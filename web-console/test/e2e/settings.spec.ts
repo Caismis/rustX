@@ -104,7 +104,8 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
       await choose(source, 'Selection', 'None');
       await source.getByRole('button', { name: `Save Source ${name}`, exact: true }).click(); await saved(`Source ${name}`);
     }
-    await expect(settings).toContainText('not a filesystem ACL');
+    await expect(settings).toContainText('not a filesystem ACL and not a security sandbox');
+    await expect(settings).toContainText('Tools keep their ordinary read behavior either way.');
     await expect(settings).toContainText(`${fixture.workspaceA}/.agents/skills`);
     const skills = settings.getByRole('form', { name: 'Skill visibility', exact: true });
     await choose(skills, 'Selection', 'All');

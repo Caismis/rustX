@@ -1,10 +1,10 @@
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { turnRail, turnRailRange } from '../src/app/agent/turn-rail-items';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
 import { installTurnNavigatorObserver } from './turn-navigator-fixture';
-import type { ConversationTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v46';
+import type { ConversationTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v47';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.unstubAllGlobals(); });
 const turnsRequests = () => server.requests.filter(row => row.request.method === 'session/turns');
@@ -53,6 +53,22 @@ it('every native turn has a fixed-pitch mark; only the visible range mounts and 
   expect(turnsRequests()).toHaveLength(1);
 });
 
+it('hover loads inherited previews without navigating, then clicks the destination anchor', async () => {
+  const { ui, navigate } = await thousandTurns();
+  server.handlers.set('session/turns', request => {
+    if (request.method !== 'session/turns') throw new Error('outline method');
+    const offset = request.params.offset ?? 960;
+    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' }, offset, total: 1000,
+      turns: Array.from({ length: 64 }, (_, i) => ({ ...native(offset + i + 1), id: { conversation_id: 'fork-source', attempt_id: `source-${offset+i+1}` } })) } };
+  });
+  fireEvent.pointerMove(ui.getByRole('button', { name: 'Load and jump to turn 960' }));
+  await waitFor(() => expect(ui.getByRole('tooltip').textContent).toBe('Prompt 960Response 960'));
+  expect(navigate).not.toHaveBeenCalled();
+  expect(turnsRequests()).toHaveLength(2);
+  fireEvent.click(ui.getByRole('button', { name: 'Load and jump to turn 960' }));
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(960); // Preview identity never replaces the committed outline.
+});
+
 it('previews show the native prompt and final response, fall back to the turn number, and focus never navigates alone', async () => {
   const { ui, navigate } = await thousandTurns();
   const mark = ui.getByRole('button', { name: 'Jump to turn 1000' });
@@ -91,6 +107,28 @@ it('an unloaded mark reads its native page before navigating; the newest page re
   expect(navigate).toHaveBeenLastCalledWith(1000);
   expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(1000).id);
   expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({ type: 'latest' });
+});
+
+it('dragging previews the pointed turn and release navigates exactly once', async () => {
+  const { ui, navigate } = await thousandTurns();
+  const rail = scroller(ui);
+  vi.spyOn(rail, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 28, 600));
+  rail.setPointerCapture = vi.fn();
+  rail.releasePointerCapture = vi.fn();
+  rail.hasPointerCapture = () => true;
+  const pointer = (type: string, y: number) => {
+    const event = new Event(type, { bubbles: true });
+    Object.assign(event, { pointerId: 1, button: 0, clientY: y });
+    fireEvent(rail, event);
+  };
+  const y = 998 * 10 + 6 - rail.scrollTop;
+  pointer('pointerdown', y - 20);
+  pointer('pointermove', y);
+  expect(ui.getByRole('tooltip').textContent).toBe('Turn 999Response 999');
+  expect(navigate).not.toHaveBeenCalled();
+  pointer('pointerup', y);
+  fireEvent.click(rail);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(native(999, ''));
 });
 
 it('fewer than two native turns render no rail', async () => {
@@ -195,6 +233,21 @@ it('an explicit historical page survives live growth; an unloaded newest mark re
  expect(fixture.mark(130)!.dataset.turnOrdinal).toBe('130');expect(fixture.offsets().slice(-4)).toEqual([128,null,null,null]);
 });
 
+it('clicking the hover-loaded newest page follows subsequent native growth',async()=>{
+ const fixture=await pagingRail(128);
+ await scrollRail(fixture.ui,0);
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Load and jump to turn 1'}));});
+ await scrollRail(fixture.ui,1000);
+ fireEvent.pointerMove(fixture.ui.getByRole('button',{name:'Load and jump to turn 128'}));
+ await waitFor(()=>expect(fixture.ui.getByRole('tooltip').textContent).toBe('turn 128'));
+ await act(async()=>{fireEvent.click(fixture.ui.getByRole('button',{name:'Load and jump to turn 128'}));});
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
+ await fixture.start(129);await fixture.locate(129);await fixture.settle(129);
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(128);
+ expect(fixture.mark(129)).toBeTruthy();
+ expect(fixture.offsets().slice(-3)).toEqual([null,null,null]);
+});
+
 it('settlement during a gated outline reply preserves one latest refresh demand',async()=>{
  const fixture=await pagingRail(64);server.held.add('session/turns');
  await fixture.start(65);const started=await server.waitFor('session/turns',2);const captured=server.commit(started);
@@ -217,7 +270,8 @@ async function pagingRail(initial:number){
   return {type:'conversation_turns',page:{cut:{conversation_id:'conversation-A',journal:String(total),transcript:String(location??initial),mutation_revision:'0'},offset,total,
    turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>{const n=offset+i+1;return {id:{conversation_id:'conversation-A',attempt_id:`a${n}`},ordinal:n,cursor:n>initial && n!==location?null:String(n),prompt:`turn ${n}`,response:''};})}};
  });
- const navigate=navigationIntent();
+ navigationIntent();
+ const navigate=vi.fn((selection:ConversationTurn|number)=>{void server.client.navigateTurn('A',selection);});
  let ui:ReturnType<typeof render>;await act(async()=>{ui=render(<TurnNavigator client={server.client} sessionId="A" onNavigate={navigate}/>);});
  const update=async(n:number,settled=false,phaseChange=false)=>{const s=server.snapshots.get('A')!;const next:RuntimeClientSnapshot={...s,attempt:{attempt_id:`a${n}`,turn:1,phase:settled?{type:'settled',outcome:{type:'completed',finish_reason:{type:'stop'}}}:{type:'running'}},transcript:{entries:location?[{cursor:String(location),item:{type:'message',message:{role:'assistant',id:`m${location}`,content:[{type:'text',text:'native output'}]}},turn_process:{conversation_id:'conversation-A',attempt_id:`a${n}`,control_cursor:String(location),message_count:1,tool_call_count:0,outcome:settled?'completed' as const:'running' as const}}]:[]}};await act(async()=>{server.snapshots.set('A',next);if(phaseChange)await server.client.refresh('A');else server.durableUpdate('A',next);});};
  return {ui:ui!,navigate,mark:(n:number)=>ui!.container.querySelector<HTMLButtonElement>(`[data-turn-id='["conversation-A","a${n}"]']`),
@@ -296,4 +350,40 @@ it('native invalidation removes rail geometry; explicit recovery places the curr
  await act(async()=>fireEvent.click(recovery));
  expect(scroller(ui).scrollTop).toBeGreaterThan(9000);
  expect(ui.getByRole('button',{name:'Jump to turn 1000'}).getAttribute('aria-current')).toBe('true');
+});
+
+for (const leaveRail of [false, true]) it(`a held hover reply cannot replace newer loaded-turn navigation (leave rail: ${leaveRail})`, async () => {
+ const fixture = await pagingRail(128);
+ await scrollRail(fixture.ui, 600);
+ server.held.add('session/turns');
+ fireEvent.pointerMove(fixture.ui.getByRole('button', { name: 'Load and jump to turn 64' }));
+ const hover = await server.waitFor('session/turns', 2);
+ expect(hover.params).toMatchObject({ offset: 0 });
+ const held = server.commit(hover);
+ await scrollRail(fixture.ui, 1000);
+ await act(async () => fireEvent.click(fixture.ui.getByRole('button', { name: 'Jump to turn 128' })));
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({ type: 'latest' });
+ if (leaveRail) fireEvent.pointerLeave(fixture.ui.getByRole('navigation'));
+ await act(async () => server.socket.deliver(held));
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(64);
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({ type: 'latest' });
+ expect(server.client.getSnapshot().views.A.turnOutline?.loading).toBeFalsy();
+ server.held.delete('session/turns');
+ await fixture.start(129); await fixture.locate(129); await fixture.settle(129);
+ expect(fixture.offsets().slice(-3)).toEqual([null, null, null]);
+ expect(fixture.mark(129)).toBeTruthy();
+});
+
+it('pointer leave retires a dispatched preview without publishing its page or error', async()=>{
+ const fixture=await pagingRail(128); await scrollRail(fixture.ui,0);
+ const committed=server.client.getSnapshot().views.A.turnOutline;
+ server.held.add('session/turns'); vi.useFakeTimers();
+ fireEvent.pointerMove(fixture.ui.getByRole('button',{name:'Load and jump to turn 1'}));
+ await act(async()=>vi.advanceTimersByTime(150));
+ const held=await server.waitFor('session/turns',2);
+ fireEvent.pointerLeave(fixture.ui.getByRole('navigation'));
+ await act(async()=>server.reply(held));
+ expect(fixture.ui.queryByRole('tooltip')).toBeNull();
+ expect(server.client.getSnapshot().views.A.turnOutline).toBe(committed);
+ expect(fixture.navigate).not.toHaveBeenCalled();
 });

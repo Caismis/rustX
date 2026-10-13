@@ -1,10 +1,11 @@
+import type { ComposerSubmission } from '../composer/draft';
 import { UploadFailure, uploadFailureState } from '../../client/uploads';
 import { uploadOperationId } from '../../../../protocol/app-server/upload';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { WorkspaceHostError } from '../../workspaces/host';
-import type { SessionModelConfig, UploadReceipt, UploadOutcome } from '../../../../protocol/app-server/v46';
+import type { SessionModelConfig, UploadReceipt, UploadOutcome } from '../../../../protocol/app-server/v47';
 
-export interface FirstDraft { workspaceId: string; text: string; files: readonly File[]; attachmentIds?: readonly string[]; model?: SessionModelConfig }
+export interface FirstDraft { submission?: ComposerSubmission; workspaceId: string; text: string; files: readonly File[]; attachmentIds?: readonly string[]; model?: SessionModelConfig }
 export interface CreatedSession { id: string; node?: string; conversation: string; diagnostic?: string }
 export interface FirstSubmitPort {
   current(): boolean;
@@ -34,7 +35,6 @@ export interface FirstSubmission {
   readonly uploadIndex?: number;
   readonly error?: unknown;
 }
-const terminal = (phase: FirstSubmitPhase) => ['admitted', 'rejected', 'failed', 'uncertain', 'discarded', 'paused'].includes(phase);
 const uncertain = (error: unknown) => isOutcomeUncertain(error) || error instanceof WorkspaceHostError && error.uncertain;
 function live(port: FirstSubmitPort) { if (!port.current()) throw new Error('Authority changed. No operation was replayed.'); }
 
@@ -72,8 +72,9 @@ export class FirstSubmissions {
   /** Admission and explicit discard release File references. Failed/uncertain
    * intent remains inspectable. Discard is unavailable during an in-flight RPC. */
   discard(value: FirstSubmission) {
-    if (!terminal(value.phase) || this.drafts.get(`${value.authority}:${value.binding}`) !== value) return;
+    if (!['failed', 'uncertain', 'paused', 'rejected'].includes(value.phase) || this.drafts.get(`${value.authority}:${value.binding}`) !== value) return false;
     this.publish({ ...value, phase: 'discarded', draft: { ...value.draft, text: '', files: [] }, receipts: [], error: undefined });
+    return true;
   }
   dispose() {
     this.disposed = true; this.recovery.clear(); this.drafts.clear(); this.sessions.clear(); this.detached = []; this.listeners.clear();
@@ -119,7 +120,7 @@ export class FirstSubmissions {
   async continueUploads(value: FirstSubmission, port: FirstSubmitPort) {
     if (!value.session || value.phase !== 'paused' || this.session(value.session.id) !== value || !port.current()) return;
     let next = value;
-    const update = (patch: Partial<FirstSubmission>) => { next = { ...next, ...patch }; this.publish(next); };
+    const update = (patch: Partial<FirstSubmission>) => { if (this.drafts.get(`${next.authority}:${next.binding}`) !== next) return; next = { ...next, ...patch }; this.publish(next); };
     try {
       for (let index = next.receipts.length; index < next.draft.files.length; index++) {
         update({ phase: 'uploading', uploadIndex: index });
@@ -132,7 +133,7 @@ export class FirstSubmissions {
       live(port); update({ phase: 'admitting' });
       await port.send(next.session!, next.draft, next.receipts, () => update({ phase: 'admitted', receipts: [], draft: { ...next.draft, text: '', files: [] } }));
       update({ phase: 'admitted', receipts: [], draft: { ...next.draft, text: '', files: [] } });
-    } catch (error) { if (next.phase !== 'admitted') { const captured = next.phase === 'uploading' && next.uploadIndex !== undefined && next.receipts.length > next.uploadIndex; update({ phase: captured ? 'paused' : next.phase === 'uploading' ? uploadFailureState(error) : uncertain(error) ? 'uncertain' : 'failed', failedPhase: captured ? undefined : next.phase, error }); } }
+    } catch (error) { if (next.phase !== 'admitted') { next.draft.submission?.failed(uncertain(error) ? 'uncertain' : 'unsent'); const captured = next.phase === 'uploading' && next.uploadIndex !== undefined && next.receipts.length > next.uploadIndex; update({ phase: captured ? 'paused' : next.phase === 'uploading' ? uploadFailureState(error) : uncertain(error) ? 'uncertain' : 'failed', failedPhase: captured ? undefined : next.phase, error }); } }
   }
   async submit(binding: string, draft: FirstDraft, port: FirstSubmitPort, sealed?: () => void, rejected?: (files: readonly File[], ids: readonly string[]) => boolean, existingId?: string): Promise<boolean> {
     const previous = this.drafts.get(`${this.authority}:${binding}`);
@@ -141,7 +142,7 @@ export class FirstSubmissions {
     // The accepted gesture transfers File ownership from intake to this owner.
     const authority = this.authority;
     let value: FirstSubmission = { authority, binding, existingSessionId: existingId, draft: { ...draft, files: [...draft.files] }, receipts: [], operations: draft.files.map(() => uploadOperationId()), attachmentIds: draft.attachmentIds ?? draft.files.map(() => uploadOperationId()), phase: existingId ? 'attaching' : 'creating' };
-    const update = (patch: Partial<FirstSubmission>) => { value = { ...value, ...patch }; this.publish(value); };
+    const update = (patch: Partial<FirstSubmission>) => { const stored = this.drafts.get(`${value.authority}:${value.binding}`); if (stored && stored !== value && stored !== previous) return; value = { ...value, ...patch }; this.publish(value); };
     const current = () => { if (this.disposed) throw new Error('Client disposed'); live(port); };
     update({});
     sealed?.();
@@ -185,6 +186,7 @@ export class FirstSubmissions {
       const phase = existingId && !value.session ? 'failed' : captured ? 'paused' : value.phase === 'uploading' ? uploadFailureState(error) : uncertain(error) ? 'uncertain' : value.session ? 'failed' : 'rejected';
       const returned = phase === 'rejected' && rejected?.(value.draft.files, value.attachmentIds);
       update({ phase, failedPhase: captured ? undefined : value.phase, error, ...(returned ? { draft: { ...value.draft, files: [] } } : {}) });
+      draft.submission?.failed(uncertain(error) ? 'uncertain' : phase === 'rejected' ? 'rejected' : 'unsent');
       return false;
     }
   }

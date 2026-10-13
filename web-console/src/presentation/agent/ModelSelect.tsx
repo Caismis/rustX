@@ -34,7 +34,7 @@ export function modelDefaultLabel(tx: Translate, choice: ModelChoice) {
  * current invocation resolves to and is only displayed. */
 export function ModelSelect({ choices, current, profile, effectiveProfile, disabled, loading, error, load, choose, initialOpen = false, binding = '' }: {
  choices: ModelChoice[]; current?: string; profile?: string; effectiveProfile?: string; disabled: boolean; loading: boolean; error?: string;
- load: () => void; choose: (intent: ModelSelectionIntent) => void; initialOpen?: boolean; binding?: string;
+ load: (refresh?: boolean) => void; choose: (intent: ModelSelectionIntent) => void; initialOpen?: boolean; binding?: string;
 }) {
   const tx = useTranslation();
  const [open, setOpen] = useState(initialOpen);
@@ -50,19 +50,19 @@ export function ModelSelect({ choices, current, profile, effectiveProfile, disab
  // Catalog reads must not resize the Composer (and its history viewport).
  // Like Harness, keep read status and selection diagnostics in the portal.
  const status: MenuEntry[] = [];
- if (loading) status.push({ id: 'loading', disabled: true, label: <span role="status">{tx('agent:model-select.reading-native-models')}</span> });
+ if (loading && !error) status.push({ id: 'loading', disabled: true, label: <span role="status">{tx('agent:model-select.reading-native-models')}</span> });
+ if (error) status.push({ id: 'error', disabled: true, label: <span role="alert">{error}</span> }, { id: 'retry', disabled, label: tx('agent:agent-controls.reread-models') });
  if (current && !loading && !selected) status.push({ id: 'unavailable-model', disabled: true, label: <span role="status">{current} {tx('agent:model-select.is-unavailable-in-this-workspace')}</span> });
  if (!loading && selected && profileUnavailable(selected, profile)) status.push({ id: 'unavailable-profile', disabled: true, label: <span role="status">{tx('agent:model-select.profile')}{' '}{profile} {tx('agent:model-select.is-unavailable-for')}{' '}{current} {tx('agent:model-select.in-this-workspace')}</span> });
  return <div className={css.root}>
  <Menu open={open} side="top" align="end" autoFocus={!loading && !disabled} items={items} footer={status}
  selectedIds={[`model:${current}`, profile === undefined ? 'profile-default' : `profile:${profile}`]} onClose={() => setOpen(false)}
  onSelect={id => {
-  if (disabled || loading) return; setOpen(false);
+  if (disabled) return; if (id === 'retry') { load(true); return; } if (loading) return; setOpen(false);
   if (id.startsWith('model:')) choose({ kind: 'model', model: id.slice(6) });
   else if (current && id === 'profile-default') choose({ kind: 'model-default', model: current });
   else if (current && id.startsWith('profile:')) choose({ kind: 'profile', model: current, profile: id.slice(8) });
  }}
- anchor={<button data-model-select="" title={[current ?? tx('agent:model-select.choose-model'), displayed].filter(Boolean).join(' ')} className={css.trigger} type="button" aria-label={tx('agent:model-select.model-and-profile')} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16} className={css.triggerIcon}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>{displayed && <span className={css.triggerEffort}>{displayed}</span>}<IconChevronDownOutline14/></button>}/>
- {error && <p role="alert">{error}</p>}
+ anchor={<button data-model-select="" className={css.trigger} type="button" aria-label={tx('agent:model-select.model-and-profile')} title={[current ?? tx('agent:model-select.choose-model'), displayed].filter(Boolean).join(' · ')} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(v => !v); if (!open) load(); }}><IconDataOutline16 size={16} className={css.triggerIcon}/><span className={css.triggerLabel}>{current ?? tx('agent:model-select.choose-model')}</span>{displayed && <span className={css.triggerEffort}>{displayed}</span>}<IconChevronDownOutline14/></button>}/>
  </div>;
 }

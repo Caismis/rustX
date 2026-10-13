@@ -4,11 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationComposer } from '../src/app/new-conversation/ConversationComposer';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
-import { NavigationEpoch } from '../src/client/navigation';
+import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v46';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v47';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -39,7 +39,7 @@ async function mount({ current = () => true, source = workspaceSource(), configu
     configureWorkspace: vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(configureWorkspace ?? (async () => ({ kind: 'read' as const, projection: source }))),
   };
   const opened = vi.fn(), authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
-  await act(async () => { render(<ConversationComposer authority={authority} associations={associations} binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={current} opened={opened}/>); });
+  await act(async () => { render(<ConversationComposer authority={authority} associations={associations} binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={current} preparePublication={() => opened}/>); });
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Preserved draft' } });
   if (ready) await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
   return { host, opened, authority, associations };
@@ -112,7 +112,7 @@ it('uncertain creation preserves the draft, refuses another Send and requires na
   expect(opened).not.toHaveBeenCalled();
 });
 
-it('confirmed create survives a transport replacement: it opens the exact committed Session without continuing native effects', async () => {
+it('confirmed create survives transport replacement without publishing an unadmitted executable route', async () => {
   const { opened } = await mount();
   server.held.add('session/create');
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
@@ -121,17 +121,18 @@ it('confirmed create survives a transport replacement: it opens the exact commit
   // Deliver the acknowledgement first; the transport replacement then occurs
   // before the client owner starts its next, separately fenced continuation.
   await act(async () => { server.reply(request); await Promise.resolve(); server.socket.close(); });
-  await waitFor(() => expect(opened).toHaveBeenCalledWith('native-committed'));
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('native-committed'));
+  expect(opened).not.toHaveBeenCalled();
   expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'session/uploadPrepare', 'turn/start'].includes(r.request.method))).toHaveLength(0);
   expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
   server.snapshots.set('native-committed', snapshot('native-committed'));
   await act(async () => server.connect());
   expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
-  expect(opened).toHaveBeenCalledTimes(1);
+  expect(opened).not.toHaveBeenCalled();
 });
 
 it('a replaced New Conversation navigation cannot open a Session committed by its older route', async () => {
-  const navigation = new NavigationEpoch(); const { opened } = await mount({ current: navigation.capture() });
+  const navigation = routeFixture(server.client); const { opened } = await mount({ current: navigation.capture() });
   server.held.add('session/create');
   server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
@@ -235,7 +236,7 @@ it('a transport drop keeps the draft mounted with no Product Host traffic, and t
 it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('existing conversation accepts a prompt during connection: %s', async outcome => {
   server = new Server(); await server.connect();
   const host = server.workspaceHost, authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
-  const navigation = new NavigationEpoch(), current = navigation.capture(), opened = vi.fn();
+  const navigation = routeFixture(server.client), current = navigation.capture(), opened = vi.fn();
   server.held.add('session/attach');
   if (outcome === 'rejection') server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Connection failed' }); });
   if (outcome === 'branch') server.nodeSnapshots.set('chosen-node', { ...snapshot('A'), conversation_id: 'chosen-conversation' });
@@ -243,7 +244,7 @@ it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('
   const request = await server.waitFor('session/attach', 1);
   function Seat() {
     const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
-    return <ConversationComposer client={server.client} host={host} authority={authority} associations={associations} binding="existing-A" current={current} opened={opened} activeView={state.views.A}
+    return <ConversationComposer client={server.client} host={host} authority={authority} associations={associations} binding="existing-A" current={current} preparePublication={() => opened} activeView={state.views.A}
       active={{ disabled: state.views.A?.attachment !== 'attached', submitDisabled: false, busy: false, active: false, onSend: async () => false, onUpload: async () => [], onCancel: () => {} }}/>;
   }
   await act(async () => { render(<Seat/>); });

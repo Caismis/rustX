@@ -48,5 +48,5 @@ for (const locale of ['en', 'zh'] as const) test(`UX-04 retains grouped and sele
     gate.resolve();
     await expect(page.getByRole('status').filter({ hasText: tx.pending })).toHaveCount(0);
     await expect(session).toBeVisible(); expect(errors).toEqual([]);
-  } finally { gate.resolve(); await remote.shutdown(); await fixture.stop(false); }
+  } finally { gate.resolve(); await page.close(); await remote.shutdown(); await fixture.stop(false); }
 });

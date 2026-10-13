@@ -1,5 +1,5 @@
 import { assign, raise, setup, type ActorRefFrom } from 'xstate';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v46';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v47';
 import { emptyFacts, sameClaim, type Admission, type Attached, type LifecycleFacts, type Observation, type SessionLifecyclePort } from './port';
 
 type Kind = 'open' | 'release' | 'switch' | 'delete' | 'recover' | 'inspect';
@@ -15,7 +15,7 @@ export interface Command {
 }
 interface Operation {
   token: number; generation: number; revision: number; command: Command;
-  node?: string; conversation?: string; target?: AttachmentTarget; stage: 'preparing' | 'request' | 'sent';
+  previous?: LifecycleFacts; node?: string; conversation?: string; target?: AttachmentTarget; stage: 'preparing' | 'request' | 'sent';
 }
 export interface LifecycleInput {
   id: string; readonly authority: object; generation: number; connected: boolean; port: SessionLifecyclePort;
@@ -148,8 +148,13 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
         catch (error) { if (port.classify(error) !== 'stale-route') throw error; }
       }
     } else if (op.command.kind === 'switch') {
+      // Switch composes another executable Node. Reauthorize its immutable cwd
+      // before dispatch, then retain the actual native outcome independently.
+      const admission = await port.admit(current);
+      const admitted = () => !!admission && admission.current() && current();
+      if (!admission || !admitted()) throw new Error('Switch admission retired before dispatch.');
       submit();
-      const result = await port.switchNode(op.target!, op.node!, proof);
+      const result = await port.switchNode(op.target!, op.node!, { current: admitted, sent: proof.sent, validate: async signal => await admission.validate(signal) && admitted() });
       if (result.id !== context().id || result.active_node !== op.node) throw new Error('Mismatched switched Node identity.');
       value = { node: result.active_node, conversation: result.active_conversation_id };
     } else if (op.command.kind === 'delete') { submit(); value = await port.delete(op.command.revision!, proof); }
@@ -189,7 +194,7 @@ export const sessionLifecycleMachine = setup({
       if (cmd.kind === 'open') f = { ...f, attachmentIntent: 'wanted', nodeId: cmd.node ?? f.nodeId,
         ...(cmd.node && cmd.node !== f.nodeId ? { nodeConversationId: undefined } : {}) };
       const op: Operation = { token: c.budget.identity(), generation: c.generation, revision: f.attachmentIntentRevision,
-        command: cmd, node: cmd.node ?? f.nodeId, stage: 'preparing' };
+        previous: c.facts, command: cmd, node: cmd.node ?? f.nodeId, stage: 'preparing' };
       c.budget.take();
       return { facts: f, queue: [...c.queue, op] };
     }),
@@ -226,6 +231,7 @@ export const sessionLifecycleMachine = setup({
       if (!event.outcome.ok) {
         const error = event.outcome.error, classification = c.port.classify(error);
         const unresolved = classification === 'uncertain' ? { kind, error } : c.unresolved;
+        if (kind === 'switch' && (classification === 'unsent' || op.stage === 'preparing') && c.connected && op.previous) return { facts: f.attachmentIntentRevision === op.revision ? op.previous : { ...f, nodeId: op.previous.nodeId, nodeConversationId: op.previous.nodeConversationId } };
         if (kind === 'switch') return { unresolved, facts: { ...f, attachmentObservation: undefined, attachment: 'stale', error: String(error), ...(classification !== 'unsent' ? { attachmentIntent: 'released', nodeId: undefined, nodeConversationId: undefined } : {}) } };
         if (kind === 'delete' && classification === 'unsent') return { facts: { ...f, deleting: false, error: String(error) } };
         if (kind === 'recover') return { unresolved, facts: { ...f, recoveringDeletion: false, error: String(error), ...(classification === 'uncertain' ? { deletionRecovery: undefined } : {}) } };

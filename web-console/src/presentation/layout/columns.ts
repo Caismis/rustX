@@ -19,8 +19,8 @@ export const SIDEBAR_DEFAULT = 280
 /** Closed-sidebar rail: a 24px icon column between 16px horizontal paddings. */
 export const SIDEBAR_COLLAPSED = 56
 /** Viewport width below which the sidebar auto-collapses to the rail (deepsuite
- * LG breakpoint); a manual toggle below it re-expands over the squeezed center
- * (stores.ts narrowExpanded). */
+ * LG breakpoint); below it, manual expansion overlays the center instead of
+ * consuming another grid track. */
 export const SIDEBAR_AUTO_COLLAPSE = 1024
 /** Right column drag clamp floor. */
 export const RIGHTBAR_MIN = 300

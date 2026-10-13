@@ -71,9 +71,26 @@ diagnostics never attribute another Session's uncertainty to the selected one.
 `presentation/` has no imports of app, bindings, workspaces, client or protocol.
 `app/` and `workspaces/` bind its props to the typed App Server client.
 Native Session cwd/history/execution remain App Server owned. Product Host owns
-registration/classification/authorization only. WorkspaceSessionNavigation and
-NavigationEpoch fence browser continuations; AppServerClient owns authoritative
-reconnect/resync. Unmount/collapse/search/navigation never cancel committed work.
+registration/classification/authorization only. WorkspaceSessionAdmission owns fresh Product Host authorization. The XState v5
+ShellNavigationMachine owns the sole committed route and one disposable pending
+intent. Browser-lifetime Shell/Settings actors and Session admission belong to
+`App`; `AppSurface` is their disposable projection. Remounting that surface does
+not retire an admitted startup continuation or recreate route authority. A
+lifetime callback actor observes native authority directly. Its correlated completion and native proof guard publish routes atomically;
+preparation and failure preserve committed controls. Settings handoff retires
+preparation before the separate Settings actor opens its overlay. AppServerClient
+and Session Lifecycle own authoritative reconnect/resync and admitted mutation
+settlement. Fork View Source publishes a read-only history route using authorized
+exact native Node and Message reads; it never attaches or switches the source.
+The browser-session Composer snapshot retains unsent text, selection and restored
+uploads across history unmounts; the existing AttachmentIntakes owner retains
+local Files. History and Return preserve this draft binding while each route
+publication replaces control authority. Native attachment/generation replacement
+keeps recoverable local text/Files but retires receipts and upload operations;
+restoration never replays them. Other executable destinations replace the draft.
+ChatViewport owns its exact anchor landing and scroll cancellation. View Source
+registers cancellation in the initiating click stack against the exact Shell
+pending intent. A correlated CANCEL cannot retire a newer or committed route. Unmount/collapse/search/navigation never cancel committed work.
 Only widths, collapse, menus, theme, search text and section selection are local.
 
 ## Exclusions and deviations

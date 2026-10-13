@@ -33,15 +33,14 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock, UserSource};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
 use rustx::runtime_client::transport::stdio::{
     STDIO_JSONL_MAX_RECORD_BYTES, StdioFramingError, StdioSessionEnd, StdioTransportError,
     serve_stdio_jsonl_with_io,
 };
 use rustx::runtime_client::{
-    RuntimeClientAttemptPhase, RuntimeClientCursor, RuntimeClientEndpoint, RuntimeClientEvent,
-    RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent, RuntimeClientResponse,
-    RuntimeClientResult,
+    RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAttemptPhase, RuntimeClientCursor,
+    RuntimeClientEndpoint, RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome,
+    RuntimeClientProtocolEvent, RuntimeClientResponse, RuntimeClientResult,
 };
 use support::fake::{FakeStep, model_release};
 use support::runtime_client_fixture::RuntimeClientFixture;
@@ -480,7 +479,9 @@ async fn run_session(
 
 /// One `initialize` record.
 fn initialize_record(id: u64) -> Vec<u8> {
-    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":{RUNTIME_CLIENT_PROTOCOL_VERSION}}}\n").into_bytes()
+    let version = RUNTIME_CLIENT_PROTOCOL_VERSION;
+    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":{version}}}\n")
+        .into_bytes()
 }
 
 /// Parses one captured record as a response.
@@ -660,7 +661,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":67}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":68}"#,
         ),
     ];
     for (name, record) in cases {

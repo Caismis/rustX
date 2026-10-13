@@ -136,10 +136,8 @@
   z-index: 1;
 }
 
-/* Must beat `.body > :not(.glow)` specificity so the open Menu (and its
-   right-hand submenu) paints above the InputBar card. */
+/* Workspace menus are portaled; the closed trigger stays below composer overlays. */
 .body > .workspaceRow {
-  z-index: 10;
   display: flex;
   align-items: center;
   min-width: 0;

@@ -1,3 +1,54 @@
+## Local Harness desktop presentation alignment
+
+The installed DeepSeek Harness Windows desktop UI was visually inspected on
+2026-10-04. The existing attributed presentation components remain the source
+baseline; no brand assets, runtime code or new dependencies are imported.
+
+- The application frame uses the reference's muted sidebar surface and rounded
+  conversation panel. Browser chrome remains browser-owned.
+- On narrow screens the expanded sidebar overlays the conversation, preserving
+  the reading width; Escape or the backdrop dismisses it. Covered content is inert.
+- Conversation title weight, default reading width and composer-context alignment
+  follow the inspected desktop layout. Deliberate width preferences remain intact.
+- The sidebar Extensions entry opens rustX's existing native-backed Settings
+  extension inventory; it does not imply a Harness plugin runtime.
+- General settings presents the existing Light and Dark choices as accessible
+  theme cards, following the inspected desktop arrangement. The icons and CSS
+  are locally authored; no unsupported preference is added.
+- The settings modal follows the inspected 800x704 desktop geometry and plain
+  dimmed backdrop; native configuration ownership and reload controls remain.
+- Configuration, extension, upload and context copy uses user-facing language
+  in both locales. General removes the duplicate appearance heading and the
+  unrelated connection paragraph.
+- Configuration cards keep source, revision and provenance details behind a
+  disclosure. Invalid values and save outcomes remain visible; duplicate Tools
+  group headings are removed while each form retains its own legend.
+- The composer plus launcher includes file intake as its first action. Plus,
+  paperclip and command glyphs reuse the already attributed Harness icon module.
+  File selection keeps the existing upload owner and slash discovery remains
+  command-only; the separate attachment toolbar button is removed.
+- Chat/trajectory, Session actions, history navigation, attachment and command
+  controls, approvals, settings and the developer inspector retain their owners.
+
+The local hashes for adapted presentation files are updated in the
+source inventory. The independent-session fork glyph additionally reuses Harness
+`ui-primitives/src/icons/index.tsx` at immutable commit
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, recorded with its exact source hash
+in the icon module's `additional_sources`. In-session branches retain the
+original branch glyph; model and tools commands reuse the intelligence and code
+glyphs. Existing source pins and dependency closures remain unchanged.
+
+Model catalog refresh keeps the launcher enabled and visually stable while
+fencing menu choices until the read finishes. First-load feedback lives inside
+the popup; cached refresh does not add an inline loading label to the composer.
+
+Updated screenshot references use exact pixel comparison. Noise evidence tied
+to the previous layout is preserved with its original images in the comparator
+fixtures, rather than reused as an exception for the new layout.
+The narrow running-draft Composer references have newly measured rounded-shadow
+noise at 15 light and 16 dark pixel sites. Each site has its own measured channel
+bound; adjacent pixels, dimensions and all other references remain exact. The
+manifest records independent runs, the pinned browser and decoded-image hashes.
 ## Shared model selection surfaces
 
 Behavioral reference: Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc`,
@@ -635,7 +686,9 @@ not a claim that a file was copied. Imported source records are the source of tr
 
 `app/App.tsx` registers native occupants/gestures. `workspaces/WorkspaceNavigation`
 projects native Session summaries and current snapshots to presentation props;
-`WorkspaceSessionNavigation` and `NavigationEpoch` own admission/supersession.
+`WorkspaceSessionAdmission` owns fresh Product Host operation authorization.
+`app/navigation/machine.ts` owns committed shell routes and exclusive preparation;
+Session Lifecycle owns native attachment, Switch and settlement.
 `client/AppServerClient` owns the typed transport, authoritative reconnect and
 resynchronization. Product Host owns navigation registration/classification and
 authorization; canonical Session cwd and history remain native server state.
@@ -1611,6 +1664,16 @@ This adapts Harness's nonempty reading candidate policy without its approximate
 binary-search candidate selection: native turn identity and exact locate anchors
 remain separate, and a window containing no native region still has no selection.
 
+## Unified canonical compaction summary presentation
+
+CompactionMessage is the sole checkpoint disclosure. The adapter retains a bounded
+plain-text preview while collapsed, and the explanation and original Markdown
+while expanded. Trajectory and compaction share the existing GFM preview projection
+in src/presentation/markdown/preview.ts; the former app-local preview module and
+CompactionSummary component/styles are removed. Native transcript identity, fork
+boundaries and explicit source navigation remain unchanged. Both local presentation
+notes and the upstream interruption/continuation references are retained.
+
 
 Terminal model-error feedback follows local Harness at
 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`:
@@ -1688,6 +1751,20 @@ snapshot. Both clients fence late history reads against the current attachment.
 
 Model menu layout repair: compared the local DeepSeek-harness `packages/client/ui-model-selection/src/client/ModelSelect.tsx` in-menu loading/error presentation. The rustX adapter keeps catalog-loading and unavailable-selection notices inside its existing portaled menu, so opening it does not resize the Composer or history viewport. Pending root rows are disabled and initial keyboard focus waits for usable choices. Native model mutation/read authority and the pinned source baseline remain unchanged.
 
+Model-selection failure announcements follow Harness `ModelSelect.tsx` and
+`packages/client/ui-primitives/src/Toast.tsx` / `Toast.module.css` at
+`5badb15009ae1756c3afe0ae0cef1faafc290ccc`, inspected from immutable upstream
+source. Rejected selections announce through a warning Toast in a body portal,
+centered horizontally over the Composer and positioned near the viewport top.
+The three-second hold and one-second fade do not move chat layout or take focus.
+Floating UI, already used by the menu, owns positioning, viewport clamping and
+layout tracking. Success/action variants are excluded; existing theme tokens
+supply the surface. Catalog-load errors and reread actions remain in the menu.
+Expiry hides the announcement only: native selection and reread fences remain
+authoritative, repeated failures restart the announcement, and attachment
+replacement retires it. Tests cover rejection, recovery without mutation replay,
+catalog errors, attachment retirement and timer lifetime.
+
 Trajectory bottom fade: compared local Harness ConversationRoot.module.css,
 TrajectoryView.tsx, views.module.css and TrajectoryTable.module.css. The native-bound
 WebUI view now elects the resident composer overlay, retaining the fixed 36px
@@ -1714,6 +1791,15 @@ icons are reused; missing fork/tools icons use Lucide 0.468.0 `git-fork.svg` and
 The upstream ISC/Feather MIT notice is shipped in `public/LICENSE-Lucide.txt`
 and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
 
+## Main protocol and bounded fork source integration
+
+The main branch owns the bounded v37 navigation, outline demand scheduler and
+command menu presentation. This integration retains those owners and upgrades
+mandatory generated imports to the final v47 contract for the native Message window selector
+and the upstream committed-delivery contract.
+Fork source navigation performs one indexed native read and validates message
+identity before anchoring. Existing source references and immutable upstream
+pins remain; hashes/import inventories reflect the reviewed combined files.
 ## Dedicated MCP settings
 
 Behavioral and layout reference: local ZCode
@@ -1996,8 +2082,8 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v44,
-Runtime Client v66, child IPC v30 and Product Host file-read v3 are synchronized.
+when navigation changes. No child model settings are introduced. App Server v47,
+Runtime Client v68, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
 
@@ -2131,7 +2217,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v44 / Runtime Client v66 native
+The Inspect pill is pure presentation. App Server v47 / Runtime Client v68 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -2150,6 +2236,7 @@ QA verifies child and parent Inspect RPCs, selected rows, exact detail reads and
 Return to latest; resident child Trajectory paging is checked at 1440px and 390px.
 Screenshots are retained under `/tmp/rustx-tool-details-*` and
 `/tmp/rustx-native-tool-inspect-{child,root}.png`.
+dependency closures describe this final source, including the v40 import renames.
 
 ### Issue #456: general Model Profiles
 
@@ -2163,7 +2250,7 @@ TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
 local buffer that blocks submission, and formatting-only edits begin no draft.
 Native Rust remains the configuration authority. No upstream source is added.
 Inventory hashes and dependency closures describe this final source, including
-the v44 import renames.
+the v47 import renames.
 
 The #456 selection review separates configured from effective Profiles in the
 Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
@@ -2177,7 +2264,7 @@ configured Profile is pinned, so the pin can be cleared.
 
 ### PR #461: integrating the current main contracts
 
-The main integration keeps App Server v44 and Runtime Client v66, which remain
+The main integration keeps App Server v47 and Runtime Client v68, which remain
 newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
 Subagent IPC becomes v31 because main and this branch had different v30
 vocabularies; either old peer is rejected. The current generated protocol and
@@ -2254,6 +2341,14 @@ change at every formerly allowed site in both current English and Chinese
 references. Other noise entries, global thresholds, retries, settle schedule
 and browser pins remain unchanged. The source inventory retains the Harness
 pin and records this concrete local CSS adaptation.
+PR #458 follow-up: TurnNavigator's delayed hover read carries the current native
+navigation intent through publication, so a newer loaded-turn jump revokes a held
+preview without retiring ordinary outline reads during transcript pagination.
+ModelSelect distinguishes lazy menu opening from an explicit forced catalog
+reread. AgentControls retains the native model recovery gates and does not replay
+a rejected selection. Held-response and cached-catalog regressions cover both
+changes; the pinned Harness source and presentation styles remain unchanged.
+
 
 ## PR #463 integration with native child inspection
 
@@ -2261,9 +2356,91 @@ The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
 The historical entries above retain the versions reviewed at those snapshots.
-The combined current contracts are App Server v46, Runtime Client v67, SQLite 56
+The combined current contracts are App Server v47, Runtime Client v68, SQLite 57
 and Child IPC 32; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
 for owners and rejection behavior. Imports and generated client contracts use
-App Server v46. The source inventory
+App Server v47. The source inventory
 records the resulting local hashes and actual dependency closure; upstream
 Harness pins, licenses and source attribution remain unchanged.
+
+## PR 458 deterministic reading and responsive repair
+
+Turn previews share the existing single-flight outline pipeline but return only
+disposable presentation data. Only explicit reads/navigation publish committed
+paging. The rail retains one preview Turn and cancels it on pointer leave,
+navigation, native mutation, attachment or generation replacement. Focused
+marks keep their tooltip through explicit navigation; preview identities never
+replace committed outline identities.
+
+AppFrame measures responsive geometry directly from its ResizeObserver, clears
+the narrow overlay on breakpoint transitions, and restores focus to the sidebar
+toggle on dismissal. Tests exercise toggle, Escape, backdrop, inert central
+content and pointer hit testing at 390px across desktop/mobile transitions.
+The collapsed rail and intentional overlay presentation remain intact.
+
+Native opening prompts apply the same human/delegated-Agent classification to
+local and inherited provenance. Local lookup uses existing Attempt/type/range
+indexes. Deterministic VM comparisons after 0, 128 and 512 unrelated future
+Turns stay constant, including idle inputs, previous-Attempt steering and
+ineligible external notifications. No protocol or schema version changes.
+
+The browser repair inspected each failing reference, stable actual and available
+diff, including later captures in the same test. Approved references retain the
+current 856px conversation width, 12px shell inset, Composer action icons,
+800 × 704 Settings panel and narrow sidebar overlay. The 57 repaired references
+were captured with pinned Playwright 1.63.0 Linux Chromium; the production
+comparison/stabilization helpers and rasterizer-noise manifest are unchanged.
+The comparator's live evidence-binding and frozen negative-control tests pass
+against the updated references. No tolerance, deadline, retry or generic mask
+was added. Product speed labels remain `token/s`; assertions follow the current
+English/Chinese dictionaries.
+
+Full integrated execution exposed three history-dependent accessory circle
+rasters (18–24 changed pixels, maximum channel delta 2) after context and shell
+transitions. The accessory now owns a complete raster layer like the send
+control. Forty-nine reviewed stable captures change only the accessory: normally
+ten glyph-edge pixels by one channel level, and the disabled button's opacity
+rounding by one level inside its 28px bounds. The dark context capture also
+replaces the prior circle-edge raster. Geometry, clipping, comparator, browser
+pins and reference-local noise evidence remain unchanged. These captures are
+baseline-review evidence; only the subsequent complete strict run counts as
+browser conformance.
+
+Full-suite execution also exposed an unowned asyncio stdin observer in the
+external provider fixture. The CLI now retains and settles that task for the
+server lifetime. A forced-GC/EOF regression fails against the prior observer
+with the same destroyed-pending-task diagnostic; all 54 provider tests and the
+real native chat/child-capability browser scenarios pass with the owned task.
+This changes test-process lifetime, not rustX execution or settlement ownership.
+
+Repair-head CI run 38157397982 passed 253 browser tests but exposed one remaining
+narrow Settings corner mismatch: ten pixels, maximum channel delta 6, where a
+long Agent card reached the panel clip. The narrow scrollport now owns its
+existing 20px bottom gutter as an outside margin rather than scrolling content
+padding. Panel dimensions, superellipse corners and content scroll range remain
+unchanged; content can no longer repaint behind the bottom corner. A rendered
+regression checks the fixed gap before and after scrolling; the prior style
+fails with 0px at both positions, while the repaired owner keeps 20px. Five
+reference/actual/diff sets were individually reviewed for this intentional
+bottom-gutter change. The strict comparator and noise manifest remain unchanged.
+
+
+## PR #458 remaining review repair
+
+AppFrame exposes its narrow overlay state and a presentation-only dismissal callback through the existing sidebar composition contract. Primary Session, new Conversation, Workspace and Settings navigation retire that overlay; desktop cold Composer presentation and sidebar width remain intact. A failed or superseded narrow Session admission does not publish its destination or dismiss the overlay. Focus returns through AppFrame after inert and backdrop retirement.
+
+The Shell Navigation actor is the sole committed route and pending-intent owner. Its two states are `idle` and `preparing`; preparation retains the committed route and its controls. Typed events select Sessions, drafts, exact read-only history, executable Node transitions and command choices. Settings handoff retires preparation before sending to the independent Settings actor. Idle Settings and overlay dismissal preserve committed controls. AppFrame owns geometry: explicit overlay dismissal retires only sidebar preparation, while successful publication closes it programmatically. Already-authoritative Sessions publish immediately without attachment or snapshot refresh. Cold destinations publish only after admission and a final exact native observation check, on desktop and narrow layouts alike. A non-executable `session-draft` route preserves the existing cold local-input surface when an empty draft chooses a Session; it queues input through FirstSubmissions until native admission, never grants execution controls, and passes through only its own successful publication. Initialized Session-to-Session navigation retains the committed conversation throughout preparation. Composer binding is machine-derived and persists across same-authority reconnect and draft promotion; there is no separate React center/focus/command/transition state or top-level epoch coordinator.
+
+Each disposable preparation actor has one correlated completion path. Final intent, connection authority, exact destination and native proof validation precede one machine publication transition. Stopped actors cannot publish routes or navigation errors. Read authorization is also retained and checked at publication, so replaced Product Host admission cannot leak a late history result or error. Committed control proofs are independent of preparation. A native first submission obtains a Shell creation publication intent while FirstSubmissions continues to own its create/attach/upload/input settlement. Settings can retire only its publication; replacing the actual committed draft also fences future native admission. Neither cleanup nor failure renews old route authority. Catalog searches retain their own disposable directory request identity and never own routes.
+
+View Source now means history inspection. It authorizes the exact Session cwd through `admitSessionOperation`, resolves the recorded Node through `session/node`, then reads `session/history` at the exact Message with limit 64. Node Conversation, read cut and returned Message/target cursor must agree. The history surface uses the canonical transcript renderer without a SessionView or Composer; it exposes bounded cut-preserving earlier/later reads and return navigation. Its cache remains bounded to 256 entries and 8 MiB. ChatViewport remains the sole scroll writer. User scroll, newer route selection, Settings and authority replacement retire intended landing; stale results never publish a history window. Source Session attachment, selected Node, Attempt and execution state are untouched. No attach, detach, Switch, initialization or execution accompanies View Source, even for a cold or same-Session source.
+
+Session Lifecycle retains every dispatched Switch transaction. Fresh Host authorization and caller interest gate dispatch; proven-unsent retirement preserves the original native claim. Acknowledged Switch ends authoritatively detached at its exact new Node. If the UI has retired, no follow-up attachment or Retry starts: later explicit Session opening recovers the selected Node. A transmitted refusal may follow native unload and therefore remains fail-closed; uncertainty is retained without replay. Branch/Fork storage acknowledgement remains observable through catalog reading after presentation retirement, and committed-node durability diagnostics are retained at decode time. Retry uses native returned input once; queued input has a dispatch fence, and transmitted input settles independently without replay. Browser cancellation provides no rollback semantics for any admitted native effect.
+
+Four dark shell references deliberately retained the enabled Stop control in the preceding repair: settings-shell-dark, desktop-expanded-dark, mobile-rail-dark and mobile-expanded-dark. Their reference/actual/diff inspection showed 952 changed pixels per reference confined to Stop, with identical dimensions and surrounding pixels. This refactor retains that control contract. Screenshot comparator, noise, stabilization, timeout and retry policies remain unchanged.
+
+Fork metadata and exact history identity use App Server v47 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v68 and SQLite v57 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
+
+The intentional `mobile-settings-dark-linux.png` reference change removes the obsolete sidebar backdrop beneath the Settings modal after successful Settings navigation. The reference, actual and diff were inspected: modal content and geometry are identical, and the changed pixels are the surrounding backdrop. The pinned browser generator updates this one changed reference; screenshot thresholds, noise policy and stabilization are unchanged.
+
+Browser-lifetime Shell/Settings actors and Session admission are owned above AppSurface. The rendered projection may remount while those owners and native startup settlement continue. Native authority observation belongs to the Shell actor; React does not duplicate its route retirement. A creation acknowledgement stages its exact native identity as a non-executable Session draft; only matching attachment evidence publishes execution controls. Saved startup hints observe retained admission or failure without replaying attachment. Root owner retirement invalidates old control proofs.

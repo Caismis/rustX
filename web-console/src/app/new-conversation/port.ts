@@ -2,13 +2,15 @@ import { UploadFailure } from '../../client/uploads';
 import { modelPreferences } from '../model-preference';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v46';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v47';
 import type { FirstSubmitPort } from './first-submit';
 
-export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, opened: (id: string) => (() => boolean) | void, existing = false): FirstSubmitPort {
+export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, preparePublication: () => ((id: string) => (() => boolean) | void), existing = false): FirstSubmitPort {
   const { generation, authorityRevision, endpoint } = client.getSnapshot();
   let target: AttachmentTarget | undefined;
   let navigation = navigationCurrent;
+  let publication: { id: string } | undefined;
+  let opened: ReturnType<typeof preparePublication> | undefined;
   const current = () => {
     const state = client.getSnapshot();
     return navigation() && state.endpoint === endpoint && state.connection === 'connected' && state.generation === generation && state.authorityRevision === authorityRevision
@@ -30,6 +32,7 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       return { id, node: client.getSnapshot().views[id]?.nodeId, conversation: attached.conversation_id };
     },
     async create(draft, acknowledged) {
+      opened = preparePublication();
       if (!endpoint || !draft.workspaceId) throw new Error('Choose a registered Workspace first.');
       const { cwd } = await host.resolveWorkspace(draft.workspaceId, endpoint);
       requireCurrent();
@@ -45,7 +48,7 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       if (!navigation() || state.endpoint !== endpoint || state.authorityRevision !== authorityRevision) throw new Error('Navigation authority changed. No operation was replayed.');
       client.restoreViews([session.id]);
       // Only this authorized transition may replace the captured route fence.
-      navigation = opened(session.id) ?? navigation;
+      publication = session;
     },
     async attach(session) {
       if (existing) {
@@ -55,11 +58,13 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       requireCurrent();
       if (!target) throw new Error('Created Session was not attached.');
       if (target.conversation_id !== session.conversation) throw new Error('Created Session attached a different Conversation.');
+      if (publication) { navigation = opened!(publication.id) ?? navigation; publication = undefined; }
+      requireCurrent();
       // Attach consumes the established native model/configuration. No second
       // selection, provider probe, model repair or catalog refresh owns startup.
     },
     async upload(session, file, acknowledged, operation) { try { bindSession(session); } catch (error) { throw new UploadFailure('failed', error); } const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }, operation); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
     status: async (session, operation) => { bindSession(session); const result = await client.uploadStatus(session.id, operation); requireCurrent(); return result; },
-    async send(session, draft, receipts, acknowledged) { bindSession(session); await client.send(session.id, draft.text, receipts, 'send', acknowledged, current); },
+    async send(session, draft, receipts, acknowledged) { bindSession(session); draft.submission?.bind(target!, JSON.stringify([generation, target]), receipts); await client.send(session.id, draft.text, receipts, 'send', acceptance => { const view = client.getSnapshot().views[session.id]; const conversation = view?.nodeConversationId ?? view?.target?.conversation_id ?? view?.snapshot?.conversation_id; draft.submission?.accepted(acceptance, conversation ? { session_id: session.id, conversation_id: conversation } : undefined); acknowledged(); }, current); },
   };
 }

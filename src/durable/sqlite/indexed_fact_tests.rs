@@ -825,6 +825,7 @@ fn measured_vm<T>(store: &SqliteConversationStore, read: impl FnOnce() -> T) -> 
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One query-work comparison across immutable seed sizes.
 fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
     use crate::durable::reading::ConversationWindowAt;
     let mut costs = Vec::new();
@@ -905,6 +906,10 @@ fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
                 crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
             crate::runtime_client::response::decorate_window(&store, &mut page, read.cut.journal)
                 .unwrap();
+            assert_eq!(page.inherited_through.unwrap().get(), seed.canonical().len() as u64);
+            // This immutable lineage-wide metadata intentionally differs with seed size;
+            // the selected historical payload and its query work remain identical.
+            page.inherited_through = None;
             page
         });
         if let Some(expected) = &expected {

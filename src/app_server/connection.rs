@@ -984,6 +984,16 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
+            Method::SessionNode {
+                session_id,
+                node_id,
+            } => Ok(MethodResult::Node {
+                node: self
+                    .sessions
+                    .read_node(&session_id, &node_id)
+                    .await
+                    .map_err(session_error)?,
+            }),
             Method::SessionTree {
                 session_id,
                 offset,
@@ -1252,7 +1262,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::SourceKey;
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v46 notice reaches only a connection that negotiated v46.
+        // A v47 notice reaches only a connection that negotiated v47.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }

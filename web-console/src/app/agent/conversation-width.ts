@@ -14,5 +14,5 @@ export function saveWidthPreference(value: number) {
 }
 export function displayedWidth(column: number, preference?: number) {
   const maximum = Math.max(0, column - (column >= WIDTH_MIN + WIDTH_EDGE ? WIDTH_EDGE : 48));
-  return Math.max(0, Math.min(maximum, Math.max(WIDTH_MIN, preference ?? Math.max(680, Math.min(column * .64, 920)))));
+  return Math.max(0, Math.min(maximum, Math.max(WIDTH_MIN, preference ?? 840)));
 }

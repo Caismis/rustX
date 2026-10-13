@@ -4,7 +4,6 @@ import { lifecycleAvailability, type LifecycleContext } from './session-lifecycl
 import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
-import { NavigationEpoch } from './navigation';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
@@ -13,15 +12,16 @@ import type {
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
   ConfigRepairReceipt, SourceTarget,
-} from '../../../protocol/app-server/v46';
+} from '../../../protocol/app-server/v47';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v46';
+import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v47';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 interface OutlineDemand {
   offset?: number;
-  paging: OutlinePagingIntent;
+  /** Absent for a disposable preview; only navigation owns committed paging. */
+  paging?: OutlinePagingIntent;
   automatic: boolean;
   current: () => boolean;
   work: Promise<ConversationTurnPage | undefined>;
@@ -72,7 +72,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v46').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v46').ContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v47').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v47').ContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -82,7 +82,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v46').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v47').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -103,6 +103,9 @@ export type GoalControlOutcome =
   | { status: 'uncertain' }
   | { status: 'obsolete' };
 export interface UncertainOperation {
+  /** Known lineage commit with uncertain durability, distinct from a lost ACK. */
+  committedNode?: { sessionId: string; nodeId: string };
+  diagnostic?: string;
   uploadOperationId?: string;
   compactionRequestId?: string;
   id: string;
@@ -172,10 +175,10 @@ export interface OperationAdmission {
   current: () => boolean;
   validate: (signal: AbortSignal) => Promise<boolean>;
 }
-type AttachmentAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
+type SessionAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
 /** One installation lifetime of an attachment-admission owner. Identity is the
  * object, never the callback: reinstalling the same callback is a new owner. */
-interface AttachmentAdmissionOwner { readonly admit: AttachmentAdmission }
+interface SessionAdmissionOwner { readonly admit: SessionAdmission }
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
   authority?: () => boolean;
@@ -244,7 +247,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'session/traceLocateTool', 'agent/traceLocateTool', 'agent/trace', 'agent/traceDetail',
   'agent/conversationCancel', 'agent/conversation', 'agent/artifactRead', 'agent/deliveryRead', 'agent/deliveryLocate', 'session/turns', 'session/uploadStatus',
-  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/tree', 'session/deletePreview',
+  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/node', 'session/tree', 'session/deletePreview',
   'session/history', 'session/statistics', 'session/traceHistory', 'session/traceHistoryDetail', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
   'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'agent/turns', 'agent/statistics', 'session/boundaries',
 ]);
@@ -293,7 +296,6 @@ export class AppServerClient {
   });
   readonly attachmentIntakes = new AttachmentIntakes();
   readonly log = new ProtocolLog();
-  readonly navigation = new NavigationEpoch();
   readonly firstSubmissions = new FirstSubmissions();
   /** Final client lifetime ends only explicitly, never on a component unmount. */
   dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
@@ -353,7 +355,6 @@ export class AppServerClient {
   }
   constructor(private readonly socketFactory: SocketFactory = (url, protocols) => new WebSocket(url, protocols), private readonly timeoutMs = 30_000, private readonly uploadCarrier = transferUpload) {
     // Navigation retires admission proofs; release their reservations outside the caller's stack.
-    this.navigation.subscribe(() => queueMicrotask(() => this.pump()));
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
@@ -424,16 +425,11 @@ export class AppServerClient {
         return { node: result.session.active_node, conversation: result.session.active_conversation_id };
       },
       conversation: async (node, current) => {
-        let offset: number | null | undefined = 0;
-        while (offset != null) {
-          const result: Extract<MethodResult, { type: 'tree' }> = await this.request({ method: 'session/tree', params: { session_id: id, offset, limit: 32 } }, 'tree', undefined, current);
-          const found = result.nodes.find(row => row.id === node); if (found) return found.conversation_id;
-          if (result.next_offset != null && result.next_offset <= offset) throw new Error('Invalid Session tree page.');
-          offset = result.next_offset;
-        }
-        throw new Error('Open Node is absent from the native Session tree.');
+        const { node: found } = await this.request({ method: 'session/node', params: { session_id: id, node_id: node } }, 'node', undefined, current);
+        if (found.id !== node) throw new Error('Mismatched native Node identity.');
+        return found.conversation_id;
       },
-      admit: current => this.admitAttachment(id, current),
+      admit: current => this.admitSessionOperation(id, current),
       attach: (node_id, admission) => native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission),
       detach: async (target, admission) => { await native({ method: 'session/detach', params: { target } }, 'detached', admission); },
       switchNode: async (target, node_id, admission) => (await native({ method: 'session/switchNode', params: { target, node_id } }, 'session', admission)).session,
@@ -468,24 +464,24 @@ export class AppServerClient {
   }
   // Product policy is injected by the Web owner, not interpreted by this transport.
   // Fail closed when there is no admission owner (including after its disposal).
-  private attachmentAdmission?: AttachmentAdmissionOwner;
-  setAttachmentAdmission(admit: AttachmentAdmission) {
+  private sessionAdmission?: SessionAdmissionOwner;
+  setSessionAdmission(admit: SessionAdmission) {
     // Every installation is a new incarnation, so retired proofs stay retired
     // even when the same callback is installed again.
-    const owner: AttachmentAdmissionOwner = { admit };
-    this.replaceAttachmentAdmission(owner);
+    const owner: SessionAdmissionOwner = { admit };
+    this.replaceSessionAdmission(owner);
     // Cleanup removes only its own incarnation; a stale one never disturbs a newer owner or its proofs.
-    return () => { if (this.attachmentAdmission === owner) this.replaceAttachmentAdmission(undefined); };
+    return () => { if (this.sessionAdmission === owner) this.replaceSessionAdmission(undefined); };
   }
-  private replaceAttachmentAdmission(owner?: AttachmentAdmissionOwner) {
-    this.attachmentAdmission = owner;
+  private replaceSessionAdmission(owner?: SessionAdmissionOwner) {
+    this.sessionAdmission = owner;
     // Owner change retires its proofs; release their reservations outside the caller's stack, as navigation does.
     queueMicrotask(() => this.pump());
   }
-  async admitAttachment(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
+  async admitSessionOperation(id: string, current: () => boolean = () => true): Promise<false | OperationAdmission> {
     const generation = this.state.generation;
-    const owner = this.attachmentAdmission;
-    const valid = () => current() && this.current(generation) && owner === this.attachmentAdmission;
+    const owner = this.sessionAdmission;
+    const valid = () => current() && this.current(generation) && owner === this.sessionAdmission;
     if (!valid()) return false;
     if (!owner) throw new Error('No Web attachment admission owner.');
     const allowed = await owner.admit(id, valid);
@@ -495,7 +491,6 @@ export class AppServerClient {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.lifecycles.restore(id);
   }
   private retireAuthority() {
-    this.navigation.invalidate();
     this.attachmentIntakes.retireAll();
     this.firstSubmissions.retireAuthority();
     const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
@@ -537,7 +532,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v46', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v47', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -555,12 +550,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 46, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 47, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 46 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v46 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 47 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v47 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -826,6 +821,10 @@ export class AppServerClient {
       }
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
       this.capacityReleased();
+      if ('result' in value && value.result?.type === 'session_transition' && value.result.durability_diagnostic) {
+        this.publish({ uncertain: [...this.state.uncertain, { id: String(value.id), method: pending.request.method, sessionId: pending.context.sessionId, generation,
+          committedNode: { sessionId: value.result.session.id, nodeId: value.result.session.active_node }, diagnostic: value.result.durability_diagnostic }] });
+      }
       // Evidence observers run at decode time, before continuation authority
       // checks. Their failures are local diagnostics, never a native RPC result.
       try {
@@ -1140,7 +1139,7 @@ export class AppServerClient {
     await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });
   }
   /** One observation scope for all cold durable reads. The Conversation is
-   * native tree evidence, never inferred from whichever response arrives first. */
+   * exact native Node evidence, never inferred from whichever response arrives first. */
   private coldReadScope(id: string, admitted: () => boolean = () => true) {
     const view = this.state.views[id];
     if (!view?.nodeId || !view.nodeConversationId) return;
@@ -1182,7 +1181,7 @@ export class AppServerClient {
     if (limit < 1 || !current()) return;
     if (previous) this.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
     try {
-      const admission = older ? await this.admitAttachment(id, current) : current;
+      const admission = older ? await this.admitSessionOperation(id, current) : current;
       if (!admission) return;
       const result = await this.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
       if (!current()) return;
@@ -1202,7 +1201,7 @@ export class AppServerClient {
       && this.state.views[id]?.tracePreview?.cache.details[record] === pending.details[record];
     this.setSession(id, { tracePreview: { ...preview, cache: pending } });
     try {
-      const admission = await this.admitAttachment(id, current);
+      const admission = await this.admitSessionOperation(id, current);
       if (!admission) return;
       const result = await this.request({ method: 'session/traceHistoryDetail', params: { session_id: id, node_id: node, record_id: record } }, 'session_trace_history_detail', undefined, admission);
       if (!current()) return;
@@ -1221,7 +1220,7 @@ export class AppServerClient {
       && this.state.views[id]?.preview?.history.epoch === epoch;
     this.setSession(id, { preview: { ...preview, history: { ...preview.history, loading: true, error: undefined } } });
     try {
-      const admission = await this.admitAttachment(id, current);
+      const admission = await this.admitSessionOperation(id, current);
       if (!admission) return;
       const result = await this.request({ method: 'session/history', params: { session_id: id, node_id: node, at: { type: 'older', before }, limit: HISTORY_PAGE_SIZE } }, 'session_history', undefined, admission);
       if (!current()) return;
@@ -1461,17 +1460,29 @@ export class AppServerClient {
   readTurns(id: string, offset?: number, userCurrent: () => boolean = () => true): Promise<ConversationTurnPage | undefined> {
     return this.demandOutline(id, offset, offset === undefined ? { type: 'latest' } : { type: 'page', offset }, userCurrent);
   }
-  private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent, userCurrent: () => boolean, automatic = false): Promise<ConversationTurnPage | undefined> {
+  /** Shares the bounded outline pipeline without publishing a reading destination. */
+  previewTurns(id: string, offset: number, current: () => boolean): Promise<ConversationTurnPage | undefined> {
+    const intent = this.readingIntents.get(id);
+    const valid = () => current() && this.readingIntents.get(id) === intent;
+    return this.demandOutline(id, offset, undefined, valid).then(page => valid() ? page : undefined);
+  }
+  private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent | undefined, userCurrent: () => boolean, automatic = false): Promise<ConversationTurnPage | undefined> {
     const view = this.state.views[id];
     if (!view || !userCurrent() || !this.lifecycles.observe(id)) return Promise.resolve(undefined);
     let read = this.outlineReads.get(id);
     if (read && !read.authority()) { this.retireOutline(id); read = undefined; }
     if (read) {
+      // Preview may observe a matching navigation read, but never take its authority.
+      if (!paging) {
+        const committed = [read.active, read.pending].find(demand => demand?.paging && demand.offset === offset);
+        if (committed) return committed.work.then(page => userCurrent() ? page : undefined);
+        if (read.pending?.paging) return Promise.resolve(undefined);
+      }
       const equivalent = !read.active.automatic && read.active.offset === offset ? read.active : read.pending?.offset === offset ? read.pending : undefined;
       if (equivalent) {
         if (equivalent === read.active) { read.pending?.resolve(); read.pending = undefined; }
         equivalent.current = userCurrent; equivalent.paging = paging;
-        this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
+        if (paging) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
         return equivalent.work;
       }
     }
@@ -1483,14 +1494,14 @@ export class AppServerClient {
       read = { authority: this.readingAuthority(id), active: demand, refresh: false };
       this.outlineReads.set(id, read);
     }
-    this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
+    if (paging) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...view.turnOutline, loading: true, error: undefined } });
     if (start) void this.runOutline(id, read);
     return demand.work;
   }
   private async runOutline(id: string, read: OutlineRead) {
     const demand = read.active;
     const owned = () => this.outlineReads.get(id) === read && read.authority();
-    const current = () => owned() && !read.pending?.current() && demand.current() && owned();
+    const current = () => owned() && !(read.pending?.paging && read.pending.current()) && demand.current() && owned();
     let page: ConversationTurnPage | undefined;
     try {
       if (!current()) return;
@@ -1499,10 +1510,10 @@ export class AppServerClient {
       if (current()) {
         if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
         page = result.page;
-        this.setSession(id, { turnOutline: { paging: demand.paging, page } });
+        if (demand.paging) this.setSession(id, { turnOutline: { paging: demand.paging, page } });
       }
     } catch (error) {
-      if (current()) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...this.state.views[id]?.turnOutline, loading: false, error: String(error) } });
+      if (demand.paging && current()) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...this.state.views[id]?.turnOutline, loading: false, error: String(error) } });
     } finally {
       // A superseded automatic read still owes a refresh of the surviving presentation.
       if (owned() && demand.automatic && !current()) read.refresh = true;
@@ -1542,7 +1553,15 @@ export class AppServerClient {
       const found = page.turns.find(row => row.ordinal === selection);
       if (!found) { this.setSession(id, { turnNavigation: { intent, error: 'This Turn is no longer in the native outline.' } }); return false; }
       turn = found; cut = page.cut;
-    } else turn = selection;
+    } else {
+      turn = selection;
+      const outline = this.state.views[id]?.turnOutline;
+      if (outline?.page) {
+        const offset = Math.floor((turn.ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE;
+        const paging: OutlinePagingIntent = offset >= Math.floor((outline.page.total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE ? { type: 'latest' } : { type: 'page', offset };
+        this.setSession(id, { turnOutline: { ...outline, paging } });
+      }
+    }
     const cursor = turn.cursor, key = turnKey(turn.id);
     if (!current()) return false;
     if (cursor == null) { this.setSession(id, { turnNavigation: { intent } }); return false; }
@@ -1559,6 +1578,31 @@ export class AppServerClient {
       if (!(history.page.entries ?? []).some(entry => entry.cursor === cursor)) throw new Error('This turn is outside the readable native history.');
       this.setSession(id, { history, turnNavigation: { intent } });
       return anchored() && current() ? turn : false;
+    } catch (error) {
+      if (current()) this.setSession(id, { turnNavigation: { intent, error: String(error) } });
+      return false;
+    }
+  }
+  /** Native owns the exact message position; one read installs a bounded window. */
+  async navigateMessage(id: string, messageId: string, userCurrent: () => boolean = () => true) {
+    const view = this.state.views[id];
+    const observation = this.lifecycles.observe(id);
+    if (!view?.history || !observation || !userCurrent()) return false;
+    const authority = this.readingAuthority(id), intent = this.invalidateReading(id), target = observation.target;
+    const current = () => observation.current() && authority() && this.readingIntents.get(id) === intent && userCurrent();
+    const anchored = () => this.state.views[id]?.history?.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId);
+    if (anchored()) return current();
+    this.setSession(id, { turnNavigation: { intent, pending: `message:${messageId}` } });
+    try {
+      const result = await this.request({ method: 'session/transcript', params: { target, at: { type: 'message', id: messageId, cut: null }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+      if (!current()) return false;
+      const cursor = result.window.target_cursor, entries = result.window.page.entries ?? [];
+      if (result.window.cut.conversation_id !== target.conversation_id || cursor == null || entries.length > HISTORY_PAGE_SIZE
+        || !entries.some(entry => entry.cursor === cursor && entry.item.type === 'message' && entry.item.message.id === messageId)) throw new Error('Invalid native message window.');
+      const history = installTranscriptWindow(result.window, this.state.views[id]?.history);
+      if (!history.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId)) throw new Error('The fork source message is outside the readable native history.');
+      this.setSession(id, { history, turnNavigation: { intent } });
+      return current() && !!anchored();
     } catch (error) {
       if (current()) this.setSession(id, { turnNavigation: { intent, error: String(error) } });
       return false;
@@ -1581,7 +1625,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v46').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v47').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
@@ -1692,7 +1736,7 @@ export class AppServerClient {
     return read();
   }
 
-  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
+  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     if (receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
@@ -1700,7 +1744,7 @@ export class AppServerClient {
     ];
     return this.sendContent(id, content, delivery, acknowledged, dispatchCurrent);
   }
-  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: () => void, dispatchCurrent?: () => boolean) {
+  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     const generation = this.state.generation;
     const preparation = this.modelPreparations.get(id);
     if (preparation) await preparation.work;
@@ -1798,10 +1842,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v46').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v47').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v47').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -1839,7 +1883,7 @@ export class AppServerClient {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v47').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -1959,8 +2003,8 @@ export class AppServerClient {
     this.modelPreparations.get(id)?.retire(); this.modelPreparations.delete(id);
     await this.lifecycles.command(id, { kind: 'release', current: () => true });
   }
-  switchNode(id: string, nodeId: string): Promise<void> {
-    return this.lifecycles.command(id, { kind: 'switch', node: nodeId, current: () => true }, true).then(() => {});
+  switchNode(id: string, nodeId: string, current: () => boolean = () => true): Promise<void> {
+    return this.lifecycles.command(id, { kind: 'switch', node: nodeId, current }, true).then(() => {});
   }
   private retireObservationWork(id: string) {
     this.acquiring.delete(id);
@@ -1975,6 +2019,9 @@ export class AppServerClient {
     this.summaryObservedEpoch.delete(id);
     this.setSession(id, { history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
   }
+  /** Resample admission proofs after their browser owner retires. No native
+   * transaction is cancelled after dispatch. */
+  recheckAdmissions() { queueMicrotask(() => this.pump()); }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {
     // This acknowledges only the notice. Uncertain interaction controls remain

@@ -9,12 +9,12 @@ import { commands, discoveryQuery, parseCommand, available } from '../src/app/co
 import { activeAttempt, executionIdle, lineageSwitchSafe } from '../src/bindings/projection';
 import { matchCommands } from '../src/app/commands/matching';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import { NavigationEpoch } from '../src/client/navigation';
+import { routeFixture } from './shell-navigation-fixture';
 import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v46';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v47';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -26,6 +26,30 @@ afterEach(() => { cleanup(); server.client.disconnect(); vi.restoreAllMocks(); }
 const methods = () => server.requests.map(item => item.request.method);
 
 describe('one narrow browser command grammar', () => {
+  it('offers Harness attachment and command icons in plus, preserves the draft, and keeps slash discovery command-only', () => {
+    const send = vi.fn(async () => true), command = vi.fn();
+    render(<AgentComposer disabled={false} busy={false} active={false} onCommand={command} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
+    const input = screen.getByLabelText('Message');
+    const picker = screen.getByLabelText('Attach files');
+    const pick = vi.spyOn(picker, 'click');
+    fireEvent.change(input, { target: { value: 'Keep this draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getAllByRole('option').every(row => row.querySelector('svg'))).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Add attachments' })).toBeNull();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(pick).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect((input as HTMLTextAreaElement).value).toBe('Keep this draft');
+    expect(send).not.toHaveBeenCalled(); expect(command).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '/' } });
+    expect(screen.queryByRole('option', { name: /file$/ })).toBeNull();
+  });
+  it('keeps file intake available through plus without a command handler', () => {
+    render(<AgentComposer disabled={false} busy={false} active={false} onSend={async () => true} onUpload={async () => []} onCancel={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    expect(screen.getByRole('option', { name: /file$/ })).toBeTruthy();
+  });
   it('discovers slash, refuses unsupported input and arguments, and leaves ordinary text alone', () => {
     expect(discoveryQuery('/')).toBe(''); expect(discoveryQuery(' /mdl')).toBe('mdl');
     expect(discoveryQuery('Read /model')).toBeUndefined();
@@ -86,7 +110,7 @@ function nativeFixture() {
   server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {
     if (request.method !== 'session/fork' && request.method !== 'session/branch') throw new Error('wrong method');
-    if (request.params.surface_revision !== boundary.surface_revision || request.params.boundary !== boundary.message.id) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
+    if (request.params.surface_revision !== boundary.surface_revision || !(request.params.boundary === boundary.message.id || request.method === 'session/fork' && request.params.side === 'after' && request.params.boundary === 'original-assistant')) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
     const id = request.method === 'session/fork' ? 'child' : 'A';
     const nodeId = request.method === 'session/fork' ? 'node-child' : 'branch-A';
     const conversation = request.method === 'session/fork' ? 'conversation-child' : 'conversation-branch-A';
@@ -107,7 +131,7 @@ function nativeFixture() {
 }
 async function subject() {
   const fixture = nativeFixture(); await server.attached('A', 'B');
-  const navigation = new NavigationEpoch();
+  const navigation = routeFixture(server.client);
   const scope = new CommandSession(server.client, 'A', navigation.capture());
   const selection = (await scope.boundaries()).selections[0];
   return { fixture, navigation, scope, selection };
@@ -312,6 +336,28 @@ describe('restored native editor content', () => {
     expect(request.params).toMatchObject({ content: [uploads[1 - index], { type: 'text', text: 'unchanged text' }] });
     expect(errors).not.toHaveBeenCalled();
   });
+  it('a genuine Fork seeds once and sidebar reselect preserves authored text, native uploads, selection and incarnation', async () => {
+    const f = nativeFixture(); f.content.splice(0, f.content.length, { type: 'upload', session_id: 'A', batch_id: 'seed-batch', token: 'seed-token' }, { type: 'text', text: 'Authorized Fork input' });
+    await server.attached('A');
+    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Branch into a new Session' })).toHaveProperty('disabled', false));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Branch into a new Session' })));
+    const input = await screen.findByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+    await act(async () => { await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
+    await waitFor(() => expect(input.value).toBe('Authorized Fork input'));
+    expect(screen.getByText('Native restored upload batch seed-batch')).toBeTruthy();
+    fireEvent.change(input, { target: { value: 'Edited Fork input' } }); input.setSelectionRange(2, 8, 'backward'); fireEvent.select(input);
+    const card = input.closest('[data-editor-incarnation]')!, incarnation = card.getAttribute('data-editor-incarnation'), revision = card.getAttribute('data-editor-revision');
+    const target = server.client.target('child'), before = server.requests.length;
+    for (let click = 0; click < 2; click++) await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Open Session child' })));
+    expect(input.value).toBe('Edited Fork input'); expect(screen.getByText('Native restored upload batch seed-batch')).toBeTruthy();
+    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([2, 8, 'backward']);
+    expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
+    expect(server.client.target('child')).toBe(target);
+    expect(server.requests.slice(before).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.request.method))).toEqual([]);
+    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+  });
   it('supported restored input round-trips exact native order without changes', async () => {
     await server.attached('A');
     const content: UserInputBlock[] = [...uploads, { type: 'text', text: 'original\ntext' }];
@@ -420,7 +466,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['branch', 'tree'] as const)('an already open %s selector tracks acknowledgement and authoritative reconciliation', async id => {
     const { navigation, fixture } = await subject();
-    render(<CommandPanel request={{ id }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} opened={() => {}} />);
+    render(<CommandPanel request={{ id }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
     const row = await screen.findByRole('option');
     expect(row).toHaveProperty('disabled', false);
     server.held.add('turn/start');
@@ -446,7 +492,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['session/create'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
     const { scope, fixture } = await subject(); server.held.add(method);
-    const work = method === 'session/create' ? firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}) : Promise.reject(new Error('unreachable'));
+    const work = method === 'session/create' ? firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}) : Promise.reject(new Error('unreachable'));
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();
@@ -456,7 +502,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it('a new Session committed after navigation does not acquire a child attachment', async () => {
     const { scope, navigation, fixture } = await subject(); server.held.add('session/create');
-    const work = firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
+    const work = firstSubmitPort(server.client, { resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } as unknown as ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
     const response = server.commit(request); navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toMatchObject({ id: fixture.committed[0].session.id }); expect(fixture.committed).toHaveLength(1);
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
@@ -479,7 +525,7 @@ describe('typed native operations and continuation fencing', () => {
     const response = server.commit(request); expect(fixture.committed).toHaveLength(1);
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); expect(await work).toBeUndefined();
-    expect(server.requests).toHaveLength(count); expect(fixture.original).toEqual(fixture.originals);
+    expect(server.requests.slice(count).map(row => row.request.method)).toEqual(['session/list']); expect(fixture.original).toEqual(fixture.originals);
     expect(server.client.getSnapshot().views.A.target?.conversation_id).toBe('conversation-A');
   });
   it('rejects the exact invalid revision without refreshing or replacing it', async () => {
@@ -548,18 +594,17 @@ describe('typed native operations and continuation fencing', () => {
     if (method === 'session/fork') expect(server.client.getSnapshot().sessions.some(session => session.id === 'child')).toBe(true);
     await expect(scope.setModel('fixture/first')).rejects.toThrow('Obsolete');
   });
-  it('visibly locks a rejected stale history mutation', async () => {
-    const { navigation } = await subject(); const close = vi.fn();
+  it('Shell reports a rejected stale history mutation once and preserves the original attachment', async () => {
+    const { navigation, selection } = await subject(); const original = server.client.target('A');
     server.handlers.set('session/fork', () => { throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision' }); });
-    render(<CommandPanel request={{ id: 'fork' }} client={server.client} sessionId="A" current={navigation.capture()} close={close} succeeded={() => {}} opened={() => {}} />);
-    const row = await screen.findByRole('option', { name: /Try this/ });
-    await act(async () => fireEvent.click(row));
-    expect(screen.getByRole('alert').textContent).toContain('Invalid historical Surface revision');
-    expect((row as HTMLButtonElement).disabled).toBe(true);
+    navigation.actor.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: 'A', action: 'fork', selection } });
+    await vi.waitFor(() => expect(navigation.actor.getSnapshot().context.error).toContain('Invalid historical Surface revision'));
+    expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
+    expect(server.client.target('A')).toBe(original); expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
   });
   it('an unavailable historical message cannot be replaced with another displayed boundary', async () => {
     const { navigation } = await subject();
-    render(<CommandPanel request={{ id: 'branch', messageId: 'missing-user' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} opened={() => {}} />);
+    render(<CommandPanel request={{ id: 'branch', messageId: 'missing-user' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
     expect((await screen.findByRole('alert')).textContent).toContain('not an available native user boundary');
     expect(screen.queryByRole('option')).toBeNull(); expect(methods()).not.toContain('session/branch');
   });
@@ -575,7 +620,7 @@ describe('typed native operations and continuation fencing', () => {
     fireEvent.click(row);
     const request = await server.waitFor(method, 1), response = server.commit(request);
     expect(fixture.committed).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
     const attachments = methods().filter(method => method === 'session/attach').length;
     await act(async () => server.socket.deliver(response));
@@ -601,7 +646,7 @@ it('lineage origin labels stay deferred and bilingual without changing node IDs 
     { id: 'fork-A', conversation_id: 'native-fork-conversation', ordinal: '3', origin: { type: 'fork', source_session: 'A', source_node: 'node-A', source_surface_revision: '1', source_message: 'native-message', side: 'before' } },
   );
   await server.attached('A');
-  render(<CommandPanel request={{ id: 'tree' }} client={server.client} sessionId="A" current={() => true} close={() => {}} succeeded={() => {}} opened={() => {}} />);
+  render(<CommandPanel request={{ id: 'tree' }} client={server.client} sessionId="A" current={() => true} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
   await screen.findAllByRole('option');
   const before = [...server.requests];
   for (const [origin, id] of [['new', 'node-A'], ['clone', 'clone-A'], ['fork', 'fork-A']] as const) {
@@ -633,4 +678,77 @@ it('keeps file intake available without a command host and never dispatches a fi
   fireEvent.change(input, { target: { value: '/file' } });
   await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
   expect(send).not.toHaveBeenCalled(); expect(upload).not.toHaveBeenCalled();
+});
+
+// Publication retirement is independent of each admitted native transaction.
+it.each(['before dispatch', 'after dispatch', 'after commit'] as const)('explicit Node Switch ownership survives UI supersession: %s', async phase => {
+  const { scope, navigation } = await subject();
+  server.nodeSnapshots.set('other-node', { ...snapshot('A'), conversation_id: 'other-conversation' });
+  const original = server.client.target('A'), before = methods().filter(method => method === 'session/attach').length;
+  if (phase === 'before dispatch') {
+    navigation.invalidate(); await expect(scope.openNode('other-node', 'other-conversation')).rejects.toThrow('Obsolete');
+    expect(methods()).not.toContain('session/switchNode'); expect(server.client.target('A')).toBe(original); return;
+  }
+  server.held.add('session/switchNode'); const work = scope.openNode('other-node', 'other-conversation');
+  const request = await server.waitFor('session/switchNode', 1);
+  const response = phase === 'after commit' ? server.commit(request) : undefined;
+  navigation.invalidate();
+  if (response) server.socket.deliver(response); else server.reply(request);
+  expect(await work).toBeUndefined();
+  const view = server.client.getSnapshot().views.A;
+  expect(view).toMatchObject({ attachment: 'detached', nodeId: 'other-node', nodeConversationId: 'other-conversation' });
+  expect(view.target).toBeUndefined(); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(before); expect(methods()).not.toContain('turn/start');
+  // Explicit recovery uses the truthful selected Node; it does not replay Switch.
+  server.held.delete('session/switchNode'); await server.client.attach('A');
+  expect(server.client.target('A').conversation_id).toBe('other-conversation'); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
+});
+it.each(['branch', 'retry'] as const)('%s admitted attachment settles after supersession without Retry execution or route publication', async action => {
+  const { scope, selection, navigation } = await subject(); server.held.add('session/attach');
+  const work = scope.transition(action, selection); const request = await server.waitFor('session/attach', 3);
+  navigation.invalidate(); server.reply(request); expect(await work).toBeUndefined();
+  expect(server.client.target('A').conversation_id).toBe('conversation-branch-A');
+  expect(methods().filter(method => method === 'session/branch')).toHaveLength(1); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(3); expect(methods()).not.toContain('turn/start');
+});
+it('Retry already dispatched input settles once after supersession and never replays', async () => {
+  const { scope, selection, navigation } = await subject(); server.held.add('turn/start');
+  const work = scope.transition('retry', selection); const request = await server.waitFor('turn/start', 1), response = server.commit(request);
+  navigation.invalidate(); server.socket.deliver(response); expect(await work).toBeUndefined();
+  expect(methods().filter(method => method === 'turn/start')).toHaveLength(1); expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+  expect(server.client.target('A').conversation_id).toBe('conversation-branch-A');
+});
+it('late committed Branch durability evidence survives UI retirement without native replay', async () => {
+  const { scope, selection, navigation } = await subject(); server.held.add('session/branch');
+  const work = scope.transition('branch', selection), request = await server.waitFor('session/branch', 1), response = server.commit(request);
+  if (!('result' in response) || response.result?.type !== 'session_transition') throw new Error('Wrong transition ACK');
+  response.result.durability_diagnostic = 'fsync uncertainty'; navigation.invalidate(); server.socket.deliver(response);
+  expect(await work).toBeUndefined(); expect(server.client.getSnapshot().uncertain).toMatchObject([{ method: 'session/branch', sessionId: 'A', committedNode: { sessionId: 'A', nodeId: 'branch-A' }, diagnostic: 'fsync uncertainty' }]);
+  expect(methods().filter(method => method === 'session/branch')).toHaveLength(1); expect(methods()).not.toContain('session/switchNode'); expect(methods()).not.toContain('turn/start');
+});
+it('UI retirement after committed Switch and before follow-up admission leaves authoritative detached state', async () => {
+  const { scope, selection, navigation } = await subject(), originalAttach = server.client.attach.bind(server.client);
+  const before = methods().filter(method => method === 'session/attach').length;
+  const attach = vi.spyOn(server.client, 'attach').mockImplementation((...args) => {
+    expect(server.client.getSnapshot().views.A).toMatchObject({ attachment: 'detached', nodeId: 'branch-A', nodeConversationId: 'conversation-branch-A' });
+    navigation.invalidate(); return originalAttach(...args);
+  });
+  expect(await scope.transition('retry', selection)).toBeUndefined(); expect(attach).toHaveBeenCalledOnce();
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(before); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1); expect(methods()).not.toContain('turn/start');
+});
+it('Retry retires queued input before dispatch without replaying the committed Branch or Switch', async () => {
+  const { scope, selection, navigation } = await subject(), original = server.client.sendContent.bind(server.client);
+  server.handlers.set('resources/read', () => ({ type: 'capabilities', capabilities: { configured_tools: [], revision: '0' } }));
+  let reads: Promise<unknown>[] = [];
+  let queued!: () => void; const staged = new Promise<void>(resolve => { queued = resolve; });
+  vi.spyOn(server.client, 'sendContent').mockImplementation((...args) => {
+    server.held.add('resources/read');
+    const target = server.client.target('A'); reads = Array.from({length:8}, () => server.client.request({method:'resources/read',params:{target}},'capabilities'));
+    const work = original(...args); expect(methods()).not.toContain('turn/start'); navigation.invalidate(); queued(); return work;
+  });
+  const work = scope.transition('retry', selection), refused = expect(work).rejects.toThrow('Authority changed before dispatch');
+  await staged;
+  server.held.delete('resources/read'); for(const row of server.requests.filter(row => row.request.method === 'resources/read')) server.reply(row.request); await Promise.all(reads); await refused;
+  expect(methods()).not.toContain('turn/start'); expect(methods().filter(method=>method==='session/branch')).toHaveLength(1); expect(methods().filter(method=>method==='session/switchNode')).toHaveLength(1);
+  expect(server.client.getSnapshot().views.A.inboundRequests).toBe(0); expect(server.client.target('A').conversation_id).toBe('conversation-branch-A');
 });

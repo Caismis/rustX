@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v46 envelope and method vocabulary.
+//! Rust authority for the App Server v47 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 46;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 47;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -362,6 +362,12 @@ pub enum Method {
     SessionSummary { session_id: SessionId },
     #[serde(rename = "session/name")]
     SessionName { session_id: SessionId, name: String },
+    /// Read one exact native node without runtime composition or tree enumeration.
+    #[serde(rename = "session/node")]
+    SessionNode {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+    },
     #[serde(rename = "session/tree")]
     SessionTree {
         session_id: SessionId,
@@ -765,6 +771,9 @@ pub enum MethodResult {
     Sessions {
         sessions: Vec<crate::local_runtime::session::SessionSummary>,
         next_offset: Option<usize>,
+    },
+    Node {
+        node: crate::local_runtime::session::SessionNode,
     },
     Tree {
         nodes: Vec<crate::local_runtime::session::SessionNode>,

@@ -319,8 +319,9 @@ fn count_conversation_store_open() {
 /// Version 55 indexes reverse immutable Turn membership for exact validation.
 /// Version 56 combines native child history/provenance with frozen shared
 /// Session workspace ownership and removes Candidate/worktree lifecycle facts.
+/// Version 57 requires the immutable inherited transcript watermark in bootstrap identity.
 /// Earlier development stores are rejected without migration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 56;
+pub const SQLITE_SCHEMA_VERSION: i64 = 57;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -2130,7 +2131,7 @@ impl ConversationStore for SqliteConversationStore {
             }
             transaction
                 .execute(
-                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,turn_count,response_count,occupancy_json,occupancy_digest,provenance_digest) VALUES(1,?1,?2,?3,?4,?5,?6,?7)",
+                    "INSERT INTO bootstrap_identity(id,message_count,history_digest,turn_count,response_count,occupancy_json,occupancy_digest,provenance_digest,inherited_transcript_through) VALUES(1,?1,?2,?3,?4,?5,?6,?7,(SELECT next_transcript_position FROM rustx_store WHERE id=1))",
                     params![
                         i64::try_from(messages.len()).map_err(|_| storage("initial message count is not representable"))?,
                         history_digest,
@@ -2735,6 +2736,7 @@ impl ConversationStore for SqliteConversationStore {
         let next_cursor = more.then(|| entries.last().unwrap().cursor);
         entries.reverse();
         Ok(TranscriptPage {
+            inherited_through: inherited_transcript_through(&connection)?,
             entries,
             next_cursor,
         })
@@ -5433,7 +5435,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 occupancy_digest TEXT NOT NULL,
                 turn_count INTEGER NOT NULL CHECK(turn_count>=0),
                 response_count INTEGER NOT NULL CHECK(response_count>=0),
-                provenance_digest TEXT NOT NULL
+                provenance_digest TEXT NOT NULL,
+                inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0)
             );
             CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
                 ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
@@ -5599,6 +5602,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "turn_count",
             "response_count",
             "provenance_digest",
+            "inherited_transcript_through",
         ]
     {
         return Err(ConversationStoreError::IncompatibleSchema(
@@ -5752,6 +5756,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "provenance_digest",
                 "occupancy_json",
                 "occupancy_digest",
+                "inherited_transcript_through",
             ],
         ),
         (
@@ -6830,6 +6835,7 @@ fn load_transcript_page(
 ) -> Result<TranscriptPage, ConversationStoreError> {
     if limit == 0 {
         return Ok(TranscriptPage {
+            inherited_through: inherited_transcript_through(connection)?,
             entries: Vec::new(),
             next_cursor: None,
         });
@@ -6901,9 +6907,30 @@ fn load_transcript_page(
         })
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
     Ok(TranscriptPage {
+        inherited_through: inherited_transcript_through(connection)?,
         entries,
         next_cursor,
     })
+}
+
+const INHERITED_TRANSCRIPT_THROUGH_SQL: &str =
+    "SELECT COALESCE((SELECT inherited_transcript_through FROM bootstrap_identity WHERE id=1),0)";
+
+/// The seed owns canonical Ledger positions, not remapped message spelling or
+/// origin Conversation IDs. Context messages have no transcript row, while
+/// terminal-only inherited turns do: both are covered by this native boundary.
+/// Bootstrap persists its final transcript watermark atomically with the seed;
+/// local appends and repeated bounded reads never recompute the inherited prefix.
+fn inherited_transcript_through(
+    connection: &Connection,
+) -> Result<TranscriptCursor, ConversationStoreError> {
+    let position: i64 = connection
+        .query_row(INHERITED_TRANSCRIPT_THROUGH_SQL, [], |row| row.get(0))
+        .map_err(|error| storage(format!("inherited transcript boundary: {error}")))?;
+    Ok(TranscriptCursor::new(nonnegative(
+        position,
+        "inherited transcript boundary",
+    )?))
 }
 
 /// Resolves one transcript reference without copying its body into the
@@ -14382,7 +14409,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 56);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14451,7 +14478,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 56);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

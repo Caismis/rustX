@@ -4,7 +4,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationStats } from '../src/app/agent/UsageStats';
 import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v46';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v47';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });
@@ -33,7 +33,7 @@ it('one completed response tail copies only final visible text and keeps missing
   const tail=within(ui.getByLabelText('Completed Turn'));
   await act(async()=>fireEvent.click(tail.getByRole('button',{name:'Copy'})));
   expect(writeText).toHaveBeenCalledWith('Final answer');
-  fireEvent.click(tail.getByRole('button',{name:'Usage 120 tok'}));
+  fireEvent.click(tail.getByRole('button',{name:'Usage 120 token'}));
   const detail=within(await ui.findByRole('dialog',{name:'Turn usage'}));
   expect(detail.getByText('Input')).toBeTruthy();
   expect(detail.queryByText('Cached input')).toBeNull(); expect(detail.queryByText('Cache hit')).toBeNull(); expect(detail.queryByText('Model')).toBeNull();
@@ -106,14 +106,14 @@ it('the Turn usage dialog splits cached input and names the requests\' models', 
   state.transcript.entries![2].completed_response = { ...response, models: ['kimi-k3', 'deepseek-v4'], timing: { total_duration_ms: 19000 },
     usage: { input_tokens: 15055, output_tokens: 406, total_tokens: 15461, details: { cached_input_tokens: 7168, reasoning_tokens: 120 } } };
   const ui = render(<AgentTranscript snapshot={state}/>);
-  fireEvent.click(ui.getByRole('button', { name: 'Usage 15.5K tok' }));
+  fireEvent.click(ui.getByRole('button', { name: 'Usage 15.5K token' }));
   const detail = within(await ui.findByRole('dialog', { name: 'Turn usage' }));
-  expect(detail.getByText('15,461 tok')).toBeTruthy();
+  expect(detail.getByText('15,461 token')).toBeTruthy();
   expect(detail.getByText('kimi-k3, deepseek-v4')).toBeTruthy();
   expect(detail.getByText('47.6%')).toBeTruthy();
-  expect(detail.getByText('7,887 tok')).toBeTruthy();
-  expect(detail.getByText('7,168 tok')).toBeTruthy();
-  expect(detail.getByText('(120 tok reasoning)')).toBeTruthy();
+  expect(detail.getByText('7,887 token')).toBeTruthy();
+  expect(detail.getByText('7,168 token')).toBeTruthy();
+  expect(detail.getByText('(120 token reasoning)')).toBeTruthy();
   // The process header owns the Turn duration; the actions carry no timing pill.
   expect(ui.queryByRole('button', { name: /Ran for/ })).toBeNull();
 });

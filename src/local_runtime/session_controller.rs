@@ -807,6 +807,21 @@ impl SessionController {
         self.repair_activity(id).await?;
         self.repair_display_preview(id).await.map(|_| ())
     }
+    /// Read the exact immutable node under the catalog lock. The existing native
+    /// node map owns identity and provenance; no runtime or store is opened.
+    /// # Errors
+    /// Unknown/deleting Session and unknown Node fail explicitly.
+    pub async fn read_node(
+        &self,
+        id: &SessionId,
+        node: &SessionNodeId,
+    ) -> Result<SessionNode, SessionError> {
+        self.catalog
+            .lock()
+            .await
+            .lineage(id, Some(node))
+            .map(|(node, _)| node)
+    }
     /// Read a bounded graph page without loading a runtime.
     /// # Errors
     /// Unknown Session or invalid page bounds fail explicitly.

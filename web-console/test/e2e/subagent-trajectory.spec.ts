@@ -8,7 +8,7 @@ for (const width of [1440, 390]) test(`child-owned trajectory, paging and conver
   if (width < 600) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
-  if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  if (width < 600) await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Subagents', exact: true }).click();
   await page.getByRole('treeitem', { name: /Verify findings/ }).click();
   const input = page.getByRole('textbox', { name: 'Message Agent Verify findings' });

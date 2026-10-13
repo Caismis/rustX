@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v46` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v47` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -135,7 +135,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v46.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v47.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -253,6 +253,79 @@ remaining a resume hint; no persisted observation or request state is introduced
 On a fresh page the Session remains available through the native list
 for explicit Open. Opening or resuming resolves through rustX's canonical
 configuration owners.
+
+AppFrame owns narrow-sidebar visibility and reports explicit Escape, backdrop,
+toggle and breakpoint dismissal to the XState v5 ShellNavigationMachine. Its
+committed route is independent from its single disposable preparing actor. Beginning or retiring a
+pending gesture leaves the displayed conversation's Stop/upload controls valid;
+only route publication or authority replacement revokes its committed fence.
+Sidebar catalog search owns only its directory read identity; it cannot replace
+the route or retire an unrelated navigation intent.
+Failure retires only its own pending intent, without refreshing, reopening or
+releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
+user dismissal retires sidebar preparation; successful programmatic closure
+does not cancel the committed route. Settings, connection Settings and
+owning-Workspace Settings synchronously retire preparation from every
+conversation entry point (including Fork source) before dispatching to the
+independent Settings machine. Idle Settings and overlay dismissal preserve
+committed controls and continuation fences. A current authoritative attachment permits
+immediate presentation navigation without an
+attachment refresh. Cold navigation commits only after lifecycle admission and
+the final gesture, generation and attachment-control checks. Dismissal or a newer
+gesture retires presentation authority; an already dispatched native operation
+still settles in the Session lifecycle actor. Successful publication closes the
+overlay programmatically without revoking its own commit. Navigation from an existing executable route preserves that route until admission.
+Startup from an empty draft may project a non-executable Session draft for local
+input staging; it never grants runtime controls before attachment proof. Saved
+route restoration starts after connection setup and Settings handoff complete,
+only while the initial draft has not been replaced. Fork View Source uses exact,
+authorized `session/node` and cut-bound `session/history` reads to publish a
+read-only route. It has bounded paging, exact ChatViewport Message landing and a
+return action, without source attachment, Node switching or model execution.
+The browser-lifetime `ComposerDraft` owns editor incarnation, authored content
+revision, selection and revision-correlated submission tickets. React subscribes;
+it never mirrors stale component-local text back into that owner. Entering history
+and returning to its originating Session preserve the logical editor destination,
+including sidebar selection and cold attachment admission. Fast and prepared
+navigation use the same editor-destination comparison through history `returnTo`.
+Returning establishes fresh route controls even when the draft binding stays
+unchanged; selecting another Session or an explicit executable Node/Branch/Retry
+transition establishes a separate editor. Native receipt and Conversation checks
+remain independent of this local draft continuity.
+Known native `inbound_accepted` settlement consumes only the submitted revision
+and exact selected upload entries, even while the editor is unmounted. Later
+edits, including equal text authored again, remain unsent. Older acceptance does
+not unblock a newer pending submission. Lost acknowledgements remain uncertain;
+there is no automatic replay. Native receipt authority changes retire receipts,
+not recoverable local text or File selections. Explicit successful First Submission
+Discard alone replaces the incarnation and clears the discarded draft; refused
+Discard and obsolete settlement cannot replace the current editor. Deliberate
+executable route replacement establishes a separate editor identity.
+
+Initial restored content is adopted once when a new logical editor key is
+published. An authorized native Fork/Branch transition publishes that fresh key
+and its exact Conversation seed together; ConversationSeat validates the native
+Conversation before exposing the seed. Refocusing the current Session preserves
+its valid seed association. Later prop references, cleared presentation fields,
+remounts and discarded incarnations cannot reinitialize an existing key or
+overwrite an authored revision.
+
+Submission tickets retain typed Session/Conversation identity separately from
+attachment-specific receipt authority. Known acceptance always records the
+historical ticket's native evidence, but edits the current projection only when
+its editor incarnation and canonical Conversation match. Same-Conversation
+reattachment may settle the exact text revision; it cannot consume replacement
+attachment receipts. A Node/Conversation replacement fences all old consumption
+without manufacturing an authored edit. Connection retirement makes a transmitted
+unacknowledged input uncertain and old-generation replies cannot invent acceptance.
+The normal CommandSession lineage frontier excludes Branch/Retry/Node navigation
+while inbound acknowledgement remains outstanding. Real-native held-response tests
+also exercise an explicit lower-level lifecycle Switch, proving the draft identity
+fence independently of that UI admission exclusion. No settlement attaches,
+refreshes, switches, executes or replays input.
+
+Historical file references remain metadata; executable workspace/Artifact byte
+preview callbacks are not inherited by that route.
 
 Request IDs provide correlation only. Separate bounded lanes permit four waits,
 two Agent message admissions, two lifecycle controls and eight transmitted ordinary

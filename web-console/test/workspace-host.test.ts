@@ -66,10 +66,9 @@ it('canonical endpoint identity accepts URL equivalence and rejects different ho
 it('unavailable roots fail fresh admission, unregister preserves it, and symlink/replacement revoke it', async () => {
   const { host, a, b, config, endpoint } = fixture();
   const [workspace] = (await host.listWorkspaces()).workspaces;
-  const { WorkspaceSessionNavigation } = await import('../src/workspaces/navigation');
-  const { NavigationEpoch } = await import('../src/client/navigation');
+  const { WorkspaceSessionAdmission } = await import('../src/workspaces/session-admission');
   const client = { getSnapshot: () => ({ generation: 1, endpoint }), request: async () => ({ settings: { cwd: a } }) } as unknown as import('../src/client/app-server').AppServerClient;
-  const admission = new WorkspaceSessionNavigation(new WorkspaceAuthority(host), client, new NavigationEpoch());
+  const admission = new WorkspaceSessionAdmission(new WorkspaceAuthority(host), client);
   expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate(new AbortController().signal)).toBe(true);
   rmSync(a, { recursive: true });
   expect(await host.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'unavailable' }]);
@@ -83,7 +82,7 @@ it('unavailable roots fail fresh admission, unregister preserves it, and symlink
   rmSync(a); mkdirSync(a);
   const replacement = new LocalWorkspaceHost({ ...config, roots: config.roots.filter(root => root.cwd !== a) });
   expect(await replacement.classifyLocations([a], endpoint)).toEqual([{ authorized: false, reason: 'denied' }]);
-  const revoked = new WorkspaceSessionNavigation(new WorkspaceAuthority(replacement), client, new NavigationEpoch());
+  const revoked = new WorkspaceSessionAdmission(new WorkspaceAuthority(replacement), client);
   await expect(revoked.admit('native-session', () => true)).rejects.toThrow('not authorized');
   expect((await replacement.listWorkspaces()).authorityId).not.toBe((await host.listWorkspaces()).authorityId);
   await expect(replacement.classifyLocations([b], endpoint, (await host.listWorkspaces()).authorityId)).rejects.toThrow('replaced');

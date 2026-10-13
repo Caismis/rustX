@@ -1,7 +1,7 @@
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { expect, it, vi } from 'vitest';
 import { act } from 'react';
-import { NavigationEpoch } from '../src/client/navigation';
+import { routeFixture } from './shell-navigation-fixture';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
 import type { AppServerClient, ClientView } from '../src/client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces, type SessionLocation, type WorkspaceCatalog } from '../src/workspaces/host';
@@ -30,8 +30,8 @@ async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] =
     }),
     adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
   };
-  const navigation = new NavigationEpoch();
-  const client = { navigation, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
+  const client = { firstSubmissions: { draft: () => undefined }, recheckAdmissions: () => {}, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
+  const navigation = routeFixture(client);
   const authority = new WorkspaceAuthority(host);
   const owner = new WorkspaceAssociations(client, authority);
   const stop = owner.start();
@@ -56,7 +56,8 @@ it('retains confirmed evidence during cloned, title-only, reordered and disconne
   await f.observed(2);
   expect(f.owner.getSnapshot().entries.get('A')).toMatchObject({ confirmed, status: 'refreshing' });
   expect(f.host.resolveWorkspace).not.toHaveBeenCalled(); expect(f.host.adoptWorkspace).not.toHaveBeenCalled();
-  f.stop(); expect(f.listeners.size).toBe(0);
+  f.stop(); expect(f.listeners.size).toBe(1); // The browser-lifetime Shell authority observer remains.
+  f.navigation.stop(); expect(f.listeners.size).toBe(0);
 });
 it('correlates captured IDs with duplicate cwds and retains unrelated page metadata', async () => {
   const f = await fixture(); await f.accept(0);
@@ -150,7 +151,8 @@ it('bounds retained identities and in-flight work while coalescing repeated dema
   expect(f.owner.getSnapshot().entries.size).toBeLessThanOrEqual(128);
   f.owner.select('19-0'); f.owner.select('19-0');
   expect(f.reads.length).toBeLessThanOrEqual(2);
-  f.stop(); expect(f.reads.every(read => read.signal?.aborted)).toBe(true); expect(f.listeners.size).toBe(0);
+  f.stop(); expect(f.reads.every(read => read.signal?.aborted)).toBe(true); expect(f.listeners.size).toBe(1);
+  f.navigation.stop(); expect(f.listeners.size).toBe(0);
 });
 it('splits a full page plus selected off-page demand into at most 32 per batch and publishes atomically', async () => {
   const f = await fixture(); await f.accept(0);

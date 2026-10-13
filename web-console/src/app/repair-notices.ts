@@ -1,4 +1,4 @@
-import type { ConfigRepairReceipt } from '../../../protocol/app-server/v46';
+import type { ConfigRepairReceipt } from '../../../protocol/app-server/v47';
 import type { AppServerClient, SourceRepairObservation } from '../client/app-server';
 
 /** The identity of one repair: a receipt id is content-derived, so only the

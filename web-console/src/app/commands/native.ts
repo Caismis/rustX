@@ -1,4 +1,4 @@
-import type { CompletedResponseView, AttachmentTarget, MethodResult, SessionUserMessageBoundary } from '../../../../protocol/app-server/v46';
+import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundary } from '../../../../protocol/app-server/v47';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { selectSessionModel } from '../model-preference';
 import { lineageSwitchSafe } from '../../bindings/projection';
@@ -48,29 +48,13 @@ export class CommandSession {
   async boundaries(offset = 0) {
     this.requireCurrent();
     const page = await this.client.request({ method: 'session/boundaries', params: { target: this.target, offset, limit: 32 } }, 'boundaries');
-    let nodeId: string | undefined;
-    let next: number | null | undefined = 0;
-    // Match the attached Conversation, never the catalog's mutable default node.
-    while (next != null && !nodeId) {
-      this.requireCurrent();
-      const tree: Extract<MethodResult, { type: 'tree' }> = await this.client.request({ method: 'session/tree', params: { session_id: this.sessionId, offset: next, limit: 32 } }, 'tree');
-      nodeId = tree.nodes.find(node => node.conversation_id === this.target.conversation_id)?.id;
-      next = tree.next_offset;
-    }
     this.requireCurrent();
-    if (!nodeId) throw new Error('Attached Conversation is absent from the native Session tree.');
-    this.client.assertAttachmentNode(this.target, nodeId);
+    const nodeId = this.admission!.nodeId;
     return { selections: page.boundaries.map(boundary => ({ target: this.target, nodeId: nodeId!, boundary })), nextOffset: page.next_offset };
   }
   async responseSelection(response: CompletedResponseView): Promise<HistoricalSelection> {
-    let offset: number | null | undefined = 0;
-    while (offset != null) {
-      const page = await this.tree(offset);
-      const node = page.nodes.find(node => node.conversation_id === this.target.conversation_id);
-      if (node) return { target: this.target, nodeId: node.id, boundary: response };
-      offset = page.next_offset;
-    }
-    throw new Error('Attached Conversation is absent from the native Session tree.');
+    this.requireCurrent();
+    return { target: this.target, nodeId: this.admission!.nodeId, boundary: response };
   }
   async transition(action: HistoryAction, selection: HistoricalSelection) {
     this.requireCurrent();
@@ -82,18 +66,20 @@ export class CommandSession {
     const params = { side: response && action !== 'retry' ? 'after' as const : 'before' as const, session_id: this.sessionId, node_id: selection.nodeId, surface_revision: selection.boundary.surface_revision, boundary };
     // Fork copies native settings: authorize the source before creating a child,
     // even when its existing attachment needs no new admission.
-    const admitted = action === 'fork' ? await this.client.admitAttachment(this.sessionId, this.current) : this.current;
+    const admitted = action === 'fork' ? await this.client.admitSessionOperation(this.sessionId, this.current) : this.current;
     if (!admitted || !(typeof admitted === 'function' ? admitted() : admitted.current())) return;
     this.requireCurrent();
     // Never substitute a newer revision, retry on refusal, or copy browser history.
     const result = await this.client.request(action === 'fork' ? { method: 'session/fork', params } : { method: 'session/branch', params }, 'session_transition', undefined, admitted);
+    // Native acknowledgement remains observable after presentation supersession.
+    if (this.client.getSnapshot().generation === this.generation) void this.client.listSessions().catch(() => {});
     if (!this.current()) return;
     if (result.durability_diagnostic) throw new Error(`Lineage committed with durability uncertainty: ${result.durability_diagnostic}. Inspect Sessions/tree; do not repeat the mutation.`);
     const session = result.session;
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error(`Branch ${session.active_node} committed, but the source now has unresolved inbound or accepted work. Open it from Session tree after execution settles; do not repeat the branch.`);
     // The manager permits one resident Conversation per Session. Switch only after
     // the branch exists. A lost branch-switch/attach response also stops this sequence.
-    if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node);
+    if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     const continuing = () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation;
     if (!continuing()) return;
     await this.client.attach(session.id, session.active_node, continuing);
@@ -104,7 +90,7 @@ export class CommandSession {
       if (!result.editor_content?.length) throw new Error('Branch has no native editor input; execution refused.');
       // Native cut excludes the selected User message. Submit the native returned
       // input exactly once, including #319 receipts, to the new Conversation.
-      await this.client.sendContent(session.id, result.editor_content);
+      await this.client.sendContent(session.id, result.editor_content, 'send', undefined, continuing);
       if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
     }
     await this.client.listSessions();
@@ -128,7 +114,7 @@ export class CommandSession {
     this.requireCurrent();
     if (conversationId !== this.target.conversation_id) {
       if (!lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
-      await this.client.switchNode(this.sessionId, nodeId);
+      await this.client.switchNode(this.sessionId, nodeId, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
       if (!this.navigationCurrent() || this.client.getSnapshot().generation !== this.generation) return;
       await this.client.attach(this.sessionId, nodeId, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     }

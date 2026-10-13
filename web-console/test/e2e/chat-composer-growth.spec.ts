@@ -14,7 +14,7 @@ for (const width of [1440, 390]) test(`typing pushes the conversation above the 
   await expect(page.getByText('Saved message 19:', { exact: false })).toBeVisible();
   await expect.poll(() => page.locator('[data-conversation-scroll]').evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1);
   if (width < 600) {
-    await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
     await expect.poll(() => page.locator('[data-conversation-scroll]').evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1);
   }
   const scroller = page.locator('[data-conversation-scroll]'), seat = page.locator('[data-composer-seat]');

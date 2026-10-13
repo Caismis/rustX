@@ -159,6 +159,16 @@ export const IconBranchOutline16 = ({ size = 16, className }: IconProps) => (
   </svg>
 )
 
+/** Harness BranchOutlineMedium; endpoints resized to match the original branch glyph (outer radius 1.8265px). */
+export const IconForkOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" strokeWidth={1.3}>
+    <path d="M1.01503 8.0001L5.6964 8.0001C6.41913 8.0001 6.78049 8.0001 7.12115 7.91951C7.4232 7.84804 7.71233 7.73014 7.97821 7.57C8.27809 7.38939 8.5364 7.13669 9.05303 6.63129L11.6092 4.1306" stroke="currentColor" />
+    <path d="M1.01221 7.9999L5.6964 7.9999C6.41913 7.9999 6.78049 7.9999 7.12115 8.08049C7.4232 8.15196 7.71233 8.26986 7.97821 8.43C8.27809 8.61061 8.5364 8.86331 9.05303 9.36871L11.6092 11.8694" stroke="currentColor" />
+    <circle cx="12.4502" cy="3.3079" r="1.1765" stroke="currentColor" />
+    <circle cx="12.4502" cy="12.6921" r="1.1765" stroke="currentColor" />
+  </svg>
+)
+
 /** ic_ds_chevron_down_outline_14 */
 export const IconChevronDownOutline14 = ({ size = 14, className }: IconProps) => (
   <svg width={size} height={size} className={className} viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">

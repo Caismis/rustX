@@ -1,4 +1,4 @@
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v46';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v47';
 
 /** Most summary records the browser retains for one Trace interval. */
 export const TRACE_LIMIT = 512;

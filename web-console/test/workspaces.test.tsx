@@ -3,7 +3,7 @@ import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
-import { NavigationEpoch } from '../src/client/navigation';
+import { routeFixture } from './shell-navigation-fixture';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { sessionObservation, WorkspaceNavigation } from '../src/workspaces/WorkspaceNavigation';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
@@ -95,7 +95,7 @@ it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completio
   await act(async () => {
     stop = owner.start();
     render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
-      endpoint={endpoint} navigation={server.client.navigation} wide expand={vi.fn()} metadataChanged={metadataChanged}
+      endpoint={endpoint} wide expand={vi.fn()} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
   });
@@ -206,7 +206,7 @@ it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened i
   await act(async () => {
     stop = owner.start();
     render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
-      endpoint={endpoint} navigation={server.client.navigation} wide expand={vi.fn()} metadataChanged={metadataChanged}
+      endpoint={endpoint} wide expand={vi.fn()} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
   });
@@ -255,19 +255,19 @@ it('picker capability exposes only authorized choices and Session rename uses th
   expect(host.listWorkspaces).toHaveBeenCalledTimes(catalogs);
 });
 it('Host resolution supplies exact cwd, rejects unauthorized identifiers, and a late resolution cannot create or reopen', async () => {
-  await server.connect(); const host = hostFixture(), navigation = new NavigationEpoch();
+  await server.connect(); const host = hostFixture(), navigation = routeFixture(server.client);
   const gate = deferred<{ cwd: string }>(); vi.mocked(host.resolveWorkspace).mockReturnValueOnce(gate.promise);
-  const pending = firstSubmitPort(server.client, host, navigation.capture(), () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {});
+  const pending = firstSubmitPort(server.client, host, navigation.capture(), () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {});
   navigation.invalidate(); const rejected = expect(pending).rejects.toThrow('authority changed'); gate.resolve({ cwd: '/workspace/A' }); await rejected;
   expect(methods()).not.toContain('session/create');
-  await expect(firstSubmitPort(server.client, host, navigation.capture(), () => {}).create({ workspaceId: '/arbitrary/path', text: 'hello', files: [] }, () => {})).rejects.toThrow('Unauthorized');
+  await expect(firstSubmitPort(server.client, host, navigation.capture(), () => (() => {})).create({ workspaceId: '/arbitrary/path', text: 'hello', files: [] }, () => {})).rejects.toThrow('Unauthorized');
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw new Error('wrong request');
     expect(request.params.settings.cwd).toBe('/workspace/A');
     server.snapshots.set('created', snapshot('created'));
     return { type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
   });
-  expect((await firstSubmitPort(server.client, host, navigation.capture(), () => {}).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {})).id).toBe('created');
+  expect((await firstSubmitPort(server.client, host, navigation.capture(), () => (() => {})).create({ workspaceId: 'wA', text: 'hello', files: [] }, () => {})).id).toBe('created');
 });
 it('late metadata searches cannot replace newer results or results after Workspace navigation', async () => {
   await mount(); server.held.add('session/list');
@@ -470,12 +470,12 @@ it('an already attached source cannot Fork a child after current cwd authorizati
   expect(methods()).not.toContain('session/fork');
   expect(server.loaded.has('A')).toBe(true); // No hot revocation/unload.
   expect(methods()).not.toContain('session/unload');
-  expect(popup.textContent).toContain('not authorized');
+  expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('not authorized'))).toBe(true);
 });
 
 it('the shared transport attachment entry fails closed without an admission owner', async () => {
   await server.connect();
-  const dispose = server.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true })); dispose();
+  const dispose = server.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true })); dispose();
   await expect(server.client.attach('A')).rejects.toThrow('No Web attachment admission owner');
   expect(methods()).not.toContain('session/attach'); expect(server.loaded.size).toBe(0);
 });
@@ -546,7 +546,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v46').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v47').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -602,10 +602,10 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
   expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
 });
 
-// Settings navigation is linearized by one App-owned epoch. A delayed owning
+// Settings navigation is linearized by its dedicated actor. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v46').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v47').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();
@@ -732,9 +732,9 @@ it('UX-04 native authority replacement at the same endpoint retires presentation
 it('UX-04 replacement of the Product Host admission owner fences an older successful admission', async () => {
   await server.connect();
   const old = deferred<false | import('../src/client/app-server').OperationAdmission>();
-  server.client.setAttachmentAdmission(() => old.promise);
-  const pending = server.client.admitAttachment('A');
-  server.client.setAttachmentAdmission(async () => false);
+  server.client.setSessionAdmission(() => old.promise);
+  const pending = server.client.admitSessionOperation('A');
+  server.client.setSessionAdmission(async () => false);
   old.resolve({ current: () => true, validate: async () => true });
   expect(await pending).toBe(false);
   expect(methods()).not.toContain('session/attach');
