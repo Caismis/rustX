@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "description": "The full question text.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          },
+          "header": {
+            "description": "The short tab label.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16,
+            "pattern": "\\S"
+          },
+          "options": {
+            "description": "Two to four authored options. The client supplies the custom-answer row.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "The authored option label.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 60,
+                  "pattern": "\\S"
+                },
+                "description": {
+                  "description": "The option's meaning and trade-offs.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "pattern": "\\S"
+                },
+                "preview": {
+                  "description": "Optional Markdown preview, only for single-select questions.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192,
+                  "pattern": "\\S"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "description"
+              ]
+            },
+            "minItems": 2,
+            "maxItems": 4
+          },
+          "multi_select": {
+            "description": "Optional; omitted means single-select.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "question",
+          "header",
+          "options"
+        ]
+      },
+      "description": "One to four related blocking questions.",
+      "minItems": 1,
+      "maxItems": 4
+    }
+  },
+  "required": [
+    "questions"
+  ]
+}
