@@ -215,6 +215,19 @@ def web_agent_continuation() -> Scenario:
 SCENARIOS["web_agent_continuation"] = web_agent_continuation
 
 
+def web_composer_identity() -> Scenario:
+    """Two real native Attempts; editor tests hold only the decoded input ACK."""
+    return Scenario("web_composer_identity", *[
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=(f"Composer identity {i}",)),
+             Stream(Text(f"Canonical composer reply {i}"), Finish()))
+        for i in range(2)
+    ])
+
+
+SCENARIOS["web_composer_identity"] = web_composer_identity
+
+
 def web_reading_surface() -> Scenario:
     """300 real native Attempts exceed 512 transcript entries; gates prove follow."""
     steps = [Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
@@ -393,3 +406,11 @@ def web_child_capabilities() -> Scenario:
     )
 
 SCENARIOS["web_child_capabilities"] = web_child_capabilities
+
+
+def web_fork_source_reading() -> Scenario:
+    """Seed distant history; every source navigation remains a read."""
+    return Scenario("web_fork_source_reading", *web_reading_surface().steps[:-1])
+
+
+SCENARIOS["web_fork_source_reading"] = web_fork_source_reading

@@ -1,17 +1,16 @@
 import { ConversationPreferenceRows } from './ConversationPreferenceRows';
 import { useInteractiveHtml } from '../../components/workbench-documents/html/preferences';
 import { localeController } from '../../../locale/controller';
-import { useBusyEnter } from '../../composer/preferences';
 import { useTranslation } from '../../../locale/react';
 import type { Theme } from '../../appearance';
 import { AppearanceRow } from '../../../presentation/settings/AppearanceRow';
 import { Choice } from '../primitives/aria';
+import { useBusyEnter } from '../../composer/preferences';
 
 /** The General product page.
  *
  * It holds the client-owned preferences, and only those that actually exist
- * today. Appearance, Language and the Composer's busy-state Enter behavior
- * (DeepSeek Harness General `composer-enter` row) are owned by this browser client: it is deliberately not
+ * today. Appearance, Language and busy-state sending are owned by this browser client: it is deliberately not
  * persisted as native configuration merely to make ownership look uniform
  * across the six pages, and no preference is invented here to make the page
  * look fuller than it is.
@@ -20,8 +19,8 @@ import { Choice } from '../primitives/aria';
  * source, a Workspace has no General page at all — see `settingsPages`. */
 export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (theme: Theme) => void }) {
   const tx = useTranslation();
+  const [busyEnter, preference] = useBusyEnter();
   const [interactiveHtml, setInteractiveHtml] = useInteractiveHtml();
-  const [busyEnter, composer] = useBusyEnter();
   return <section aria-label={tx('settings:general-page.general')}>
     <h3>{tx('settings:general-page.general')}</h3>
     <Choice label={tx('settings:copy.language')} value={tx.locale} options={[["en", "English"], ["zh", "中文"]]} onChange={localeController.setLocale} />
@@ -33,8 +32,7 @@ export function GeneralPage({ theme, setTheme }: { theme: Theme; setTheme?: (the
       onChange={value => setInteractiveHtml(value === 'on')} description={tx('artifacts:workbench.html-description')} />
     <h4>{tx('settings:general-page.conversation')}</h4>
     <Choice label={tx('settings:general-page.busy-enter')} value={busyEnter}
-      options={[['queue', tx('settings:general-page.busy-enter-queue')], ['steer', tx('settings:general-page.busy-enter-steer')]]}
-      onChange={value => composer.setBusyEnter(value)}
-      description={tx('settings:general-page.busy-enter-description')} />
+      options={[["queue", tx('settings:general-page.busy-enter-queue')], ["steer", tx('agent:submission.immediate')]]}
+      onChange={value => preference.setBusyEnter(value)} description={tx('settings:general-page.busy-enter-description')} />
   </section>;
 }

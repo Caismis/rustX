@@ -4,12 +4,11 @@ import { WorkspaceAuthority } from './authority';
 /** Fresh operation admission. Display evidence is neither input nor prerequisite.
  * Native Session cwd is fixed at creation on every App Server path, so the exact
  * cwd read here is the one reauthorized at the dispatch boundary. */
-export class WorkspaceSessionNavigation {
-  constructor(private readonly authority: WorkspaceAuthority, private readonly client: AppServerClient, private readonly navigation: import('../client/navigation').NavigationEpoch) {}
+export class WorkspaceSessionAdmission {
+  constructor(private readonly authority: WorkspaceAuthority, private readonly client: AppServerClient) {}
   admit = async (id: string, current: () => boolean): Promise<false | OperationAdmission> => {
     const { generation, endpoint } = this.client.getSnapshot();
-    const navigationCurrent = this.navigation.capture();
-    const valid = () => current() && navigationCurrent() && generation === this.client.getSnapshot().generation && endpoint === this.client.getSnapshot().endpoint;
+    const valid = () => current() && generation === this.client.getSnapshot().generation && endpoint === this.client.getSnapshot().endpoint;
     const observation = await this.authority.observe();
     if (!valid()) return false;
     const settings = await this.client.request({ method: 'session/settings', params: { session_id: id } }, 'settings');

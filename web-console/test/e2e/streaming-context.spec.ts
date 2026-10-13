@@ -12,7 +12,15 @@ for (const width of [1440, 390]) test(`context reading survives streaming at ${w
   await page.locator('button[data-session-id=A]').click();
   await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
   await page.setViewportSize({ width, height: 900 });
-  if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  if (width < 600) {
+    await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    await expect(page.locator('main')).toHaveAttribute('inert', '');
+    await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+    await expect(page.locator('main')).not.toHaveAttribute('inert', '');
+    await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Close navigation' })).toHaveCount(0);
+  }
   await page.evaluate(() => (window as any).startupFixture.contextReading(25000));
   const ring = page.getByRole('button', { name: '25% of context used', exact: true });
   await expect(ring).toBeVisible();

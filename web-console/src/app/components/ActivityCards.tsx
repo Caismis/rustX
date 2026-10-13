@@ -5,7 +5,7 @@ import { displayText, message as uiMessage, type DisplayText } from '../../local
 import { useTranslation } from '../../locale/react';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v45';
+import type { AgentStatistics, RuntimeClientAgent, RuntimeClientJob, MethodResult, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v46';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AppServerClient, RpcFailure } from '../../client/app-server';
 import { json } from '../../bindings/projection';
@@ -139,7 +139,7 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
         onUpload={(files, operation) => client.upload(sessionId, files, { current: () => client.isAttachmentControlCurrent(sessionId, admission), acknowledged: () => {} }, operation)}
         onReconcile={operation => client.uploadStatus(sessionId, operation)}
         onSend={(message, attachments, _delivery, acknowledged) => request.run(async (client, target, current) => {
-          await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message, attachments: [...attachments] } }, 'agent_message', acknowledged, current);
+          await client.request({ method: 'agent/sendMessage', params: { target, agent_id: agent.agent_id, message, attachments: [...attachments] } }, 'agent_message', () => acknowledged?.(), current);
           if (current()) refreshTranscript(value => value + 1);
         })}
         cancellationAvailable={!interruptRequest.disabled && !unavailable && agent.state !== 'inactive'}

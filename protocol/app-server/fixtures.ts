@@ -1,6 +1,31 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v45.js';
+import type {ProtocolMessage} from './v46.js';
 export const fixtures = [
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-node",
+    "method": "session/node",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-node",
+    "result": {
+      "type": "node",
+      "node": {
+        "ordinal": "9007199254740993",
+        "id": "node_00000000-0000-7000-8000-000000000001",
+        "parent": null,
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "origin": {
+          "type": "new"
+        }
+      }
+    }
+  },
   {
     "jsonrpc": "2.0",
     "id": "manual-compaction-correlation",
@@ -115,7 +140,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 45,
+      "protocol_version": 46,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -133,7 +158,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 45,
+      "protocol_version": 46,
       "capabilities": {
         "upload_policy": {
           "max_file_bytes": 2097152,
@@ -468,6 +493,25 @@ export const fixtures = [
         "cut": null
       },
       "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/transcript",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "at": {
+        "type": "message",
+        "id": "source-message-fixture",
+        "cut": null
+      },
+      "limit": 64
     }
   },
   {
@@ -822,6 +866,7 @@ export const fixtures = [
           "mutation_revision": "0"
         },
         "page": {
+          "inherited_through": "0",
           "entries": []
         },
         "newer_cursor": null,

@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { HttpWorkspaceHost } from '../src/workspaces/http-host';
-import { WorkspaceSessionNavigation } from '../src/workspaces/navigation';
+import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { SessionLocation, WorkspaceCatalog } from '../src/workspaces/host';
 import type { OperationAdmission } from '../src/client/app-server';
 import { Server, endpoint } from './fixture';
@@ -29,8 +29,8 @@ it.each([true, false])('same adapter, callback and native authority reject delay
   }));
   const adapter = new HttpWorkspaceHost();
   const authority = new WorkspaceAuthority(adapter);
-  const navigation = new WorkspaceSessionNavigation(authority, server.client, server.client.navigation);
-  server.client.setAttachmentAdmission(navigation.admit);
+  const navigation = new WorkspaceSessionAdmission(authority, server.client);
+  server.client.setSessionAdmission(navigation.admit);
   const native = server.client.getSnapshot().authorityId, generation = server.client.getSnapshot().generation;
   try {
     // Deliberately never construct WorkspaceAssociations.
@@ -67,8 +67,8 @@ it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at t
     return Response.json([{ authorized: true }]);
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
-  const navigation = new WorkspaceSessionNavigation(authority, server.client, server.client.navigation);
-  server.client.setAttachmentAdmission(navigation.admit);
+  const navigation = new WorkspaceSessionAdmission(authority, server.client);
+  server.client.setSessionAdmission(navigation.admit);
   const queued = deferred<void>();
   const request = server.client.request.bind(server.client);
   vi.spyOn(server.client, 'request').mockImplementation((...args) => {
@@ -85,7 +85,7 @@ it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at t
     expect(lists).toBe(1); // Final Host observation must wait for dispatch capacity.
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
     if (replacement === 'host') hostId = 'replacement-host';
-    else server.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true }));
+    else server.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
     const summaries = server.requests.filter(row => row.request.method === 'session/summary');
     server.reply(summaries[0].request);
     await expect(pending).rejects.toThrow('Authority changed before dispatch');
@@ -109,15 +109,15 @@ it.each(['host', 'callback', 'native', 'unavailable'] as const)('final in-flight
     return Response.json({ authorityId: captured, endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } });
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
-  const navigation = new WorkspaceSessionNavigation(authority, server.client, server.client.navigation);
-  server.client.setAttachmentAdmission(navigation.admit);
+  const navigation = new WorkspaceSessionAdmission(authority, server.client);
+  server.client.setSessionAdmission(navigation.admit);
   try {
     const pending = server.client.attach('A');
     const refused = expect(pending).rejects.toThrow();
     await entered.promise;
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
     if (replacement === 'host') { hostId = 'replacement-host'; await authority.observe(); }
-    if (replacement === 'callback') server.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true }));
+    if (replacement === 'callback') server.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
     if (replacement === 'native') server.client.disconnect();
     release.resolve(); await refused;
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
@@ -145,9 +145,10 @@ async function stalledFinalValidations(retirement: 'navigation' | 'callback' | '
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
   // One callback object for the whole fixture: reinstalling it must still be a new owner.
-  const admit = new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit;
-  const owner = server.client.setAttachmentAdmission(admit);
-  const admitted = await server.client.admitAttachment('A');
+  const admit = new WorkspaceSessionAdmission(authority, server.client).admit;
+  const owner = server.client.setSessionAdmission(admit);
+  let presentationCurrent = true;
+  const admitted = await server.client.admitSessionOperation('A', () => presentationCurrent);
   if (!admitted) throw new Error('fixture admission refused');
   const validations: Promise<boolean>[] = [];
   const proof: OperationAdmission = { current: admitted.current, validate: signal => { const work = admitted.validate(signal); validations.push(work); return work; } };
@@ -168,7 +169,7 @@ async function stalledFinalValidations(retirement: 'navigation' | 'callback' | '
   expect(sent('turn/cancel')).toHaveLength(1);
   await expect(cancel).resolves.toMatchObject({ type: 'cancellation_accepted' });
   expect(sent('session/summary')).toHaveLength(0);
-  return { server, authority, admit, owner, stalled, live, validations, refused, settled, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
+  return { retire: () => { presentationCurrent = false; server.client.recheckAdmissions(); }, server, authority, admit, owner, stalled, live, validations, refused, settled, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
 }
 /** Exactly eight native RPC slots remain: a ninth read waits for one to settle. */
 async function expectRpcCapacity(server: Server) {
@@ -187,14 +188,14 @@ async function expectRpcCapacity(server: Server) {
 it.each(['navigation', 'callback', 'cleanup', 'reinstall', 'host', 'timeout'] as const)('%s retirement of stalled final validations never blocks cancellation; late Host answers send nothing', async retirement => {
   const f = await stalledFinalValidations(retirement);
   try {
-    if (retirement === 'navigation') f.server.client.navigation.invalidate();
+    if (retirement === 'navigation') f.retire();
     // Owner replacement and disposal retire by themselves: no Host read answers
     // and no validation deadline elapses before the reservations are released.
-    else if (retirement === 'callback') f.server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(f.authority, f.server.client, f.server.client.navigation).admit);
+    else if (retirement === 'callback') f.server.client.setSessionAdmission(new WorkspaceSessionAdmission(f.authority, f.server.client).admit);
     else if (retirement === 'cleanup') f.owner();
     // Remove and reinstall the identical callback before the scheduled pump runs:
     // the new incarnation never revives proofs captured under the retired one.
-    else if (retirement === 'reinstall') { f.owner(); f.server.client.setAttachmentAdmission(f.admit); }
+    else if (retirement === 'reinstall') { f.owner(); f.server.client.setSessionAdmission(f.admit); }
     else if (retirement === 'host') { f.unstall(); f.replace('replacement-host'); await f.authority.observe(); }
     else {
       // The deadline starts at reservation, not at socket send. Each expiry
@@ -245,11 +246,11 @@ it.each(['a different callback', 'the same callback reinstalled'] as const)('a s
     return Response.json({ authorityId: 'host', endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'test' } } satisfies WorkspaceCatalog);
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
-  const admit = new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit;
+  const admit = new WorkspaceSessionAdmission(authority, server.client).admit;
   // A#1 -> B#1, or A#1 -> none -> A#2 with the identical callback object.
-  const releaseOld = server.client.setAttachmentAdmission(admit);
+  const releaseOld = server.client.setSessionAdmission(admit);
   if (newer === 'the same callback reinstalled') releaseOld();
-  const releaseNew = server.client.setAttachmentAdmission(newer === 'a different callback' ? new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit : admit);
+  const releaseNew = server.client.setSessionAdmission(newer === 'a different callback' ? new WorkspaceSessionAdmission(authority, server.client).admit : admit);
   try {
     const attach = server.client.attach('A');
     const signal = await entered.promise; // The newer incarnation's final validation holds its reservation.
@@ -259,7 +260,7 @@ it.each(['a different callback', 'the same callback reinstalled'] as const)('a s
     expect(signal.aborted).toBe(false);
     release.resolve(); await attach;
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
-    expect(await server.client.admitAttachment('B')).not.toBe(false);
+    expect(await server.client.admitSessionOperation('B')).not.toBe(false);
     // Only the newer incarnation's own cleanup removes it; fresh admission then fails closed.
     releaseNew();
     await expect(server.client.attach('B')).rejects.toThrow('No Web attachment admission owner');
@@ -280,7 +281,7 @@ it('stalled validations reserve their RPC slots, so ordinary native reads never 
     await f.server.waitFor('session/summary', before + 7);
     expect(f.sent('session/summary')).toHaveLength(7);
     expect(f.live()).toBe(2);
-    f.server.client.navigation.invalidate();
+    f.retire();
     for (const row of f.sent('session/summary').slice(1)) f.server.reply(row.request);
     await Promise.all(reads);
     for (const result of await f.refused) expect(result.status).toBe('rejected');
@@ -298,7 +299,7 @@ it('a cancelled final validation settles once; its late authorizing answer sends
   try {
     const operation = server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary', undefined, proof);
     void operation.then(settled, settled);
-    live = false; server.client.navigation.invalidate();
+    live = false; server.client.recheckAdmissions();
     await expect(operation).rejects.toThrow('Authority changed before dispatch');
     live = true; late.resolve(true); await late.promise; await Promise.resolve();
     expect(settled).toHaveBeenCalledTimes(1);
@@ -321,7 +322,7 @@ it.each([['another endpoint', 'ws://127.0.0.1:9090/', false], ['a normalized-equ
     return Response.json([{ authorized: true }]);
   }));
   const authority = new WorkspaceAuthority(new HttpWorkspaceHost());
-  server.client.setAttachmentAdmission(new WorkspaceSessionNavigation(authority, server.client, server.client.navigation).admit);
+  server.client.setSessionAdmission(new WorkspaceSessionAdmission(authority, server.client).admit);
   try {
     const attach = server.client.attach('A');
     await entered.promise;

@@ -37,8 +37,8 @@ selected page and its directly relevant members. Total-count and offset queries
 can still traverse owner keys; the complete directory operation is not constant-time.
 
 Each turn carries two native previews, matching DeepSeek Harness's turn outline.
-`prompt` is the turn's first human prompt: the earliest User message with Human
-source and ordinary Message kind adopted with this Attempt, or adopted while idle
+`prompt` is the turn's first eligible opening input: the earliest User message
+with Human or delegated-Agent source and ordinary Message kind adopted with this Attempt, or adopted while idle
 after the previous Attempt started and before this one did. Steering of the
 previous turn carries that turn's identity and never opens this one; automatic
 continuation has no prompt. Queued inbound reserves its transcript position at
@@ -46,10 +46,22 @@ acceptance, so transcript adjacency is never used to find a prompt. `response`
 is the newest text/refusal-bearing Assistant member, present only once the turn
 has a terminal at the cut. Both join text blocks with single spaces, collapse
 whitespace and end with an ellipsis when clipped: at most 50 and 120 Unicode
-characters (one and three rail-card lines). Inherited turns carry their prompt as
-`TurnReadingProvenance.prompt_message_id`, remapped to destination identity on
-copy and dropped when the prompt is outside the retained cut; their response is
+characters (one and three rail-card lines). Inherited prompt previews use the
+earliest text-bearing Human or delegated-Agent input explicitly named by the turn's
+`TurnReadingProvenance.prompt_message_id` or its completed response's native
+`retry_message_id`. Both relationships are remapped to destination identity on
+copy and dropped when the input is outside the retained cut. An opening prompt
+precedes later steering input; when only response replay input is retained, that
+recorded input provides the preview. Neither nearby User messages nor live reads
+of the source Session establish ownership. The inherited response is
 the newest text-bearing retained member of a settled inherited turn.
+
+Local prompt lookup uses the existing Attempt/type/sequence index for the
+selected Attempt and the exact idle range between the previous and current
+starts. It does not inspect unrelated future Attempt adoptions. Deterministic
+SQLite VM instrumentation compares 0, 128 and 512 later Turns: Human lookup stays
+at 107 instructions, delegated-Agent at 110, idle at 104, and absent inputs at
+66. The former kind-only search grows to more than 3600 instructions.
 
 `TurnReadingProvenance` is a separate immutable lineage/bootstrap domain from
 `CompletedResponseProvenance` (finalized response, Retry, timing and usage).
@@ -156,6 +168,17 @@ while accepting concurrent appends. Reads execute no model/Tool work and create
 no request snapshots or durable writes.
 
 ## Browser reading and scrolling
+
+Hover and focus use the same single-flight outline pipeline as committed reads,
+but only return disposable preview data. They cannot publish an outline window,
+paging selection, transcript position, follow mode or navigation error. The rail
+retains one preview Turn; pointer leave, explicit navigation, native mutation,
+attachment replacement and generation replacement revoke its authority. An
+explicit navigation can acquire a matching in-flight read; only that new owner
+may commit its native page. Growth owes one refresh of the committed paging
+selection, independently of a preview's offset. A focused mark retains its
+tooltip while explicit navigation resolves, without promoting the preview's
+identity into the committed directory.
 
 The browser retains one outline page of at most 64 previews, plus at most one
 pinned current identity from live Runtime Client state. The rail draws a
@@ -279,3 +302,22 @@ handles are exposed only when the column has usable margin, with slider labels
 and values; narrow columns clamp to available space and hide handles. Reduced
 motion disables rail animation. Width changes create no Session/runtime state or
 request; ChatViewport preserves the reading anchor through the resulting reflow.
+
+## Exact fork source message windows
+
+App Server v46 adds the Message window selector over canonical MessageId. The
+store resolves its existing indexed transcript position inside the same read
+transaction, then returns at most 64 entries forward from that exact position.
+It never scans intervening transcript pages or substitutes a nearby Turn. A
+provided cut obeys the same foreign, future and semantic-mutation fences as other
+windows; an absent cut captures current native facts. A message outside the cut
+or no longer readable fails explicitly. The result carries target_cursor while
+target remains absent: a message identity does not invent Turn ownership.
+
+The Web source action validates the exact message at target_cursor, attachment
+authority and navigation intent before publishing or anchoring. A superseding
+read, reattachment, node switch or user cancellation retires the result. The
+retained presentation remains bounded and later source activity cannot rewrite
+the fork seed boundary.
+
+The immutable inherited transcript boundary is stored with the lineage bootstrap in SQLite schema 57. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and snapshot reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.

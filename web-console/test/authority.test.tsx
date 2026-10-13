@@ -12,7 +12,7 @@ const remote = 'wss://remote.example/';
 function pair() {
   const a = new Server(), b = new Server();
   const client = new AppServerClient((url, protocols) => (url === endpoint ? a : b).socketFactory(url, protocols));
-  client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => true }));
+  client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
   const owner = new ConnectionController(client, async () => new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } }));
   return { a, b, client, owner };
 }
@@ -183,7 +183,7 @@ it('detached evidence capacity refusal preserves Remote and its material until e
 });
 it('Session diagnostic capacity refuses before closing the current Remote socket', async () => {
   const { a, client, owner, b } = pair(); await owner.select('remote'); await owner.connectRemote(remote, TOKEN);
-  client.setAttachmentAdmission(async () => { throw new Error('Review this Session'); });
+  client.setSessionAdmission(async () => { throw new Error('Review this Session'); });
   for (let i = 0; i < 65; i++) { b.snapshots.set(`diagnostic-${i}`, snapshot(`diagnostic-${i}`)); await client.attach(`diagnostic-${i}`).catch(() => {}); }
   const before = client.getSnapshot(), close = vi.spyOn(b.socket, 'close');
   await owner.select('local');
@@ -192,7 +192,7 @@ it('Session diagnostic capacity refuses before closing the current Remote socket
   expect(close).not.toHaveBeenCalled(); expect(a.sockets).toHaveLength(0);
   await client.listSessions();
   // A new explicit inspection clears one diagnostic without adding another.
-  client.setAttachmentAdmission(async () => false);
+  client.setSessionAdmission(async () => false);
   await client.attach('diagnostic-0');
   await owner.select('local');
   expect(close).toHaveBeenCalledTimes(1); expect(a.sockets).toHaveLength(1);
@@ -302,7 +302,7 @@ it.each(['en', 'zh'] as const)('disconnected current diagnostic acknowledgement 
   const { a, client, owner } = pair(); await owner.start();
   a.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'committed_cleanup_pending', session_id: 'A' } }));
   await client.deleteSession('A', 'old');
-  client.setAttachmentAdmission(async () => { throw new Error('diagnostic'); });
+  client.setSessionAdmission(async () => { throw new Error('diagnostic'); });
   for (let index = 0; index < 64; index++) { a.snapshots.set(`diagnostic-${index}`, snapshot(`diagnostic-${index}`)); await client.attach(`diagnostic-${index}`).catch(() => {}); }
   await owner.disconnect(); a.authorityId = 'replacement'; await owner.reconnect();
   expect(client.getSnapshot().connection).toBe('error');

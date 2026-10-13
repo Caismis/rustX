@@ -1,11 +1,12 @@
 import { useTranslation } from '../../locale/react';
 import { useState } from 'react';
+import { UploadFailure } from '../../client/uploads';
 import { sameTarget, type AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v45';
+import type { UserInputBlock } from '../../../../protocol/app-server/v46';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
@@ -15,6 +16,7 @@ import { ConversationDocks, ConversationTotals } from './ConversationLive';
 import { ContextSeat } from './ContextSeat';
 import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
+import type { ComposerDraft } from '../composer/draft';
 import { ComposerSeat } from './ComposerSeat';
 
 export function ConversationStatus({ client, sessionId, recover }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void }) {
@@ -24,39 +26,54 @@ export function ConversationStatus({ client, sessionId, recover }: { client: App
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, binding, current, consumed, restored, opened, onCommand }: {
+export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, consumed, restored, preparePublication, onCommand }: {
   client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
   workspacePicked?: (id: string) => void;
-  binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
-  restored?: { conversation: string; content: UserInputBlock[] }; opened: (id: string) => (() => boolean) | void;
+  draftOwner?: ComposerDraft; executable: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
+  restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
   onCommand: (id: CommandId) => void;
 }) {
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
-  const uploadCurrent = () => current() && state.generation === client.getSnapshot().generation && sameTarget(view?.target, sessionId ? client.getSnapshot().views[sessionId]?.target : undefined);
-  const cancellation = view && current() ? client.cancellationTarget(view.id) : undefined;
+  const nativeUploadCurrent = () => !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation) && state.generation === client.getSnapshot().generation && sameTarget(view?.target, sessionId ? client.getSnapshot().views[sessionId]?.target : undefined);
+  const uploadCurrent = () => current() && nativeUploadCurrent();
+  const cancellation = view && executable && current() ? client.cancellationTarget(view.id) : undefined;
   const [sending, setSending] = useState<string>();
   const [failure, setFailure] = useState<{ owner: string; message: string }>();
   const error = failure?.owner === owner ? failure.message : undefined;
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
-  const disabled = !attached || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
+  const disabled = !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
     <div hidden={!!view?.snapshot?.pending_interactions?.length}>
-      <ConversationComposer client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} opened={opened}
+      <ConversationComposer draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
-          initialContent: restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined,
-          submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
+          initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,
+          submissionTarget: view.target, submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
           consumed, cancellationAvailable: !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
           onCancel: () => { setFailure(undefined); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure({ owner, message: String(cause) })); },
-          onUpload: (files, operation) => client.upload(view.id, files, { current: uploadCurrent, acknowledged: () => {} }, operation),
-          onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!uploadCurrent()) throw new Error('Upload view replaced'); return result; },
+          onUpload: (files, operation) => {
+            if (!uploadCurrent()) return Promise.reject(new UploadFailure('failed', 'Upload view replaced'));
+            // The current gesture admits work. Once sent, its native result
+            // belongs to this draft/attachment, independently of route rendering.
+            return client.upload(view.id, files, { current: nativeUploadCurrent, acknowledged: () => {} }, operation);
+          },
+          onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!nativeUploadCurrent()) throw new Error('Upload view replaced'); return result; },
           onSend: async (text, receipts, delivery, acknowledged) => {
-            const generation = client.getSnapshot().generation; setFailure(undefined); setSending(owner);
-            try { await client.send(view.id, text, receipts, delivery, acknowledged); return generation === client.getSnapshot().generation; }
+            if (!uploadCurrent()) return false;
+            setFailure(undefined); setSending(owner);
+            try {
+              await client.send(view.id, text, receipts, delivery, acceptance => {
+                const native = client.getSnapshot().views[view.id];
+                const conversation = native?.nodeConversationId ?? native?.target?.conversation_id ?? native?.snapshot?.conversation_id;
+                // This native callback survives history unmounting. Its evidence
+                // accompanies settlement; it never authorizes another route's draft.
+                acknowledged?.(acceptance, conversation ? { session_id: view.id, conversation_id: conversation } : undefined);
+              }, uploadCurrent); return true;
+            }
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>

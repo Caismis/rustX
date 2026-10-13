@@ -86,9 +86,9 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
   await openUserSettings(page);
   const settings = dialog(page);
   const frame = await panelBox(page);
-  // Bounded product geometry: ~1000 wide, min(820, viewport − 48) high, r24.
-  expect(frame.width).toBeGreaterThanOrEqual(960); expect(frame.width).toBeLessThanOrEqual(1040);
-  expect(frame.height).toBe(820); expect(frame.radius).toBe('24px');
+  // Inspected Harness desktop geometry, bounded by the viewport on small screens.
+  expect(frame.width).toBe(800);
+  expect(frame.height).toBe(704); expect(frame.radius).toBe('24px');
   const rail = page.getByRole('tablist', { name: 'Settings pages' });
   await expect(rail).toHaveAttribute('aria-orientation', 'vertical');
   await expect(rail.getByRole('tab')).toHaveText(pages);
@@ -118,6 +118,13 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
 
   // Settings forms retain their geometry; Provider cards use pinned Harness ModelsSection geometry.
   await openSettingsPage(page, 'Agent');
+  const identity = settings.getByRole('form', { name: 'Root identity' });
+  const configurationDetails = identity.getByRole('button', { name: 'Configuration details', exact: true });
+  await expect(identity.locator('[data-authored]')).toBeHidden();
+  await configurationDetails.click();
+  await expect(identity.locator('[data-authored]')).toBeVisible();
+  await configurationDetails.click();
+  await expect(identity.locator('[data-authored]')).toBeHidden();
   const unit = await settings.getByRole('form', { name: 'Root identity' }).evaluate(el => {
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
@@ -161,6 +168,7 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   const identity = settings.getByRole('form', { name: 'Root identity' });
   await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
   await expect(identity.locator('[data-authored="present"]')).toBeVisible();
+  await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
   await identity.getByLabel('Agent identity').fill('rustx-workspace-reviewer');
   await expect(identity).toHaveAttribute('data-draft', 'true');
   await expect(identity.getByRole('button', { name: 'Save Root identity' })).toBeEnabled();
@@ -337,6 +345,27 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expect(settings.getByLabel('Description', { exact: true })).toBeVisible();
   await expect(settings.getByRole('button', { name: '← Extensions', exact: true })).toBeInViewport();
   await expectNoHorizontalOverflow(page);
+  // The narrow bottom gutter belongs to the viewport, not to the content
+  // padding that disappears as the long Agent card scrolls through it.
+  const gutter = await settings.getByRole('form', { name: 'Agent reviewer' }).evaluate(form => {
+    let pane: HTMLElement | null = form.parentElement;
+    while (pane && getComputedStyle(pane).overflowY !== 'auto') pane = pane.parentElement;
+    if (!pane) throw new Error('Settings scroll owner missing');
+    const panel = form.closest('[role="dialog"]')!.getBoundingClientRect();
+    const gap = () => panel.bottom - pane!.getBoundingClientRect().bottom;
+    const before = gap(), position = pane.scrollTop;
+    pane.scrollTop = pane.scrollHeight;
+    const after = gap(), scrollable = pane.scrollHeight > pane.clientHeight;
+    pane.scrollTop = position;
+    const range = pane.scrollHeight - pane.clientHeight;
+    const margin = pane.style.marginBottom, padding = pane.style.paddingBottom;
+    pane.style.marginBottom = '0px'; pane.style.paddingBottom = '20px';
+    const priorRange = pane.scrollHeight - pane.clientHeight;
+    pane.style.marginBottom = margin; pane.style.paddingBottom = padding;
+    pane.scrollTop = position;
+    return { before, after, scrollable, rangeUnchanged: range === priorRange };
+  });
+  expect(gutter).toEqual({ before: 20, after: 20, scrollable: true, rangeUnchanged: true });
   await expectStableScreenshot(page, 'settings-agent-narrow-dark.png');
 
   // Escape closes Settings itself when no transient layer is open; the global

@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { FirstSubmissions, type FirstSubmitPort, type FirstDraft, type CreatedSession } from '../src/app/new-conversation/first-submit';
 import { UploadFailure } from '../src/client/uploads';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { UploadReceipt } from '../../protocol/app-server/v45';
+import type { UploadReceipt } from '../../protocol/app-server/v46';
 function gate<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 const session: CreatedSession = { id: 'native-session', node: 'native-node', conversation: 'native-conversation' };
 const draft: FirstDraft = { workspaceId: 'registered', text: 'Task', files: [], model: { model: 'explicit' } };
@@ -101,7 +101,7 @@ it('repairs the retained exact upload without create/upload/send replay, then co
   const { owner, port, start } = fixture({ upload: vi.fn(async () => { throw new OutcomeUncertain(); }) });
   await start({ ...draft, files: [new File(['first'], 'first.md'), new File(['second'], 'second.md')] });
   const lost = owner.session(session.id)!;
-  const reply = gate<import('../../protocol/app-server/v45').UploadOutcome>();
+  const reply = gate<import('../../protocol/app-server/v46').UploadOutcome>();
   port.status = vi.fn(() => reply.promise);
   const repair = owner.recoverUpload(lost, port, false);
   await owner.recoverUpload(lost, port, false);
@@ -215,4 +215,18 @@ it('continuation preserves a known no-commit upload failure instead of degrading
   await owner.continueUploads(ready, port);
   expect(owner.session(session.id)).toMatchObject({ phase: 'failed', failedPhase: 'uploading', uploadIndex: 1, receipts: [receipt] });
   expect(port.send).not.toHaveBeenCalled();
+});
+
+it('Discard reports only an applied terminal transition and late admission cannot replace the discarded owner', async () => {
+  let acknowledged!: () => void;
+  const admission = gate<void>(), entered = gate<void>();
+  const send = vi.fn<FirstSubmitPort['send']>(async (_, __, ___, capture) => { acknowledged = capture; entered.resolve(); return admission.promise; });
+  const { owner, start } = fixture({ send });
+  const work = start();
+  await entered.promise;
+  expect(owner.discard(owner.draft('draft')!)).toBe(false);
+  admission.reject(new OutcomeUncertain()); expect(await work).toBe(false);
+  const old = owner.draft('draft')!; expect(owner.discard(old)).toBe(true);
+  const discarded = owner.draft('draft'); expect(owner.discard(old)).toBe(false);
+  acknowledged(); expect(owner.draft('draft')).toBe(discarded); expect(owner.draft('draft')?.phase).toBe('discarded'); expect(send).toHaveBeenCalledTimes(1);
 });

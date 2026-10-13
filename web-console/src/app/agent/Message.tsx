@@ -1,15 +1,16 @@
 import { InboundMessage } from './InboundMessage';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
-import type { CompactionMarker, MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v45';
+import type { CompactionMarker, MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v46';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage, CompactionMessage } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v45';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v46';
 import type { ReactNode } from 'react';
+import { markdownPreviewText } from '../../presentation/markdown/preview';
 
 export function Content({ blocks, markdown = false, streaming = false, tools = [], reasoningHidden = false, include }: { reasoningHidden?: boolean; tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
   const tx = useTranslation();
@@ -37,7 +38,8 @@ export function Message({ message, compaction, tools = [], actions, streaming = 
     if (!compaction) return <Content blocks={message.content} markdown/>;
     const checkpoint = compaction;
     return <CompactionMessage title={checkpoint.manual === true ? tx('agent:context.command-title') : tx('agent:context.succeeded')}
-      summary={tx('agent:context.completed', { items: checkpoint.retired_messages, tokens: checkpoint.retired_tokens })}>
+      summary={tx('agent:context.completed', { items: checkpoint.retired_messages, tokens: checkpoint.retired_tokens })}
+      preview={markdownPreviewText(message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join(' '))} description={tx('agent:compaction.description')}>
       <Content blocks={message.content} markdown/>
     </CompactionMessage>;
   }

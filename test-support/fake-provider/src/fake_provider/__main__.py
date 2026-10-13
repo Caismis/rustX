@@ -80,7 +80,7 @@ async def run(scenario_name: str, host: str, port: int, workspace: str | None) -
     # test is failing, and `uv run` is itself a parent process; an EOF on the
     # inherited pipe is the one signal that always arrives, so a failed test
     # can never leave a provider process behind.
-    await _shutdown_on_stdin_eof(state)
+    stdin_watcher = await _shutdown_on_stdin_eof(state)
 
     print(
         json.dumps(
@@ -98,7 +98,15 @@ async def run(scenario_name: str, host: str, port: int, workspace: str | None) -
     )
     print(f"fake-provider: serving {scenario.name} on {bound_host}:{bound_port}", file=sys.stderr)
 
-    await server.serve_until_shutdown()
+    try:
+        await server.serve_until_shutdown()
+    finally:
+        if stdin_watcher is not None:
+            stdin_watcher.cancel()
+            try:
+                await stdin_watcher
+            except asyncio.CancelledError:
+                pass
 
     report = state.report()
     print(json.dumps({"report": report}), flush=True)
@@ -117,7 +125,7 @@ async def run(scenario_name: str, host: str, port: int, workspace: str | None) -
     return 0 if report["ok"] else 1
 
 
-async def _shutdown_on_stdin_eof(state: ScenarioRun) -> None:
+async def _shutdown_on_stdin_eof(state: ScenarioRun) -> asyncio.Task[None] | None:
     """Requests shutdown when stdin reaches EOF.
 
     Only a pipe or socket is watched. A terminal, a regular file, or
@@ -138,7 +146,9 @@ async def _shutdown_on_stdin_eof(state: ScenarioRun) -> None:
         await reader.read()
         state.shutdown_requested.set()
 
-    asyncio.ensure_future(watch())
+    # The caller owns this task for the server lifetime. asyncio retains only
+    # weak task references; an unowned reader can disappear during collection.
+    return asyncio.create_task(watch())
 
 
 def _stdin_is_a_pipe() -> bool:

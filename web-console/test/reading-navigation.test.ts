@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { ConversationTurn, ConversationTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v45';
+import type { ConversationTurn, ConversationTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v46';
 import { Server, snapshot } from './fixture';
 import { HISTORY_LIMIT, HISTORY_MAX_BYTES, turnKey } from '../src/client/transcript';
 const owner=(n:number)=>({conversation_id:'conversation-A',attempt_id:`attempt-${n}`,control_cursor:String(n),message_count:1,tool_call_count:0,outcome:'completed' as const});
@@ -17,15 +17,52 @@ async function ready(){
  server.handlers.set('session/transcript',request=>{
   if(request.method!=='session/transcript')throw new Error('transcript read');
   const {at,limit}=request.params;
-  const start=at.type==='turn'?Number(at.id.attempt_id.slice(8)):at.type==='older'?Math.max(1,Number(at.before)-limit):at.type==='newer'?Number(at.after)+1:6000;
+  const start=at.type==='message'?Number(at.id.slice(1)):at.type==='turn'?Number(at.id.attempt_id.slice(8)):at.type==='older'?Math.max(1,Number(at.before)-limit):at.type==='newer'?Number(at.after)+1:6000;
   const end=at.type==='older'?Number(at.before):Math.min(start+limit,6064);
-  return {type:'transcript_window',window:{cut,target:at.type==='turn'?at.id:null,target_cursor:at.type==='turn'?String(start):null,newer_cursor:end<6064?String(end-1):null,page:{entries:Array.from({length:end-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
+  return {type:'transcript_window',window:{cut,target:at.type==='turn'?at.id:null,target_cursor:at.type==='turn'||at.type==='message'?String(start):null,newer_cursor:end<6064?String(end-1):null,page:{entries:Array.from({length:end-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
  });
  server.held.add('session/transcript');
 }
 async function serve(count=1){server.reply(await server.waitFor('session/transcript',count));}
 
 it('a loaded native anchor lands without a read',async()=>{await ready();expect(await server.client.navigateTurn('A',turn(6010))).toEqual(turn(6010));expect(reads()).toHaveLength(0);});
+
+it('exact source message uses one bounded native request without scanning intervening history',async()=>{
+ await ready();expect(await server.client.navigateMessage('A','m6010')).toBe(true);expect(reads()).toHaveLength(0);
+ const work=server.client.navigateMessage('A','m530');
+ const request=await server.waitFor('session/transcript',1);
+ expect(request.params).toMatchObject({at:{type:'message',id:'m530',cut:null},limit:64});
+ server.reply(request);expect(await work).toBe(true);expect(reads()).toHaveLength(1);
+ expect(cursors()).toEqual(Array.from({length:64},(_,i)=>530+i));
+});
+it('obsolete source jump cannot publish or continue reading after a newer turn jump',async()=>{
+ await ready();const old=server.client.navigateMessage('A','m1'),fresh=server.client.navigateTurn('A',turn(400));
+ await serve(2);expect(await fresh).toEqual(turn(400));const history=server.client.getSnapshot().views.A.history;
+ await serve(1);expect(await old).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(history);expect(reads()).toHaveLength(2);
+});
+it('a source-message reply cannot substitute a different native message',async()=>{
+ await ready();const history=server.client.getSnapshot().views.A.history,work=server.client.navigateMessage('A','m1');
+ const request=await server.waitFor('session/transcript',1);
+ server.socket.success(request,{type:'transcript_window',window:{cut,target:null,target_cursor:'2',newer_cursor:'65',page:{entries:Array.from({length:64},(_,i)=>entry(i+2))}}});
+ expect(await work).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(history);expect(server.client.getSnapshot().views.A.turnNavigation?.error).toContain('Invalid native message window');
+});
+it.each(['loaded', 'held'] as const)('a %s source-message jump cannot land after Node switching revokes its observation', async kind => {
+ await ready();
+ server.nodeSnapshots.set('next-node', { ...snapshot(), conversation_id: 'conversation-next' });
+ server.held.add('session/switchNode');
+ const source = kind === 'held' ? server.client.navigateMessage('A', 'm1') : undefined;
+ const read = source ? await server.waitFor('session/transcript', 1) : undefined;
+ const switching = server.client.switchNode('A', 'next-node');
+ const mutation = await server.waitFor('session/switchNode', 1);
+ const view = server.client.getSnapshot().views.A;
+ expect(server.client.isAttachmentObservationCurrent('A', view.attachmentObservation)).toBe(false);
+ const history = view.history;
+ if (read) { server.reply(read); expect(await source).toBe(false); }
+ else expect(await server.client.navigateMessage('A', 'm6010')).toBe(false);
+ expect(server.client.getSnapshot().views.A.history).toBe(history);
+ expect(reads()).toHaveLength(kind === 'held' ? 1 : 0);
+ server.reply(mutation); await switching;
+});
 it('6063 Turns: distant jump is one read and 64 retained entries; live authority continues independently',async()=>{
  await ready();const work=server.client.navigateTurn('A',turn(1));
  expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBe(turnKey(turn(1).id));
@@ -302,4 +339,56 @@ it('a genuinely missing ordinal reports unavailability without a transcript read
  server.socket.success(held,{type:'conversation_turns',page:{...outline,total:64,offset:0,turns:outline.turns}});
  expect(await work).toBe(false);expect(reads()).toHaveLength(0);
  expect(server.client.getSnapshot().views.A.turnNavigation?.error).toBe('This Turn is no longer in the native outline.');
+});
+
+for (const outcome of ['complete', 'leave', 'navigate', 'error', 'growth'] as const) it(`a disposable outline preview preserves committed reading: ${outcome}`, async () => {
+ await ready(); let total=128;
+ server.handlers.set('session/turns', request => {
+  if(request.method!=='session/turns') throw new Error('outline method');
+  const offset=request.params.offset??Math.floor((total-1)/64)*64;
+  return {type:'conversation_turns',page:{cut:{...cut,journal:String(6063+total-128)},offset,total,turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
+ });
+ await server.client.refreshTurns('A');
+ const before=server.client.getSnapshot().views.A;
+ server.held.add('session/turns'); let current=true;
+ const count=server.requests.filter(row=>row.request.method==='session/turns').length;
+ const preview=server.client.previewTurns('A',0,()=>current);
+ const held=await server.waitFor('session/turns',count+1), reply=server.commit(held);
+ expect(server.client.getSnapshot().views.A.turnOutline).toBe(before.turnOutline);
+ if(outcome==='leave') current=false;
+ if(outcome==='navigate') {
+  const latest=turn(128);
+  const navigation=server.client.navigateTurn('A',latest);
+  // Navigation supersedes the preview even though it needs no outline RPC.
+  await serve(); expect(await navigation).toEqual(latest);
+ }
+ if(outcome==='growth') { total=129; await server.client.refreshTurns('A'); }
+ if(outcome==='error') server.socket.deliver({jsonrpc:'2.0',id:held.id,error:{code:-32000,message:'obsolete preview error'}});
+ else server.socket.deliver(reply);
+ const result=await preview;
+ expect(result?.offset).toBe(outcome==='leave'||outcome==='navigate'||outcome==='error'?undefined:0);
+ const after=server.client.getSnapshot().views.A;
+ expect(after.turnOutline?.paging).toEqual({type:'latest'});
+ expect(after.turnOutline?.error).toBeUndefined();
+ if(outcome!=='navigate') expect(after.history).toBe(before.history);
+ if(outcome!=='growth') expect(after.turnOutline?.page).toBe(before.turnOutline?.page);
+ total=129;
+ const refresh=server.client.refreshTurns('A');
+ const next=await server.waitFor('session/turns',count+2);
+ expect(next.params).toMatchObject({offset:null});
+ const published=new Promise<void>(resolve=>{const stop=server.client.subscribe(()=>{if(server.client.getSnapshot().views.A.turnOutline?.page?.turns.at(-1)?.ordinal===129){stop();resolve();}});});
+ server.reply(next); await refresh; await published;
+ expect(server.client.getSnapshot().views.A.turnOutline?.page?.turns.at(-1)?.ordinal).toBe(129);
+});
+
+it('explicit navigation can acquire the matching in-flight preview without a duplicate outline RPC', async()=>{
+ await ready(); server.held.add('session/turns');
+ const preview=server.client.previewTurns('A',64,()=>true);
+ const held=await server.waitFor('session/turns',2);
+ const navigate=server.client.navigateTurn('A',100);
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);
+ server.socket.success(held,{type:'conversation_turns',page:{...outline,offset:64,turns:Array.from({length:64},(_,i)=>turn(65+i))}});
+ await serve(); expect(await navigate).toEqual(turn(100)); await preview;
+ expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'page',offset:64});
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);
 });

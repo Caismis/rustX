@@ -922,6 +922,16 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
+            Method::SessionNode {
+                session_id,
+                node_id,
+            } => Ok(MethodResult::Node {
+                node: self
+                    .sessions
+                    .read_node(&session_id, &node_id)
+                    .await
+                    .map_err(session_error)?,
+            }),
             Method::SessionTree {
                 session_id,
                 offset,

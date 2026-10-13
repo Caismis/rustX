@@ -1016,7 +1016,7 @@ later checkpoint retires that summary. Lineage copies retain those values and
 omit local completion correlation. Transcript decoration uses one keyed Ledger
 lookup and at most one keyed local Journal lookup per requested summary; it never
 reconstructs the retired Surface, hydrates retired messages, or scans the Journal.
-Missing or malformed checkpoint facts are explicit read errors. SQLite schema 56
+Missing or malformed checkpoint facts are explicit read errors. SQLite schema 57
 requires these facts; older development stores are refused without migration.
 
 ## Indexed historical occupancy

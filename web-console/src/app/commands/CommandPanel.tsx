@@ -2,7 +2,6 @@ import { message, displayText, searchVocabulary, type DisplayText } from '../../
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v45';
 import type { AppServerClient } from '../../client/app-server';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
@@ -11,17 +10,16 @@ import { CommandSession, type HistoricalSelection, type HistoryAction } from './
 import type { CommandId } from './registry';
 import css from './Commands.module.css';
 
-type Choice = { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
+export type Choice = { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: DisplayText; detail?: DisplayText; choice: Choice }
 export interface CommandRequest { id: Exclude<CommandId, 'new' | 'compact' | 'model'> | 'tree'; messageId?: string }
-export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
+export function CommandPanel({ request, client, sessionId, current, close, succeeded, navigate }: {
   request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
-  close: () => void; succeeded: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
+  close: () => void; succeeded: () => void; navigate: (choice: Choice) => void;
 }) {
   const tx = useTranslation();
   const [rows, setRows] = useState<Row[]>([]), [query, setQuery] = useState(''), [active, setActive] = useState(0);
   const [busy, setBusy] = useState(true), [error, setError] = useNotice(), [detail, setDetail] = useNotice();
-  const [stopped, setStopped] = useState(false);
   const [next, setNext] = useState<number | null | undefined>();
   const alive = useRef(true), selecting = useRef(false);
   const options = useRef<HTMLDivElement>(null);
@@ -69,19 +67,9 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     return () => { alive.current = false; };
   }, []);
   const choose = async (choice: Choice) => {
-    if (selecting.current || busy || stopped || blocked || !valid()) return;
-    selecting.current = true; setBusy(true); setError('');
-    try {
-      switch (choice.kind) {
-        case 'node': if (await scope.openNode(choice.nodeId, choice.conversationId) && valid()) close(); break;
-        case 'history': {
-          const result = await scope.transition(choice.action, choice.selection);
-          if (valid() && result) opened(result); break;
-        }
-        default: { const exhaustive: never = choice; throw new Error(String(exhaustive)); }
-      }
-    } catch (cause) { if (valid()) { setError(message('commands:copy.value-close-and-reread-authoritative-state-before-another-mutation', { p0: String(cause) })); setStopped(true); } }
-    finally { selecting.current = false; if (valid()) setBusy(false); }
+    if (selecting.current || busy || blocked || !valid()) return;
+    selecting.current = true;
+    navigate(choice);
   };
   const filtered = rows.filter(row => `${searchVocabulary(row.label)} ${searchVocabulary(row.detail ?? '')}`.toLowerCase().includes(query.toLowerCase()));
   useEffect(() => { options.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active, query]);
@@ -99,7 +87,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && filtered.length) { event.preventDefault(); setActive(index => (index + (event.key === 'ArrowDown' ? 1 : filtered.length - 1)) % filtered.length); }
         if (event.key === 'Enter' && filtered[active] && !event.nativeEvent.isComposing) { event.preventDefault(); void choose(filtered[active].choice); }
       }} />
-      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? tx('commands:command-panel.historical-boundaries') : tx('commands:command-panel.native-choices')}>{filtered.map((row, index) => <button type="button" role="option" data-choice-id={row.id} id={`choice-${index}`} aria-selected={active === index} disabled={busy || stopped || stale || blocked} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
+      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? tx('commands:command-panel.historical-boundaries') : tx('commands:command-panel.native-choices')}>{filtered.map((row, index) => <button type="button" role="option" data-choice-id={row.id} id={`choice-${index}`} aria-selected={active === index} disabled={busy || stale || blocked} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
         <span>{displayText(tx, row.label)}</span><small>{displayText(tx, row.detail ?? '')}</small>
       </button>)}</div></>}
     {(historical || request.id === 'tree') && next != null && !request.messageId && <Button disabled={busy} onClick={() => { setBusy(true); void (request.id === 'tree' ? loadTree(next) : loadBoundaries(next)).catch(cause => { if (valid()) setError(String(cause)); }).finally(() => { if (valid()) setBusy(false); }); }}>{tx('commands:command-panel.more')}{' '}{historical ? tx('commands:command-panel.boundaries') : tx('commands:command-panel.nodes')}</Button>}

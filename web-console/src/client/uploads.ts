@@ -1,4 +1,4 @@
-import type { UploadPolicy, UploadReceipt, UploadedFile, UploadOutcome } from '../../../protocol/app-server/v45';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UploadOutcome } from '../../../protocol/app-server/v46';
 import { uploadOperationId } from '../../../protocol/app-server/upload';
 
 export type IntakeInput = { file: File | null; name?: string; directory?: boolean };
@@ -39,11 +39,20 @@ export function pasteText(value: string, start: number, end: number, text: strin
 export class AttachmentIntake {
   private files: readonly IntakeFile[] = [];
   private binding?: string;
+  private receiptScope?: string;
   private revision = 0;
   private retired = false;
-  bind(binding: string) {
-    if (this.retired || this.binding === binding) return;
+  bind(binding: string, receiptScope?: string) {
+    if (this.retired || this.binding === binding && this.receiptScope === receiptScope) return;
+    const replaced = this.receiptScope !== undefined && receiptScope !== undefined && this.receiptScope !== receiptScope;
+    this.receiptScope = receiptScope;
     this.binding = binding; this.revision++;
+    // Local File selections are recoverable. Native receipts/operations never
+    // transfer to a replacement attachment, and nothing is automatically replayed.
+    if (replaced) {
+      this.publish(this.files.map(file => file.status === 'rejected' || file.status === 'draft' ? file : { ...file, status: 'draft', receipt: undefined, error: undefined, operation: uploadOperationId() }));
+      return;
+    }
     this.publish(this.files.map(file => file.status === 'queued' ? { ...file, status: 'failed' } : ['uploading', 'reconciling'].includes(file.status) ? { ...file, status: 'uncertain' } : file));
   }
   private listeners = new Set<() => void>();
@@ -58,6 +67,11 @@ export class AttachmentIntake {
     return true;
   }
   remove(id: string) { this.publish(this.files.filter(file => file.id !== id)); }
+  consume(selected: readonly { id: string; operation: string; receipt?: UploadReceipt }[]) {
+    if (this.retired) return;
+    const next = this.files.filter(file => !selected.some(old => old.id === file.id && old.operation === file.operation && old.receipt === file.receipt));
+    if (next.length !== this.files.length) this.publish(next);
+  }
   clear() { this.revision++; this.actions.clear(); this.publish([]); }
   retire() { this.retired = true; this.clear(); this.listeners.clear(); }
   add(inputs: readonly IntakeInput[], policy: UploadPolicy | undefined, port?: UploadPort) {
@@ -122,13 +136,13 @@ export class AttachmentIntakes {
   lookup(key: string) { return this.terminal ?? this.owners.get(key); }
   /** Only committed semantic navigation replaces the selected Composer owner.
    * Transient unmount has no release: the same binding can recover this owner. */
-  activate(key: string, binding: string, candidate: AttachmentIntake) {
+  activate(key: string, binding: string, candidate: AttachmentIntake, receiptScope?: string) {
     if (this.terminal) { if (candidate !== this.terminal) candidate.retire(); return this.terminal; }
     for (const previous of this.owners.keys()) if (previous !== key) this.release(previous);
     const owner = this.owners.get(key) ?? candidate;
     if (owner !== candidate) candidate.retire();
     this.owners.set(key, owner);
-    owner.bind(binding);
+    owner.bind(binding, receiptScope);
     return owner;
   }
 }

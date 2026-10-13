@@ -54,7 +54,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Original native answer', { exact: true })).toBeVisible(); await settled();
-    const usageButton = page.getByRole('button', { name: 'Usage 120 tok', exact: true });
+    const usageButton = page.getByRole('button', { name: 'Usage 120 token', exact: true });
     // The inherited response keeps its exact native usage across every lineage.
     const usageDetails = async () => {
       await usageButton.click();
@@ -63,10 +63,11 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
       await page.keyboard.press('Escape'); await expect(detail).toHaveCount(0);
       return text;
     };
+    await expect(usageButton).toBeVisible();
     await usageButton.click();
     const usageDetail = page.getByRole('dialog', { name: 'Turn usage', exact: true });
     await expect(usageDetail.getByText('Output', { exact: true })).toBeVisible();
-    await expect(usageDetail.getByText('20 tok', { exact: true })).toBeVisible();
+    await expect(usageDetail.getByText('20 token', { exact: true })).toBeVisible();
     await expect(usageDetail.getByText('Cached input', { exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape'); await expect(usageDetail).toHaveCount(0);
     const originalUsage = await usageDetails();
@@ -115,7 +116,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(await usageDetails()).toBe(originalUsage);
     // As a Harness fork folds its copied prefix, the composer's session totals
     // include the inherited turn rather than starting empty.
-    await expect(page.getByLabel('Session statistics', { exact: true }).getByRole('button', { name: '120 tok', exact: true })).toBeVisible();
+    await expect(page.getByLabel('Session statistics', { exact: true }).getByRole('button', { name: '120 token', exact: true })).toBeVisible();
     // Native #319 copies uploads in the inherited post-response prefix before publishing the child.
     const root = join(fixture.workspaceA, '.agents/uploads', forkId);
     const batches = readdirSync(root);

@@ -71,6 +71,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     const wasCollapsed = await expandSidebar.isVisible();
     if (wasCollapsed) { await tabTo(expandSidebar); await page.keyboard.press('Enter'); }
     await tabTo(page.locator('button[data-session-id]').first()); await page.keyboard.press('Enter');
+    if (wasCollapsed) { await expect(expandSidebar).toBeFocused(); await page.keyboard.press('Enter'); }
     const rowActions = page.locator('button[data-session-actions]').first();
     await tabTo(rowActions); await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
     await expect(page.getByRole('menuitem', { name: 'Close New session view', exact: true })).toBeFocused();

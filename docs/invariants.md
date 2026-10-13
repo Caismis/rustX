@@ -406,7 +406,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v45 navigation adds native Turn-relative finite windows at a captured
+App Server v46 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -2639,7 +2639,7 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** SQLite 56, child IPC 32, Runtime Client 67
+- **Retired formats are refused.** SQLite 57, child IPC 32, Runtime Client 68
   and App Server 45 refuse earlier stores and peers. Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.
 
@@ -5759,7 +5759,7 @@ semantic normalization boundary. The frozen invariants:
   as `failed` through the Runtime Client. There is no v15 -> v16 conversion
   and no legacy `interrupted` decoding: a v15 client is rejected explicitly
   at negotiation.
-- **Runtime Client protocol v67 retires the Agent workspace object (Issue
+- **Runtime Client protocol v68 retires the Agent workspace object (Issue
   #462).** `RuntimeClientAgent.workspace` is the frozen Session binding path.
   The v13 isolation projection, the v15 retained-workspace resource lifecycle
   and its `subagent_workspace_dispose` request, Workflow Candidate and handoff
@@ -7444,6 +7444,14 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   evidence. Retained evidence grants no operation authority. See
   [Workspace ownership](../web-console/WORKSPACES.md) and
   [connection ownership](../web-console/CONNECTION.md) for bounds and precedence.
+
+### Exact message reading positions
+
+A message-positioned conversation window is resolved from the attached native
+store, under its read cut, by canonical MessageId. It returns the exact native
+transcript cursor and no invented Turn identity. Read failures cannot substitute
+a nearby message. Client attachment and navigation fences must survive through
+window publication and the viewport anchor commit.
 
 ### Attachment input admission
 

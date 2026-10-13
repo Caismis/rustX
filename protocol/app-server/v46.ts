@@ -388,6 +388,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/node';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+      };
+    }
+  | {
       method: 'session/tree';
       params: {
         session_id: SessionId;
@@ -650,6 +657,11 @@ export type ConversationWindowAt =
       id: ConversationTurnId;
       cut: ConversationReadCut;
       type: 'turn';
+    }
+  | {
+      id: MessageId;
+      cut?: ConversationReadCut | null;
+      type: 'message';
     };
 /**
  * A durable transcript cursor.
@@ -1319,6 +1331,10 @@ export type MethodResult =
       sessions: SessionSummary[];
       next_offset?: number | null;
       type: 'sessions';
+    }
+  | {
+      node: SessionNode;
+      type: 'node';
     }
   | {
       nodes: SessionNode[];
@@ -6442,6 +6458,10 @@ export interface ConversationWindow {
  */
 export interface RuntimeClientTranscriptPage {
   /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
+  /**
    * Native whole-conversation totals, independent of this page.
    */
   statistics?: ConversationStatistics | null;
@@ -8146,6 +8166,10 @@ export interface RuntimeDurabilityFailure {
  * One bounded newest-or-older page of derived transcript history.
  */
 export interface RuntimeClientTranscriptPage1 {
+  /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
   /**
    * Native whole-conversation totals, independent of this page.
    */

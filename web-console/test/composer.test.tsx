@@ -69,8 +69,7 @@ it('an uploaded attachment cannot be discarded by command selection', async () =
   expect(p.onCommand).not.toHaveBeenCalled(); expect(p.onSend).not.toHaveBeenCalled();
 });
 
-// The preference is a General Settings row (Harness `composer-enter`); the
-// Composer only reads it and renders no selector of its own.
+// General Settings owns the persistent preference; the composer subscribes.
 const preferSteer = () => {
   expect(screen.queryByRole('button', { name: /Enter while running/ })).toBeNull();
   act(() => composerPreferences().setBusyEnter('steer'));

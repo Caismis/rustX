@@ -8,7 +8,7 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
   if (width < 600) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
-  if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
+  if (width < 600) await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
   const parentTitle = await page.locator('#session-title').innerText();
   const trigger = page.getByRole('button', { name: 'Subagents', exact: true });
   await trigger.click(); await page.getByRole('treeitem', { name: /Verify findings/ }).click();

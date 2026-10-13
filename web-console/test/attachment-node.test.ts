@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult } from '../../protocol/app-server/v45';
+import type { MethodResult } from '../../protocol/app-server/v46';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
 import { Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';
@@ -26,7 +26,7 @@ function readBarrier(s: Server, method: string) {
 
 it.each(['host', 'validation', 'ack'] as const)('conflicting Node Open is rejected without mutating or acquiring: %s', async phase => {
   const s = await setup(), entered = deferred<void>(), gate = deferred<void>();
-  if (phase !== 'ack') s.client.setAttachmentAdmission(async () => {
+  if (phase !== 'ack') s.client.setSessionAdmission(async () => {
     if (phase === 'host') { entered.resolve(); await gate.promise; }
     return { current: () => true, validate: async () => { if (phase === 'validation') { entered.resolve(); await gate.promise; } return true; } };
   });
@@ -148,7 +148,7 @@ it('late cold A statistics and Trace detail cannot overwrite B evidence', async 
 
 it('Release during final validation retires A before send and admits only the explicitly queued B', async () => {
   const s = await setup(), entered = deferred<void>(), gate = deferred<boolean>(); let first = true;
-  s.client.setAttachmentAdmission(async () => ({ current: () => true, validate: async () => { if (first) { first = false; entered.resolve(); return gate.promise; } return true; } }));
+  s.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => { if (first) { first = false; entered.resolve(); return gate.promise; } return true; } }));
   const a = s.client.attach('A', 'left'), rejected = expect(a).rejects.toThrow('before dispatch'); await entered.promise;
   const release = s.client.release('A'), b = s.client.attach('A', 'right'); gate.resolve(true);
   await Promise.all([rejected, release, b]);
@@ -351,7 +351,10 @@ async function expectSwitchExcludesDeletion(s: Server, revision: string) {
   const immediatelyAfter = s.client.getSnapshot();
   expect(await outcome).toContain('Node switch');
   expect(immediatelyAfter).toBe(before);
-  expect(s.client.getSnapshot()).toBe(before);
+  // A proven-unsent Switch may settle during the awaited refusal. Deletion
+  // itself changed nothing synchronously and dispatched no request.
+  const after = s.client.getSnapshot().views.A, previous = before.views.A;
+  expect({ node: after.nodeId, target: after.target, attachment: after.attachment, deleting: after.deleting }).toEqual({ node: previous.nodeId, target: previous.target, attachment: previous.attachment, deleting: previous.deleting });
   expect(s.requests).toHaveLength(count);
 }
 
