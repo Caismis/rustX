@@ -40,8 +40,11 @@ test('automatic configuration repair is announced once and inspected at its exac
       await expect(section.getByText(line, { exact: true })).toBeVisible();
     await expect(section.getByText('An exact private copy of the original file is kept in rustX storage.')).toBeVisible();
     await section.screenshot({ path: test.info().outputPath('config-repair-advanced-user.png') });
-    await closeSettings(page);
+    // Settings may first show the owner's last confirmed details while a
+    // fresh authoritative read is in flight; only that read's presentation
+    // acknowledges the receipt, so wait for it before leaving Settings.
     await expect(notice).toHaveCount(0);
+    await closeSettings(page);
 
     // Workspace A is repaired before its first Session resolves; entering it
     // announces that Workspace receipt to this browser.
@@ -54,9 +57,9 @@ test('automatic configuration repair is announced once and inspected at its exac
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     const workspace = settings.getByRole('region', { name: 'Auto Repair', exact: true });
     await expect(workspace.getByText('Removed unknown field agent.future_trust', { exact: true })).toBeVisible();
-    await closeSettings(page);
-    // Presenting the details acknowledged the Workspace receipt in this page.
+    // Presenting the Workspace's current details acknowledges its receipt.
     await expect(notice).toHaveCount(0);
+    await closeSettings(page);
 
     // A reload is a new connection: its server announces the User receipt after
     // initialize and the Workspace receipt once the Workspace is addressed. On
