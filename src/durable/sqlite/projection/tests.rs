@@ -566,16 +566,19 @@ fn dependency_free_checkpoint_rejects_every_future_resource_cut_atomically() {
             _ => value.read_cut.conversation_id = ConversationId::generate(),
         }
         let before = store.compaction_resource_cut().unwrap();
+        let error = store
+            .commit_projection(commit_input(
+                &store,
+                "invalid",
+                value,
+                &CancellationSignal::new(),
+            ))
+            .unwrap_err();
         assert!(
-            store
-                .commit_projection(commit_input(
-                    &store,
-                    "invalid",
-                    value,
-                    &CancellationSignal::new()
-                ))
-                .is_err(),
-            "accepted future {domain}"
+            error
+                .to_string()
+                .contains("foreign or future compaction Resource Read Cut"),
+            "{domain} must fail at the unconditional cut validator, not the later provenance guard: {error}"
         );
         assert_eq!(store.compaction_resource_cut().unwrap(), before);
         assert!(store.projection_head().unwrap().is_none());

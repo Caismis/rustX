@@ -522,3 +522,21 @@ have their own cost; planner-controlled rendering, materialization and query cou
 are bounded. Earlier disk-backed liveness failures and their unestablished exact
 phases remain reported above. Final branch/commit and current-head CI status are
 published in PR #477 after pushing; prior-head green CI is not substituted.
+
+### Final coverage-strengthening follow-up
+
+After the full local matrix and first push, final review found that the older
+R3 dependency-free future-cut regression asserted only rejection. F3 now independently
+rejects source-free historical content, so that broad assertion could mask removal
+of the unconditional durable cut validator. It now requires the specific durable
+Resource Read Cut error in every coordinate domain, before the later compiler
+provenance guard. This strengthens the existing assertion; no production code,
+deadline or selector changes.
+
+The complete matrix above ran on `7117275c0390ffe345d21aad3a8e47345a084187`.
+The coverage-only follow-up reran
+`cargo test --lib durable::sqlite::projection::tests:: -- --test-threads=2`
+and its `--all-features` form: both passed all 24 tests. Both complete workspace
+Clippy modes, `git diff --check` and `cargo fmt --all -- --check` are repeated for
+this follow-up. Full remote CI is inspected for the actual final pushed commit;
+earlier-head CI is retained only as historical evidence.
