@@ -100,8 +100,9 @@ pub enum ConfigRepairChange {
     UpdatedSchemaVersion { from: i64, to: u32 },
 }
 
-/// The outcome of one automatic repair observation. A healthy unchanged
-/// source has no receipt at all.
+/// The outcome of one automatic repair observation. A source that never
+/// needed repair has no receipt — nor has one whose receipt was withdrawn or
+/// forgotten, so having none never proves a source valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigRepairStatus {
@@ -678,6 +679,18 @@ struct LedgerState {
     entries: BTreeMap<SourceKey, LedgerEntry>,
 }
 
+/// One source's change in the ledger after a delivered sequence.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SourceChange {
+    /// Its entry changed: the entry's sequence and receipt, none once
+    /// withdrawn.
+    Entry(u64, Option<ConfigRepairReceipt>),
+    /// The ledger holds no entry for it — never recorded, or forgotten while
+    /// recording another source — at this ledger sequence. Absence says the
+    /// ledger retains no receipt, never that the source is valid.
+    Absent(u64),
+}
+
 /// Finite process-local repair observations: the latest receipt per source.
 ///
 /// Not history, not an Event Journal, and never persisted. A source repaired
@@ -857,18 +870,19 @@ impl RepairLedger {
         (state.sequence, receipt)
     }
 
-    /// The source's observation if it changed after `cursor`, with its
-    /// sequence. A cleared observation carries no receipt.
-    pub(crate) fn changed_after(
-        &self,
-        key: &SourceKey,
-        cursor: u64,
-    ) -> Option<(u64, Option<ConfigRepairReceipt>)> {
-        self.lock()
-            .entries
-            .get(key)
-            .filter(|entry| entry.sequence > cursor)
-            .map(|entry| (entry.sequence, entry.receipt.clone()))
+    /// What changed of the source after `cursor`, read under one lock with
+    /// the ledger sequence: its entry when that changed after `cursor`, or,
+    /// when the ledger holds no entry for it, that absence at the current
+    /// sequence; nothing when its entry is unchanged.
+    pub(crate) fn changed_after(&self, key: &SourceKey, cursor: u64) -> Option<SourceChange> {
+        let state = self.lock();
+        match state.entries.get(key) {
+            Some(entry) if entry.sequence > cursor => {
+                Some(SourceChange::Entry(entry.sequence, entry.receipt.clone()))
+            }
+            Some(_) => None,
+            None => Some(SourceChange::Absent(state.sequence)),
+        }
     }
 
     pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {

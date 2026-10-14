@@ -608,7 +608,13 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
   announces each source's current level — a receipt or none — whenever it
   admits the source for this connection, including when it re-admits a
   Workspace it forgot, so a stale receipt is replaced by native's next
-  admission of its source. Native forgets by addressing and the client by
+  admission of its source; and while it keeps observing a Workspace whose
+  delivered receipt its finite ledger forgets, it delivers that absence once,
+  at a higher sequence, with no new admission. An absent receipt says only
+  that native retains none — withdrawn, never recorded or forgotten — never
+  that the source is valid: it retires a presented warning and nothing else,
+  with no success notice, Settings draft or CAS change, write or
+  application. Native forgets by addressing and the client by
   observation, so the client recovers what it may have missed itself. One
   frontier records the highest sequence at which
   the connection forgot a source: a notice of an absent source ordered before

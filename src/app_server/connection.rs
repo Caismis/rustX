@@ -182,8 +182,10 @@ struct RepairInterest {
 enum RepairCursor {
     /// Admitted; its current level — a receipt or none — is still owed.
     Admitted,
-    /// Delivered through this native ledger sequence.
-    Delivered(u64),
+    /// Delivered through this native ledger sequence, a level that did or did
+    /// not hold a receipt: a delivered receipt the finite ledger later forgets
+    /// is owed its absence, a delivered absence nothing more.
+    Delivered { sequence: u64, receipt: bool },
 }
 
 /// Workspace sources one connection observes for repair notices.
@@ -1282,8 +1284,16 @@ impl AppServerConnection {
     /// committed after that read carries a higher sequence and is delivered
     /// next, and one committed before it is part of the level: nothing is
     /// lost, stale or delivered twice.
+    ///
+    /// A source this connection keeps observing may still lose its ledger
+    /// entry, which the finite ledger forgets only while recording another
+    /// source and so advancing the sequence. When the level last delivered
+    /// held a receipt, that absence is delivered once, at the sequence it was
+    /// read at, so no client keeps a receipt the ledger forgot; a delivered
+    /// absence is not repeated however the ledger advances. A later entry of
+    /// the source is newer than both and follows.
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
-        use crate::local_runtime::configuration::repair::SourceKey;
+        use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
         // A v47 notice reaches only a connection that negotiated v47.
         if self.initialized.lock().expect("initialize mutex").is_none() {
@@ -1294,14 +1304,21 @@ impl AppServerConnection {
         for (key, cursor) in &mut interest.delivered {
             let (sequence, receipt) = match *cursor {
                 RepairCursor::Admitted => ledger.level(key),
-                RepairCursor::Delivered(delivered) => {
-                    let Some(changed) = ledger.changed_after(key, delivered) else {
-                        continue;
-                    };
-                    changed
-                }
+                RepairCursor::Delivered {
+                    sequence: delivered,
+                    receipt: held,
+                } => match ledger.changed_after(key, delivered) {
+                    Some(SourceChange::Entry(sequence, receipt)) => (sequence, receipt),
+                    Some(SourceChange::Absent(sequence)) if held && sequence > delivered => {
+                        (sequence, None)
+                    }
+                    _ => continue,
+                },
             };
-            *cursor = RepairCursor::Delivered(sequence);
+            *cursor = RepairCursor::Delivered {
+                sequence,
+                receipt: receipt.is_some(),
+            };
             let target = match key {
                 SourceKey::User => SourceTarget::User,
                 SourceKey::Workspace(directory) => SourceTarget::Workspace {
@@ -1315,6 +1332,19 @@ impl AppServerConnection {
             });
         }
         None
+    }
+
+    /// Whether this connection still observes `target`'s repairs.
+    #[cfg(test)]
+    pub(crate) fn observes_repairs_of(
+        &self,
+        target: &crate::local_runtime::configuration::settings::SourceTarget,
+    ) -> bool {
+        self.source_repairs
+            .lock()
+            .expect("source repair interest")
+            .delivered
+            .contains_key(&target.into())
     }
 
     /// The next configuration application this connection has not delivered yet.

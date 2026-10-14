@@ -190,7 +190,7 @@ export function renderRepairInspection(observations: readonly Pick<SourceRepairO
       ? "## User rustx.toml"
       : `## Workspace rustx.toml (${sanitizeField(target.directory, false)})`;
     if (receipt === undefined) {
-      return `${heading}\nNo automatic repair was needed in this App Server process.`;
+      return `${heading}\nNo automatic repair is currently reported in this App Server process.`;
     }
     const lines = [
       heading,

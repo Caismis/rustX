@@ -167,8 +167,9 @@ function browserEvents(): StorageEvents | undefined {
 }
 
 /** The receipts a notification presents now: each source's latest receipt
- * this browser has not acknowledged for its authority. A healthy source has
- * no receipt at all, so it is never presented. */
+ * this browser has not acknowledged for its authority. A source native
+ * retains no receipt for presents nothing, which says nothing of whether it
+ * is valid. */
 export function unacknowledgedRepairs(observations: Readonly<Record<string, SourceRepairObservation>> | undefined, acknowledged: RepairAcknowledgements): PresentedRepair[] {
   return Object.values(observations ?? {})
     .flatMap(({ authorityId, receipt }) => receipt ? [{ authorityId, receipt }] : [])

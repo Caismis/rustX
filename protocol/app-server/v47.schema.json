@@ -19970,7 +19970,7 @@
           ]
         },
         "user_repair": {
-          "description": "The latest automatic repair observation of the User source in this\nprocess. Absent for a source that never needed repair.",
+          "description": "The latest automatic repair observation of the User source in this\nprocess. Absent when the finite ledger retains none — never needed,\nwithdrawn, or forgotten — which never proves the source valid; the\nviews' diagnostics report that.",
           "anyOf": [
             {
               "$ref": "#/$defs/ConfigRepairReceipt"
@@ -20192,7 +20192,7 @@
       ]
     },
     "ConfigRepairStatus": {
-      "description": "The outcome of one automatic repair observation. A healthy unchanged\nsource has no receipt at all.",
+      "description": "The outcome of one automatic repair observation. A source that never\nneeded repair has no receipt — nor has one whose receipt was withdrawn or\nforgotten, so having none never proves a source valid.",
       "oneOf": [
         {
           "description": "A validated candidate was atomically published.",
@@ -21217,7 +21217,7 @@
           ]
         },
         {
-          "description": "The latest automatic `rustx.toml` repair observation of one source\nchanged (Issue #464).\n\nSource-scoped: it names a `SourceTarget`, never a Session, attachment\nor application scope, and it says nothing about runtime application,\nwhich `configuration/changed` reports separately. A connection observes\nthe User source and each Workspace source it addressed, the least\nrecently addressed of its 64 Workspaces forgotten first. Each admission\nof a source — including addressing a forgotten one again — announces\nits current level once, then every change of it. `receipt: null` is\nthat level when the source reports no repair: never recorded,\nwithdrawn, or forgotten by the finite process-local ledger. It is a\nstate, not a repair, and presents nothing. Delivery is\nlevel-triggered: after a gap, the authoritative\n`configuration/sourcesRead` carries the same receipts. A notice is not\nhistory: one receipt id is one repair occurrence, and a later notice\nmay carry it again at a higher `sequence`.",
+          "description": "The latest automatic `rustx.toml` repair observation of one source\nchanged (Issue #464).\n\nSource-scoped: it names a `SourceTarget`, never a Session, attachment\nor application scope, and it says nothing about runtime application,\nwhich `configuration/changed` reports separately. A connection observes\nthe User source and each Workspace source it addressed, the least\nrecently addressed of its 64 Workspaces forgotten first. Each admission\nof a source — including addressing a forgotten one again — announces\nits current level once, then every change of it, and a delivered\nreceipt the finite ledger later forgets is followed by its absence\nonce. `receipt: null` says the finite process-local ledger retains no\nreceipt for the source — never recorded, withdrawn, or forgotten —\nnever that the document is valid, which only a source read reports.\nIt is a state, not a repair, and presents nothing. Delivery is\nlevel-triggered: after a gap, the authoritative\n`configuration/sourcesRead` carries the same receipts. A notice is not\nhistory: one receipt id is one repair occurrence, and a later notice\nmay carry it again at a higher `sequence`.",
           "type": "object",
           "properties": {
             "method": {

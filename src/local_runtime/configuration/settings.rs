@@ -166,7 +166,9 @@ pub struct SourceSettings {
     pub user: SourceView<SourceDocumentView>,
     pub workspace: Option<SourceView<SourceDocumentView>>,
     /// The latest automatic repair observation of the User source in this
-    /// process. Absent for a source that never needed repair.
+    /// process. Absent when the finite ledger retains none — never needed,
+    /// withdrawn, or forgotten — which never proves the source valid; the
+    /// views' diagnostics report that.
     pub user_repair: Option<super::repair::ConfigRepairReceipt>,
     /// The latest automatic repair observation of the target Workspace source.
     pub workspace_repair: Option<super::repair::ConfigRepairReceipt>,

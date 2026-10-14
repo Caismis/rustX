@@ -1344,6 +1344,398 @@ async fn repair_interest_is_bounded_and_readmission_is_distinct_from_access() {
     .await;
 }
 
+/// Connection `b` reconciles 64 further Workspaces, each holding a malformed
+/// document, so the native reconcile boundary records an unresolved receipt
+/// for each: 64 Workspace entries newer than any before them, which the
+/// finite ledger keeps in place of every older Workspace entry.
+async fn evict_through(
+    f: &Fixture,
+    b: &AppServerConnection,
+    prefix: &str,
+    first_id: i64,
+) -> Vec<SourceTarget> {
+    let more = more_workspaces(f, prefix, 64, "[agent\nlegacy = 1\n");
+    for (id, target) in (first_id..).zip(&more) {
+        call(
+            b,
+            id,
+            Method::ConfigurationReconcile {
+                target: target.clone(),
+            },
+        )
+        .await;
+        assert_eq!(
+            f.manager.source_repairs().latest(target).unwrap().status,
+            ConfigRepairStatus::Unresolved
+        );
+    }
+    more
+}
+
+/// Connection A admits W0, a Workspace with an unresolved receipt R0, and is
+/// delivered R0; connection B is another client of the same App Server.
+/// Returns A, B, W0, R0 and the sequence R0 was delivered at.
+async fn delivered_unresolved(
+    f: &Fixture,
+    w0: &SourceTarget,
+) -> (
+    AppServerConnection,
+    AppServerConnection,
+    ConfigRepairReceipt,
+    u64,
+) {
+    let a = AppServerConnection::new(f.host.clone());
+    let b = AppServerConnection::new(f.host.clone());
+    initialize(&a).await;
+    initialize(&b).await;
+    owed(&a);
+    owed(&b);
+    record_unresolved(f, w0);
+    sources(&a, 1, w0).await;
+    match owed(&a).as_slice() {
+        [(announced, Some(receipt), delivered)] => {
+            assert_eq!(announced, w0);
+            assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+            (a, b, receipt.clone(), *delivered)
+        }
+        owed => panic!("R0: {owed:?}"),
+    }
+}
+
+/// LEDGER-EVICT-01: A keeps observing W0 — it addresses nothing else — while
+/// B's 64 newer receipts make the finite ledger forget W0's entry. Without
+/// any request of A, A is owed W0's absence once, at a sequence newer than
+/// R0. Absence is not health: W0's document is still as malformed as it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retained_source_the_ledger_forgets_delivers_its_absence_once() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        let (a, b, _, delivered) = delivered_unresolved(&f, &w0).await;
+        evict_through(&f, &b, "evict", 1).await;
+        assert!(
+            !f.manager.source_repairs().holds(&w0),
+            "the ledger forgot W0"
+        );
+        assert!(a.observes_repairs_of(&w0), "A still observes W0");
+        let forgotten = sequence(&f);
+        assert!(forgotten > delivered);
+        assert_eq!(owed(&a), [(w0.clone(), None, forgotten)]);
+        assert!(owed(&a).is_empty(), "absence is delivered once");
+        assert!(a.observes_repairs_of(&w0));
+        // The empty level reports the ledger, not the document.
+        let read = sources(&b, 100, &w0).await;
+        assert!(read.workspace_repair.is_none());
+        assert_eq!(read.repair_sequence, forgotten);
+        assert!(
+            read.workspace.unwrap().diagnostic.is_some(),
+            "still malformed"
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+/// LEDGER-EVICT-02: after A was delivered W0's absence, B repairs W0 by the
+/// manual source write. W0 is then valid by its authoritative read; A, which
+/// re-addresses W0 without a new admission, is owed nothing — R0 never
+/// returns — and every sequence A can now read orders after R0, so a delayed
+/// R0 notice is older than anything A holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_manual_repair_after_ledger_eviction_never_restores_the_forgotten_receipt() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        let (a, b, r0, delivered) = delivered_unresolved(&f, &w0).await;
+        evict_through(&f, &b, "evict", 1).await;
+        let forgotten = sequence(&f);
+        assert_eq!(owed(&a), [(w0.clone(), None, forgotten)]);
+        // The manual repair is a source write; with no unresolved receipt
+        // retained, it withdraws nothing and records nothing.
+        let written = withdraw(&b, 100, &w0).await;
+        assert_eq!(written, forgotten);
+        let read = sources(&b, 102, &w0).await;
+        let view = read.workspace.unwrap();
+        assert!(view.diagnostic.is_none() && view.authored.is_some());
+        assert!(read.prospective_diagnostic.is_none(), "W0 is valid now");
+        assert!(owed(&a).is_empty());
+        // Re-addressing is access, not admission: nothing is owed.
+        let reread = sources(&a, 2, &w0).await;
+        assert!(a.observes_repairs_of(&w0));
+        assert!(owed(&a).is_empty());
+        assert!(reread.workspace_repair.is_none());
+        assert_eq!(reread.repair_sequence, forgotten);
+        assert!(
+            delivered < forgotten,
+            "R0 orders before every level A holds"
+        );
+        assert_ne!(reread.workspace_repair.as_ref(), Some(&r0));
+        f.close().await;
+    })
+    .await;
+}
+
+/// LEDGER-EVICT-03: W0's entry is forgotten and, before A runs, W0 records a
+/// distinct receipt R1. A is delivered R1 at its own sequence — no transient
+/// absence — and nothing of R0 or the eviction follows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_receipt_recorded_after_eviction_supersedes_the_forgotten_one() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        let (a, b, r0, delivered) = delivered_unresolved(&f, &w0).await;
+        evict_through(&f, &b, "evict", 1).await;
+        let forgotten = sequence(&f);
+        assert!(!f.manager.source_repairs().holds(&w0));
+        let r1 = commit_repair(&f, &w0);
+        let recorded = sequence(&f);
+        assert_ne!(r1.id, r0.id);
+        assert!(delivered < forgotten && forgotten < recorded);
+        assert_eq!(owed(&a), [(w0.clone(), Some(r1), recorded)]);
+        assert!(owed(&a).is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+/// LEDGER-EVICT-04: once A was delivered W0's absence, further receipts of
+/// other Workspaces — which advance the ledger and forget more entries —
+/// owe A nothing of W0, until W0's own state changes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_delivered_absence_is_not_repeated() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        let (a, b, _, _) = delivered_unresolved(&f, &w0).await;
+        let evicting = evict_through(&f, &b, "evict", 1).await;
+        let forgotten = sequence(&f);
+        assert_eq!(owed(&a), [(w0.clone(), None, forgotten)]);
+        for target in more_workspaces(&f, "unrelated", 8, "") {
+            commit_repair(&f, &target);
+            assert!(owed(&a).is_empty(), "nothing of W0");
+        }
+        for target in &evicting[..4] {
+            commit_repair(&f, target);
+            assert!(owed(&a).is_empty(), "nothing of W0");
+        }
+        assert!(sequence(&f) > forgotten);
+        record_unresolved(&f, &w0);
+        let current = f.manager.source_repairs().latest(&w0).unwrap();
+        assert_eq!(owed(&a), [(w0.clone(), Some(current), sequence(&f))]);
+        f.close().await;
+    })
+    .await;
+}
+
+/// LEDGER-EVICT-05: a healthy W0 the ledger never recorded is delivered its
+/// empty level once, at sequence zero; 64 and more receipts of other
+/// Workspaces afterwards owe A nothing of W0 or the User, and A still
+/// observes W0.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_never_recorded_source_is_not_repeated() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        assert_eq!(sequence(&f), 0);
+        let a = AppServerConnection::new(f.host.clone());
+        let b = AppServerConnection::new(f.host.clone());
+        initialize(&a).await;
+        initialize(&b).await;
+        sources(&a, 1, &w0).await;
+        assert_eq!(
+            owed(&a),
+            [(SourceTarget::User, None, 0), (w0.clone(), None, 0)]
+        );
+        evict_through(&f, &b, "evict", 1).await;
+        for target in more_workspaces(&f, "unrelated", 8, "") {
+            commit_repair(&f, &target);
+        }
+        assert!(sequence(&f) > 64);
+        assert!(owed(&a).is_empty(), "no empty level is repeated");
+        assert!(a.observes_repairs_of(&w0));
+        assert!(!f.manager.source_repairs().holds(&w0));
+        f.close().await;
+    })
+    .await;
+}
+
+/// LEDGER-EVICT-06: two connections are delivered R0. `kept` keeps observing
+/// W0; `moved` addresses 64 other Workspaces, so its interest forgets W0.
+/// The ledger then forgets W0 too. `kept` converges by its retained cursor,
+/// with no request; `moved` hears nothing until it addresses W0 again, and
+/// that new admission delivers the current level.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retained_and_readmitted_sources_converge_through_their_own_contracts() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        let (kept, b, r0, _) = delivered_unresolved(&f, &w0).await;
+        let moved = AppServerConnection::new(f.host.clone());
+        initialize(&moved).await;
+        sources(&moved, 1, &w0).await;
+        assert_eq!(
+            owed(&moved),
+            [
+                (SourceTarget::User, None, sequence(&f)),
+                (w0.clone(), Some(r0.clone()), sequence(&f))
+            ]
+        );
+        for (id, target) in (2..).zip(&more_workspaces(&f, "moved", 64, "")) {
+            sources(&moved, id, target).await;
+        }
+        owed(&moved);
+        assert!(kept.observes_repairs_of(&w0));
+        assert!(
+            !moved.observes_repairs_of(&w0),
+            "moved's interest forgot W0"
+        );
+        evict_through(&f, &b, "evict", 1).await;
+        assert!(!f.manager.source_repairs().holds(&w0));
+        let forgotten = sequence(&f);
+        // Retained interest: the absence, with no request of `kept`.
+        assert_eq!(owed(&kept), [(w0.clone(), None, forgotten)]);
+        assert!(kept.observes_repairs_of(&w0));
+        // Forgotten interest: nothing until re-admission, then the level.
+        assert!(owed(&moved).iter().all(|(target, _, _)| *target != w0));
+        sources(&moved, 100, &w0).await;
+        assert!(moved.observes_repairs_of(&w0));
+        assert_eq!(owed(&moved), [(w0.clone(), None, forgotten)]);
+        assert!(owed(&kept).is_empty() && owed(&moved).is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+/// LEDGER-EVICT-07: a parked reader of A, holding R0, is woken by the
+/// recording that forgets W0.
+///
+/// 1. It runs before W0 records again: it delivers the absence; a later
+///    receipt R1 wakes it again and follows at a higher sequence.
+/// 2. W0 records R2 before it runs: it delivers R2 directly, never the
+///    absence or anything older.
+///
+/// Each step is forced by polling the reader by hand. `record` takes only the
+/// ledger lock and the reader takes the interest lock, then the ledger lock,
+/// so the two never wait on each other in reverse.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reader_parked_across_ledger_eviction_never_loses_the_latest_level() {
+    use std::future::Future;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        let (a, b, _, delivered) = delivered_unresolved(&f, &w0).await;
+        let poll_after = |record: &dyn Fn()| {
+            let mut next = park(&a, &SourceTarget::User);
+            let flag = std::sync::Arc::new(WakeFlag(std::sync::atomic::AtomicBool::new(false)));
+            let waker = std::task::Waker::from(flag.clone());
+            let mut context = std::task::Context::from_waker(&waker);
+            assert!(next.as_mut().poll(&mut context).is_pending());
+            record();
+            assert!(flag.0.load(Ordering::SeqCst), "the ledger wakes the reader");
+            let std::task::Poll::Ready(notification) = next.as_mut().poll(&mut context) else {
+                panic!("a level is deliverable")
+            };
+            let NotificationMethod::SourceRepairChanged {
+                target,
+                receipt,
+                sequence,
+            } = notification.notification
+            else {
+                panic!("a source repair notice")
+            };
+            (target, receipt, sequence)
+        };
+        // 1. The forgetting recording, then the reader, then R1.
+        let evicting = more_workspaces(&f, "evict", 64, "[agent\nlegacy = 1\n");
+        let (last, first) = evicting.split_last().unwrap();
+        for target in first {
+            record_unresolved(&f, target);
+        }
+        assert!(f.manager.source_repairs().holds(&w0));
+        let absence = poll_after(&|| record_unresolved(&f, last));
+        assert!(!f.manager.source_repairs().holds(&w0));
+        let forgotten = sequence(&f);
+        assert!(forgotten > delivered);
+        assert_eq!(absence, (w0.clone(), None, forgotten));
+        let r1 = poll_after(&|| {
+            commit_repair(&f, &w0);
+        });
+        assert_eq!(r1.0, w0);
+        assert!(r1.1.is_some() && r1.2 > forgotten);
+        assert!(owed(&a).is_empty());
+        // 2. The forgetting recording and R2 both before the reader runs.
+        let more = more_workspaces(&f, "again", 64, "[agent\nlegacy = 1\n");
+        let (last, first) = more.split_last().unwrap();
+        for target in first {
+            record_unresolved(&f, target);
+        }
+        assert!(f.manager.source_repairs().holds(&w0));
+        let r2 = poll_after(&|| {
+            record_unresolved(&f, last);
+            assert!(!f.manager.source_repairs().holds(&w0));
+            record_unresolved(&f, &w0);
+        });
+        let latest = f.manager.source_repairs().latest(&w0).unwrap();
+        assert_eq!(r2, (w0.clone(), Some(latest), sequence(&f)));
+        assert!(owed(&a).is_empty(), "nothing older follows");
+        drop(b);
+        f.close().await;
+    })
+    .await;
+}
+
+/// LEDGER-EVICT-09: ledger eviction and its convergence touch nothing but
+/// observations: no provider request, Tool call, canonical message or Event
+/// Journal entry, no source write or backup, no prepared application, and
+/// the Session's settled configuration is unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ledger_eviction_convergence_is_isolated_from_runtime_and_sources() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let live = runtime.inspect_runtime().unwrap();
+        let w0 = workspace(&f, 1);
+        let (a, b, _, _) = delivered_unresolved(&f, &w0).await;
+        // A healthy reconcile establishes the Session's application baseline.
+        call(
+            &b,
+            200,
+            Method::ConfigurationReconcile {
+                target: workspace(&f, 0),
+            },
+        )
+        .await;
+        owed(&a);
+        let journal = events(&live).len();
+        let requests = f.provider.attempt_count();
+        let probe = f.manager.probe(&f.id(0).await);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let settled = super::configuration::settled(&f, 0).await;
+        let w0_file = w0.workspace().unwrap().join("rustx.toml");
+        let bytes = std::fs::read(&w0_file).unwrap();
+        let user_bytes = std::fs::read(user_path(&f)).unwrap();
+        evict_through(&f, &b, "evict", 1).await;
+        assert_eq!(owed(&a), [(w0.clone(), None, sequence(&f))]);
+        assert_eq!(events(&live).len(), journal);
+        assert_eq!(f.provider.attempt_count(), requests);
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        assert_eq!(
+            super::configuration::settled(&f, 0).await.desired,
+            settled.desired
+        );
+        assert_eq!(std::fs::read(&w0_file).unwrap(), bytes);
+        assert_eq!(std::fs::read(user_path(&f)).unwrap(), user_bytes);
+        assert!(!f.archive_root.join("configuration-backups").exists());
+        drop(live);
+        drop(runtime);
+        f.close().await;
+    })
+    .await;
+}
+
 /// Reconcile workspace 0 and return its announced receipt and sequence.
 async fn reconcile_announced(
     f: &Fixture,

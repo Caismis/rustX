@@ -698,6 +698,76 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
     }
   });
 
+  it("LEDGER-EVICT-08 a warning whose receipt native's ledger forgets retires while A keeps observing W0", { timeout: 120_000 }, async (t) => {
+    const malformed = (revision: number) => `[agent\nlegacy = ${revision}\n`;
+    const directory = (name: string) => {
+      const path = server.fixture.path(name);
+      mkdirSync(path, { recursive: true });
+      return { kind: "workspace", directory: realpathSync(path) } as const;
+    };
+    const w0 = directory("evict-w0");
+    const w0File = join(w0.directory, "rustx.toml");
+    const others = Array.from({ length: 64 }, (_, index) => directory(`evict-w${index + 1}`));
+    for (const target of others) writeFileSync(join(target.directory, "rustx.toml"), malformed(1));
+    const key = (target: SourceTarget) => target.kind === "user" ? "user" : `workspace:${target.directory}`;
+    const held = (host: AppServerHost) => host.sourceRepairs().find(observation => key(observation.target) === key(w0));
+    const requests = (await provider.requests()).length;
+    const a = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const b = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const status = new SourceRepairStatus();
+    status.adopt(a.authorityId);
+    for (const observation of a.sourceRepairs()) status.observe(a.authorityId, observation);
+    a.onSourceRepair(observation => status.observe(a.authorityId, observation));
+    const warned = () => status.pendingSources().some(source => key(source) === key(w0));
+    try {
+      // 1. A's failed Session admits W0, and A observes its unresolved R0.
+      writeFileSync(w0File, malformed(1));
+      await assert.rejects(a.createSession({ cwd: w0.directory }));
+      await until(() => held(a)?.receipt?.status === "unresolved", "A observes W0 unresolved");
+      assert.ok(warned());
+      const r0 = held(a)!;
+      // From here A sends nothing: no read, no Session, so no re-admission.
+      const sent: string[] = [];
+      const call = a.client.call.bind(a.client);
+      t.mock.method(a.client, "call", (...args: Parameters<typeof call>) => {
+        sent.push(args[0]);
+        return call(...args);
+      });
+      // 2. B reconciles 64 malformed Workspaces A never addressed; each is a
+      //    newer ledger entry, so native's finite ledger forgets W0.
+      for (const target of others) await b.client.call("configuration/reconcile", { target }, "configuration_application");
+      // 3. Native still observes W0 for A and delivers its absence.
+      await until(() => held(a)?.receipt === undefined, "native delivers W0's absence");
+      assert.ok(BigInt(held(a)!.sequence) > BigInt(r0.sequence));
+      assert.equal(warned(), false);
+      assert.deepEqual(sent, []);
+      // Absence is not health: W0's bytes are unchanged and its read still
+      // reports the malformed document.
+      assert.equal(readFileSync(w0File, "utf8"), malformed(1));
+      const read = await b.readSourceRepairs(w0);
+      assert.equal(read.workspace_repair ?? null, null);
+      assert.ok(read.workspace?.diagnostic);
+      // 4. R0 delivered again late is older and restores nothing.
+      assert.equal(status.observe(a.authorityId, r0), false);
+      assert.equal(warned(), false);
+      // 5. A still observes W0: a new episode reaches it with no request.
+      writeFileSync(w0File, malformed(2));
+      await assert.rejects(b.createSession({ cwd: w0.directory }));
+      await until(() => held(a)?.receipt?.status === "unresolved", "A observes W0's new episode");
+      assert.notEqual(held(a)!.receipt!.id, r0.receipt!.id);
+      assert.ok(warned());
+      assert.deepEqual(sent, []);
+      // R0's announcement identity survived its retirement: R0 current again
+      // at a newer sequence retires R1 from the line and is not announced.
+      assert.equal(status.observe(a.authorityId, { ...r0, sequence: String(BigInt(held(a)!.sequence) + 1n) }), true);
+      assert.equal(warned(), false);
+      assert.equal((await provider.requests()).length, requests);
+    } finally {
+      await a.shutdown();
+      await b.shutdown();
+    }
+  });
+
   it("keeps the server and its accepted work alive across disconnect and reconnect", { timeout: 120_000 }, async () => {
     const first = await AppServerHost.connectRemote({
       endpoint: external.endpoint,

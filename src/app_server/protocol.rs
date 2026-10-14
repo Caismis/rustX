@@ -896,10 +896,12 @@ pub enum NotificationMethod {
     /// the User source and each Workspace source it addressed, the least
     /// recently addressed of its 64 Workspaces forgotten first. Each admission
     /// of a source — including addressing a forgotten one again — announces
-    /// its current level once, then every change of it. `receipt: null` is
-    /// that level when the source reports no repair: never recorded,
-    /// withdrawn, or forgotten by the finite process-local ledger. It is a
-    /// state, not a repair, and presents nothing. Delivery is
+    /// its current level once, then every change of it, and a delivered
+    /// receipt the finite ledger later forgets is followed by its absence
+    /// once. `receipt: null` says the finite process-local ledger retains no
+    /// receipt for the source — never recorded, withdrawn, or forgotten —
+    /// never that the document is valid, which only a source read reports.
+    /// It is a state, not a repair, and presents nothing. Delivery is
     /// level-triggered: after a gap, the authoritative
     /// `configuration/sourcesRead` carries the same receipts. A notice is not
     /// history: one receipt id is one repair occurrence, and a later notice

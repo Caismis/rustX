@@ -619,7 +619,7 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   await settingsReady();
   await openSettingsPage('Advanced');
   const section = await screen.findByRole('region', { name: 'Auto Repair' });
-  expect(within(section).getByText('No automatic repair was needed for this source in this App Server process.')).toBeTruthy();
+  expect(within(section).getByText('No automatic repair is currently reported for this source in this App Server process.')).toBeTruthy();
   // An unsaved draft on another page.
   await openSettingsPage('Agent');
   fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
@@ -1049,6 +1049,69 @@ describe('WEB-SEQ-08 an in-flight recovery read never publishes into a later con
 
 /** The repair notice, also while open Settings hides the page behind it. */
 const shownNotice = () => screen.queryByRole('status', { name: 'Configuration repair', hidden: true }) ?? screen.queryByRole('alert', { name: 'Configuration repair', hidden: true });
+
+/** Every persisted browser entry, acknowledgements included. */
+const stored = () => Object.fromEntries(Array.from({ length: localStorage.length }, (_, index) => {
+  const key = localStorage.key(index)!;
+  return [key, localStorage.getItem(key)];
+}));
+
+it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stays observed, with no side effect', async () => {
+  const native = new Native();
+  const s = new Server();
+  const w0 = workspace;
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
+  await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<>
+    <RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={vi.fn()} />
+    <SettingsSurface client={s.client} target={userSettingsTarget} />
+  </>);
+  await settingsReady();
+  await openSettingsPage('Agent');
+  fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  // 1. W0's unresolved receipt R0, delivered at 1, warns.
+  await deliverAt(s, w0, unresolvedAt(w0, 'w0-1'), 1);
+  expect(shownNotice()!.textContent).toMatch(/Workspace configuration could not be repaired automatically/);
+  const requests = s.requests.length;
+  const before = s.client.getSnapshot();
+  const persisted = stored();
+  // 2. Another connection records 64 receipts of Workspaces this connection
+  //    never addressed (sequences 2…65), so the finite ledger forgets W0.
+  //    Native interest still holds W0, so native delivers W0's absence once
+  //    at the ledger sequence it read it at — with no request and no
+  //    re-admission.
+  await deliverAt(s, w0, null, 65);
+  expect(held(s, w0)).toMatchObject({ sequence: '65', receipt: undefined });
+  expect(shownNotice()).toBeNull();
+  // 3. Older notices of R0 never restore it.
+  for (const older of [64, 1]) await deliverAt(s, w0, unresolvedAt(w0, 'w0-1'), older);
+  expect(held(s, w0)).toMatchObject({ sequence: '65', receipt: undefined });
+  expect(shownNotice()).toBeNull();
+  // Observation alone: no request, nothing presented as a success, nothing
+  // acknowledged or forgotten in the browser, no Session or application
+  // state changed.
+  expect(s.requests.length).toBe(requests);
+  expect(stored()).toEqual(persisted);
+  const authorityId = s.client.getSnapshot().authorityId;
+  expect(authorityId).toBeTruthy();
+  expect(acknowledgements.has({ authorityId: authorityId!, receiptId: 'w0-1' })).toBe(false);
+  const after = s.client.getSnapshot();
+  expect(after.views).toBe(before.views);
+  expect(after.configuration).toBe(before.configuration);
+  expect(after.sessions).toBe(before.sessions);
+  expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
+  expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
+  // The Settings draft and its CAS base are untouched.
+  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  await openSettingsPage('Advanced');
+  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
+  expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
+  s.client.disconnect();
+});
 
 it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Workspace, with no side effect', async () => {
   const native = new Native();

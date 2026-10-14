@@ -631,7 +631,7 @@ fn a_source_found_healthy_clears_its_unresolved_receipt() {
             .manager
             .repairs()
             .changed_after(&SourceKey::User, sequence),
-        Some((sequence + 1, None))
+        Some(SourceChange::Entry(sequence + 1, None))
     );
 }
 
@@ -2250,7 +2250,7 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
             .manager
             .repairs()
             .changed_after(&SourceKey::from(&target), sequence),
-        Some((sequence + 1, None))
+        Some(SourceChange::Entry(sequence + 1, None))
     );
     // Later observations are no-ops.
     fixture.manager.refresh_repair_observation(&target);
@@ -3549,7 +3549,7 @@ fn a_restored_original_repaired_again_is_a_new_occurrence() {
             .manager
             .repairs()
             .changed_after(&SourceKey::User, first_sequence),
-        Some((first_sequence + 1, Some(second)))
+        Some(SourceChange::Entry(first_sequence + 1, Some(second)))
     );
 }
 

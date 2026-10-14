@@ -115,8 +115,9 @@ export interface UncertainOperation {
   generation: number;
 }
 /** The latest native automatic repair receipt of one configuration source
- * (Issue #464). `receipt` is absent once native withdrew an unresolved one,
- * or when the source has none. `authorityId` is the negotiated App Server
+ * (Issue #464). `receipt` is absent when native retains none for the
+ * source — withdrawn, never recorded, or forgotten by its finite ledger —
+ * which never says the source is valid. `authorityId` is the negotiated App Server
  * authority that announced it: a receipt id names one repair occurrence
  * within its authority only, so equal ids from distinct authorities are
  * distinct repairs. `sequence` is the native repair-ledger sequence the

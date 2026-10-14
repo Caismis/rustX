@@ -2974,8 +2974,9 @@ export type SessionModelsView =
       kind: 'unavailable';
     };
 /**
- * The outcome of one automatic repair observation. A healthy unchanged
- * source has no receipt at all.
+ * The outcome of one automatic repair observation. A source that never
+ * needed repair has no receipt — nor has one whose receipt was withdrawn or
+ * forgotten, so having none never proves a source valid.
  */
 export type ConfigRepairStatus = 'repaired' | 'unresolved' | 'commit_uncertain';
 /**
@@ -9925,7 +9926,9 @@ export interface SourceSettings {
   workspace?: SourceView | null;
   /**
    * The latest automatic repair observation of the User source in this
-   * process. Absent for a source that never needed repair.
+   * process. Absent when the finite ledger retains none — never needed,
+   * withdrawn, or forgotten — which never proves the source valid; the
+   * views' diagnostics report that.
    */
   user_repair?: ConfigRepairReceipt | null;
   /**

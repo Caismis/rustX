@@ -109,7 +109,7 @@ it("words repaired, combined, unresolved and uncertain receipts without values",
     '- agent.tools.builtin[4] "agent_list" (Agent control composed automatically)',
     '- agent.tools.builtin[5] "todo" (provided by a Plugin)',
     "## Workspace rustx.toml (/work/project)",
-    "No automatic repair was needed in this App Server process.",
+    "No automatic repair is currently reported in this App Server process.",
     "runtime application is reported separately",
   ]) assert.ok(body.includes(line), line);
   const failed = renderRepairInspection([{ target: WORKSPACE, receipt: receipt({ status: "unresolved", after_revision: null, diagnostic: "invalid value" }) }]);

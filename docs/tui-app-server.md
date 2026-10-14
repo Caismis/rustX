@@ -52,7 +52,12 @@ acknowledges it or a newer observation replaces or withdraws it. A newer
 observation therefore always updates its source even when its receipt was
 announced before: it becomes current without a second announcement and retires
 whatever the source presented (R1 → R2 → R1 ends with R1 current and nothing
-presented). An acknowledgement never changes what a source holds.
+presented). An acknowledgement never changes what a source holds. A withdrawal
+(`receipt: null`) says only that native retains no receipt for the source —
+withdrawn, never recorded, or forgotten by its finite ledger, which delivers
+that absence once to a connection still observing a source whose receipt it
+announced — never that the document is valid: it retires what the line
+presents for the source and announces nothing.
 
 A new connection observes the User at once and a Workspace only once it
 addresses it again, so a Workspace whose receipt was withdrawn while the client

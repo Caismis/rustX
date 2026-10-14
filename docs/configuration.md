@@ -921,8 +921,11 @@ A connection's interest is the User and the 64 Workspaces it most recently
 addressed. Each admission — including addressing a forgotten Workspace again —
 delivers the source's current level once, at the sequence it was read at: its
 receipt, or none when the source reports no repair, whether withdrawn, never
-recorded, or forgotten by the ledger. That empty level is a state, never a
-repair, and presents nothing. The TUI and the Web console retain the same
+recorded, or forgotten by the ledger. A Workspace the connection keeps
+observing whose delivered receipt the ledger then forgets is delivered that
+absence once, without being addressed again. That empty level is a state, never
+a repair, and presents nothing; it reports what the ledger retains, never that
+the document is valid, which only the source read's diagnostics establish. The TUI and the Web console retain the same
 finite number of observations — the User and 64 Workspaces, the least recently
 observed Workspace forgotten first — replace an observation only with one of a
 higher sequence (even of the same receipt, which is not presented again), never

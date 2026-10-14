@@ -1296,7 +1296,8 @@ interface ConfigRepairReceipt {
 }
 ```
 
-A healthy source that never needed repair has no receipt. `repaired` proves only
+A source that never needed repair has no receipt; having no receipt never proves
+a source valid (see `receipt: null` below). `repaired` proves only
 that authored bytes were committed; whether the configuration was prepared,
 applied or adopted stays the `ConfigurationApplication` of `configuration/changed`,
 `configuration/reconcile` and `session/configuration`. `unresolved` means the
@@ -1345,8 +1346,16 @@ repair — is on the first read.
 
 The notification is source-scoped: it names a `SourceTarget`, never a Session,
 attachment or application scope, and is distinct from `configuration/changed`.
-`receipt: null` withdraws an unresolved receipt once the source is healthy under
-the source-intrinsic contract, never merely because it parses again. A
+`receipt: null` states only that the native ledger retains no receipt for the
+source: it never needed repair, its unresolved receipt was withdrawn — which
+happens once the source is healthy under the source-intrinsic contract, never
+merely because it parses again — or the finite ledger forgot its entry, or it was
+not observed in this process. It is authoritative about the ledger's retained
+repair observation, not proof that the document is valid; validity is what the
+source read reports (its view `diagnostic`, `prospective_diagnostic`) and native
+validation enforces. A client retires any repair notice it presents for the
+source and does nothing else because of it: it presents no success, authorizes
+no edit, rebases no Settings draft and implies no application or adoption. A
 connection observes the User source and each Workspace source it addressed in a
 request (`configuration/sourcesRead`, `configuration/sourceWrite`,
 `configuration/reconcile`, `mcp/probe`, `session/create`, `session/attach`) —
@@ -1362,7 +1371,15 @@ finite ledger. That level carries the ledger sequence it was read at, never
 lower than anything recorded of the source; it is a state, not a repair, so a
 null level presents nothing. Admitting a source wakes the connection's
 notification reader, so the level is delivered without any further ledger
-change; every later change of the source follows. The level and its sequence
+change; every later change of the source follows. A source the connection keeps
+observing can still lose its ledger entry, which the finite ledger forgets only
+while recording another source and so advancing the sequence. When the level
+last delivered to the connection held a receipt, that absence is delivered once,
+at the ledger sequence it was read at, with no new admission, so no client keeps
+a receipt the ledger forgot; a delivered absence is not repeated however other
+sources change, and a later receipt of the source follows at its own higher
+sequence. Each cursor therefore records the sequence and whether that level held
+a receipt — nothing more per source. The level and its sequence
 are read under one ledger lock and become the source's cursor under the
 connection's interest lock, so a change committed after that read carries a
 higher sequence and is delivered next, and one committed before it is folded
