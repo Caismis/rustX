@@ -356,7 +356,7 @@ async fn long_prefix_planning_bounds_actual_rendering_and_complete_estimator_wor
         );
         assert!(
             visits.load(Ordering::SeqCst)
-                <= crate::context::planning::MAX_SUMMARY_CANDIDATES * (2 * history.len() + 1),
+                <= crate::context::planning::MAX_GENERIC_CANDIDATES * (2 * history.len() + 1),
             "complete candidate materialization is capped independently of history length"
         );
         assert_eq!(
@@ -364,7 +364,7 @@ async fn long_prefix_planning_bounds_actual_rendering_and_complete_estimator_wor
                 .await
                 .unwrap(),
             selected,
-            "sampled boundary selection is deterministic"
+            "bounded boundary selection is deterministic"
         );
     }
 }
@@ -533,4 +533,262 @@ async fn complete_tool_batch_and_core_owned_boundaries_constrain_every_probe() {
         .kind,
         ContextErrorKind::CannotFit
     );
+}
+
+#[tokio::test]
+async fn n1_unsampled_only_feasible_boundary_is_not_proven_cannot_fit() {
+    let history = input(129);
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+        if let [ModelInputMessage::Derived(derived)] = messages {
+            let rustx::model::projected::ProjectedMessage::User { content, .. } = &derived.message
+            else {
+                unreachable!()
+            };
+            let UserContentBlock::Text(text) = &content[0] else {
+                unreachable!()
+            };
+            if text.text.contains("message 3\n") {
+                1000
+            } else {
+                1
+            }
+        } else if messages.len() >= 128 {
+            1000
+        } else {
+            1
+        }
+    });
+    let e = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 100,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(estimator),
+    )
+    .unwrap();
+    let outcome = plan(
+        &e,
+        &history,
+        CompactionBudgets::new(0, 1, 10),
+        &CompactionConstraints::default(),
+    )
+    .await;
+    match outcome {
+        Ok(n) => assert_eq!(n, 2),
+        Err(error) => assert_eq!(
+            error.kind,
+            ContextErrorKind::SearchIncomplete,
+            "boundary 2 is feasible; not examining it proves nothing"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn n1_default_estimator_finds_only_feasible_second_of_129_boundaries() {
+    let history = input(129);
+    let summary_cost = |n| {
+        DefaultTokenEstimator.estimate_input(
+            &rustx::context::SummaryRequest {
+                retired: history[..n].to_vec(),
+            }
+            .model_input()
+            .messages,
+            "",
+            &[],
+        )
+    };
+    let tail_cost = |n| DefaultTokenEstimator.estimate_input(&history[n..], "", &[]);
+    assert!(summary_cost(3) > summary_cost(2));
+    assert!(tail_cost(1) > tail_cost(2));
+    let e = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: tail_cost(2) + 50,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(DefaultTokenEstimator),
+    )
+    .unwrap();
+    assert_eq!(
+        plan(
+            &e,
+            &history,
+            CompactionBudgets::new(0, 50, summary_cost(2)),
+            &CompactionConstraints::default()
+        )
+        .await
+        .unwrap(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn n1_default_search_preserves_extremes_preference_and_fallback() {
+    let history = input(129);
+    let summary_cost = |n| {
+        DefaultTokenEstimator.estimate_input(
+            &rustx::context::SummaryRequest {
+                retired: history[..n].to_vec(),
+            }
+            .model_input()
+            .messages,
+            "",
+            &[],
+        )
+    };
+    let tail_cost = |n| DefaultTokenEstimator.estimate_input(&history[n..], "", &[]);
+    for (first, last, recent) in [
+        (1, 1, 0),
+        (129, 129, 0),
+        (2, 100, 0),
+        (2, 100, tail_cost(50)),
+        (2, 100, u64::MAX),
+    ] {
+        let e = ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: tail_cost(first) + 50,
+                reserve_tokens: 0,
+                keep_recent_tokens: recent,
+            },
+            Arc::new(DefaultTokenEstimator),
+        )
+        .unwrap();
+        let feasible: Vec<_> = (1..=129)
+            .filter(|n| {
+                summary_cost(*n) <= summary_cost(last)
+                    && tail_cost(*n) + 50 <= e.soft_input_limit(0).unwrap()
+            })
+            .collect();
+        let expected = feasible
+            .iter()
+            .copied()
+            .filter(|n| tail_cost(*n) >= recent)
+            .max()
+            .unwrap_or(feasible[0]);
+        assert_eq!(
+            plan(
+                &e,
+                &history,
+                CompactionBudgets::new(0, 50, summary_cost(last)),
+                &CompactionConstraints::default()
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn n1_arbitrary_non_monotone_prices_require_actual_candidate_queries() {
+    let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+        if matches!(messages, [ModelInputMessage::Derived(_)])
+            || [28, 23, 11].contains(&messages.len())
+        {
+            1
+        } else {
+            1000
+        }
+    });
+    let e = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 100,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(estimator),
+    )
+    .unwrap();
+    assert_eq!(
+        plan(
+            &e,
+            &input(30),
+            CompactionBudgets::new(0, 1, 10),
+            &CompactionConstraints::default()
+        )
+        .await
+        .unwrap(),
+        19
+    );
+}
+
+#[tokio::test]
+async fn n1_generic_exhaustion_distinguishes_incomplete_search_from_infeasibility() {
+    let e = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 100,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(rustx::context::ClosureTokenEstimator::new(|_, _, _| 1000)),
+    )
+    .unwrap();
+    let incomplete = plan(
+        &e,
+        &input(129),
+        CompactionBudgets::new(0, 1, 10),
+        &CompactionConstraints::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(incomplete.kind, ContextErrorKind::SearchIncomplete);
+    assert_eq!(
+        incomplete.message,
+        "compaction candidate search incomplete: inspected 64 of 129 eligible boundaries; estimator has no monotone accounting guarantee"
+    );
+    assert_eq!(
+        plan(
+            &e,
+            &input(64),
+            CompactionBudgets::new(0, 1, 10),
+            &CompactionConstraints::default()
+        )
+        .await
+        .unwrap_err()
+        .kind,
+        ContextErrorKind::CannotFit
+    );
+}
+
+#[tokio::test]
+async fn n1_default_search_bounds_actual_render_copy_and_serialization_work() {
+    for length in [512, 1024] {
+        let history = input(length);
+        let full_summary = rustx::context::SummaryRequest {
+            retired: history.clone(),
+        }
+        .model_input();
+        let logical_bytes = serde_json::to_vec(&history).unwrap().len() as u64;
+        let summary_bytes = serde_json::to_vec(&full_summary.messages).unwrap().len() as u64;
+        let e = ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 100_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: 100,
+            },
+            Arc::new(DefaultTokenEstimator),
+        )
+        .unwrap();
+        crate::context::summarizer::take_summary_rendered_messages();
+        crate::context::summarizer::take_summary_copied_bytes();
+        crate::context::planning::take_copied_bytes();
+        crate::context::tokens::take_accounted_bytes();
+        crate::context::tokens::take_estimator_calls();
+        plan(&e, &history, budgets(), &CompactionConstraints::default())
+            .await
+            .unwrap();
+        let probes = 3 * (u64::from(length.ilog2()) + 1) + 1;
+        assert_eq!(
+            crate::context::summarizer::take_summary_rendered_messages(),
+            length
+        );
+        assert!(crate::context::tokens::take_estimator_calls() <= 3 * probes);
+        assert!(crate::context::summarizer::take_summary_copied_bytes() <= probes * summary_bytes);
+        assert!(crate::context::planning::take_copied_bytes() <= probes * logical_bytes);
+        assert!(
+            crate::context::tokens::take_accounted_bytes()
+                <= probes * (summary_bytes + 2 * logical_bytes + 100)
+        );
+    }
 }

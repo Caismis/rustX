@@ -154,6 +154,9 @@ pub(crate) fn summary_model_input(transcript: &str) -> SummaryModelInput {
     let instruction = format!(
         "{SUMMARY_INSTRUCTION}\n\n<retired-conversation>\n{transcript}\n</retired-conversation>"
     );
+    #[cfg(test)]
+    SUMMARY_COPIED_BYTES
+        .with(|total| total.set(total.get().saturating_add(instruction.len() as u64)));
     SummaryModelInput {
         messages: vec![crate::model::ModelInputMessage::Derived(
             crate::model::projected::DerivedModelMessage {
@@ -175,6 +178,13 @@ thread_local! { static SUMMARY_RENDERED_MESSAGES: std::cell::Cell<usize> = const
 #[cfg(test)]
 pub(crate) fn take_summary_rendered_messages() -> usize {
     SUMMARY_RENDERED_MESSAGES.with(|count| count.replace(0))
+}
+
+#[cfg(test)]
+thread_local! { static SUMMARY_COPIED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn take_summary_copied_bytes() -> u64 {
+    SUMMARY_COPIED_BYTES.with(|total| total.replace(0))
 }
 
 /// Truncates on a character boundary, reporting how much was dropped.

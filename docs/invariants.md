@@ -7389,13 +7389,24 @@ completion or receipt insert. Parent-only provenance remains valid and prior mat
 receipts retain their existing recovery ordering. Request-only synthetic input is
 outside this historical rule.
 
-Default Summary planning renders history once and caps complete candidate evaluation
-at 64 structural boundaries per pass. It never assumes estimator additivity or
-monotonicity. Keep-recent selection is exhaustive for <=64 boundaries and deterministic
-among sampled proven fits for longer inputs; missing an unsampled feasible candidate
-fails closed. Cooperative planning yields observe existing Agent cancellation before
-summary admission. Canonical facts, request starts, commit grants and SQLite COMMIT
-remain owned by their existing authorities.
+Default Summary planning renders history once. Exact monotone whole-request prices
+from `DefaultTokenEstimator` support complete binary interval selection without
+per-message rounded token sums: growing Summary transcript bytes cannot reduce its
+price; deleting a prefix with fixed core inputs cannot increase primary/recent
+prices. Identity image/upload wrappers preserve that proof, while dynamic media
+rendering does not claim it. Choose the largest feasible boundary retaining the
+keep-recent target, otherwise the earliest feasible fallback.
+
+Arbitrary estimators receive at most 64 descending complete-boundary queries. A
+preferred validated fit is conclusive; without it, only an exhaustive search can
+select the fallback or prove `CannotFit`. Unexamined candidates yield the distinct
+`SearchIncomplete` outcome, never inferred infeasibility. It admits no Summary or
+Checkpoint and settles once as runtime compaction failure, even after an actual
+provider overflow. Production planning bounds materialization to O(B log N), generic
+planning to O(64 B), with one O(N log N + B) preparation pass and O(N + B) retained
+memory. Cooperative yields observe existing Agent cancellation between full estimates
+and before Summary admission. Canonical facts, request starts, commit grants and
+SQLite COMMIT remain owned by their existing authorities.
 
 Projection History pagination retains prior activation/item pages. Stable identities
 prevent overlap duplication; Session lifetime and current selection tokens prevent

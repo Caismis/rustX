@@ -375,16 +375,15 @@ available for independent review; final remote CI status is maintained in PR #47
 ## Three-finding review beginning at 3252f6a
 
 This review starts at `3252f6a296c00f653bf0c1d7c5ea62bf9a6500d9`, with PR
-base/main `97096020d64ea00218493a0a99b9b805821eeb28`. These F1–F3 labels belong
+base/main `97096020d64ea00218493a0a99b9b805821eeb28`. The sampled F1 planner described here is superseded by N1 below. These F1–F3 labels belong
 to this review; the earlier F1/F2 review above remains a separate historical record.
 
 - **F1, Context planning:** exhaustive full-prefix cloning/rendering was quadratic.
-  One render/index pass and at most 64 complete candidate probes now bound work
-  independently of boundary count. Non-additive/non-monotone estimators still price
-  complete requests. Histories with more boundaries use evenly spaced structural
-  ranks; an unsampled feasible candidate may be missed and fails closed. Keep-recent
-  preference remains exact among examined fits. Existing Agent cancellation is
-  checked at cooperative yields before invocation; ownership/grants are unchanged.
+  That repair introduced one render/index pass and at most 64 complete candidate
+  probes. Whole requests were priced without additive assumptions, but uniformly
+  sampled ranks could miss feasible prefixes and incorrectly report `CannotFit`.
+  This incomplete search and preference are corrected by N1 below. Cooperative
+  Agent cancellation and existing ownership/grants remain preserved.
   Files: `context/planning.rs`, `summarizer.rs`, `compaction.rs`, existing Context
   owner tests and their async call sites.
 - **F2, WebUI inspection:** both page streams replaced old data and stale promises
@@ -516,8 +515,8 @@ exercise these boundaries, inherited activation distinctions, source deletion,
 exact reconstruction and lossy archive failure. Passing lanes supplement the source
 ownership analysis; they do not prove arbitrary future algorithms/providers correct.
 
-The intentional >64-boundary sampled selection is the bounded planner's practical
-limit: it can fail closed despite an unsampled feasible prefix. Estimator internals
+The >64-boundary sampled selection recorded for that implementation was incomplete
+and is corrected by N1 below. Estimator internals
 have their own cost; planner-controlled rendering, materialization and query counts
 are bounded. Earlier disk-backed liveness failures and their unestablished exact
 phases remain reported above. Final branch/commit and current-head CI status are
@@ -540,3 +539,117 @@ and its `--all-features` form: both passed all 24 tests. Both complete workspace
 Clippy modes, `git diff --check` and `cargo fmt --all -- --check` are repeated for
 this follow-up. Full remote CI is inspected for the actual final pushed commit;
 earlier-head CI is retained only as historical evidence.
+
+## N1: complete candidate discovery without quadratic recomputation
+
+Starting HEAD: `5d52e20d765fd244f63151e89889d0d8cde14a93`; reviewed planner:
+`7117275c0390ffe345d21aad3a8e47345a084187`; base/main:
+`97096020d64ea00218493a0a99b9b805821eeb28`.
+
+The uniform 64-boundary sampler skipped boundary 2 of 129. Two deterministic red
+tests returned `CannotFit` despite boundary 2 being the only valid fit: one arbitrary
+estimator, and one actual `DefaultTokenEstimator` budget construction. The pre-fix
+run had zero passes and two failures. This was a semantic defect, not an approximate
+fit or a resource exhaustion.
+
+The Context Engine retains one transcript/index pass and complete Tool-batch
+boundaries. A narrow estimator guarantee enables complete monotone interval search
+for production semantic JSON-byte accounting, including identity media/upload
+wrappers. It does not assume rounded token additivity. Exact Summary prices increase
+with appended escaped text; whole primary/recent prices decrease with prefix removal
+and fixed core inputs. Three binary partitions establish the feasible interval and
+keep-recent preference; cached whole-candidate prices are validated before selection.
+O(B log N) materialization and O(N + B) memory replace repeated O(N B) prefix copies.
+
+Without a monotonicity guarantee, at most 64 descending exact queries may establish
+a preferred fit. Exhaustive evaluation alone authorizes the earliest fallback or
+proven infeasibility. Remaining unexamined candidates yield `SearchIncomplete`, even
+when a nonpreferred fit is already known. This makes the guarantee explicit for
+non-monotone estimators and typed dynamic media. Agent execution settles that outcome
+once as a runtime compaction failure, including after a real overflow; it does not
+start a Summary, commit a Checkpoint or start another actual provider request.
+Cancellation retains its existing owner and is observed between exact queries.
+
+### N1 deterministic evidence
+
+| Requirement | Authoritative regression / observation |
+| --- | --- |
+| T1 | `n1_unsampled_only_feasible_boundary_is_not_proven_cannot_fit` and `n1_default_estimator_finds_only_feasible_second_of_129_boundaries`: both red on the sampler; arbitrary estimator now explicitly incomplete, production estimator selects 2. |
+| T2, T4 | `n1_default_search_preserves_extremes_preference_and_fallback`: exhaustive exact-price oracle over 129 boundaries, first-only/last-only fits and multiple preferred/fallback cases. |
+| T3 | `n1_arbitrary_non_monotone_prices_require_actual_candidate_queries`: disconnected feasible boundaries, no inference from neighbors; `non_additive_planning_checks_complete_requests_and_retention_without_inferred_fit` retains whole-request/core-overlay proof. |
+| T5 | `complete_tool_batch_and_core_owned_boundaries_constrain_every_probe`: reordered sibling results, mandatory coverage, Fresh Inbound, Context and carryover constraints; a split protected batch proves infeasible. Existing missing-anchor and Fresh Original tests remain. |
+| T6 | `n1_default_search_bounds_actual_render_copy_and_serialization_work`: 512/1024 messages, actual render entries, estimator entries, Summary string bytes, logically encoded cloned assemblies and counting-writer bytes; no timing threshold. |
+| T7 | `n1_cancellation_during_exact_query_settles_without_summary_commit_or_request`: existing estimator test hook cancels synchronously inside the first exact Summary estimate → next cooperative observation; exactly one Summary estimate; one cancelled terminal, zero Summary/provider invocations, no start/completion/failure/receipt/head transition. Existing pipeline cancellation proof remains. |
+| T8 | `n1_generic_exhaustion_distinguishes_incomplete_search_from_infeasibility`: 129 unknown versus 64 exhaustively rejected boundaries; `n1_incomplete_search_invokes_no_summary_and_leaves_no_durable_transition` checks the known operation's absent receipt; `n1_incomplete_search_settles_once_as_runtime_failure_even_after_real_overflow` checks proactive and actual-overflow terminal classification and request counts. |
+| T9 | `n1_default_middle_candidate_commits_and_freezes_the_subsequent_primary_input`: file-backed SQLite Agent composition, production estimator through identity wrappers, only boundary 2 selected, Derived checkpoint installed, all eligible Originals retained, canonical prefix unchanged and exact snapshot reconstruction equals dispatched input. |
+
+The focused N1 run passed all ten tests. Existing full Context owners initially
+passed 82 tests before adding the explicit Agent cancellation regression. Native
+retry/continuation, lineage, process-death and client/browser preservation are
+checked in the full matrix below. No new testing framework or live API is used.
+
+### N1 complete local validation
+
+All commands below passed using the final production implementation. After the full
+native runs, the cancellation regression was strengthened to cancel synchronously
+inside its first estimator query and assert exactly one query. Both complete Context
+owners (83 tests each), both Clippy modes, formatting and whitespace were rerun after
+that test-only change. Cancellation proof does not depend on executor scheduling.
+The Linux discovery checker initially compared the old/new test names during that
+rename; stable-source reruns of both unchanged lane commands passed. No CI selector,
+timeout, assertion or golden was weakened. An initial test-accounting slice type
+error was corrected before the successful matrix; the mandatory red failures remain
+separate from final passing validation.
+
+Native, client and browser fixtures used `TMPDIR=/run/user/1000/r466-477` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`, the established executable scratch isolation.
+SQLite remains file-backed with real COMMIT, locking, restart and process-death
+boundaries. This does not claim power-loss durability. The slow isolated `uv lock`
+fixtures completed successfully; no environmental test failure was suppressed.
+
+| Command | Result |
+| --- | --- |
+| `git diff --check` | Pass, including final documentation |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Pass, repeated after cancellation test hardening |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Pass, repeated after cancellation test hardening |
+| `cargo build --bins --example document_artifact_fixture --locked` | Pass; default native binaries/fixture built before process tests and restored before clients |
+| `cargo build --bins --all-features --locked` | Pass |
+| `cargo test --workspace -- --test-threads=2` | 4,178 passed, 0 failed, 8 existing ignored |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites:: --test-threads=2` | 3,488 passed, 0 failed, 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features -- --test-threads=2` | 208 passed, 0 failed, 5 opt-in live-model tests ignored |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=2` | 200 passed, 0 failed |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output -- --test-threads=2` | 432 passed: SQLite 129, process 61, subagent 47, tools 135, conformance 29, CFG3 31 |
+| `cargo run --all-features --example check_test_lanes -- --job rust-contracts` | Pass on stable source after mixed-name discovery rejection |
+| `cargo run --all-features --example check_test_lanes -- --job rust-boundaries` | Pass |
+| `uv run --project test-support/fake-provider --frozen pytest` | 54 passed |
+| `pnpm --dir protocol/app-server check` | Generated-contract drift check passed; no regeneration required |
+| `pnpm --dir protocol/app-server typecheck` | Pass |
+| `pnpm --dir dev typecheck` | Pass |
+| `pnpm --dir dev test` | 41 passed |
+| `pnpm --dir tui typecheck` | Pass |
+| `pnpm --dir tui test` | 1,025 passed, 1 existing platform skip |
+| `pnpm --dir web-console typecheck` | Pass |
+| `pnpm --dir web-console test` | 2,585 passed, 4 existing platform skips |
+| `pnpm --dir web-console build` | Pass |
+| `pnpm --dir web-console check:i18n` | Pass |
+| `pnpm --dir web-console check:provenance` | Pass: 276 source records, 264 package notices |
+| `node web-console/scripts/check-office-sandbox.ts` | Pass |
+| `bash web-console/scripts/browser-tests.sh test/e2e/compaction.spec.ts test/e2e/trajectory-integration.spec.ts` | Pinned browser acceptance 5/5 passed |
+| `cargo test --lib scripted_suites::context:: -- --test-threads=2` | Final hardened Context owners: 83 passed |
+| `cargo test --lib --all-features scripted_suites::context:: -- --test-threads=2` | Final hardened Context owners: 83 passed |
+
+No real model API, K3 infrastructure, compatibility path, generated version change,
+canonical summary insertion or new execution state machine is introduced. Schema 59,
+App Server v48 and Runtime Client v69 remain unchanged. Current-head remote CI is
+reported in PR #477 after pushing; previous-head CI is historical evidence only.
+
+### N1 remaining bounded limitation
+
+Arbitrary/non-monotone estimators and dynamic typed image/upload estimators do not
+promise complete efficient selection. If their 64 exact queries cannot establish
+preference or feasibility, the runtime terminates once with `SearchIncomplete`.
+This explicitly preserves the unknown result and does not claim `CannotFit`.
+Individual synchronous estimator calls finish before cancellation is observed at
+the next checkpoint; the planner bounds calls/materialization, not arbitrary callback
+CPU behavior. Production JSON-byte accounting has the documented complete guarantee.

@@ -853,3 +853,60 @@ async fn cancellation_observed_during_planning_starts_no_summary_and_commits_not
     assert_no_transition(&store, &history);
     assert!(store.read_events(None, 64).unwrap().events.is_empty());
 }
+
+#[tokio::test]
+async fn n1_incomplete_search_invokes_no_summary_and_leaves_no_durable_transition() {
+    let history: Vec<_> = (1..=129)
+        .map(|n| user_message(&format!("M{n}"), "history"))
+        .collect();
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "must not run".into(),
+    )]));
+    let engine = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 100,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(rustx::context::ClosureTokenEstimator::new(|_, _, _| 1000)),
+    )
+    .unwrap();
+    let context = ContextRuntime::with_scripted_summarizer(
+        engine,
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(0, 1, 10),
+    );
+    store.initialize(&history).unwrap();
+    let mut state = ConversationState::from_messages(history.clone()).unwrap();
+    let operation = rustx::runtime::identity::CompactionOperationId::new("n1-incomplete");
+    let result = crate::context::compaction::execute_compaction(
+        &mut state,
+        &context,
+        &conversation(),
+        &store,
+        &[],
+        None,
+        "",
+        &CompactionConstraints::default(),
+        &CancellationSignal::new(),
+        crate::context::compaction::CompactionAttribution {
+            operation_id: operation.clone(),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        matches!(result, Err(crate::context::compaction::CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::SearchIncomplete)
+    );
+    assert!(summarizer.requests().is_empty());
+    assert_no_transition(&store, &history);
+    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    assert!(
+        store
+            .projection_receipt(&operation, "unused")
+            .unwrap()
+            .is_none()
+    );
+}

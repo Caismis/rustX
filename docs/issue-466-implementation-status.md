@@ -269,3 +269,28 @@ selection policy, cancellation checkpoints, compiler/durable ownership and evide
 are recorded in `context-engine.md` and `pr-477-architecture-review-repairs.md`.
 These repairs do not change schema 59, App Server v48 or Runtime Client v69,
 continuation/retry authority, activation lineage or transaction linearization.
+
+## N1 candidate-search correction
+
+The 64-boundary sampler introduced by the F1 performance repair could incorrectly
+report `CannotFit` while an unsampled historical prefix fit. N1 replaces it with
+complete monotone interval search for the production JSON-byte estimator and an
+explicit `SearchIncomplete` outcome for bounded arbitrary-estimator searches.
+Keep-recent preference remains largest feasible preferred boundary, otherwise the
+earliest feasible fallback. A single rendered transcript and cached exact prices
+bound production materialization to O(B log N); dynamic media/upload paths retain
+bounded generic search unless their wrapper is identity. Search incompleteness
+starts no Summary or Checkpoint and settles once through the existing Agent owner.
+See `context-engine.md` for the proof and `pr-477-architecture-review-repairs.md`
+for deterministic red/green and full-validation evidence. Schema/protocol ownership,
+canonical history, cancellation grants, exact snapshots and retry versions remain
+unchanged.
+
+N1 local validation passed: workspace 4,178; all-features contracts 3,488 + 208;
+all-features boundaries 200 + 432; emulator Python 54; Dev 41; TUI 1,025 with one
+existing platform skip; Web 2,585 with four existing platform skips; pinned browser
+acceptance 5/5. Both Clippy modes, generated drift, lane coverage, builds, typechecks,
+i18n/provenance and sandbox checks passed. After strengthening cancellation to a
+synchronous first-query hook, both complete Context owners passed 83 tests each and
+both Clippy modes passed again. Full command/count and intermediate-failure evidence
+is retained in the repair record. Remote CI must be checked on the pushed N1 HEAD.

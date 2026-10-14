@@ -336,6 +336,17 @@ pub trait TokenEstimator: Send + Sync {
         tool_definitions: &[ModelToolDefinition],
     ) -> u64;
 
+    /// Whether compaction's whole-request prices are monotone for this input.
+    ///
+    /// Returning true promises that growing the rendered summary prefix cannot
+    /// reduce its estimate, and deleting a historical prefix from a request
+    /// with fixed core inputs cannot increase either primary or recent prices.
+    /// The promise must hold for all complete boundaries, without resource
+    /// resampling. Arbitrary estimators conservatively return false.
+    fn supports_monotone_compaction(&self, _messages: &[ModelInputMessage]) -> bool {
+        false
+    }
+
     /// Price final materialized input without selecting runtime resources again.
     fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
         self.estimate_input(
@@ -449,16 +460,41 @@ fn encoded_bytes(value: &(impl serde::Serialize + ?Sized)) -> u64 {
     }
     let mut count = Count(0);
     serde_json::to_writer(&mut count, value).expect("semantic model content serializes");
+    #[cfg(test)]
+    ACCOUNTED_BYTES.with(|total| total.set(total.get().saturating_add(count.0)));
     count.0
+}
+#[cfg(test)]
+thread_local! {
+    static ACCOUNTED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static ESTIMATOR_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn take_accounted_bytes() -> u64 {
+    ACCOUNTED_BYTES.with(|total| total.replace(0))
+}
+
+#[cfg(test)]
+pub(crate) fn take_estimator_calls() -> u64 {
+    ESTIMATOR_CALLS.with(|total| total.replace(0))
 }
 
 impl TokenEstimator for DefaultTokenEstimator {
+    fn supports_monotone_compaction(&self, _messages: &[ModelInputMessage]) -> bool {
+        // JSON arrays contribute brackets plus independent item bytes and
+        // separators. Prefix deletion only removes nonnegative bytes. Summary
+        // text appends only escaped UTF-8 bytes; ceil(bytes/4) is monotone.
+        true
+    }
+
     fn estimate_input(
         &self,
         messages: &[ModelInputMessage],
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
+        #[cfg(test)]
+        ESTIMATOR_CALLS.with(|total| total.set(total.get() + 1));
         bytes_to_tokens(Self::serialized_bytes(
             messages,
             effective_system_prompt,

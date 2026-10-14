@@ -3259,3 +3259,254 @@ async fn committed_checkpoint_hot_reconciliation_never_starts_from_stale_input()
         }
     }
 }
+
+#[tokio::test]
+async fn n1_incomplete_search_settles_once_as_runtime_failure_even_after_real_overflow() {
+    for overflow in [false, true] {
+        let model = fake_model(vec![vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(ModelEvent::Failed {
+                error: overflow_error(),
+            }),
+        ]]);
+        let history: Vec<_> = (1..=129)
+            .map(|n| user(&format!("M{n}"), "history"))
+            .collect();
+        let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+            "must not run".into(),
+        )]));
+        let context = ContextRuntime::with_scripted_summarizer(
+            engine(
+                if overflow { 100_000 } else { 100 },
+                0,
+                0,
+                Arc::new(rustx::context::ClosureTokenEstimator::new(|_, _, _| 1000)),
+            ),
+            summarizer.clone(),
+            None,
+            CompactionBudgets::new(0, 1, 10),
+        );
+        let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = common::durable_agent_result(
+            AgentExecution::new(
+                request("attempt-1", history.clone(), 1, &model),
+                capability.into_lease(),
+                &cancellation,
+                support::default_execution_policy(),
+                context,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap()
+            .run()
+            .await,
+            tool_runtime.durable_store().as_ref(),
+        );
+        assert_eq!(model.requests().len(), usize::from(overflow));
+        assert!(summarizer.requests().is_empty());
+        assert_eq!(result.messages(), history);
+        assert_single_terminal(&result.event_history);
+        let RuntimeEvent::AttemptFailed {
+            error:
+                AttemptFailure::Runtime {
+                    error: rustx::runtime::types::RuntimeError::ContextCompactionFailed { message },
+                },
+            ..
+        } = result.event_history.last().unwrap()
+        else {
+            panic!("incomplete search is a runtime planning failure");
+        };
+        assert!(message.contains("compaction candidate search incomplete"));
+        assert_eq!(
+            result
+                .event_history
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::CompactionFailed { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            result
+                .event_history
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+                .count(),
+            usize::from(overflow)
+        );
+        assert!(
+            tool_runtime
+                .durable_store()
+                .projection_head()
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn n1_default_middle_candidate_commits_and_freezes_the_subsequent_primary_input() {
+    let model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "done")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let history: Vec<_> = (1..=129)
+        .map(|n| {
+            let text = if n <= 2 {
+                "x".repeat(100_000)
+            } else {
+                "history".into()
+            };
+            user(&format!("M{n}"), &text)
+        })
+        .collect();
+    let historical = rustx::model::input::canonical_input(&history);
+    let summary_input = rustx::context::SummaryRequest {
+        retired: historical[..2].to_vec(),
+    }
+    .model_input();
+    let summary_limit =
+        rustx::context::DefaultTokenEstimator.estimate_input(&summary_input.messages, "", &[]);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "Earlier work summarized.".into(),
+    )]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        engine(
+            10_000,
+            0,
+            0,
+            Arc::new(rustx::context::DefaultTokenEstimator),
+        ),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 128, summary_limit),
+    );
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", history.clone(), 1, &model),
+            capability.into_lease(),
+            &cancellation,
+            support::default_execution_policy(),
+            context,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
+    assert_eq!(summarizer.requests().len(), 1);
+    assert_eq!(summarizer.requests()[0].retired, historical[..2]);
+    assert_eq!(model.requests().len(), 1);
+    let sent = &model.requests()[0];
+    assert!(!sent.messages.iter().any(|item| {
+        item.canonical_id()
+            .is_some_and(|id| ["M1", "M2"].contains(&id.as_str()))
+    }));
+    for n in 3..=129 {
+        assert!(
+            sent.messages
+                .iter()
+                .any(|item| item.canonical_id() == Some(history[n - 1].id()))
+        );
+    }
+    let store = tool_runtime.durable_store();
+    assert!(store.projection_head().unwrap().is_some());
+    let snapshot = &result.snapshot_history()[0];
+    assert_eq!(
+        store
+            .reconstruct_model_request(&snapshot.request_id)
+            .unwrap(),
+        *sent
+    );
+    assert_eq!(&store.load_canonical().unwrap()[..history.len()], history);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_single_terminal(&result.event_history);
+}
+
+#[tokio::test]
+async fn n1_cancellation_during_exact_query_settles_without_summary_commit_or_request() {
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let queries = Arc::new(AtomicUsize::new(0));
+    let counted = queries.clone();
+    let estimator = rustx::context::ClosureTokenEstimator::new(move |messages, _, _| {
+        if matches!(messages, [ModelInputMessage::Derived(_)]) {
+            counted.fetch_add(1, Ordering::SeqCst);
+            // Existing scripted estimator seam: cancellation linearizes inside
+            // the first exact query, before the next planning observation.
+            controller_cancellation.cancel();
+        }
+        1000
+    });
+    let model = fake_model(vec![]);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        engine(100, 0, 0, Arc::new(estimator)),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(0, 1, 10),
+    );
+    let history: Vec<_> = (1..=129)
+        .map(|n| user(&format!("M{n}"), "history"))
+        .collect();
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", history.clone(), 1, &model),
+            capability.into_lease(),
+            &cancellation,
+            support::default_execution_policy(),
+            context,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
+    assert_eq!(queries.load(Ordering::SeqCst), 1);
+    assert_single_terminal(&result.event_history);
+    assert!(matches!(
+        result.event_history.last(),
+        Some(RuntimeEvent::AttemptCancelled { .. })
+    ));
+    assert!(summarizer.requests().is_empty());
+    assert!(model.requests().is_empty());
+    assert_eq!(result.messages(), history);
+    assert!(!result.event_history.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::ModelRequestStarted { .. }
+            | RuntimeEvent::CompactionCompleted { .. }
+            | RuntimeEvent::CompactionFailed { .. }
+    )));
+    let store = tool_runtime.durable_store();
+    assert!(store.projection_head().unwrap().is_none());
+    let operation = result
+        .event_history
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::CompactionStarted { operation_id } => Some(operation_id),
+            _ => None,
+        })
+        .expect("planning operation allocated before its first exact query");
+    assert!(
+        store
+            .projection_receipt(operation, "unused")
+            .unwrap()
+            .is_none()
+    );
+}

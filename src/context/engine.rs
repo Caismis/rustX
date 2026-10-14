@@ -508,6 +508,10 @@ impl ContextEngine {
             .estimate_input(messages, effective_system_prompt, tool_definitions)
     }
 
+    pub(crate) fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
+        self.estimator.supports_monotone_compaction(messages)
+    }
+
     /// Price the frozen provider-neutral request after dynamic materialization.
     #[must_use]
     pub fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
@@ -612,13 +616,33 @@ struct UploadEstimator {
     inner: Arc<dyn TokenEstimator>,
     owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
 }
+fn has_uploads(messages: &[ModelInputMessage]) -> bool {
+    messages.iter().any(|message| match message.view() {
+        crate::model::projected::ModelMessageView::User(content) => content.iter().any(|block| {
+            matches!(
+                block,
+                crate::message::types::UserContentBlock::UploadedFile(_)
+            )
+        }),
+        _ => false,
+    })
+}
 impl TokenEstimator for UploadEstimator {
+    fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
+        // No typed upload means apply() is identity. Dynamic upload resolution
+        // has no monotonicity promise; do not infer one from the inner formula.
+        !has_uploads(messages) && self.inner.supports_monotone_compaction(messages)
+    }
+
     fn estimate_input(
         &self,
         messages: &[ModelInputMessage],
         prompt: &str,
         tools: &[ModelToolDefinition],
     ) -> u64 {
+        if !has_uploads(messages) {
+            return self.inner.estimate_input(messages, prompt, tools);
+        }
         let mut rendered = messages.to_vec();
         let Ok(projection) = self.owner.resolve(messages) else {
             return u64::MAX;

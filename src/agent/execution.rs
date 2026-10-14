@@ -3677,7 +3677,9 @@ impl<'a> AgentExecution<'a> {
             operation_id: operation_id.clone(),
             error: error.message.clone(),
         });
-        match overflow {
+        // An unfinished planner search is an independent runtime failure,
+        // not evidence that the provider's overflow remains irrecoverable.
+        match overflow.filter(|_| error.kind != ContextErrorKind::SearchIncomplete) {
             Some(overflow) => Terminal::Failed {
                 failure: AttemptFailure::Model {
                     error: overflow.clone(),

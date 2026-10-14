@@ -122,28 +122,54 @@ and deterministic file-operation sections. It selects only complete historical
 prefixes. Fresh Inbound, current-generation Context and carryover anchors remain
 core-owned protected inputs.
 
-Planning indexes canonical positions and renders the authorized historical input once.
-It evaluates at most 64 complete Tool-batch boundaries per planning pass, including
-both endpoints and evenly spaced boundary ranks when there are more than 64. Each
-examined candidate is priced as a complete summary request and complete retained
-primary input with the existing Summary output reservation; retained recent history
-is also priced as a whole. The generated Checkpoint and complete actual primary
-request are validated again after Summary output exists, before commit. Token estimators need
-neither additivity nor monotonicity. For N messages and B rendered/input bytes, the
-planner performs O(N log N + 64 B) materialization work, plus the bounded core
-overlay per probe, and at most 192 complete estimator queries. Estimator internals
-retain their own complexity; the planner does not infer additive prices.
-The existing summary shrink loop is separately bounded. Agent-owned cancellation is
-observed at cooperative yields during indexing/rendering and between full estimates;
-no summary invocation is admitted before selection succeeds.
+Planning indexes canonical positions, discovers complete Tool batches and renders the
+authorized historical transcript once. Eligible boundaries already respect
+`must_cover_through`, Fresh Inbound, accepted Context and request-only carryover
+anchors. Each queried boundary is priced using the complete Summary request,
+complete retained primary request with fixed core inputs and Summary output
+reservation, and whole recent-history suffix. A selected boundary is never accepted
+from an approximate per-message token sum. Generated Checkpoint and complete actual
+primary input are validated again after Summary output exists, before commit.
 
-With at most 64 eligible boundaries selection retains the previous exhaustive policy.
-For longer histories, keep-recent preference applies only among examined proven fits:
-choose the largest examined fit retaining the target, otherwise the first examined
-fit. A feasible unsampled boundary can be missed by a non-monotone estimator; the
-planner fails closed if no examined candidate fits rather than claiming approximate
-fit or doing unbounded exhaustive work. Post-summary full request validation remains
-authoritative.
+`DefaultTokenEstimator` supplies a narrow monotone compaction guarantee. Its price
+is `ceil(serialized semantic JSON bytes / 4)`: array brackets, separators and
+independent item encodings have nonnegative byte costs; removing a prefix cannot
+increase the primary or recent suffix price. Appending rendered transcript text
+cannot decrease the escaped JSON byte count of the fixed Summary wrapper. Tools,
+prompt and core overlays remain fixed. Rounding preserves monotonicity, but does
+**not** justify adding separately rounded per-message estimates. Image/upload
+wrappers inherit this proof only when the complete input contains no corresponding
+typed media; dynamic rendering and resource selection do not advertise it.
+
+For a guaranteed estimator, binary partition queries find the intersection of the
+Summary-fit initial interval and primary-fit final interval. Whole recent prices
+identify the keep-recent initial interval. Selection preserves the established
+policy: the largest feasible boundary retaining `keep_recent_tokens`; if none
+retains that target, the earliest feasible boundary. Empty fit intersection proves
+`CannotFit`. The selected candidate's complete prices are checked explicitly.
+With N boundaries and B input/transcript bytes, preparation is O(N log N + B),
+queried materialization is O(B log N), and memory is O(N + B), including bounded
+core overlays. At most `3 ceil(log2(N+1)) + 1` distinct candidates are priced, with
+three complete estimator calls each; cached prices do not retain copied bodies.
+Estimator implementations remain responsible for their own query complexity.
+
+For an arbitrary estimator, descending exact queries inspect at most 64 boundaries.
+A validated preferred fit is conclusive because every larger boundary has already
+been excluded. Without such a fit, exhaustive evaluation chooses the earliest
+feasible fallback or proves `CannotFit`. If eligible boundaries remain unexamined,
+`SearchIncomplete` reports unknown feasibility or preference; it never claims
+infeasibility. This path bounds materialization to O(64 B), independent of N.
+An arbitrary non-monotone estimator can make any unseen boundary uniquely feasible;
+no finite sampling shortcut can establish otherwise. Incomplete planning starts no
+Summary, commits no Checkpoint, and settles once as a runtime compaction failure,
+even when recovery followed a real provider overflow. It does not retry planning,
+classify itself as provider overflow, or alter unrelated recovery budgets.
+
+Agent-owned cancellation is observed at cooperative yields during indexing/rendering,
+before/after each complete estimate, and before Summary admission. Individual
+synchronous estimates finish before the next observation; no new execution owner or
+request-start arbitration is introduced. The existing Summary shrink loop remains
+separately bounded.
 
 The summary is a Derived User checkpoint item. Retained history remains ordered
 Original/Derived items. Trusted cumulative read/modified-file metadata comes from

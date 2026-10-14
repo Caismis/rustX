@@ -39,6 +39,10 @@ pub enum ContextErrorKind {
     /// consumes the whole budget. Compaction cannot fix this; the caller must
     /// fail explicitly.
     CannotFit,
+    /// The finite candidate-query budget ended before feasibility or the
+    /// required selection preference could be established. This is not
+    /// proven infeasibility and must not trigger provider-overflow retries.
+    SearchIncomplete,
     /// The canonical conversation violates the structural contract: a
     /// `ToolMessageBlock` whose tool call resolves to no requesting
     /// `AssistantMessageBlock`, or a Surface span whose boundary is

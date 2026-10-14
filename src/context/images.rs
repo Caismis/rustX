@@ -54,6 +54,21 @@ impl ImageEstimator {
     }
 }
 impl TokenEstimator for ImageEstimator {
+    fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
+        // Only the identity case inherits the inner proof. Image selection and
+        // artifact resolution retain conservative bounded generic search.
+        !messages.iter().any(|message| match message.view() {
+            crate::model::projected::ModelMessageView::User(content) => content
+                .iter()
+                .any(|block| matches!(block, UserContentBlock::Image(_))),
+            crate::model::projected::ModelMessageView::Tool(_, result) => result
+                .content
+                .iter()
+                .any(|block| matches!(block, ToolResultContent::Image(_))),
+            _ => false,
+        }) && self.inner.supports_monotone_compaction(messages)
+    }
+
     fn estimate_input(
         &self,
         messages: &[ModelInputMessage],
