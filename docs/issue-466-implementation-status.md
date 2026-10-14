@@ -1,5 +1,10 @@
 # Issue #466 implementation and acceptance evidence
 
+The subsequent PR #477 review repair is documented in
+[architecture review repairs](pr-477-architecture-review-repairs.md). The commands
+and counts below describe the original implementation baseline, not a substitute
+for validation of those repairs.
+
 The ownership transition and local validation are complete. All development
 remains in the dedicated worktree. The associated PR provides the final implementation
 commit and current platform CI status; local validation does not claim a macOS result.

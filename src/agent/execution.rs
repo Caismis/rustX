@@ -2783,6 +2783,24 @@ impl<'a> AgentExecution<'a> {
                 }
             }
         }
+        let compatibility_failure = |message: String| Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::Unsupported {
+                    message: format!("native model input compatibility: {message}"),
+                },
+            },
+        };
+        if request
+            .reconcile_continuation()
+            .map_err(compatibility_failure)?
+        {
+            // The next immutable logical input version owns this decision.
+            // Canonical native output remains intact for adapter replay validation.
+            self.pending_continuation = None;
+            self.continuation_source = None;
+            crate::model::adapter::validation::validate_prepared_request(&request)
+                .map_err(|error| compatibility_failure(error.message))?;
+        }
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,

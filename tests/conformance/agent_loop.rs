@@ -1903,6 +1903,159 @@ async fn image_tool_round_trip_and_text_model_switch() {
 }
 
 #[tokio::test]
+async fn cross_turn_image_projection_reconciles_native_coverage_before_frozen_retry() {
+    for (scenario, model) in [
+        (
+            "image_coverage_growth",
+            "emulator-anthropic/anthropic-model",
+        ),
+        (
+            "image_coverage_growth_responses",
+            "emulator/responses-image",
+        ),
+    ] {
+        let Some((driver, emulator)) = image_coverage_driver(scenario, model).await else {
+            return;
+        };
+        driver.submit("Read sixteen images, then one more.");
+        let outcome = driver.settle().await.1;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{scenario}: {outcome:?}"
+        );
+        let requests = emulator.requests().await;
+        assert_eq!(
+            requests.len(),
+            4,
+            "internal validation starts no extra request"
+        );
+        assert_eq!(
+            requests[2]["body"], requests[3]["body"],
+            "transient retry retains transformed input and continuation decision"
+        );
+        assert!(
+            requests[2]["body"].get("previous_response_id").is_none(),
+            "stale stored coverage was cleared"
+        );
+        let canonical = driver.snapshot().unwrap().0.messages;
+        assert_eq!(
+            canonical
+                .iter()
+                .filter(|m| matches!(m, MessageBlock::Assistant(_)))
+                .count(),
+            3,
+            "transient failure commits no duplicate accepted output"
+        );
+        assert_eq!(
+            canonical
+                .iter()
+                .filter(|m| matches!(m, MessageBlock::Tool(_)))
+                .count(),
+            17
+        );
+        for m in &canonical {
+            if let MessageBlock::Tool(t) = m {
+                assert!(
+                    t.result
+                        .content
+                        .iter()
+                        .any(|b| matches!(b, rustx::tools::types::ToolResultContent::Image(_)))
+                );
+            }
+        }
+        let history = driver.request_history();
+        let snapshots = history.page(None, 32).unwrap().snapshots;
+        assert_eq!(snapshots.len(), 4);
+        assert_eq!(
+            snapshots[2].semantic_input_fingerprint,
+            snapshots[3].semantic_input_fingerprint
+        );
+        let third = history.reconstruct(&snapshots[2].identity).unwrap();
+        let fourth = history.reconstruct(&snapshots[3].identity).unwrap();
+        assert_eq!(
+            third, fourth,
+            "reconstruction never repeats image selection"
+        );
+        emulator.finish().await;
+    }
+}
+
+async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, ProviderEmulator)> {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut bytes = Vec::new();
+    png::Encoder::new(&mut bytes, 1, 1)
+        .write_header()
+        .unwrap()
+        .write_image_data(&[128])
+        .unwrap();
+    std::fs::write(workspace.join("sample.png"), &bytes).unwrap();
+    let emulator = ProviderEmulator::start_with_workspace(scenario, Some(&workspace)).await?;
+    let mut setup = Setup::new(model);
+    setup.images = true;
+    let driver = Driver::start_in(root, &emulator, &setup).await;
+    Some((driver, emulator))
+}
+
+#[tokio::test]
+async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request_start() {
+    let Some((driver, emulator)) =
+        image_coverage_driver("image_coverage_missing_replay", "emulator/responses-image").await
+    else {
+        return;
+    };
+    driver.submit("Read sixteen images, then one more.");
+    let outcome = driver.settle().await.1;
+    let RuntimeClientOutcome::Failed { error } = outcome else {
+        panic!("missing native replay must fail")
+    };
+    assert!(
+        format!("{error:?}").contains("native model input compatibility"),
+        "{error:?}"
+    );
+    assert_eq!(
+        emulator.requests().await.len(),
+        2,
+        "failed preflight dispatches no third request"
+    );
+    assert_eq!(
+        driver
+            .request_history()
+            .page(None, 32)
+            .unwrap()
+            .snapshots
+            .len(),
+        2,
+        "failed preflight commits no third request start"
+    );
+    assert_eq!(
+        driver
+            .snapshot()
+            .unwrap()
+            .0
+            .messages
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Tool(_)))
+            .count(),
+        17
+    );
+    assert_eq!(
+        driver
+            .snapshot()
+            .unwrap()
+            .0
+            .messages
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Assistant(_)))
+            .count(),
+        2,
+        "compatibility failure invents no Assistant output"
+    );
+    emulator.finish().await;
+}
+
+#[tokio::test]
 async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
     image_budget_continuation(
         "image_budget_continuation",

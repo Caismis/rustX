@@ -80,6 +80,42 @@ impl ModelRequest {
     /// # Errors
     /// Missing/ambiguous output or reordered/omitted covered input fails explicitly.
     pub fn continuation_boundary(&self) -> Result<Option<usize>, String> {
+        let Some((boundary, source)) = self.accepted_output_boundary()? else {
+            return Ok(None);
+        };
+        if semantic_messages_fingerprint(&self.messages[..boundary])
+            != source.covered_input_fingerprint
+        {
+            return Err("continuation does not cover the compiled historical input".into());
+        }
+        Ok(Some(boundary))
+    }
+
+    /// Reconcile coverage after request-local semantic materialization. The adapter
+    /// must independently validate complete native replay before snapshot freeze.
+    pub(crate) fn reconcile_continuation(&mut self) -> Result<bool, String> {
+        let Some((boundary, source)) = self.accepted_output_boundary()? else {
+            return Ok(false);
+        };
+        if semantic_messages_fingerprint(&self.messages[..boundary])
+            == source.covered_input_fingerprint
+        {
+            return Ok(false);
+        }
+        self.continuation = None;
+        self.continuation_source = None;
+        Ok(true)
+    }
+
+    fn accepted_output_boundary(
+        &self,
+    ) -> Result<
+        Option<(
+            usize,
+            &crate::runtime::continuation::AcceptedOutputContinuationSource,
+        )>,
+        String,
+    > {
         let (Some(state), Some(source)) = (&self.continuation, &self.continuation_source) else {
             return if self.continuation.is_none() && self.continuation_source.is_none() {
                 Ok(None)
@@ -107,12 +143,7 @@ impl ModelRequest {
         }
         let boundary =
             boundary.ok_or("continuation accepted output is absent or semantically changed")?;
-        if semantic_messages_fingerprint(&self.messages[..boundary])
-            != source.covered_input_fingerprint
-        {
-            return Err("continuation does not cover the compiled historical input".into());
-        }
-        Ok(Some(boundary))
+        Ok(Some((boundary, source)))
     }
     /// The provider-facing model identifier of this request.
     #[must_use]

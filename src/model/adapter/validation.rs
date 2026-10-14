@@ -107,6 +107,28 @@ pub fn validate_request(
     validate_tools(request)
 }
 
+/// Adapter-owned preflight, including opaque native replay, without dispatch.
+/// No SDK or wire values escape the adapter boundary.
+pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), ModelError> {
+    let tools = validate_request(request, request.protocol())?;
+    match request.protocol() {
+        ModelProtocol::OpenAiChatCompletions => {
+            super::openai::chat_completions::translate_request(request)?;
+        }
+        ModelProtocol::OpenAiResponses => {
+            super::openai::responses::translate_request(
+                request,
+                &tools,
+                request.invocation.compat.responses_storage,
+            )?;
+        }
+        ModelProtocol::AnthropicMessages => {
+            super::anthropic::mapping::translate_request(request, &tools)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_continuation(
     request: &ModelRequest,
     protocol: ModelProtocol,
@@ -213,6 +235,107 @@ mod tests {
             tools: Vec::new(),
             effective_system_prompt: String::new(),
             continuation: None,
+        }
+    }
+
+    #[test]
+    fn reconciled_coverage_replays_only_complete_native_units() {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, MessageBlock, ReasoningBlock,
+            UserContentBlock,
+        };
+        use crate::runtime::continuation::AcceptedOutputContinuationSource;
+        use crate::runtime::identity::{ConversationId, MessageId, RequestId};
+        let states = [
+            (
+                ModelProtocol::OpenAiResponses,
+                ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+                    previous_response_id: "accepted-response".into(),
+                }),
+                None,
+                true,
+            ),
+            (
+                ModelProtocol::OpenAiResponses,
+                ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+                    previous_response_id: "accepted-response".into(),
+                }),
+                Some("opaque reasoning unavailable"),
+                false,
+            ),
+            (
+                ModelProtocol::OpenAiResponses,
+                ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stateless {
+                        items: vec![
+                            serde_json::json!({"type":"reasoning", "id":"rs-real", "encrypted_content":"exact-encrypted-state"}),
+                        ],
+                    },
+                ),
+                None,
+                true,
+            ),
+            (
+                ModelProtocol::AnthropicMessages,
+                ProviderContinuationState::Anthropic(AnthropicContinuation {
+                    opaque: serde_json::json!({"type":"thinking", "thinking":"original thinking", "signature":"real-native-signature"}),
+                }),
+                Some("original thinking"),
+                true,
+            ),
+        ];
+        for (protocol, state, text, replayable) in states {
+            let mut input =
+                crate::scripted_suites::common::simple_request(protocol, "test", "covered input");
+            let output = MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("actual-output"),
+                content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                    text: text.map(str::to_owned),
+                    provider_state: Some(state.clone()),
+                })],
+            });
+            let source = AcceptedOutputContinuationSource::from_accepted_output(
+                RequestId::new("actual-request"),
+                &ConversationId::generate(),
+                &input.messages,
+                &output,
+            )
+            .unwrap();
+            input.messages.push(output.clone().into());
+            input.continuation = Some(state);
+            input.continuation_source = Some(source);
+            assert!(
+                !input.reconcile_continuation().unwrap(),
+                "unchanged coverage stays native"
+            );
+            let crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) =
+                &mut input.messages[0]
+            else {
+                panic!("user")
+            };
+            user.content = vec![UserContentBlock::Text(crate::message::TextBlock {
+                text: "request-local transformed input".into(),
+            })];
+            assert!(input.reconcile_continuation().unwrap());
+            assert!(input.continuation.is_none());
+            assert_eq!(
+                input.messages[1].as_canonical(),
+                Some(&output),
+                "native history remains immutable"
+            );
+            if replayable {
+                super::validate_prepared_request(&input).unwrap();
+            } else {
+                let error = super::validate_prepared_request(&input).unwrap_err();
+                assert!(
+                    error.message.contains("preserved provider-native"),
+                    "{error:?}"
+                );
+            }
+            assert!(
+                !input.reconcile_continuation().unwrap(),
+                "retry uses the reconciled version"
+            );
         }
     }
 

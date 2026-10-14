@@ -565,6 +565,26 @@ impl Drop for StoreGuard<'_> {
 }
 
 impl SqliteConversationStore {
+    /// Select projection eligibility at the message boundary inside the same read transaction.
+    pub(crate) fn read_message_lineage_cut(
+        &self,
+        revision: SurfaceRevision,
+        message: &MessageId,
+        include: bool,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        lineage::read_at(
+            &transaction,
+            &self.conversation_id,
+            revision,
+            None,
+            Some((message, include)),
+        )
+    }
+
     /// Bound a management traversal while unrelated execution may append events.
     pub(crate) fn event_high_watermark(&self) -> Result<u64, ConversationStoreError> {
         self.lock()?
@@ -1555,24 +1575,13 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .unchecked_transaction()
             .map_err(|e| storage(e.to_string()))?;
-        let mut cut = lineage::read(
+        lineage::read_at(
             &transaction,
             &self.conversation_id,
             SurfaceRevision::new(ledger.0),
-        )?;
-        if activation.0 > 0
-            && !cut
-                .projections
-                .iter()
-                .any(|p| p.activation.activation == activation)
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "expected historical projection boundary is missing or incompatible".into(),
-            ));
-        }
-        cut.projections
-            .retain(|p| p.activation.activation <= activation);
-        Ok(cut)
+            Some(activation),
+            None,
+        )
     }
 
     fn read_lineage_cut(
@@ -6617,7 +6626,7 @@ fn append_message_ledger(
 /// Whether one canonical message is ordinary user-facing transcript content.
 ///
 /// Context messages remain durable model history but are deliberately absent
-/// from the normal transcript. User messages, including compaction summaries,
+/// from the normal transcript. Canonical conversation messages,
 /// Assistant generations, and Tool results are visible semantic content.
 fn transcript_visible_message(message: &MessageBlock) -> bool {
     !matches!(

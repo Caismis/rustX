@@ -193,10 +193,20 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       if (await latest.isVisible()) await latest.click();
       await page.screenshot({ path: `/tmp/rustx-stopped-${locale}-${theme}.png` });
       await message.fill('Continue after stopping'); await message.press('Enter');
+      // The provider's eighth response is the actual continuation producer.
+      // Wait for its terminal fact before asserting the independently rendered text.
+      await fixture.control('observations/await?kind=response_completed&count=8&timeoutMs=30000');
       await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
       await expect(page.getByText('This must not appear after stopping.', { exact: true })).toHaveCount(0);
       expect(errors).toEqual([]);
       passed = true;
+    } catch (error) {
+      let report: unknown;
+      try { report = await fixture.control('report'); } catch (failure) { report = String(failure); }
+      await test.info().attach('native-compaction-failure', {
+        body: JSON.stringify({ ...fixture.diagnostics(), report }), contentType: 'application/json',
+      });
+      throw error;
     } finally { await fixture.stop(passed); }
   });
 }

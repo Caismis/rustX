@@ -39,7 +39,7 @@ pub(super) fn cut(
     })
 }
 
-fn validate(
+pub(super) fn validate(
     connection: &Connection,
     conversation: &ConversationId,
     expected: &ResourceReadCut,
@@ -56,6 +56,19 @@ fn validate(
         return Err(ConversationStoreError::InvalidReference(
             "foreign or future compaction Resource Read Cut".into(),
         ));
+    }
+    if expected.projection_activation.0 > 0 {
+        let activation =
+            super::projection::activation_at(connection, expected.projection_activation)?;
+        if activation.ledger > expected.ledger
+            || (activation.destination_installation.is_none()
+                && (activation.origin.conversation_id != *conversation
+                    || activation.origin.completed_journal > expected.journal))
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "inconsistent compaction Resource Read Cut activation".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -126,8 +139,9 @@ pub(super) fn messages(
                         "Original {id} is absent at the Resource Read Cut"
                     ))
                 })?;
+            let json = row.1?;
             record_body_decode();
-            let message: MessageBlock = decode(&row.1?, "compaction Original")?;
+            let message: MessageBlock = decode(&json, "compaction Original")?;
             if message.id() != id {
                 return Err(ConversationStoreError::InvalidReference(
                     "compaction Original identity mismatch".into(),

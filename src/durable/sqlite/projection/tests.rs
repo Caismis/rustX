@@ -517,3 +517,419 @@ fn ordinary_projection_preparation_does_not_hydrate_retired_summary_provenance()
         "provenance-only corruption still fails closed"
     );
 }
+
+#[test]
+fn dependency_free_checkpoint_rejects_every_future_resource_cut_atomically() {
+    for domain in [
+        "ledger",
+        "journal",
+        "transcript",
+        "activation",
+        "conversation",
+    ] {
+        let store = store();
+        store.initialize(&[message(1)]).unwrap();
+        let mut value = candidate(&store, "P-invalid", vec![summary("detached")]);
+        match domain {
+            "ledger" => {
+                value.read_cut.ledger = LedgerFrontier(100);
+                value.base_frontier = LedgerFrontier(100);
+            }
+            "journal" => value.read_cut.journal = JournalFrontier(100),
+            "transcript" => value.read_cut.transcript = crate::durable::TranscriptCursor::new(100),
+            "activation" => value.read_cut.projection_activation = ProjectionActivationId(100),
+            _ => value.read_cut.conversation_id = ConversationId::generate(),
+        }
+        let before = store.compaction_resource_cut().unwrap();
+        assert!(
+            store
+                .commit_projection(commit_input(
+                    &store,
+                    "invalid",
+                    value,
+                    &CancellationSignal::new()
+                ))
+                .is_err(),
+            "accepted future {domain}"
+        );
+        assert_eq!(store.compaction_resource_cut().unwrap(), before);
+        assert!(store.projection_head().unwrap().is_none());
+        let connection = store.lock().unwrap();
+        for table in [
+            "projection_checkpoints",
+            "projection_activations",
+            "compaction_operations",
+        ] {
+            let count: u64 = connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "partial {table}");
+        }
+    }
+}
+
+#[test]
+fn trusted_metadata_sources_share_one_predecode_materialization_budget() {
+    for count in [16, 33] {
+        let store = store();
+        let messages: Vec<_> = (1..=count)
+            .map(|n| {
+                let mut m = message(n);
+                if let MessageBlock::User(u) = &mut m {
+                    u.content = vec![UserContentBlock::Text(TextBlock {
+                        text: "x".repeat(512 * 1024),
+                    })];
+                }
+                m
+            })
+            .collect();
+        store.initialize(&messages).unwrap();
+        let mut item = summary("bounded metadata");
+        let CheckpointMessage::Derived(d) = &mut item.message else {
+            unreachable!()
+        };
+        d.sources = messages
+            .iter()
+            .map(|m| CanonicalMessageRef::of(store.conversation_id(), m))
+            .collect();
+        let mut value = candidate(&store, "metadata", vec![item]);
+        value.summary_metadata = Some(crate::message::types::CompactionSummaryMetadata::empty());
+        super::super::compaction_resources::take_body_decodes();
+        let result = store.commit_projection(commit_input(
+            &store,
+            "metadata",
+            value,
+            &CancellationSignal::new(),
+        ));
+        let decoded = super::super::compaction_resources::take_body_decodes();
+        if count == 16 {
+            result.unwrap();
+            assert_eq!(decoded, 16);
+        } else {
+            assert!(result.is_err(), "cumulative 16 MiB budget bypassed");
+            assert_eq!(decoded, 31, "next body must be rejected before decoding");
+            assert!(store.projection_head().unwrap().is_none());
+        }
+    }
+}
+
+#[test]
+fn early_lineage_selection_never_hydrates_later_large_checkpoints() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    store
+        .commit_projection(commit_input(
+            &store,
+            "O1",
+            candidate(&store, "P1", vec![summary("early")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    for n in 2..=10 {
+        store.append_canonical(&message(n)).unwrap();
+        store
+            .commit_projection(commit_input(
+                &store,
+                &format!("O{n}"),
+                candidate(
+                    &store,
+                    &format!("P{n}"),
+                    vec![summary(&"x".repeat(2 * 1024 * 1024))],
+                ),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+    }
+    take_candidate_decodes();
+    let early = store
+        .read_projection_lineage_cut(LedgerFrontier(1), ProjectionActivationId(1))
+        .unwrap();
+    assert_eq!(take_candidate_decodes(), 1, "later bodies were not decoded");
+    assert_eq!(early.projections.len(), 1);
+    assert_eq!(early.projections[0].candidate.checkpoint_id.as_str(), "P1");
+    let selected = store
+        .read_projection_lineage_cut(LedgerFrontier(10), ProjectionActivationId(1))
+        .unwrap();
+    assert_eq!(selected.projections.len(), 1);
+    assert_eq!(
+        take_candidate_decodes(),
+        1,
+        "explicit activation excludes later same-cut bodies"
+    );
+    let cut = store
+        .read_message_lineage_cut(
+            crate::conversation::SurfaceRevision::new(10),
+            &MessageId::new("M2"),
+            false,
+        )
+        .unwrap();
+    assert_eq!(cut.projections.len(), 1);
+    assert_eq!(
+        take_candidate_decodes(),
+        1,
+        "ordinary Fork selects before hydration"
+    );
+}
+
+#[test]
+fn metadata_checkpoint_sources_cannot_reset_the_operation_budget() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    let mut sources = Vec::new();
+    for n in 1..=3 {
+        let mut parent = candidate(
+            &store,
+            &format!("parent-{n}"),
+            vec![summary(&"x".repeat(6 * 1024 * 1024))],
+        );
+        parent.summary_metadata = Some(crate::message::types::CompactionSummaryMetadata::empty());
+        let receipt = store
+            .commit_projection(commit_input(
+                &store,
+                &format!("parent-{n}"),
+                parent,
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        sources.push(crate::model::projected::CheckpointSourceRef {
+            conversation_id: store.conversation_id().clone(),
+            checkpoint_id: receipt.checkpoint.candidate.checkpoint_id,
+            content_digest: receipt.candidate_fingerprint,
+        });
+    }
+    let mut item = summary("cumulative metadata");
+    let CheckpointMessage::Derived(d) = &mut item.message else {
+        unreachable!()
+    };
+    d.checkpoint_sources = sources;
+    let mut value = candidate(&store, "child", vec![item]);
+    value.summary_metadata = Some(crate::message::types::CompactionSummaryMetadata::empty());
+    let before = store.compaction_resource_cut().unwrap();
+    take_candidate_decodes();
+    take_metadata_decodes();
+    assert!(
+        store
+            .commit_projection(commit_input(
+                &store,
+                "child",
+                value,
+                &CancellationSignal::new()
+            ))
+            .is_err()
+    );
+    assert_eq!(
+        take_candidate_decodes(),
+        1,
+        "only CAS reads the head body; metadata extraction hydrates no retired body"
+    );
+    assert_eq!(
+        take_metadata_decodes(),
+        2,
+        "third parent refused before metadata decode"
+    );
+    assert_eq!(store.compaction_resource_cut().unwrap(), before);
+}
+
+#[test]
+fn inherited_activation_coordinates_are_validated_before_atomic_installation() {
+    let source = store();
+    let canonical = vec![message(1)];
+    source.initialize(&canonical).unwrap();
+    let checkpoint = source
+        .commit_projection(commit_input(
+            &source,
+            "origin",
+            candidate(&source, "origin", vec![summary("origin")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap()
+        .checkpoint;
+    for defect in ["future", "before_base", "identity", "order"] {
+        let destination =
+            SqliteConversationStore::in_memory(source.conversation_id().clone()).unwrap();
+        let mut inherited = checkpoint.clone();
+        inherited.activation.destination_installation = Some(
+            crate::runtime::identity::LineageInstallationId::new("installed"),
+        );
+        match defect {
+            "future" => inherited.activation.ledger = LedgerFrontier(2),
+            "before_base" => inherited.activation.ledger = LedgerFrontier(0),
+            "identity" => inherited.activation.checkpoint_id = CheckpointId::new("foreign"),
+            _ => inherited.activation.activation = ProjectionActivationId(2),
+        }
+        let seed = crate::durable::LineageSeed::history(canonical.clone())
+            .with_projections(vec![inherited])
+            .unwrap();
+        assert!(
+            destination.initialize_lineage(&seed).is_err(),
+            "accepted inconsistent {defect}"
+        );
+        assert!(destination.projection_head().unwrap().is_none());
+        assert!(
+            destination.load_canonical().unwrap().is_empty(),
+            "installation rolled back"
+        );
+    }
+}
+
+#[test]
+fn historical_read_cut_with_inconsistent_activation_is_rejected_without_dependencies() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    store
+        .commit_projection(commit_input(
+            &store,
+            "first",
+            candidate(&store, "first", vec![summary("first")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    let mut second = candidate(&store, "second", vec![summary("second")]);
+    second.read_cut.journal = JournalFrontier(0);
+    let before = store.compaction_resource_cut().unwrap();
+    assert!(
+        store
+            .commit_projection(commit_input(
+                &store,
+                "second",
+                second,
+                &CancellationSignal::new()
+            ))
+            .is_err()
+    );
+    assert_eq!(store.compaction_resource_cut().unwrap(), before);
+}
+
+#[test]
+fn corrupted_eligibility_header_cannot_hide_a_required_historical_projection() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    store
+        .commit_projection(commit_input(
+            &store,
+            "first",
+            candidate(&store, "first", vec![summary("first")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projection_activations SET ledger_frontier=100 WHERE activation=1",
+            [],
+        )
+        .unwrap();
+    assert!(
+        store
+            .read_lineage_cut(crate::conversation::SurfaceRevision::new(1))
+            .is_err()
+    );
+    assert!(
+        store
+            .read_projection_lineage_cut(LedgerFrontier(1), ProjectionActivationId(1))
+            .is_err()
+    );
+}
+
+#[test]
+fn original_and_checkpoint_only_candidates_validate_their_cut_before_commit() {
+    for checkpoint_only in [false, true] {
+        let store = store();
+        let original = message(1);
+        store.initialize(std::slice::from_ref(&original)).unwrap();
+        let first = store
+            .commit_projection(commit_input(
+                &store,
+                "first",
+                candidate(&store, "first", vec![summary("first")]),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        let item = if checkpoint_only {
+            let mut item = summary("checkpoint-only");
+            let CheckpointMessage::Derived(d) = &mut item.message else {
+                unreachable!()
+            };
+            d.checkpoint_sources
+                .push(crate::model::projected::CheckpointSourceRef {
+                    conversation_id: store.conversation_id().clone(),
+                    checkpoint_id: first.checkpoint.candidate.checkpoint_id.clone(),
+                    content_digest: first.candidate_fingerprint,
+                });
+            item
+        } else {
+            CheckpointItem {
+                message: CheckpointMessage::Original(CanonicalMessageRef::of(
+                    store.conversation_id(),
+                    &original,
+                )),
+                call_sources: Vec::new(),
+                result_call: None,
+            }
+        };
+        let mut value = candidate(&store, "second", vec![item]);
+        value.read_cut.ledger = LedgerFrontier(100);
+        value.base_frontier = LedgerFrontier(100);
+        let before = store.compaction_resource_cut().unwrap();
+        assert!(
+            store
+                .commit_projection(commit_input(
+                    &store,
+                    "second",
+                    value,
+                    &CancellationSignal::new()
+                ))
+                .is_err()
+        );
+        assert_eq!(store.compaction_resource_cut().unwrap(), before);
+        assert_eq!(store.projection_head().unwrap().unwrap(), first.checkpoint);
+    }
+}
+
+#[test]
+fn historical_selection_rejects_missing_eligible_checkpoint_closure() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    let first = store
+        .commit_projection(commit_input(
+            &store,
+            "first",
+            candidate(&store, "first", vec![summary("first")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    let mut item = summary("second");
+    let CheckpointMessage::Derived(d) = &mut item.message else {
+        unreachable!()
+    };
+    d.checkpoint_sources
+        .push(crate::model::projected::CheckpointSourceRef {
+            conversation_id: store.conversation_id().clone(),
+            checkpoint_id: first.checkpoint.candidate.checkpoint_id,
+            content_digest: first.candidate_fingerprint,
+        });
+    store
+        .commit_projection(commit_input(
+            &store,
+            "second",
+            candidate(&store, "second", vec![item]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM projection_activations WHERE activation=1", [])
+        .unwrap();
+    assert!(
+        store
+            .read_projection_lineage_cut(LedgerFrontier(1), ProjectionActivationId(2))
+            .is_err()
+    );
+    assert!(
+        store
+            .read_lineage_cut(crate::conversation::SurfaceRevision::new(1))
+            .is_err()
+    );
+}

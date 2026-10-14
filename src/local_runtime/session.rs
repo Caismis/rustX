@@ -2808,7 +2808,10 @@ fn inherit_projections(
         .collect();
     let ids: BTreeMap<_, _> = projections
         .iter()
-        .filter(|p| p.candidate.base_frontier.0 <= mapped.len() as u64)
+        .filter(|p| {
+            p.candidate.base_frontier.0 <= mapped.len() as u64
+                && p.activation.ledger.0 <= mapped.len() as u64
+        })
         .map(|p| {
             (
                 p.candidate.checkpoint_id.clone(),
@@ -2901,8 +2904,6 @@ fn inherit_projections(
     Ok(copied)
 }
 
-/// The identities a `Replace` retires, in the active order it retires them
-/// from.
 /// Reconstructs a destination seed with destination-owned canonical message/occurrence
 /// identities. Provider correlation strings remain unchanged. Response origins
 /// retain their original execution owner as provenance, never destination execution state.
@@ -3703,6 +3704,74 @@ keep_recent_tokens = 4096
 [agent.model]
 model = "provider/model"
 "#;
+
+    #[test]
+    fn historical_fork_excludes_checkpoint_activated_after_selected_ledger() {
+        use crate::context::resources::LedgerFrontier;
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
+        let source = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        source
+            .initialize(
+                &(1..=100)
+                    .map(|n| user(&format!("M{n}"), "history"))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        source
+            .commit_projection(checkpoint_commit_fixture(
+                &source,
+                checkpoint_fixture(&source, "P1", 95, "early"),
+                None,
+            ))
+            .unwrap();
+        let pending = checkpoint_fixture(&source, "P2", 1, "future");
+        assert_eq!(pending.base_frontier, LedgerFrontier(100));
+        for n in 101..=110 {
+            source
+                .append_canonical(&user(&format!("M{n}"), "tail"))
+                .unwrap();
+        }
+        source
+            .commit_projection(checkpoint_commit_fixture(&source, pending, None))
+            .unwrap();
+        source
+            .append_canonical(&user("M111", "after activation"))
+            .unwrap();
+        let cut = source
+            .read_lineage_cut(source.load_head().unwrap().revision)
+            .unwrap();
+        for (boundary, side, expected) in [
+            (105, super::LineageSide::Before, 1),
+            (110, super::LineageSide::Before, 1),
+            (110, super::LineageSide::After, 2),
+            (111, super::LineageSide::After, 2),
+        ] {
+            let id = ConversationId::generate();
+            let seed = super::lineage_cut(
+                &id,
+                &cut,
+                Some(&MessageId::new(format!("M{boundary}"))),
+                side,
+            )
+            .unwrap();
+            let destination = SqliteConversationStore::in_memory(id).unwrap();
+            destination.initialize_lineage(&seed).unwrap();
+            assert_eq!(
+                destination
+                    .projection_head()
+                    .unwrap()
+                    .unwrap()
+                    .activation
+                    .activation
+                    .0,
+                expected,
+                "boundary {boundary} {side:?}"
+            );
+            destination.projected_history().unwrap();
+        }
+    }
 
     /// Each same-ledger activation is a distinct historical fork boundary.
     /// Persistence and the product's lineage remapper are exercised at every copy.

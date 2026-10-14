@@ -16,6 +16,16 @@ pub(super) fn read(
     conversation: &ConversationId,
     revision: SurfaceRevision,
 ) -> Result<LineageReadCut, ConversationStoreError> {
+    read_at(connection, conversation, revision, None, None)
+}
+
+pub(super) fn read_at(
+    connection: &Connection,
+    conversation: &ConversationId,
+    revision: SurfaceRevision,
+    activation: Option<crate::context::checkpoint::ProjectionActivationId>,
+    boundary: Option<(&MessageId, bool)>,
+) -> Result<LineageReadCut, ConversationStoreError> {
     // This first SELECT linearizes temporal cut C. Selected revision R below
     // owns structure, not execution time; the same R at a newer C may observe
     // newer outcomes. Later commits cannot alter this captured (R, C).
@@ -58,33 +68,23 @@ pub(super) fn read(
             .is_none_or(|id| referenced.contains(id))
     });
     let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
-    let mut projections = Vec::new();
-    let mut after = crate::context::checkpoint::ProjectionActivationId(0);
-    let mut remaining_projection_bytes = 16 * 1024 * 1024;
-    loop {
-        let page = super::projection::timeline(connection, after, 64)?;
-        if page.is_empty() {
-            break;
-        }
-        after = page.last().unwrap().activation.activation;
-        for checkpoint in &page {
-            remaining_projection_bytes -= crate::context::resources::bounded_encoded_len(
-                checkpoint,
-                remaining_projection_bytes,
-            )?;
-        }
-        projections.extend(page.into_iter().filter(|p| {
-            p.candidate.base_frontier.0 <= canonical.len() as u64
-                && p.activation.ledger.0 <= canonical.len() as u64
-                && (p.activation.destination_installation.is_some()
-                    || p.activation.origin.completed_journal.0 <= read_cut.journal)
-        }));
-        if projections.len() > 8192 {
-            return Err(ConversationStoreError::InvalidReference(
-                "lineage projection timeline exceeds bound".into(),
-            ));
-        }
-    }
+    let projection_len = if let Some((id, include)) = boundary {
+        canonical.iter().position(|m| m.id() == id).ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "missing selected canonical lineage boundary".into(),
+            )
+        })? + usize::from(include)
+    } else {
+        canonical.len()
+    };
+    let ledger = crate::context::resources::LedgerFrontier(projection_len as u64);
+    let projections = selected_projections(
+        connection,
+        conversation,
+        ledger,
+        read_cut.journal,
+        activation,
+    )?;
     Ok(LineageReadCut {
         projections,
         read_cut,
@@ -96,6 +96,88 @@ pub(super) fn read(
         completed_responses,
         turns,
     })
+}
+
+fn selected_projections(
+    connection: &Connection,
+    conversation: &ConversationId,
+    ledger: crate::context::resources::LedgerFrontier,
+    journal: u64,
+    activation: Option<crate::context::checkpoint::ProjectionActivationId>,
+) -> Result<Vec<crate::durable::projection::ProjectionCheckpoint>, ConversationStoreError> {
+    let through = activation.unwrap_or(crate::context::checkpoint::ProjectionActivationId(
+        i64::MAX as u64,
+    ));
+    if let Some(selected) = activation.filter(|a| a.0 > 0) {
+        let selected = super::projection::activation_at(connection, selected)?;
+        if selected.ledger > ledger
+            || (selected.destination_installation.is_none()
+                && selected.origin.completed_journal.0 > journal)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "incompatible historical projection boundary".into(),
+            ));
+        }
+    }
+    let mut projections = Vec::new();
+    let mut previous_checkpoint = None;
+    let mut after = crate::context::checkpoint::ProjectionActivationId(0);
+    let mut remaining_projection_bytes =
+        crate::context::resources::ResourceLimits::default().total_bytes;
+    loop {
+        let page = super::projection::timeline_page(
+            connection,
+            after,
+            64,
+            Some((
+                ledger,
+                crate::context::resources::JournalFrontier(journal),
+                through,
+            )),
+            remaining_projection_bytes,
+        )?;
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().unwrap().activation.activation;
+        for checkpoint in &page {
+            // A retained activation owns its immutable predecessor closure.
+            if checkpoint.candidate.expected_head.as_ref() != previous_checkpoint.as_ref() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "missing historical projection predecessor".into(),
+                ));
+            }
+            super::projection::validate_current_dependencies(
+                connection,
+                conversation,
+                &checkpoint.candidate,
+            )?;
+            if checkpoint.candidate.base_frontier > checkpoint.activation.ledger {
+                return Err(ConversationStoreError::InvalidReference(
+                    "checkpoint base exceeds activation boundary".into(),
+                ));
+            }
+            previous_checkpoint = Some(checkpoint.candidate.checkpoint_id.clone());
+            remaining_projection_bytes -= crate::context::resources::bounded_encoded_len(
+                checkpoint,
+                remaining_projection_bytes,
+            )?;
+        }
+        projections.extend(page);
+        if projections.len() > 8192 {
+            return Err(ConversationStoreError::InvalidReference(
+                "lineage projection timeline exceeds bound".into(),
+            ));
+        }
+    }
+    if activation
+        .is_some_and(|a| a.0 > 0 && !projections.iter().any(|p| p.activation.activation == a))
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "missing selected historical checkpoint".into(),
+        ));
+    }
+    Ok(projections)
 }
 
 #[allow(clippy::too_many_lines)] // One native response evidence fold under the same SQLite snapshot.

@@ -51,6 +51,20 @@ pub(super) fn owner(
     })
 }
 
+#[cfg(test)]
+thread_local! { static CANDIDATE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_candidate_decodes() -> usize {
+    CANDIDATE_DECODES.with(|n| n.replace(0))
+}
+
+#[cfg(test)]
+thread_local! { static METADATA_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+fn take_metadata_decodes() -> usize {
+    METADATA_DECODES.with(|n| n.replace(0))
+}
+
 fn candidate(
     connection: &Connection,
     id: &CheckpointId,
@@ -68,6 +82,8 @@ fn candidate(
     let (fingerprint, json, occupancy) =
         row.ok_or_else(|| invalid(format!("missing checkpoint {id}")))?;
     let json = json.ok_or_else(|| invalid("oversized checkpoint"))?;
+    #[cfg(test)]
+    CANDIDATE_DECODES.with(|n| n.set(n.get() + 1));
     let value: CheckpointCandidate = decode(&json, "checkpoint content")?;
     value.validate_budget().map_err(invalid)?;
     if value.checkpoint_id != *id || value.fingerprint() != fingerprint {
@@ -80,23 +96,30 @@ fn candidate(
     ))
 }
 
+pub(super) fn activation_at(
+    connection: &Connection,
+    id: ProjectionActivationId,
+) -> Result<ProjectionActivation, ConversationStoreError> {
+    let (checkpoint_id, ledger, json, integrity): (String, u64, String, String) = connection
+        .query_row("SELECT checkpoint_id,ledger_frontier,activation_json,activation_digest FROM projection_activations WHERE activation=?1 AND octet_length(activation_json)<=1048576", [seq_to_i64(id.0)?], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .optional().map_err(|e| storage(e.to_string()))?
+        .ok_or_else(|| invalid("missing or oversized expected projection activation"))?;
+    let activation: ProjectionActivation = decode(&json, "projection activation")?;
+    if digest(&json) != integrity
+        || activation.activation != id
+        || activation.checkpoint_id.as_str() != checkpoint_id
+        || activation.ledger.0 != ledger
+    {
+        return Err(invalid("corrupted projection activation coordinates"));
+    }
+    Ok(activation)
+}
+
 fn activated(
     connection: &Connection,
     activation: u64,
 ) -> Result<ProjectionCheckpoint, ConversationStoreError> {
-    let row: Option<(String, String, String)> = connection.query_row("SELECT checkpoint_id,CASE WHEN octet_length(activation_json)<=1048576 THEN activation_json END,activation_digest FROM projection_activations WHERE activation=?1", [seq_to_i64(activation)?], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))
-        .optional().map_err(|e| storage(e.to_string()))?;
-    let (id, json, integrity) =
-        row.ok_or_else(|| invalid("missing expected projection activation"))?;
-    if digest(&json) != integrity {
-        return Err(invalid("corrupted projection activation"));
-    }
-    let activation: ProjectionActivation = decode(&json, "projection activation")?;
-    if activation.activation.0 != activation_number(connection, &id)?
-        || activation.checkpoint_id.as_str() != id
-    {
-        return Err(invalid("projection activation coordinate mismatch"));
-    }
+    let activation = activation_at(connection, ProjectionActivationId(activation))?;
     let (candidate, fingerprint, occupancy) = candidate(connection, &activation.checkpoint_id)?;
     Ok(ProjectionCheckpoint {
         candidate,
@@ -153,17 +176,54 @@ pub(super) fn timeline(
     after: ProjectionActivationId,
     limit: usize,
 ) -> Result<Vec<ProjectionCheckpoint>, ConversationStoreError> {
+    timeline_page(
+        connection,
+        after,
+        limit,
+        None,
+        ResourceLimits::default().total_bytes,
+    )
+}
+
+pub(super) fn timeline_page(
+    connection: &Connection,
+    after: ProjectionActivationId,
+    limit: usize,
+    selection: Option<(LedgerFrontier, JournalFrontier, ProjectionActivationId)>,
+    budget: usize,
+) -> Result<Vec<ProjectionCheckpoint>, ConversationStoreError> {
     if limit == 0 || limit > 64 {
         return Err(invalid("projection timeline page exceeds bound"));
     }
-    let mut query = connection.prepare("SELECT activation FROM projection_activations WHERE activation>?1 ORDER BY activation LIMIT ?2").map_err(|e| storage(e.to_string()))?;
+    let (ledger, journal, through) =
+        selection.map_or((i64::MAX, i64::MAX, i64::MAX), |(l, j, a)| {
+            (
+                i64::try_from(l.0).unwrap_or(i64::MAX),
+                i64::try_from(j.0).unwrap_or(i64::MAX),
+                i64::try_from(a.0).unwrap_or(i64::MAX),
+            )
+        });
+    // Eligibility headers are immutable authority too. Validate an eligible
+    // header before its scalar coordinates can hide a required checkpoint.
+    let corrupt: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projection_activations WHERE activation<=?1 AND (ledger_frontier<=?2 OR json_extract(activation_json,'$.ledger')<=?2) AND (octet_length(activation_json)>1048576 OR activation_digest!=rustx_content_digest(activation_json) OR activation!=json_extract(activation_json,'$.activation') OR checkpoint_id!=json_extract(activation_json,'$.checkpoint_id') OR ledger_frontier!=json_extract(activation_json,'$.ledger')))",
+        params![through, ledger], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
+    if corrupt {
+        return Err(invalid(
+            "corrupted historical projection eligibility header",
+        ));
+    }
+    let mut query = connection.prepare("SELECT activation FROM projection_activations WHERE activation>?1 AND activation<=?3 AND ledger_frontier<=?4 AND (json_type(activation_json,'$.destination_installation')!='null' OR json_extract(activation_json,'$.origin.completed_journal')<=?5) ORDER BY activation LIMIT ?2").map_err(|e| storage(e.to_string()))?;
     let ids = query
-        .query_map(params![seq_to_i64(after.0)?, limit], |r| r.get::<_, u64>(0))
+        .query_map(
+            params![seq_to_i64(after.0)?, limit, through, ledger, journal],
+            |r| r.get::<_, u64>(0),
+        )
         .map_err(|e| storage(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| storage(e.to_string()))?;
     let mut page = Vec::new();
-    let mut remaining = 16 * 1024 * 1024;
+    let mut remaining = budget;
     for id in ids {
         let bytes: usize = connection.query_row("SELECT octet_length(candidate_json)+octet_length(activation_json)+octet_length(occupancy_json) FROM projection_activations a JOIN projection_checkpoints p ON a.checkpoint_id=p.checkpoint_id WHERE activation=?1", [id], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
         if bytes > remaining && !page.is_empty() {
@@ -214,9 +274,12 @@ pub(super) fn validate_dependencies(
     scope: &ConversationId,
     value: &CheckpointCandidate,
 ) -> Result<(), ConversationStoreError> {
-    if value.read_cut.conversation_id != *scope {
-        return Err(invalid("foreign checkpoint scope"));
-    }
+    super::compaction_resources::validate(
+        connection,
+        scope,
+        &value.read_cut,
+        ResourceLimits::default(),
+    )?;
     validate_current_dependencies(connection, scope, value)?;
     compile_checkpoint(value, |source, body_required| {
         super::compaction_resources::dependency(
@@ -230,65 +293,98 @@ pub(super) fn validate_dependencies(
         .map_err(|e| e.to_string())
     })
     .map_err(invalid)?;
+    if let Some(metadata) = &value.summary_metadata {
+        validate_summary_metadata(connection, scope, value, metadata)?;
+    }
+    Ok(())
+}
+
+fn validate_summary_metadata(
+    connection: &Connection,
+    scope: &ConversationId,
+    value: &CheckpointCandidate,
+    metadata: &crate::message::types::CompactionSummaryMetadata,
+) -> Result<(), ConversationStoreError> {
+    let mut original_sources = std::collections::BTreeMap::new();
+    let mut inherited = Vec::new();
+    let mut parent_ids = std::collections::BTreeSet::new();
+    let limits = ResourceLimits::default();
+    let mut remaining_bytes = limits.total_bytes;
+    let mut remaining_items = limits.total_items;
     for item in &value.items {
-        if let CheckpointMessage::Derived(derived) = &item.message {
+        if let CheckpointMessage::Derived(derived) = &item.message
+            && derived
+                .transformations
+                .contains(&crate::model::projected::SemanticTransformation::Summary)
+        {
+            for source in &derived.sources {
+                original_sources.insert(source.message_id.clone(), source);
+            }
             for source in &derived.checkpoint_sources {
-                if source.conversation_id != *scope {
-                    return Err(invalid("foreign checkpoint provenance"));
+                if !parent_ids.insert(source.checkpoint_id.clone()) {
+                    continue;
                 }
-                let (_, fingerprint, _) = candidate(connection, &source.checkpoint_id)?;
-                if fingerprint != source.content_digest {
-                    return Err(invalid("changed checkpoint provenance"));
+                let bytes: usize = connection.query_row("SELECT octet_length(candidate_json) FROM projection_checkpoints WHERE checkpoint_id=?1", [source.checkpoint_id.as_str()], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
+                remaining_bytes = remaining_bytes
+                    .checked_sub(bytes)
+                    .ok_or_else(|| invalid("trusted metadata cumulative byte budget exceeded"))?;
+                remaining_items = remaining_items
+                    .checked_sub(1)
+                    .ok_or_else(|| invalid("trusted metadata cumulative item budget exceeded"))?;
+                // The immutable content digest was checked above. Read only
+                // its trusted metadata, not retired Derived bodies or occupancy.
+                let json: Option<String> = connection.query_row("SELECT json_extract(candidate_json,'$.summary_metadata') FROM projection_checkpoints WHERE checkpoint_id=?1", [source.checkpoint_id.as_str()], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
+                if let Some(json) = json {
+                    #[cfg(test)]
+                    METADATA_DECODES.with(|n| n.set(n.get() + 1));
+                    inherited.push(decode::<crate::message::types::CompactionSummaryMetadata>(
+                        &json,
+                        "trusted inherited metadata",
+                    )?);
                 }
             }
         }
     }
-    if let Some(metadata) = &value.summary_metadata {
-        let mut original_sources = std::collections::BTreeMap::new();
-        let mut inherited = Vec::new();
-        for item in &value.items {
-            if let CheckpointMessage::Derived(derived) = &item.message
-                && derived
-                    .transformations
-                    .contains(&crate::model::projected::SemanticTransformation::Summary)
-            {
-                for source in &derived.sources {
-                    original_sources.insert(source.message_id.clone(), source);
-                }
-                for source in &derived.checkpoint_sources {
-                    let (parent, _, _) = candidate(connection, &source.checkpoint_id)?;
-                    if let Some(metadata) = parent.summary_metadata {
-                        inherited.push(metadata);
-                    }
-                }
-            }
+    let mut read_files = Vec::new();
+    let mut modified_files = Vec::new();
+    for source in original_sources.into_values() {
+        if remaining_bytes == 0 || remaining_items == 0 {
+            return Err(invalid(
+                "trusted metadata cumulative resource budget exceeded",
+            ));
         }
-        let mut originals = Vec::new();
-        for source in original_sources.into_values() {
-            let page = super::compaction_resources::messages(
-                connection,
-                scope,
-                &value.read_cut,
-                LedgerFrontier(0),
-                Some(std::slice::from_ref(&source.message_id)),
-                ResourceLimits::default(),
-            )?;
-            let (_, message) = page
-                .rows
-                .into_iter()
-                .next()
-                .ok_or_else(|| invalid("missing trusted metadata source"))?;
-            originals.push(message);
-        }
-        let physical = crate::context::compaction_metadata::retired_span_metadata(&originals);
-        let expected = crate::message::types::CompactionSummaryMetadata::accumulate(
-            inherited.iter(),
-            physical.read_files().to_vec(),
-            physical.modified_files().to_vec(),
+        let page = super::compaction_resources::messages(
+            connection,
+            scope,
+            &value.read_cut,
+            LedgerFrontier(0),
+            Some(std::slice::from_ref(&source.message_id)),
+            ResourceLimits {
+                page_bytes: limits.page_bytes.min(remaining_bytes),
+                page_items: 1,
+                ..limits
+            },
+        )?;
+        remaining_bytes -= page.bytes;
+        remaining_items -= page.rows.len();
+        let (_, message) = page
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| invalid("missing trusted metadata source"))?;
+        let physical = crate::context::compaction_metadata::retired_span_metadata(
+            std::slice::from_ref(&message),
         );
-        if metadata != &expected {
-            return Err(invalid("untrusted cumulative file-operation metadata"));
-        }
+        read_files.extend_from_slice(physical.read_files());
+        modified_files.extend_from_slice(physical.modified_files());
+    }
+    let expected = crate::message::types::CompactionSummaryMetadata::accumulate(
+        inherited.iter(),
+        read_files,
+        modified_files,
+    );
+    if metadata != &expected {
+        return Err(invalid("untrusted cumulative file-operation metadata"));
     }
     Ok(())
 }
@@ -603,6 +699,8 @@ pub(super) fn install_lineage(
     checkpoints: &[ProjectionCheckpoint],
 ) -> Result<(), ConversationStoreError> {
     let mut last = None;
+    let mut previous_checkpoint = None;
+    let mut previous_ledger = LedgerFrontier(0);
     for checkpoint in checkpoints {
         let candidate = &checkpoint.candidate;
         if candidate.read_cut.conversation_id != *scope
@@ -611,6 +709,21 @@ pub(super) fn install_lineage(
         {
             return Err(invalid("inherited projection scope or integrity mismatch"));
         }
+        let actual_cut = super::compaction_resources::cut(transaction, scope)?;
+        if checkpoint.activation.checkpoint_id != candidate.checkpoint_id
+            || checkpoint.activation.activation.0
+                != last.map_or(1, |a: ProjectionActivationId| a.0 + 1)
+            || checkpoint.activation.ledger < previous_ledger
+            || candidate.base_frontier > checkpoint.activation.ledger
+            || checkpoint.activation.ledger > actual_cut.ledger
+            || candidate.read_cut.ledger > actual_cut.ledger
+            || candidate.read_cut.projection_activation > last.unwrap_or_default()
+            || candidate.expected_head.as_ref() != previous_checkpoint.as_ref()
+        {
+            return Err(invalid(
+                "inconsistent inherited projection activation boundary",
+            ));
+        }
         validate_dependencies(transaction, scope, candidate)?;
         let json = encode(candidate, "inherited checkpoint")?;
         transaction.execute("INSERT INTO projection_checkpoints(checkpoint_id,candidate_fingerprint,candidate_json,occupancy_json) VALUES(?1,?2,?3,?4)", params![candidate.checkpoint_id.as_str(),checkpoint.fingerprint,json,encode(&checkpoint.occupancy,"inherited occupancy")?]).map_err(|e|storage(e.to_string()))?;
@@ -618,6 +731,8 @@ pub(super) fn install_lineage(
         let json = encode(activation, "inherited activation")?;
         transaction.execute("INSERT INTO projection_activations(activation,checkpoint_id,ledger_frontier,activation_json,activation_digest) VALUES(?1,?2,?3,?4,?5)",params![seq_to_i64(activation.activation.0)?,candidate.checkpoint_id.as_str(),seq_to_i64(activation.ledger.0)?,json,digest(&json)]).map_err(|e|storage(e.to_string()))?;
         last = Some(activation.activation);
+        previous_checkpoint = Some(candidate.checkpoint_id.clone());
+        previous_ledger = activation.ledger;
     }
     if let Some(last) = last {
         transaction
@@ -648,7 +763,7 @@ pub(super) fn verify_lineage(
 /// selection or hydrate its retired Originals. Lineage installation validates
 /// each retained historical checkpoint independently for subsequent forks.
 type ProvenanceHeader = (String, Option<String>, Option<String>, Option<u64>, u64);
-fn validate_current_dependencies(
+pub(super) fn validate_current_dependencies(
     connection: &Connection,
     scope: &ConversationId,
     value: &CheckpointCandidate,

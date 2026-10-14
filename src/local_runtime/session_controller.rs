@@ -979,9 +979,15 @@ impl SessionController {
                 return Err(SessionError::Seed { detail: "Stale or mismatched response boundary revision; choose an exact historical cut".into() });
             }
         }
-        let source = store
-            .read_lineage_cut(revision)
-            .map_err(SessionError::Store)?;
+        let source = match boundary {
+            Some(message) => store.read_message_lineage_cut(
+                revision,
+                message,
+                side == super::session::LineageSide::After,
+            ),
+            None => store.read_lineage_cut(revision),
+        }
+        .map_err(SessionError::Store)?;
         if side == super::session::LineageSide::After
             && !source
                 .completed_responses

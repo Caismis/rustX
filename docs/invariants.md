@@ -7030,6 +7030,32 @@ output carryover is execution residue and is not inherited. Ordinary canonical
 append membership remains one-for-one with committed identities; Derived messages
 never enter that membership or invent a MessageId.
 
+Historical eligibility is decided before checkpoint body hydration, at the exact
+selected canonical and activation boundary under the native read transaction.
+The Journal cut applies to local activation facts; inherited source Journal
+coordinates are never compared with the destination Journal. Later ineligible
+bodies consume no historical-read allowance. Eligible bodies and their ordered
+immutable predecessor/provenance closure remain bounded and fail explicitly if
+missing or corrupt. Installation validates monotone activation Ledger coordinates,
+base <= activation <= destination Ledger, checkpoint identity and predecessor order.
+
+Every new local checkpoint transaction validates the complete Resource Read Cut,
+including dependency-free Derived candidates, against durable authority. Historical
+cuts permit ordinary append growth. Existing matching operation receipts are resolved
+before revalidation, preserving uncertain-commit recovery. Trusted metadata sources
+share one cumulative byte/item allowance across canonical reads and parent checkpoint
+reads. Raw sizes are charged before decoding, and canonical bodies are reduced to
+physical file-operation metadata immediately instead of retained together.
+
+Request-local image/upload transformations settle before continuation reconciliation,
+native replay preflight, snapshot freeze and request-start arbitration. A changed
+covered prefix clears the active continuation pointer and compiles complete native
+replay through the existing protocol adapters. Accepted Assistant output remains the
+sole continuation authority; opaque canonical output is never edited or fabricated.
+Unavailable complete replay is an explicit native-input compatibility failure,
+not token exhaustion. Ordinary transient retries clone this newly frozen decision
+and exact materialized content without repeating transformations or contributors.
+
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.

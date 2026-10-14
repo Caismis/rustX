@@ -679,7 +679,30 @@ def image_budget_continuation(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL
     return Scenario(name, *steps)
 
 
+def image_coverage_growth(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, name="image_coverage_growth") -> Scenario:
+    return Scenario(name,
+        Step(Expect(protocol=protocol, model=model, tools_include=("read_image",)),
+             Stream(*(ToolCall(f"first-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(16)), Finish("tool_calls"))),
+        Step(Expect(protocol=protocol, model=model, body_contains=("image/png",)),
+             Stream(*([Reasoning("complete signed native thinking")] if protocol == ANTHROPIC_MESSAGES else []), ToolCall("seventeenth-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=protocol, model=model, body_contains=("image/png", "Image artifact")),
+             HttpError(503, {"error": {"message": "temporary unavailable", "type": "server_error"}})),
+        Step(Expect(protocol=protocol, model=model, body_contains=("image/png", "Image artifact")),
+             Stream(Text("coverage reconciled"), Finish("stop"))))
+
+
+def image_coverage_missing_replay() -> Scenario:
+    return Scenario("image_coverage_missing_replay",
+        Step(Expect(protocol=OPENAI_RESPONSES, model="responses-image", tools_include=("read_image",)),
+             Stream(*(ToolCall(f"first-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(16)), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_RESPONSES, model="responses-image", body_contains=("image/png",)),
+             Stream(Reasoning("stored reasoning requires unavailable native replay"), ToolCall("seventeenth-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"))))
+
+
 SCENARIOS = {
+    "image_coverage_missing_replay": image_coverage_missing_replay,
+    "image_coverage_growth": image_coverage_growth,
+    "image_coverage_growth_responses": lambda: image_coverage_growth(OPENAI_RESPONSES, "responses-image", "image_coverage_growth_responses"),
     "image_budget_chat": lambda: image_budget_continuation(OPENAI_CHAT_COMPLETIONS, "chat-image", "image_budget_chat"),
     "image_budget_responses": lambda: image_budget_continuation(OPENAI_RESPONSES, "responses-image", "image_budget_responses"),
     "image_budget_continuation": image_budget_continuation,
