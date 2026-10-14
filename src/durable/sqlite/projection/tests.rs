@@ -46,8 +46,29 @@ fn summary(text: &str) -> CheckpointItem {
 fn candidate(
     store: &SqliteConversationStore,
     id: &str,
-    items: Vec<CheckpointItem>,
+    mut items: Vec<CheckpointItem>,
 ) -> CheckpointCandidate {
+    // Ordinary fixtures describe transformations of a real immutable source.
+    // Negative provenance tests explicitly remove it after candidate assembly.
+    let first: String = store
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT message_json FROM message_ledger ORDER BY position LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let source: MessageBlock = serde_json::from_str(&first).unwrap();
+    for item in &mut items {
+        if let CheckpointMessage::Derived(body) = &mut item.message
+            && body.sources.is_empty()
+            && body.checkpoint_sources.is_empty()
+        {
+            body.sources
+                .push(CanonicalMessageRef::of(store.conversation_id(), &source));
+        }
+    }
     let cut = store.compaction_resource_cut().unwrap();
     CheckpointCandidate {
         checkpoint_id: CheckpointId::new(id),
@@ -530,6 +551,10 @@ fn dependency_free_checkpoint_rejects_every_future_resource_cut_atomically() {
         let store = store();
         store.initialize(&[message(1)]).unwrap();
         let mut value = candidate(&store, "P-invalid", vec![summary("detached")]);
+        let CheckpointMessage::Derived(body) = &mut value.items[0].message else {
+            unreachable!()
+        };
+        body.sources.clear();
         match domain {
             "ledger" => {
                 value.read_cut.ledger = LedgerFrontier(100);
@@ -1063,4 +1088,221 @@ fn historical_head_validation_preserves_growth_same_ledger_and_old_receipts() {
     );
     assert_eq!(store.commit_projection(first_input).unwrap(), first);
     assert_eq!(store.projection_head().unwrap().unwrap(), third.checkpoint);
+}
+
+#[test]
+fn source_free_historical_derived_is_rejected_without_any_durable_mutation() {
+    for role in ["user", "assistant", "tool"] {
+        let store = store();
+        store.initialize(&[message(1)]).unwrap();
+        let mut item = summary("invented historical content");
+        let CheckpointMessage::Derived(body) = &mut item.message else {
+            unreachable!()
+        };
+        if role == "assistant" {
+            body.message = ProjectedMessage::Assistant { content: vec![] };
+        } else if role == "tool" {
+            body.message = ProjectedMessage::Tool {
+                tool_call_id: crate::runtime::identity::ToolCallId::new("absent"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-read"),
+                result: crate::tools::types::ToolExecutionResult {
+                    status: crate::tools::types::ToolExecutionStatus::Success,
+                    content: vec![],
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: vec![],
+                    deliveries: vec![],
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                },
+            };
+        }
+        let counts = || {
+            let connection = store.lock().unwrap();
+            [
+                "projection_checkpoints",
+                "projection_activations",
+                "compaction_operations",
+                "events",
+            ]
+            .map(|table| {
+                connection
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
+                        r.get::<_, u64>(0)
+                    })
+                    .unwrap()
+            })
+        };
+        let before_counts = counts();
+        let before = store.compaction_resource_cut().unwrap();
+        let mut value = candidate(&store, "invalid", vec![item]);
+        let CheckpointMessage::Derived(body) = &mut value.items[0].message else {
+            unreachable!()
+        };
+        body.sources.clear();
+        let error = store
+            .commit_projection(commit_input(
+                &store,
+                "invalid",
+                value,
+                &CancellationSignal::new(),
+            ))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("immutable provenance"),
+            "{error}"
+        );
+        assert_eq!(counts(), before_counts);
+        assert_eq!(store.compaction_resource_cut().unwrap(), before);
+        assert!(store.projection_head().unwrap().is_none());
+        assert_eq!(store.load_canonical().unwrap(), [message(1)]);
+    }
+}
+
+#[test]
+fn parent_only_and_combined_immutable_provenance_commit_and_recover_receipts() {
+    use crate::model::projected::CheckpointSourceRef;
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    let first_input = commit_input(
+        &store,
+        "parent",
+        candidate(&store, "parent", vec![summary("first")]),
+        &CancellationSignal::new(),
+    );
+    let first = store.commit_projection(first_input.clone()).unwrap();
+    for (id, canonical) in [("parent-only", false), ("combined", true)] {
+        let mut next = candidate(&store, id, vec![summary(id)]);
+        let CheckpointMessage::Derived(body) = &mut next.items[0].message else {
+            unreachable!()
+        };
+        if !canonical {
+            body.sources.clear();
+        }
+        body.checkpoint_sources.push(CheckpointSourceRef {
+            conversation_id: store.conversation_id().clone(),
+            checkpoint_id: first.checkpoint.candidate.checkpoint_id.clone(),
+            content_digest: first.candidate_fingerprint.clone(),
+        });
+        let input = commit_input(&store, id, next, &CancellationSignal::new());
+        let receipt = store.commit_projection(input.clone()).unwrap();
+        assert_eq!(store.commit_projection(input).unwrap(), receipt);
+        assert_eq!(store.projected_history().unwrap().messages.len(), 1);
+    }
+    let newest = store.projection_head().unwrap();
+    assert_eq!(store.commit_projection(first_input).unwrap(), first);
+    assert_eq!(store.projection_head().unwrap(), newest);
+    assert_eq!(store.load_canonical().unwrap(), [message(1)]);
+}
+
+#[test]
+fn invalid_immutable_derived_provenance_rolls_back_every_durable_authority() {
+    use crate::model::projected::CheckpointSourceRef;
+    for kind in [
+        "foreign-canonical",
+        "missing-canonical",
+        "corrupt-canonical",
+        "future-canonical",
+        "foreign-parent",
+        "missing-parent",
+        "corrupt-parent",
+        "future-parent",
+    ] {
+        let store = store();
+        store.initialize(&[message(1)]).unwrap();
+        let mut value = candidate(&store, "child", vec![summary("child")]);
+        let old_cut = value.read_cut.clone();
+        let parent = store
+            .commit_projection(commit_input(
+                &store,
+                "parent",
+                candidate(&store, "parent", vec![summary("parent")]),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        if kind == "future-canonical" {
+            store.append_canonical(&message(2)).unwrap();
+        }
+        // A future parent is valid now, but was not eligible at the candidate's read cut.
+        if kind == "future-parent" {
+            value.read_cut = old_cut;
+            value.expected_head = Some(parent.checkpoint.candidate.checkpoint_id.clone());
+        } else {
+            value = candidate(&store, "child", vec![summary("child")]);
+        }
+        let CheckpointMessage::Derived(body) = &mut value.items[0].message else {
+            unreachable!()
+        };
+        if kind.ends_with("parent") {
+            body.sources.clear();
+            let mut source = CheckpointSourceRef {
+                conversation_id: store.conversation_id().clone(),
+                checkpoint_id: parent.checkpoint.candidate.checkpoint_id.clone(),
+                content_digest: parent.candidate_fingerprint.clone(),
+            };
+            match kind {
+                "foreign-parent" => source.conversation_id = ConversationId::generate(),
+                "missing-parent" => source.checkpoint_id = CheckpointId::new("missing"),
+                "corrupt-parent" => source.content_digest = "corrupt".into(),
+                _ => {}
+            }
+            body.checkpoint_sources.push(source);
+        } else {
+            match kind {
+                "foreign-canonical" => body.sources[0].conversation_id = ConversationId::generate(),
+                "missing-canonical" => body.sources[0].message_id = MessageId::new("missing"),
+                "corrupt-canonical" => body.sources[0].content_digest = "corrupt".into(),
+                "future-canonical" => {
+                    body.sources[0] = CanonicalMessageRef::of(store.conversation_id(), &message(2));
+                    value.base_frontier = LedgerFrontier(1);
+                }
+                _ => unreachable!(),
+            }
+        }
+        let before = (
+            projection_authority_counts(&store),
+            store.projection_head().unwrap(),
+            store.compaction_resource_cut().unwrap(),
+            store.load_canonical().unwrap(),
+        );
+        assert!(
+            store
+                .commit_projection(commit_input(
+                    &store,
+                    "invalid",
+                    value,
+                    &CancellationSignal::new()
+                ))
+                .is_err(),
+            "{kind}"
+        );
+        assert_eq!(
+            (
+                projection_authority_counts(&store),
+                store.projection_head().unwrap(),
+                store.compaction_resource_cut().unwrap(),
+                store.load_canonical().unwrap()
+            ),
+            before,
+            "{kind}"
+        );
+    }
+}
+
+fn projection_authority_counts(store: &SqliteConversationStore) -> [u64; 4] {
+    let connection = store.lock().unwrap();
+    [
+        "projection_checkpoints",
+        "projection_activations",
+        "compaction_operations",
+        "events",
+    ]
+    .map(|table| {
+        connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap()
+    })
 }

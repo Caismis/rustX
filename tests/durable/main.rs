@@ -36,7 +36,8 @@ fn checkpoint(
 ) -> rustx::durable::projection::ProjectionCommitReceipt {
     use rustx::context::checkpoint::{CheckpointCandidate, CheckpointItem, CheckpointMessage};
     use rustx::model::projected::{
-        CanonicalMessageRef, DerivedModelMessage, ProjectedMessage, SemanticTransformation,
+        CanonicalMessageRef, CheckpointSourceRef, DerivedModelMessage, ProjectedMessage,
+        SemanticTransformation,
     };
     let history = store.projected_history().unwrap();
     let mut items = vec![CheckpointItem {
@@ -54,7 +55,21 @@ fn checkpoint(
                 .filter_map(|m| m.as_canonical())
                 .map(|m| CanonicalMessageRef::of(store.conversation_id(), m))
                 .collect(),
-            checkpoint_sources: vec![],
+            checkpoint_sources: store
+                .projection_head()
+                .unwrap()
+                .filter(|_| {
+                    history.messages[..retired]
+                        .iter()
+                        .any(|m| matches!(m, rustx::model::ModelInputMessage::Derived(_)))
+                })
+                .map(|p| CheckpointSourceRef {
+                    conversation_id: store.conversation_id().clone(),
+                    checkpoint_id: p.candidate.checkpoint_id,
+                    content_digest: p.fingerprint,
+                })
+                .into_iter()
+                .collect(),
             transformations: vec![SemanticTransformation::Summary],
         })),
         call_sources: vec![],

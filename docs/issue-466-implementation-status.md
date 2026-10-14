@@ -260,3 +260,12 @@ can establish preserved input and supported replay semantics, not reproduce a mo
 generation. Inspection archives intentionally omit exact private/native input and
 are explicitly non-reconstructible. Logical byte/item limits bound allocations;
 they are not an OS RSS sandbox. macOS-only platform coverage requires macOS CI.
+
+## Three-finding follow-up at 3252f6a
+
+The subsequent F1–F3 review repairs bounded prefix planning, accumulated WebUI
+historical pagination and universal historical Derived provenance. The detailed
+selection policy, cancellation checkpoints, compiler/durable ownership and evidence
+are recorded in `context-engine.md` and `pr-477-architecture-review-repairs.md`.
+These repairs do not change schema 59, App Server v48 or Runtime Client v69,
+continuation/retry authority, activation lineage or transaction linearization.

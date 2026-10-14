@@ -168,6 +168,10 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await expect(historical.locator('[data-projection-origin="inherited"]')).toHaveCount(0);
       await historical.getByRole('button', { name: copy('Inspect projected messages', '查看投影消息'), exact: true }).first().click();
       await expect(historical.locator('[data-projection-detail]')).toContainText('The user supplied compaction-evidence-435. Preserve that fact.');
+      await historical.getByRole('button', { name: copy('Inspect projected messages', '查看投影消息'), exact: true }).nth(1).click();
+      await expect(historical.locator('[data-projection-detail]')).toContainText("Preserve compaction-evidence-435 and the user's instruction to continue.");
+      await expect(historical.locator('[data-projection-origin="local"]')).toHaveCount(2);
+      await page.screenshot({ path: `/tmp/rustx-projection-history-${locale}-${theme}.png` });
       await historical.locator('summary').first().click();
       await page.screenshot({ path: `/tmp/rustx-compaction-${locale}-${theme}.png` });
       await page.getByRole('tab', { name: copy('Trajectory', '轨迹'), exact: true }).click();

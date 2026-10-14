@@ -801,3 +801,55 @@ async fn delayed_older_receipt_installs_current_projection_head() {
         "O1 retains its historical completion; hot installation selects current authority"
     );
 }
+
+#[tokio::test]
+async fn cancellation_observed_during_planning_starts_no_summary_and_commits_nothing() {
+    let history = file_operation_history();
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "must not run".into(),
+    )]));
+    let (planning, mut entered) = tokio::sync::watch::channel(false);
+    let estimator = rustx::context::ClosureTokenEstimator::new(move |messages, _, _| {
+        if messages
+            .iter()
+            .any(|m| matches!(m, rustx::model::ModelInputMessage::Derived(_)))
+        {
+            planning.send_replace(true);
+        }
+        10
+    });
+    let e = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 10_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(estimator),
+    )
+    .unwrap();
+    let context = ContextRuntime::with_scripted_summarizer(
+        e,
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 1, 10_000),
+    );
+    let cancellation = CancellationSignal::new();
+    let controller = cancellation.clone();
+    let cancel = async move {
+        entered.wait_for(|value| *value).await.unwrap();
+        // The planner yields after the first complete estimate, before the
+        // next evaluation or summary admission. The owner wins here.
+        controller.cancel();
+    };
+    let (result, ()) = tokio::join!(
+        run_pipeline(&history, &store, &context, &cancellation),
+        cancel
+    );
+    assert!(
+        matches!(result, Err(crate::context::compaction::CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::Cancelled)
+    );
+    assert!(summarizer.requests().is_empty());
+    assert_no_transition(&store, &history);
+    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+}

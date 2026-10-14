@@ -211,6 +211,15 @@ pub fn compile_checkpoint(
                 &mut source_budget,
             )?),
             CheckpointMessage::Derived(derived) => {
+                if derived.sources.is_empty() && derived.checkpoint_sources.is_empty() {
+                    return Err("historical Derived message requires immutable provenance".into());
+                }
+                if derived.checkpoint_sources.iter().any(|source| {
+                    source.conversation_id != candidate.read_cut.conversation_id
+                        || source.checkpoint_id == candidate.checkpoint_id
+                }) {
+                    return Err("foreign or self-referential checkpoint provenance".into());
+                }
                 if let ProjectedMessage::User {
                     kind: crate::model::projected::ProjectedUserKind::CompactionContext,
                     source,
@@ -872,6 +881,71 @@ mod tests {
                 compile(&p, std::slice::from_ref(&source))
                     .unwrap_err()
                     .contains("native reasoning")
+            );
+        }
+    }
+    #[test]
+    fn historical_derived_requires_a_real_source_even_with_summary_label() {
+        let user = MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("u"),
+            content: vec![],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        });
+        for original in [user, assistant("a"), result("r", "a", 1, "same-wire")] {
+            for label in [false, true] {
+                let mut item = derived_item(&original);
+                let CheckpointMessage::Derived(body) = &mut item.message else {
+                    unreachable!()
+                };
+                body.sources.clear();
+                if !label {
+                    body.transformations.clear();
+                }
+                let error = compile(&candidate(vec![item]), &[]).unwrap_err();
+                assert!(error.contains("immutable provenance"), "{error}");
+            }
+        }
+    }
+    #[test]
+    fn historical_derived_compiler_accepts_canonical_and_parent_only_sources_but_rejects_wrong_scope()
+     {
+        use crate::model::projected::CheckpointSourceRef;
+        let user = MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("u"),
+            content: vec![],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        });
+        let canonical = candidate(vec![derived_item(&user)]);
+        assert!(compile(&canonical, std::slice::from_ref(&user)).is_ok());
+        let mut parent_only = canonical;
+        let CheckpointMessage::Derived(body) = &mut parent_only.items[0].message else {
+            unreachable!()
+        };
+        body.sources.clear();
+        body.checkpoint_sources.push(CheckpointSourceRef {
+            conversation_id: conversation(),
+            checkpoint_id: CheckpointId::new("parent"),
+            content_digest: "checked by durable owner".into(),
+        });
+        assert!(compile(&parent_only, &[]).is_ok());
+        for foreign in [true, false] {
+            let mut invalid = parent_only.clone();
+            let CheckpointMessage::Derived(body) = &mut invalid.items[0].message else {
+                unreachable!()
+            };
+            if foreign {
+                body.checkpoint_sources[0].conversation_id = ConversationId::generate();
+            } else {
+                body.checkpoint_sources[0].checkpoint_id = invalid.checkpoint_id.clone();
+            }
+            assert!(
+                compile(&invalid, &[])
+                    .unwrap_err()
+                    .contains("checkpoint provenance")
             );
         }
     }

@@ -140,7 +140,9 @@ pub(crate) async fn execute_compaction(
             tools,
             budgets,
             constraints,
-        )?;
+            cancellation,
+        )
+        .await?;
         // Inline provenance is a finite capability. Admit it before invoking
         // the provider rather than generating a candidate we cannot commit.
         let mut refs = std::collections::BTreeSet::new();

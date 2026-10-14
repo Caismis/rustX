@@ -1446,7 +1446,9 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         &[],
         CompactionBudgets::new(1, 1, 1_000_000),
         &rustx::context::CompactionConstraints::default(),
+        &rustx::runtime::CancellationSignal::new(),
     )
+    .await
     .expect("unrestricted historical prefix");
     assert_eq!(
         unconstrained, 3,
@@ -1465,7 +1467,9 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
             fresh_inbound: Some(&fresh),
             ..Default::default()
         },
+        &rustx::runtime::CancellationSignal::new(),
     )
+    .await
     .expect("fresh input leaves earlier retirement");
     assert_eq!(protected, 1);
 

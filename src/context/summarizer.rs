@@ -92,66 +92,89 @@ impl SummaryRequest {
     /// tool-call arguments).
     #[must_use]
     pub fn render_transcript(&self) -> String {
-        let mut parts: Vec<String> = Vec::new();
+        let mut transcript = String::new();
         for message in &self.retired {
-            use crate::model::projected::{ModelMessageView, ProjectedMessage};
-            match message.view() {
-                ModelMessageView::User(content) => {
-                    let label = match message {
-                        crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) => {
-                            user_label(user)
-                        }
-                        crate::model::ModelInputMessage::Derived(derived)
-                            if derived.transformations.contains(
-                                &crate::model::projected::SemanticTransformation::Summary,
-                            ) =>
-                        {
-                            "Earlier summary".to_owned()
-                        }
-                        crate::model::ModelInputMessage::Derived(derived) => match &derived.message
-                        {
-                            ProjectedMessage::User { source, kind, .. } => {
-                                source_label(source, kind)
-                            }
-                            _ => unreachable!(),
-                        },
-                        _ => unreachable!(),
-                    };
-                    render_user(content, &label, &mut parts);
-                }
-                ModelMessageView::Assistant(content) => render_assistant(content, &mut parts),
-                ModelMessageView::Tool(call, result) => render_tool(call, result, &mut parts),
-                ModelMessageView::RequestOnly(context) => parts.push(context.render()),
-            }
+            append_summary_message(message, &mut transcript);
         }
-        parts.join("\n\n")
+        transcript
     }
 
-    /// Assembles the exact canonical model input used by the production
+    /// Assembles the exact provider-neutral model input used by the production
     /// summary invocation.
     #[must_use]
     pub fn model_input(&self) -> SummaryModelInput {
-        let instruction = format!(
-            "{}\n\n<retired-conversation>\n{}\n</retired-conversation>",
-            SUMMARY_INSTRUCTION,
-            self.render_transcript()
-        );
-        SummaryModelInput {
-            messages: vec![crate::model::ModelInputMessage::Derived(
-                crate::model::projected::DerivedModelMessage {
-                    message: crate::model::projected::ProjectedMessage::User {
-                        content: vec![UserContentBlock::Text(TextBlock { text: instruction })],
-                        source: UserSource::Runtime,
-                        kind: crate::model::projected::ProjectedUserKind::Message,
-                        timestamp: None,
-                    },
-                    sources: Vec::new(),
-                    checkpoint_sources: Vec::new(),
-                    transformations: vec![crate::model::projected::SemanticTransformation::Summary],
-                },
-            )],
-        }
+        summary_model_input(&self.render_transcript())
     }
+}
+
+/// Render each historical message once; no detached prefix clone is needed.
+pub(crate) fn append_summary_message(
+    message: &crate::model::ModelInputMessage,
+    transcript: &mut String,
+) {
+    use crate::model::projected::{ModelMessageView, ProjectedMessage};
+    #[cfg(test)]
+    SUMMARY_RENDERED_MESSAGES.with(|count| count.set(count.get() + 1));
+    let mut parts = Vec::new();
+    match message.view() {
+        ModelMessageView::User(content) => {
+            let label = match message {
+                crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) => {
+                    user_label(user)
+                }
+                crate::model::ModelInputMessage::Derived(derived)
+                    if derived
+                        .transformations
+                        .contains(&crate::model::projected::SemanticTransformation::Summary) =>
+                {
+                    "Earlier summary".to_owned()
+                }
+                crate::model::ModelInputMessage::Derived(derived) => match &derived.message {
+                    ProjectedMessage::User { source, kind, .. } => source_label(source, kind),
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+            render_user(content, &label, &mut parts);
+        }
+        ModelMessageView::Assistant(content) => render_assistant(content, &mut parts),
+        ModelMessageView::Tool(call, result) => render_tool(call, result, &mut parts),
+        ModelMessageView::RequestOnly(context) => parts.push(context.render()),
+    }
+    for part in parts {
+        if !transcript.is_empty() {
+            transcript.push_str("\n\n");
+        }
+        transcript.push_str(&part);
+    }
+}
+
+/// The same complete instruction/wrapper used by the real summary invocation.
+pub(crate) fn summary_model_input(transcript: &str) -> SummaryModelInput {
+    let instruction = format!(
+        "{SUMMARY_INSTRUCTION}\n\n<retired-conversation>\n{transcript}\n</retired-conversation>"
+    );
+    SummaryModelInput {
+        messages: vec![crate::model::ModelInputMessage::Derived(
+            crate::model::projected::DerivedModelMessage {
+                message: crate::model::projected::ProjectedMessage::User {
+                    content: vec![UserContentBlock::Text(TextBlock { text: instruction })],
+                    source: UserSource::Runtime,
+                    kind: crate::model::projected::ProjectedUserKind::Message,
+                    timestamp: None,
+                },
+                sources: Vec::new(),
+                checkpoint_sources: Vec::new(),
+                transformations: vec![crate::model::projected::SemanticTransformation::Summary],
+            },
+        )],
+    }
+}
+#[cfg(test)]
+thread_local! { static SUMMARY_RENDERED_MESSAGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn take_summary_rendered_messages() -> usize {
+    SUMMARY_RENDERED_MESSAGES.with(|count| count.replace(0))
 }
 
 /// Truncates on a character boundary, reporting how much was dropped.

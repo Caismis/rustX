@@ -7379,3 +7379,25 @@ writes, activation identity/reservations, preparation or accepted/delivered fact
 The shared message-domain limit is eight attachments per input; attachment-only
 input remains valid. Session receipt ownership and upload storage checks precede
 conversion into trusted references and remain separate from Runtime admission.
+
+## PR #477 bounded planning and historical provenance review
+
+Historical Checkpoint Derived content requires nonempty canonical or Checkpoint
+provenance. Core compilation rejects source-free bodies even with a Summary label;
+durable commit validates the immutable closure before any content/head/activation,
+completion or receipt insert. Parent-only provenance remains valid and prior matching
+receipts retain their existing recovery ordering. Request-only synthetic input is
+outside this historical rule.
+
+Default Summary planning renders history once and caps complete candidate evaluation
+at 64 structural boundaries per pass. It never assumes estimator additivity or
+monotonicity. Keep-recent selection is exhaustive for <=64 boundaries and deterministic
+among sampled proven fits for longer inputs; missing an unsampled feasible candidate
+fails closed. Cooperative planning yields observe existing Agent cancellation before
+summary admission. Canonical facts, request starts, commit grants and SQLite COMMIT
+remain owned by their existing authorities.
+
+Projection History pagination retains prior activation/item pages. Stable identities
+prevent overlap duplication; Session lifetime and current selection tokens prevent
+obsolete asynchronous responses or errors from changing current inspection. Later-page
+errors preserve valid history and allow retry at the unchanged cursor.

@@ -371,3 +371,154 @@ The earlier protocol failure sequence did not reproduce in the full rerun. The
 Fork, native trajectory ordering, file delivery, uploads and attachment/source
 closure with unchanged assertions and golden references. The branch remains
 available for independent review; final remote CI status is maintained in PR #477.
+
+## Three-finding review beginning at 3252f6a
+
+This review starts at `3252f6a296c00f653bf0c1d7c5ea62bf9a6500d9`, with PR
+base/main `97096020d64ea00218493a0a99b9b805821eeb28`. These F1–F3 labels belong
+to this review; the earlier F1/F2 review above remains a separate historical record.
+
+- **F1, Context planning:** exhaustive full-prefix cloning/rendering was quadratic.
+  One render/index pass and at most 64 complete candidate probes now bound work
+  independently of boundary count. Non-additive/non-monotone estimators still price
+  complete requests. Histories with more boundaries use evenly spaced structural
+  ranks; an unsampled feasible candidate may be missed and fails closed. Keep-recent
+  preference remains exact among examined fits. Existing Agent cancellation is
+  checked at cooperative yields before invocation; ownership/grants are unchanged.
+  Files: `context/planning.rs`, `summarizer.rs`, `compaction.rs`, existing Context
+  owner tests and their async call sites.
+- **F2, WebUI inspection:** both page streams replaced old data and stale promises
+  could publish obsolete selections. Session-keyed state and current request tokens
+  accumulate stable activation/item identities, reject stale completion/error paths,
+  prevent duplicate current-page requests and preserve pages on later failure.
+  Files: `ProjectionHistory.tsx`, `projection-history.test.tsx` and the native
+  Compaction browser acceptance in `compaction.spec.ts`.
+- **F3, core Checkpoint compiler:** source-free historical Derived User/Assistant
+  content compiled and committed. Core compilation now requires at least one scoped
+  immutable canonical/parent source; transformation labels confer no authority.
+  Durable source integrity/eligibility checks remain in their existing owner.
+  Legitimate historical test fixtures now supply real canonical or parent provenance;
+  request-only synthetic inputs remain unaffected. Files: `context/checkpoint.rs`,
+  SQLite projection owner tests and `tests/durable/main.rs`.
+
+### Deterministic red/green evidence
+
+Before each production correction, focused tests were run against the defective path:
+F1's actual rendering counter failed on 512 messages; F2's four controlled-pagination
+regressions failed while the original single-page test passed; F3's compiler and
+SQLite tests both failed because source-free content was accepted. No timing threshold
+or sleep is used as proof.
+
+| Finding | Regression names / proof |
+| --- | --- |
+| F1 | `long_prefix_planning_bounds_actual_rendering_and_complete_estimator_work` counts actual render entries and whole-estimator message visits for 512/1024 messages; `non_additive_planning_checks_complete_requests_and_retention_without_inferred_fit` uses a non-monotone estimator; `incremental_transcript_boundaries_match_complete_summary_requests` proves identical rendered requests; `complete_tool_batch_and_core_owned_boundaries_constrain_every_probe` protects reordered Tool siblings, Fresh Inbound, Context and carryover anchors. |
+| F1 cancellation | `cancellation_observed_during_planning_starts_no_summary_and_commits_nothing` publishes a watch from the first full estimator query, cancels at the following cooperative yield, and asserts zero summary invocations/checkpoint transitions/Journal facts. |
+| F2 | Existing historical inspection test plus accumulated overlapping activation/detail pages, superseded in-flight selection, A→B→A Session replacement, later-page failure/retry and duplicate concurrent-click tests. Deferred promises establish completion order directly. Cursor exhaustion removes the more control. |
+| F3 | `historical_derived_requires_a_real_source_even_with_summary_label`; `historical_derived_compiler_accepts_canonical_and_parent_only_sources_but_rejects_wrong_scope`; `source_free_historical_derived_is_rejected_without_any_durable_mutation`; `parent_only_and_combined_immutable_provenance_commit_and_recover_receipts`; `invalid_immutable_derived_provenance_rolls_back_every_durable_authority`. Rejection compares content/activation/receipt/Journal row counts, head, resource cut and immutable canonical history. |
+
+The WebUI regression uses existing mocked App Server routes and English-localized
+controls. No generated protocol or transport redesign is required. Native retries,
+continuation replay, lineage and process-death atomicity remain covered by the
+existing complete validation lanes below.
+
+Browser acceptance extends the existing real-native Compaction flow to switch between
+both historical Checkpoints and assert that both activation records remain visible.
+It captures open-history screenshots outside the repository for English/Chinese,
+light/dark and desktop/mobile QA. Browser plugin capabilities are not available in
+this session; the repository's digest-pinned Chromium/Playwright runner is used.
+
+The first complete workspace attempt reported 3,546 library tests passed, one failed
+and three existing ignored. The failure was the existing
+`scripted_suites::agent::tool_scheduling::cancellation_during_mixed_batch_settles_structurally`
+10-second `run terminates` liveness guard (`Elapsed(())`). Its one-message input,
+10-million-token model window and unchanged fixture never enter summary prefix
+planning. The unchanged eight-test scheduling owner rerun passed in 12.26 seconds.
+Fixture preparation and foreground/background watches were inspected; the timeout's
+exact cause is not established and is not labeled an infrastructure failure. The
+complete workspace command is rerun below; no deadline, assertion or selector is
+weakened to hide the initial result.
+
+The second disk-backed workspace attempt again passed 3,546 library tests, with a
+different one failing: `goal350_background_terminal_publication_wakes_next_continuation`
+at its existing 10-second parked-provider wake guard (`Elapsed(())`, extensions
+owner line 4131). The earlier mixed-batch cancellation test passed in this run.
+The unchanged Goal test passed alone (0.34 seconds). During the full-run stalls,
+live process/thread inspection captured the test binary's threads in kernel
+`jbd2_log_wait_commit`; `/proc/pressure/io` reported full pressure above 70%.
+These observations establish an actual journal-I/O condition; they do not establish
+the exact phase responsible for either earlier timeout.
+
+Final isolation uses `TMPDIR=/run/user/1000/r466-477` on the existing executable
+user-owned tmpfs (verified fixture execution), with
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. No filesystem mount, host quota, deadline,
+assertion, retry budget or CI selector is changed. SQLite remains file-backed,
+with its actual transactions, WAL/locking, restart and process-death cuts. This
+isolates temporary fixture writes from the stalled root-filesystem journal; it is
+not power-loss durability testing. Native builds and client/browser execution
+remain serialized. Earlier disk-backed failures are retained as distinct attempts.
+
+### Final three-finding validation
+
+The implementation was validated in the dedicated worktree. Final passing commands
+use the isolated scratch environment described above; builds complete before fixture
+execution. Counts below are per invocation, not distinct-test totals across overlapping
+lanes. Existing live-model tests remain ignored; no real model API is called.
+
+| Command | Final result |
+| --- | --- |
+| `git diff --check` | Passed, repeated after review |
+| `cargo fmt --all -- --check` | Passed, repeated after review |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Passed; initial new-code style diagnostics corrected |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed |
+| `cargo build --bins --example document_artifact_fixture --locked` | Passed; repeated before client tests |
+| `cargo build --bins --all-features --locked` | Passed |
+| `cargo test --workspace -- --test-threads=2` | 4,168 passed; 0 failed; 8 existing ignored |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites:: --test-threads=2` | 3,478 passed; 0 failed; 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features -- --test-threads=2` | 208 passed; 0 failed; 5 existing live-model ignores |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=2` | 200 passed; 0 failed |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output -- --test-threads=2` | 432 passed; 0 failed: CFG3 31, conformance 29, SQLite 129, process 61, subagent 47, tools 135 |
+| `cargo run --all-features --example check_test_lanes -- --job rust-contracts` | Passed, Linux lane coverage |
+| `cargo run --all-features --example check_test_lanes -- --job rust-boundaries` | Passed, Linux lane coverage |
+| `uv run --project test-support/fake-provider --frozen pytest` | 54 passed |
+| `pnpm --dir protocol/app-server check` | Passed, no generated drift |
+| `pnpm --dir protocol/app-server typecheck` | Passed |
+| `pnpm --dir dev typecheck` | Passed |
+| `pnpm --dir dev test` | 41 passed; 0 failed |
+| `pnpm --dir tui typecheck` | Passed |
+| `pnpm --dir tui test` | 1,025 passed; 0 failed; 1 existing platform skip |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | 2,585 passed; 0 failed; 4 existing platform skips |
+| `pnpm --dir web-console build` | Passed, existing bundle-size warning |
+| `pnpm --dir web-console check:i18n` | Passed |
+| `pnpm --dir web-console check:provenance` | Passed, 276 source records / 264 package notices |
+| `node web-console/scripts/check-office-sandbox.ts` | Passed |
+| `bash web-console/scripts/browser-tests.sh test/e2e/compaction.spec.ts test/e2e/trajectory-integration.spec.ts` | 5 passed, 37.7 seconds, pinned Chromium container |
+
+Focused owner checks also passed: Context 150, SQLite projection 24, Projection
+History component 6. The new native tests passed in default and all-features lanes.
+The complete local browser suite was not repeated: the selected acceptance covers
+both affected native historical inspection/compaction and adjacent trajectory
+behavior; the full browser suite remains a required remote CI lane. macOS coverage
+is provided by remote CI, not claimed as local coverage.
+
+Browser QA used `http://127.0.0.1:5173/`, the real App Server/Product Host and local
+Provider Emulator, with 1440x1000 desktop and 390x1000 mobile, English/Chinese and
+light/dark themes. Page identity, populated content, interaction completion and
+console/page-error checks passed. Open-history screenshots show both activation
+records and the second selected Derived detail; screenshots were inspected and are
+stored outside the repository (`/tmp/rustx-projection-history-*.png`). Paging races
+are proven by controlled promises in component tests, not screenshot timing.
+
+The code changes preserve immutable canonical facts and typed projection ownership.
+SQLite COMMIT, operation receipt ordering/CAS/fencing, request-start cancellation
+arbitration, frozen retry versions and native replay are unchanged. Existing tests
+exercise these boundaries, inherited activation distinctions, source deletion,
+exact reconstruction and lossy archive failure. Passing lanes supplement the source
+ownership analysis; they do not prove arbitrary future algorithms/providers correct.
+
+The intentional >64-boundary sampled selection is the bounded planner's practical
+limit: it can fail closed despite an unsampled feasible prefix. Estimator internals
+have their own cost; planner-controlled rendering, materialization and query counts
+are bounded. Earlier disk-backed liveness failures and their unestablished exact
+phases remain reported above. Final branch/commit and current-head CI status are
+published in PR #477 after pushing; prior-head green CI is not substituted.

@@ -60,6 +60,11 @@ messages. An Original is scoped to a conversation and complete immutable-body
 SHA-256 digest. A Derived has typed User, Assistant or Tool content and scoped
 canonical/checkpoint provenance, without a canonical MessageId. Text, Reasoning,
 ToolCall, ToolResult, Refusal and supported media retain their typed representation.
+Every historical Derived item must name at least one canonical or parent-checkpoint
+source. A transformation label alone is not provenance. The compiler enforces this
+universal historical rule and scope/self-reference checks; durable authority validates
+immutable bodies, digests, eligibility and dependency ordering. Parent-only summaries
+are permitted. This rule does not apply to request-only synthetic material.
 
 These identity domains are distinct:
 
@@ -116,6 +121,29 @@ keep-recent behavior, summary-input reservation/shrinks, structured Markdown/XML
 and deterministic file-operation sections. It selects only complete historical
 prefixes. Fresh Inbound, current-generation Context and carryover anchors remain
 core-owned protected inputs.
+
+Planning indexes canonical positions and renders the authorized historical input once.
+It evaluates at most 64 complete Tool-batch boundaries per planning pass, including
+both endpoints and evenly spaced boundary ranks when there are more than 64. Each
+examined candidate is priced as a complete summary request and complete retained
+primary input with the existing Summary output reservation; retained recent history
+is also priced as a whole. The generated Checkpoint and complete actual primary
+request are validated again after Summary output exists, before commit. Token estimators need
+neither additivity nor monotonicity. For N messages and B rendered/input bytes, the
+planner performs O(N log N + 64 B) materialization work, plus the bounded core
+overlay per probe, and at most 192 complete estimator queries. Estimator internals
+retain their own complexity; the planner does not infer additive prices.
+The existing summary shrink loop is separately bounded. Agent-owned cancellation is
+observed at cooperative yields during indexing/rendering and between full estimates;
+no summary invocation is admitted before selection succeeds.
+
+With at most 64 eligible boundaries selection retains the previous exhaustive policy.
+For longer histories, keep-recent preference applies only among examined proven fits:
+choose the largest examined fit retaining the target, otherwise the first examined
+fit. A feasible unsampled boundary can be missed by a non-monotone estimator; the
+planner fails closed if no examined candidate fits rather than claiming approximate
+fit or doing unbounded exhaustive work. Post-summary full request validation remains
+authoritative.
 
 The summary is a Derived User checkpoint item. Retained history remains ordered
 Original/Derived items. Trusted cumulative read/modified-file metadata comes from
@@ -410,3 +438,14 @@ at contracts, and presentation at each client. Channel/watch/barrier hooks force
 cancellation and fault interleavings at actual grant/transaction/start boundaries.
 No sleep or probabilistic scheduling constitutes a race proof. Validation evidence
 and the Section13 mapping are recorded in [issue-466-implementation-status.md](issue-466-implementation-status.md).
+
+## Projection inspection pagination
+
+WebUI history is keyed by Session and accumulated in activation order, deduplicated
+by activation identity without replacing earlier immutable records. Detail pages
+accumulate by checkpoint item occurrence only within the selected Checkpoint.
+Session unmount invalidates pending request tokens; selection changes supersede
+pending detail tokens. Responses and errors from obsolete requests cannot publish.
+Each pagination stream allows one current page request, preserves prior pages on
+failure, and carries the latest authoritative cursor until exhaustion. Inspection
+continues to create no execution facts or provider requests.
