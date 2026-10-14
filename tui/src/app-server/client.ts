@@ -72,7 +72,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 48;
+export const APP_SERVER_PROTOCOL_VERSION = 49;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -537,7 +537,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v48 protocol message");
+      this.#fail("invalid App Server v49 protocol message");
       return;
     }
 

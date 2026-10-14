@@ -2560,6 +2560,29 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
         projection::timeline(&*self.lock()?, after, limit)
     }
+    fn projection_timeline_at_journal_cut(
+        &self,
+        through: u64,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<super::projection::ProjectionTimelinePage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::timeline_at_journal_cut(&transaction, through, after, limit)
+    }
+    fn projection_checkpoint_at_journal_cut(
+        &self,
+        through: u64,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::checkpoint_at_journal_cut(&transaction, through, id)
+    }
     fn projection_owner(
         &self,
         attempt: Option<&crate::runtime::identity::AttemptId>,

@@ -7420,3 +7420,31 @@ Projection History pagination retains prior activation/item pages. Stable identi
 prevent overlap duplication; Session lifetime and current selection tokens prevent
 obsolete asynchronous responses or errors from changing current inspection. Later-page
 errors preserve valid history and allow retry at the unchanged cursor.
+
+## PR #477 final request and historical-read contracts
+
+- Every newly prepared semantic primary request passes complete adapter-owned translation
+  and native replay preflight before exact input freeze and durable request-start arbitration.
+  Ordinary transient retries reuse the validated current frozen version. Continuation retirement
+  requires successful replay preflight; no native signatures/encrypted units are manufactured.
+- Frozen Tool wire associations use the same request-local labels as adapter encoding. Physical,
+  projected and request occurrences remain distinct. Covered stored-continuation input is not
+  retransmitted; the transmitted suffix retains its actual native correlation. Unsafe opaque
+  native relabeling fails explicitly before request start.
+- Published Projection history is selected in durable SQL by destination installation or local
+  completion Journal eligibility before candidate JSON admission/decoding. Page records and
+  continuation existence share one short native read snapshot. Detail admission applies the same
+  cut before hydration. Future candidate bytes/corruption cannot affect an independently valid
+  historical page; corrupt eligible content fails explicitly. Runtime Client only presents results.
+- Default input cost counts the bounded neutral Tool semantic projection and excludes execution
+  duration/exit metadata, Workflow/delivery/Artifact metadata and discarded content/diagnostics.
+  Visible status, managed continuation and ordered media remain priced. This message-local
+  normalization preserves whole-request monotonicity over frozen media; generic estimators retain
+  conservative `SearchIncomplete` semantics. Canonical bodies and dependency digests stay intact.
+
+Fully native-covered Tool associations have no current wire field and therefore no
+invented wire ID. Nullable `wire_id` distinguishes absence from explicit correlation;
+transmitted stored results use actual accepted native IDs. Stateless/full replay IDs
+match the adapter's relevant wire segment, independent of covered historical occurrences.
+Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
+This required observation change advances App Server to v49 and Runtime Client to v70.

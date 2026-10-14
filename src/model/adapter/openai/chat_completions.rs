@@ -1509,7 +1509,8 @@ fn construct_request(
     value["stream"] = serde_json::Value::Bool(true);
     value[request.invocation.compat.chat_max_tokens_field.wire_name()] =
         request.max_output_tokens().into();
-    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::OpenAiChatCompletions);
+    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::OpenAiChatCompletions)
+        .map_err(invalid_request)?;
     finalize_provider_request(
         value,
         request.request_params(),

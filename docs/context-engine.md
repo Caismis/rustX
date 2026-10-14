@@ -141,6 +141,21 @@ prompt and core overlays remain fixed. Rounding preserves monotonicity, but does
 preparation freezes authorized resources before advertising this proof, as described
 below. An arbitrary estimator never inherits a guarantee from media preparation.
 
+Tool items are priced from the Tool Plane's existing bounded model-facing projection,
+not serialized `ToolExecutionResult`. The neutral semantic view joins text-only parts
+with the projection's canonical separators and retains ordered text/image parts for
+media. Visible status and managed-output continuation remain included. Duration,
+exit code, Workflow identity, delivery cards, non-visible Artifact metadata and
+truncated tails remain canonical execution facts and contribute no input cost.
+Tool semantic fingerprints use this same normalized content; text-only identities
+remain unchanged, while media identities include the actual bounded ordered parts.
+Unsupported Tool content is never treated as zero cost and fails adapter admission.
+
+This normalization remains message-local: each surviving item has fixed bounded
+bytes after frozen media materialization. Whole-array JSON accounting, fixed core
+inputs and nonnegative immutable image charges therefore retain the monotone proof.
+No per-message rounding, candidate-time I/O or approximate-fit substitution is used.
+
 For a guaranteed estimator, binary partition queries find the intersection of the
 Summary-fit initial interval and primary-fit final interval. Whole recent prices
 identify the keep-recent initial interval. Selection preserves the established
@@ -541,3 +556,10 @@ pending detail tokens. Responses and errors from obsolete requests cannot publis
 Each pagination stream allows one current page request, preserves prior pages on
 failure, and carries the latest authoritative cursor until exhaustion. Inspection
 continues to create no execution facts or provider requests.
+
+Final request admission belongs to Agent execution and Provider Adapters. Preliminary
+staging may select compaction and reduce carryover; it cannot admit a request. Every
+final semantic input undergoes complete adapter translation/replay preflight after
+media materialization and continuation coverage reconciliation, before exact Snapshot
+freeze and cancellation-versus-start arbitration. Ordinary transient retries reuse
+that validated frozen input without contributor, upload, image or preflight resampling.

@@ -673,7 +673,7 @@ export class AppServerSession {
     return result.agent;
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v48.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v49.js").UploadReceipt[] = []) {
     return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 

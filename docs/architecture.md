@@ -6668,7 +6668,7 @@ facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v48).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v49).
 
 ## Image Tool and Bash presentation (#412)
 

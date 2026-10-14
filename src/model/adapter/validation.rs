@@ -103,13 +103,23 @@ pub fn validate_request(
     }
 
     validate_continuation(request, protocol)?;
-    request.continuation_boundary().map_err(invalid_request)?;
+    // Wire coverage/correlation is part of deterministic adapter admission,
+    // including accepted stored calls absent from this request's explicit input.
+    super::correlation::request_labels(request).map_err(invalid_request)?;
     validate_tools(request)
 }
 
+#[cfg(test)]
+thread_local! { static PREFLIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn take_preflights() -> usize {
+    PREFLIGHTS.with(|v| v.replace(0))
+}
 /// Adapter-owned preflight, including opaque native replay, without dispatch.
 /// No SDK or wire values escape the adapter boundary.
 pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), ModelError> {
+    #[cfg(test)]
+    PREFLIGHTS.with(|v| v.set(v.get() + 1));
     let tools = validate_request(request, request.protocol())?;
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
@@ -218,6 +228,59 @@ mod tests {
     };
     use crate::runtime::identity::ToolId;
     use crate::tools::types::ModelToolDefinition;
+
+    #[test]
+    fn ambiguous_unresolved_wire_ids_fail_complete_adapter_preflight() {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
+            ToolCallOccurrenceRef, ToolMessageBlock,
+        };
+        use crate::runtime::identity::{MessageId, ToolCallId};
+        use crate::tools::types::ToolCall;
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            let mut input =
+                crate::scripted_suites::common::simple_request(protocol, "test", "input");
+            let call = ToolCall {
+                id: ToolCallId::new("repeat"),
+                tool_id: ToolId::new("tool"),
+                name: "tool".into(),
+                arguments: serde_json::json!({}),
+            };
+            input.messages.push(
+                MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("assistant"),
+                    content: vec![
+                        AssistantContentBlock::ToolCall(call.clone()),
+                        AssistantContentBlock::ToolCall(call),
+                    ],
+                })
+                .into(),
+            );
+            for block in [1, 0] {
+                input.messages.push(
+                    MessageBlock::Tool(ToolMessageBlock {
+                        id: MessageId::new(format!("result-{block}")),
+                        tool_call_id: ToolCallId::new("repeat"),
+                        tool_id: ToolId::new("tool"),
+                        occurrence: ToolCallOccurrenceRef::new(
+                            MessageId::new("assistant"),
+                            ContentBlockIndex::new(block),
+                        ),
+                        result: crate::scripted_suites::support::fake::success_result("result"),
+                    })
+                    .into(),
+                );
+            }
+            let error = super::validate_prepared_request(&input)
+                .expect_err("raw wire IDs cannot disambiguate two pending physical occurrences");
+            assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+            assert!(error.message.contains("correlation"));
+        }
+    }
 
     fn request() -> ModelRequest {
         ModelRequest {

@@ -6193,7 +6193,11 @@ export interface ActualRequestToolAssociation {
   call: ActualRequestCallCoordinate;
   result: RequestMessageOccurrence;
   source: CanonicalCallSource;
-  wire_id: string;
+  /**
+   * Absent only when both occurrences are covered by native continuation
+   * and no correlation field is transmitted in this actual request.
+   */
+  wire_id?: string | null;
 }
 export interface ActualRequestCallCoordinate {
   message: RequestMessageOccurrence;

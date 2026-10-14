@@ -60,9 +60,7 @@ use rustx::model::{
     ModelAdapter, ModelError, ModelErrorKind, ModelEvent, ModelFinishReason, ModelProtocol,
     RequestParams,
 };
-use rustx::runtime::continuation::{
-    AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
-};
+use rustx::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
     EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeAttachment,
@@ -337,15 +335,9 @@ fn assert_tool_units_complete(messages: &[rustx::model::ModelInputMessage], cont
     }
 }
 
-fn anthropic_state() -> ProviderContinuationState {
+fn anthropic_state(signature: &str) -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"signature": "sig-27"}),
-    })
-}
-
-fn stored_state() -> ProviderContinuationState {
-    ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
-        previous_response_id: "resp_27".to_owned(),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": signature}),
     })
 }
 
@@ -674,8 +666,8 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let cross_attempt = stored_state();
-    let intra_attempt = anthropic_state();
+    let cross_attempt = anthropic_state("cross-attempt");
+    let intra_attempt = anthropic_state("intra-attempt");
 
     // Block 0 carries the continuation annotation; the tool call is block 1
     // (the exact layout proven by the m4 continuation suite).
@@ -734,8 +726,13 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     .register(&mut tools);
     let fixture = RuntimeClientFixture::builder(CONVERSATION)
         .tools(tools)
-        .session_model(scripted_session_model(
-            adapter.clone() as Arc<dyn ModelAdapter>
+        .session_model(super::super::support::model::fixture_session_model(
+            &[
+                FixtureModel::text("scripted/scripted", ModelProtocol::AnthropicMessages)
+                    .with_max_output_tokens(512),
+            ],
+            "scripted/scripted",
+            &ScriptedAdapterFactory::new(adapter.clone()),
         ))
         .status_engine(counting_status_engine(status_seam.clone()))
         .build()

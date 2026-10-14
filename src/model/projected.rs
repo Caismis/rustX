@@ -161,3 +161,26 @@ impl<'a> From<&'a MessageBlock> for ModelMessageView<'a> {
         }
     }
 }
+
+/// Model-visible role/content, with the authoritative bounded Tool projection.
+/// Runtime execution metadata and projection provenance never enter this view.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum ModelVisibleMessage<'a> {
+    Borrowed(ModelMessageView<'a>),
+    Tool {
+        role: &'static str,
+        content: (&'a ToolCallId, crate::tools::types::ModelToolResultContent),
+    },
+}
+impl<'a> ModelMessageView<'a> {
+    pub(crate) fn model_visible(self) -> Result<ModelVisibleMessage<'a>, &'static str> {
+        match self {
+            Self::Tool(id, result) => Ok(ModelVisibleMessage::Tool {
+                role: "tool",
+                content: (id, result.model_visible_content()?),
+            }),
+            other => Ok(ModelVisibleMessage::Borrowed(other)),
+        }
+    }
+}

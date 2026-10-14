@@ -245,7 +245,19 @@ pub fn semantic_messages_fingerprint(messages: &[ModelInputMessage]) -> String {
                 serde_json::json!({"role":"assistant", "content":content})
             }
             crate::model::projected::ModelMessageView::Tool(call_id, result) => {
-                serde_json::json!({"role":"tool", "call_id":call_id, "text":result.model_facing_projection().as_text(), "media":result.content.iter().filter_map(|c| match c { crate::tools::types::ToolResultContent::Image(image) => Some(image), _ => None }).collect::<Vec<_>>()})
+                match result.model_visible_content() {
+                    Ok(crate::tools::types::ModelToolResultContent::Parts(parts)) => {
+                        serde_json::json!({"role":"tool", "call_id":call_id, "parts":parts})
+                    }
+                    Ok(crate::tools::types::ModelToolResultContent::Text(text)) => {
+                        // Text-only identities remain unchanged; both consumers
+                        // use the same normalized bounded Tool semantic content.
+                        serde_json::json!({"role":"tool", "call_id":call_id, "text":text, "media":[]})
+                    }
+                    Err(_) => {
+                        serde_json::json!({"role":"tool", "call_id":call_id, "unsupported_content":true})
+                    }
+                }
             }
             crate::model::projected::ModelMessageView::RequestOnly(context) => {
                 serde_json::json!({"role":"user", "text":context.render()})

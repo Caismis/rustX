@@ -872,4 +872,89 @@ mod tests {
         );
         assert_eq!(take_work().reads, 0);
     }
+    #[test]
+    fn bounded_tool_media_suffix_accounting_matches_exact_projection_and_is_monotone() {
+        use crate::context::tokens::{DefaultTokenEstimator, TokenEstimator};
+        use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef, ToolMessageBlock};
+        use crate::runtime::identity::{ToolCallId, ToolId};
+        use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = ArtifactStore::new(ConversationId::generate(), root.path()).unwrap();
+        let id = artifacts.put_bounded(&png()).unwrap();
+        let history: Vec<_> = (0..17)
+            .map(|n| {
+                let mut result =
+                    crate::scripted_suites::support::fake::success_result(&"text".repeat(10_000));
+                result
+                    .content
+                    .push(ToolResultContent::Image(ImageReference {
+                        artifact_id: id.clone(),
+                        alt: None,
+                    }));
+                result.status = ToolExecutionStatus::Failed {
+                    error: "visible status".into(),
+                };
+                ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
+                    id: MessageId::new(format!("tool-{n}")),
+                    tool_call_id: ToolCallId::new(format!("call-{n}")),
+                    occurrence: ToolCallOccurrenceRef::new(
+                        MessageId::new(format!("assistant-{n}")),
+                        ContentBlockIndex::new(0),
+                    ),
+                    tool_id: ToolId::new("tool"),
+                    result,
+                }))
+            })
+            .collect();
+        for enabled in [true, false] {
+            take_work();
+            let snapshot = MediaSnapshot::capture(
+                None,
+                &history,
+                &history,
+                Some(&artifacts),
+                Some(enabled),
+                None,
+                &CancellationSignal::new(),
+            )
+            .unwrap();
+            assert_eq!(take_work().reads, usize::from(enabled));
+            let mut previous = u64::MAX;
+            for boundary in 0..=history.len() {
+                let mut oracle = history[boundary..].to_vec();
+                crate::model::images::project(&mut oracle, enabled);
+                let images = crate::model::images::resolve(&oracle, |id| {
+                    artifacts.read_bounded(id).map_err(|e| e.to_string())
+                })
+                .unwrap();
+                let costs: BTreeMap<_, _> = images
+                    .iter()
+                    .map(|(id, bytes)| {
+                        (
+                            id.clone(),
+                            crate::model::images::measure_png(bytes)
+                                .unwrap()
+                                .input_tokens(),
+                        )
+                    })
+                    .collect();
+                let exact = DefaultTokenEstimator.estimate_input(&oracle, "system", &[])
+                    + image_cost(&oracle, |id| costs.get(id).copied());
+                let mut actual = history[boundary..].to_vec();
+                snapshot.materialize(&mut actual).unwrap();
+                assert_eq!(
+                    DefaultTokenEstimator.estimate_input(&actual, "system", &[])
+                        + snapshot.image_cost(&actual),
+                    exact
+                );
+                assert_eq!(snapshot.selected_images(&actual).unwrap(), images);
+                assert!(
+                    exact <= previous,
+                    "prefix deletion must not increase the complete price"
+                );
+                previous = exact;
+            }
+            assert_eq!(take_work().reads, 0, "candidate queries never read media");
+        }
+    }
 }

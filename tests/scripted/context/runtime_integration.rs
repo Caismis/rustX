@@ -350,6 +350,38 @@ fn fresh_user(id: &str, text: &str) -> MessageBlock {
     })
 }
 
+fn native_request(
+    attempt: &str,
+    history: Vec<MessageBlock>,
+    model: &Arc<FakeModel>,
+    state: &ProviderContinuationState,
+) -> AgentExecutionRequest {
+    let (protocol, stateless) = match state {
+        ProviderContinuationState::Anthropic(_) => {
+            (rustx::model::ModelProtocol::AnthropicMessages, false)
+        }
+        ProviderContinuationState::OpenAiResponses(state) => (
+            rustx::model::ModelProtocol::OpenAiResponses,
+            matches!(state, OpenAiResponsesContinuation::Stateless { .. }),
+        ),
+    };
+    let mut fixture = FixtureModel::text("fixture/native", protocol)
+        .with_context_window(10_000_000)
+        .with_max_output_tokens(1);
+    if stateless {
+        fixture.compat = serde_json::json!({"responsesStorage":"stateless"});
+    }
+    let mut input = request(attempt, history, 1, model);
+    input.model = fixture_session_model(
+        &[fixture],
+        "fixture/native",
+        &ScriptedAdapterFactory::new(model.clone()),
+    )
+    .snapshot()
+    .unwrap();
+    input
+}
+
 async fn run_continuation_case(
     emit_continuation: bool,
     state: ProviderContinuationState,
@@ -370,7 +402,7 @@ async fn run_continuation_case(
             1,
             FakeStep::Emit(ModelEvent::ContinuationState {
                 block_index: ContentBlockIndex::new(0),
-                state,
+                state: state.clone(),
             }),
         );
     }
@@ -389,7 +421,7 @@ async fn run_continuation_case(
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
-            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            native_request("attempt-1", vec![user("msg-user-1", "hi")], &model, &state),
             capability.into_lease(),
             &cancellation,
             crate::scripted_suites::support::default_execution_policy(),
@@ -408,7 +440,7 @@ async fn run_continuation_case(
 
 fn anthropic_state() -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"signature": "sig-1"}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": "sig-1"}),
     })
 }
 
@@ -420,11 +452,14 @@ fn stored_state() -> ProviderContinuationState {
 
 fn stateless_state() -> ProviderContinuationState {
     ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-        items: vec![serde_json::json!({
-            "type": "reasoning",
-            "id": "rs_1",
-            "encrypted_content": "opaque"
-        })],
+        items: vec![
+            serde_json::json!({
+                "type": "reasoning",
+                "id": "rs_1",
+                "encrypted_content": "opaque"
+            }),
+            serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
+        ],
     })
 }
 
@@ -3120,7 +3155,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
-            request("attempt-1", vec![user("msg-u0", "hi")], 0, &model),
+            native_request("attempt-1", vec![user("msg-u0", "hi")], &model, &state),
             capability.into_lease(),
             &cancellation,
             crate::scripted_suites::support::default_execution_policy(),
@@ -3939,4 +3974,239 @@ async fn production_media_failures_and_cancelled_resolution_start_no_request_or_
             );
         }
     }
+}
+
+#[tokio::test]
+async fn mandatory_adapter_preflight_rejects_native_history_without_continuation_before_start() {
+    use rustx::message::types::{AssistantMessageBlock, ReasoningBlock};
+    use rustx::model::ModelProtocol;
+    let cases = [
+        (
+            ModelProtocol::AnthropicMessages,
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+                previous_response_id: "foreign-response".into(),
+            }),
+        ),
+        (
+            ModelProtocol::AnthropicMessages,
+            ProviderContinuationState::Anthropic(AnthropicContinuation {
+                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":""}),
+            }),
+        ),
+        (
+            ModelProtocol::OpenAiResponses,
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
+                items: vec![serde_json::json!({"type":"reasoning","id":"native", "summary":[]})],
+            }),
+        ),
+    ];
+    for (protocol, native) in cases {
+        let history = vec![
+            user("M1", "history"),
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("M2"),
+                content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("native".into()),
+                    provider_state: Some(native),
+                })],
+            }),
+            user("M3", "next"),
+        ];
+        let model = fake_model(vec![vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "should not dispatch")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ]]);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let mut input = request("attempt-1", history.clone(), 128, &model);
+        input.model = fixture_session_model(
+            &[FixtureModel::text("fixture/native", protocol)],
+            "fixture/native",
+            &ScriptedAdapterFactory::new(model.clone()),
+        )
+        .snapshot()
+        .unwrap();
+        let summarizer = FakeContextSummarizer::new(Vec::new());
+        let result = common::durable_agent_result(
+            AgentExecution::new(
+                input,
+                capability.into_lease(),
+                &cancellation,
+                support::default_execution_policy(),
+                runtime_with(100_000, 0, 0, weighted(1, 1, 0), summarizer),
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap()
+            .run()
+            .await,
+            tool_runtime.durable_store().as_ref(),
+        );
+        assert_single_terminal(&result.event_history);
+        assert!(
+            model.requests().is_empty(),
+            "incompatible {protocol:?} dispatched"
+        );
+        assert!(
+            !result
+                .event_history
+                .iter()
+                .any(|e| matches!(e, RuntimeEvent::ModelRequestStarted { .. }))
+        );
+        assert!(result.snapshot_history().is_empty());
+        assert_eq!(result.messages(), history);
+        assert!(matches!(
+            result.event_history.last(),
+            Some(RuntimeEvent::AttemptFailed { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn mandatory_preflight_validates_once_for_frozen_transient_retries() {
+    let mut transient = fail(rustx::model::ModelErrorKind::Transport, "transient");
+    let ModelEvent::Failed { error } = &mut transient else {
+        unreachable!()
+    };
+    error.retry_disposition = rustx::model::error::ModelRetryDisposition::Transient;
+    let model = fake_model(vec![
+        vec![FakeStep::Emit(transient)],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "answer")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tools = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let capability = common::capability_lease(ToolRegistry::new(), &tools).await;
+    rustx::model::adapter::validation::take_preflights();
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("M1", "request")], 128, &model),
+            capability.into_lease(),
+            &cancellation,
+            support::default_execution_policy(),
+            runtime_with(
+                100_000,
+                0,
+                0,
+                weighted(1, 1, 0),
+                FakeContextSummarizer::new(vec![]),
+            ),
+            &tools,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await,
+        tools.durable_store().as_ref(),
+    );
+    assert_single_terminal(&result.event_history);
+    assert_eq!(rustx::model::adapter::validation::take_preflights(), 1);
+    assert_eq!(model.requests().len(), 2);
+    assert_eq!(model.requests()[0], model.requests()[1]);
+    assert_eq!(result.snapshot_history().len(), 2);
+    assert_ne!(
+        result.snapshot_history()[0].request_id,
+        result.snapshot_history()[1].request_id
+    );
+    assert_eq!(
+        result.snapshot_history()[0].semantic_input_fingerprint,
+        result.snapshot_history()[1].semantic_input_fingerprint
+    );
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|e| matches!(e, RuntimeEvent::ModelRequestStarted { .. }))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn mandatory_preflight_rejects_retained_native_history_after_successful_compaction() {
+    use rustx::message::types::{AssistantMessageBlock, ReasoningBlock};
+    let history = vec![
+        user("M1", "old"),
+        user("M2", "middle"),
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("M3"),
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                text: Some("native".into()),
+                provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stored {
+                        previous_response_id: "foreign-response".into(),
+                    },
+                )),
+            })],
+        }),
+    ];
+    let model = fake_model(vec![]);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tools = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let capability = common::capability_lease(ToolRegistry::new(), &tools).await;
+    let mut input = request("attempt-1", history.clone(), 1, &model);
+    input.model = fixture_session_model(
+        &[FixtureModel::text(
+            "fixture/native",
+            rustx::model::ModelProtocol::AnthropicMessages,
+        )
+        .with_max_output_tokens(1)],
+        "fixture/native",
+        &ScriptedAdapterFactory::new(model.clone()),
+    )
+    .snapshot()
+    .unwrap();
+    let summary = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "summary".into(),
+    )]));
+    let context = ContextRuntime::with_scripted_summarizer(
+        engine(200, 0, 10, weighted(100, 10, 0)),
+        summary.clone(),
+        None,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    );
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            input,
+            capability.into_lease(),
+            &cancellation,
+            support::default_execution_policy(),
+            context,
+            &tools,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await,
+        tools.durable_store().as_ref(),
+    );
+    assert_single_terminal(&result.event_history);
+    assert_eq!(summary.requests().len(), 1);
+    assert_eq!(result.projections.len(), 1);
+    assert!(result.snapshot_history().is_empty());
+    assert!(model.requests().is_empty());
+    assert_eq!(result.messages(), history);
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|e| matches!(e, RuntimeEvent::CompactionCompleted { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !result
+            .event_history
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::ModelRequestStarted { .. }))
+    );
+    assert!(matches!(
+        result.event_history.last(),
+        Some(RuntimeEvent::AttemptFailed { .. })
+    ));
 }

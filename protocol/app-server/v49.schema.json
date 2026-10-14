@@ -11030,14 +11030,17 @@
           "$ref": "#/$defs/CanonicalCallSource"
         },
         "wire_id": {
-          "type": "string"
+          "description": "Absent only when both occurrences are covered by native continuation\nand no correlation field is transmitted in this actual request.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "call",
         "result",
-        "source",
-        "wire_id"
+        "source"
       ]
     },
     "ActualRequestCallCoordinate": {

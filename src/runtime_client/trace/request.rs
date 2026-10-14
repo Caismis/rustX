@@ -131,13 +131,14 @@ pub(super) fn request_detail(
             .iter()
             .take(32)
             .filter(|a| {
-                identity_fits(&a.wire_id.0) && identity_fits(a.source.assistant.message_id.as_str())
+                a.wire_id.as_ref().is_none_or(|id| identity_fits(&id.0))
+                    && identity_fits(a.source.assistant.message_id.as_str())
             })
             .cloned()
             .collect(),
         tool_associations_truncated: snapshot.tool_associations.len() > 32
             || snapshot.tool_associations.iter().take(32).any(|a| {
-                !identity_fits(&a.wire_id.0)
+                !a.wire_id.as_ref().is_none_or(|id| identity_fits(&id.0))
                     || !identity_fits(a.source.assistant.message_id.as_str())
             }),
         contributions,

@@ -1309,3 +1309,184 @@ fn projection_authority_counts(store: &SqliteConversationStore) -> [u64; 4] {
             .unwrap()
     })
 }
+
+#[test]
+#[allow(clippy::too_many_lines)] // One file-backed eligibility, pagination and inherited-closure scenario.
+fn published_history_cut_excludes_future_bodies_before_hydration() {
+    let root = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &root.path().join("history.sqlite"),
+    )
+    .unwrap();
+    store.initialize(&[message(1)]).unwrap();
+    for n in 1..=6 {
+        let value = candidate(&store, &format!("P{n}"), vec![summary("history")]);
+        store
+            .commit_projection(commit_input(
+                &store,
+                &format!("O{n}"),
+                value,
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+    }
+    let inherited = ["P1", "P2"]
+        .into_iter()
+        .map(|id| {
+            let mut checkpoint = store.projection_checkpoint(&CheckpointId::new(id)).unwrap();
+            checkpoint.activation.destination_installation = Some(
+                crate::runtime::identity::LineageInstallationId::new("destination-installation"),
+            );
+            checkpoint.candidate.read_cut.journal = JournalFrontier(0);
+            checkpoint.candidate.read_cut.transcript = crate::durable::TranscriptCursor::new(0);
+            checkpoint.fingerprint = checkpoint.candidate.fingerprint();
+            checkpoint
+        })
+        .collect();
+    let destination_root = tempfile::tempdir().unwrap();
+    let destination = SqliteConversationStore::open(
+        store.conversation_id().clone(),
+        &destination_root.path().join("inherited.sqlite"),
+    )
+    .unwrap();
+    destination
+        .initialize_lineage(
+            &crate::durable::LineageSeed::history(vec![message(1)])
+                .with_projections(inherited)
+                .unwrap(),
+        )
+        .unwrap();
+    // Origin Journal coordinates belong to the source. Installed inherited
+    // projections precede destination execution and are visible at destination J0.
+    assert_eq!(
+        crate::runtime_client::projection_history::page(
+            &destination,
+            0,
+            ProjectionActivationId(0),
+            64
+        )
+        .unwrap()
+        .records
+        .len(),
+        2
+    );
+    assert!(
+        crate::runtime_client::projection_history::detail(
+            &destination,
+            0,
+            &CheckpointId::new("P2"),
+            0,
+            1
+        )
+        .is_ok()
+    );
+    let second = store
+        .projection_checkpoint(&CheckpointId::new("P2"))
+        .unwrap();
+    let cut = second.activation.origin.completed_journal.0;
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projection_checkpoints SET candidate_json='not-json' WHERE checkpoint_id='P3'",
+            [],
+        )
+        .unwrap();
+    store.lock().unwrap().execute("UPDATE projection_checkpoints SET candidate_json=zeroblob(9000000) WHERE checkpoint_id='P4'", []).unwrap();
+    take_candidate_decodes();
+    let page =
+        crate::runtime_client::projection_history::page(&store, cut, ProjectionActivationId(0), 64)
+            .unwrap();
+    assert_eq!(page.records.len(), 2);
+    assert!(page.next_activation.is_none());
+    assert_eq!(
+        take_candidate_decodes(),
+        2,
+        "only eligible bodies are decoded once"
+    );
+    assert!(
+        crate::runtime_client::projection_history::detail(
+            &store,
+            cut,
+            &CheckpointId::new("P1"),
+            0,
+            1
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        take_candidate_decodes(),
+        1,
+        "detail only hydrates its eligible checkpoint"
+    );
+    let first =
+        crate::runtime_client::projection_history::page(&store, cut, ProjectionActivationId(0), 1)
+            .unwrap();
+    assert_eq!(first.records.len(), 1);
+    let next = crate::runtime_client::projection_history::page(
+        &store,
+        cut,
+        first.next_activation.unwrap(),
+        1,
+    )
+    .unwrap();
+    assert_eq!(next.records.len(), 1);
+    assert!(next.next_activation.is_none());
+    take_candidate_decodes();
+    assert!(
+        crate::runtime_client::projection_history::detail(
+            &store,
+            cut,
+            &CheckpointId::new("P3"),
+            0,
+            1
+        )
+        .is_err()
+    );
+    assert_eq!(
+        take_candidate_decodes(),
+        0,
+        "ineligible detail is rejected before decoding"
+    );
+    store.lock().unwrap().execute("UPDATE projection_checkpoints SET candidate_json=zeroblob(9000000) WHERE checkpoint_id='P3'", []).unwrap();
+    assert_eq!(
+        crate::runtime_client::projection_history::page(&store, cut, ProjectionActivationId(0), 64)
+            .unwrap()
+            .records
+            .len(),
+        2
+    );
+    assert!(
+        crate::runtime_client::projection_history::page(&store, cut, ProjectionActivationId(2), 64)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projection_checkpoints SET candidate_json='not-json' WHERE checkpoint_id='P1'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        crate::runtime_client::projection_history::page(&store, cut, ProjectionActivationId(0), 64)
+            .is_err()
+    );
+    drop(store);
+    root.close().unwrap();
+    assert_eq!(
+        crate::runtime_client::projection_history::page(
+            &destination,
+            0,
+            ProjectionActivationId(0),
+            64
+        )
+        .unwrap()
+        .records
+        .len(),
+        2
+    );
+}

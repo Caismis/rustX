@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ProjectionDetail, ProjectionPage } from '../../../../protocol/app-server/v48';
+import type { ProjectionDetail, ProjectionPage } from '../../../../protocol/app-server/v49';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';

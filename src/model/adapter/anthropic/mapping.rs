@@ -391,7 +391,8 @@ fn construct_request(
         timeout_phase: None,
         generation: None,
     })?;
-    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::AnthropicMessages);
+    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::AnthropicMessages)
+        .map_err(invalid_request)?;
     finalize_provider_request(
         value,
         request.request_params(),

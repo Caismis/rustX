@@ -2144,3 +2144,42 @@ outcome. Pending interaction waiters receive ControlLost before runtime shutdown
 cancels and settles the enclosing native owners. A Quiescent child may leave an
 exact incarnation receipt; recovery combines it with exclusive lease release and
 durably records physical proof. The logical Interrupted outcome remains unknown.
+
+## Final semantic request admission
+
+`finalize_model_turn` is the mandatory adapter preflight boundary for each new logical
+input version: initial input, post-compaction input, overflow recovery and semantic
+correction all pass it. Preliminary `stage_model_turn` reconciles native continuation
+coverage on a detached request, but has no start or dispatch authority. Finalization
+validates the complete deterministic translation after all media and carryover changes,
+then freezes exact input and preserves compiled occurrence associations. A retired
+continuation installs in hot state only after replay validation and freeze succeed.
+Canonical signed/encrypted output is never changed to satisfy replay.
+
+A deterministic incompatibility settles as an explicit runtime compatibility failure,
+without a started Snapshot, `ModelRequestStarted`, provider invocation, canonical
+Assistant output or partial request-owned Context. An already committed compaction
+remains independently valid if the subsequent request is incompatible. The existing
+cancellation start gate remains the sole request-start arbitration point.
+
+`retry_frozen_model_turn` bypasses semantic finalization: it reuses the current validated
+input, assigns distinct physical request/snapshot/publication identities, and changes
+neither contributors nor media nor continuation. Authorized semantic recovery finalizes
+its new input through the same preflight boundary before replacing the current version.
+
+Wire Tool correlation is adapter-owned encoding of deterministic request-local occurrence
+labels. The shared correlation encoder and frozen associations use `wire_labels`;
+canonical IDs and physical execution occurrences remain unchanged. Older repeated generic
+calls may receive synthetic labels, while the latest accepted output retains its native
+ID for continuation. A complete encrypted native output that would need editing is
+rejected before start. Stored Responses transmits the uncovered suffix; covered input
+associations remain historical evidence, rather than claims of retransmitted fields.
+
+Responses continuation coverage is also part of adapter-owned wire planning. Fully
+covered associations have no explicit wire ID in the new request (`wire_id: null`).
+Stored continuation associates transmitted results with the accepted output's native
+IDs; stateless continuation labels only the replayed output and uncovered tail. Full
+explicit history uses the complete label plan. Snapshot freezing/reconstruction validates
+this same neutral adapter plan. Duplicate unresolved raw IDs cannot be disambiguated by
+serialized protocol fields and fail before encoding or request start. The nullable
+observation field requires App Server v49 / Runtime Client v70; no old reader is retained.

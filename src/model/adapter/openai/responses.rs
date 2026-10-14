@@ -1342,7 +1342,8 @@ pub(crate) fn translate_request(
             "repeated correlation IDs would edit a complete encrypted native output unit",
         ));
     }
-    crate::model::adapter::correlation::encode(&mut request_value, ModelProtocol::OpenAiResponses);
+    crate::model::adapter::correlation::encode(&mut request_value, ModelProtocol::OpenAiResponses)
+        .map_err(invalid_request)?;
     finalize_provider_request(
         request_value,
         request.request_params(),

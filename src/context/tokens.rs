@@ -408,12 +408,15 @@ impl DefaultTokenEstimator {
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        let items = encoded_bytes(
-            &messages
-                .iter()
-                .map(ModelInputMessage::view)
-                .collect::<Vec<_>>(),
-        );
+        let Ok(visible) = messages
+            .iter()
+            .map(|m| m.view().model_visible())
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            // Unsupported Tool content must never be priced as an empty input.
+            return u64::MAX;
+        };
+        let items = encoded_bytes(&visible);
         let tools = encoded_bytes(tool_definitions);
         // An empty prompt means that no request-time prompt section exists;
         // do not charge the JSON representation's two quote bytes as model
@@ -436,12 +439,14 @@ impl DefaultTokenEstimator {
     /// unreachable for the canonical runtime-owned types.
     #[must_use]
     pub fn conversation_bytes(messages: &[MessageBlock]) -> u64 {
-        encoded_bytes(
-            &messages
-                .iter()
-                .map(crate::model::projected::ModelMessageView::from)
-                .collect::<Vec<_>>(),
-        )
+        let Ok(visible) = messages
+            .iter()
+            .map(|m| crate::model::projected::ModelMessageView::from(m).model_visible())
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return u64::MAX;
+        };
+        encoded_bytes(&visible)
     }
 }
 
@@ -569,6 +574,114 @@ mod tests {
     use crate::model::input::canonical_input;
     use crate::runtime::identity::{MessageId, ToolId};
     use crate::tools::types::ModelToolDefinition;
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // All hidden metadata variants share the same bounded visible fixture.
+    fn tool_accounting_ignores_runtime_metadata_and_truncated_tail() {
+        use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef, ToolMessageBlock};
+        use crate::runtime::identity::ToolCallId;
+        let body = |result| {
+            ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("result"),
+                tool_call_id: ToolCallId::new("call"),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new("assistant"),
+                    ContentBlockIndex::new(0),
+                ),
+                tool_id: ToolId::new("tool"),
+                result,
+            }))
+        };
+        let original = crate::scripted_suites::support::fake::success_result(&"x".repeat(100_000));
+        let input = body(original.clone());
+        let expected =
+            DefaultTokenEstimator::serialized_bytes(std::slice::from_ref(&input), "", &[]);
+        for index in 0..7 {
+            let mut result = original.clone();
+            match index {
+                0 => result.duration_ms = 9_000_000,
+                1 => result.exit_code = Some(-999),
+                2 => {
+                    result.truncation = Some(crate::tools::types::TruncationState {
+                        truncated: true,
+                        original_bytes: Some(900_000),
+                    });
+                }
+                3 => {
+                    result.workflow =
+                        Some(Box::new(crate::runtime::workflow::WorkflowToolIdentity {
+                            workflow_id: crate::runtime::workflow::WorkflowId::parse("workflow")
+                                .unwrap(),
+                            program_digest: "runtime-only".repeat(1000),
+                        }));
+                }
+                4 => result
+                    .artifacts
+                    .push(crate::message::content::FileReference {
+                        artifact_id: crate::runtime::identity::ArtifactId::new("artifact-meta"),
+                        name: Some("hidden".repeat(1000)),
+                        mime_type: None,
+                        description: None,
+                    }),
+                5 => result
+                    .deliveries
+                    .push(crate::tools::session_files::SessionFileReference {
+                        scope: crate::tools::session_files::SessionFileScope {
+                            conversation_id: crate::runtime::identity::ConversationId::generate(),
+                            device: "1".into(),
+                            inode: "2".into(),
+                        },
+                        path: "file.txt".into(),
+                        name: "hidden".repeat(1000),
+                        description: None,
+                        mime_type: "text/plain".into(),
+                    }),
+                _ => result
+                    .content
+                    .push(crate::tools::types::ToolResultContent::Text(TextBlock {
+                        text: "invisible tail".repeat(1000),
+                    })),
+            }
+            assert_eq!(
+                original.model_facing_projection(),
+                result.model_facing_projection()
+            );
+            let other = body(result);
+            assert_eq!(
+                expected,
+                DefaultTokenEstimator::serialized_bytes(std::slice::from_ref(&other), "", &[])
+            );
+            assert_eq!(
+                crate::model::types::semantic_messages_fingerprint(std::slice::from_ref(&input)),
+                crate::model::types::semantic_messages_fingerprint(&[other])
+            );
+        }
+        let mut diagnostic = original.clone();
+        diagnostic.status = crate::tools::types::ToolExecutionStatus::Failed {
+            error: "diagnostic".repeat(100_000),
+        };
+        let mut changed_diagnostic = diagnostic.clone();
+        if let crate::tools::types::ToolExecutionStatus::Failed { error } =
+            &mut changed_diagnostic.status
+        {
+            error.push_str("hidden diagnostic tail");
+        }
+        assert_eq!(
+            diagnostic.model_facing_projection(),
+            changed_diagnostic.model_facing_projection()
+        );
+        assert_eq!(
+            DefaultTokenEstimator::serialized_bytes(&[body(diagnostic)], "", &[]),
+            DefaultTokenEstimator::serialized_bytes(&[body(changed_diagnostic)], "", &[])
+        );
+        let changed = body(crate::scripted_suites::support::fake::success_result(
+            "different visible text",
+        ));
+        assert_ne!(
+            expected,
+            DefaultTokenEstimator::serialized_bytes(&[changed], "", &[])
+        );
+    }
 
     fn user_message(id: &str, text: &str) -> MessageBlock {
         MessageBlock::User(UserMessageBlock {

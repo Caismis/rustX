@@ -32,25 +32,14 @@ pub(crate) fn page(
     after: ProjectionActivationId,
     limit: usize,
 ) -> Result<ProjectionPage, crate::durable::ConversationStoreError> {
-    let records = store
-        .projection_timeline(after, limit)?
-        .into_iter()
-        .filter(|p| {
-            p.activation.destination_installation.is_some()
-                || p.activation.origin.completed_journal.0 <= through
-        })
-        .map(super::projection::checkpoint_view)
-        .collect::<Vec<_>>();
-    let visible_head = store
-        .projection_at_journal_cut(through)?
-        .map(|p| p.activation.activation);
-    let next_activation = records
-        .last()
-        .map(|r| r.activation_id)
-        .filter(|last| visible_head.is_some_and(|head| *last < head));
+    let page = store.projection_timeline_at_journal_cut(through, after, limit)?;
     Ok(ProjectionPage {
-        records,
-        next_activation,
+        records: page
+            .records
+            .into_iter()
+            .map(super::projection::checkpoint_view)
+            .collect(),
+        next_activation: page.next_activation,
     })
 }
 pub(crate) fn detail(
@@ -66,14 +55,7 @@ pub(crate) fn detail(
             "projection detail limit must be 1..=32".into(),
         ));
     }
-    let checkpoint = store.projection_checkpoint(id)?;
-    if checkpoint.activation.destination_installation.is_none()
-        && checkpoint.activation.origin.completed_journal.0 > through
-    {
-        return Err(crate::durable::ConversationStoreError::InvalidReference(
-            "projection is not installed at the published cut".into(),
-        ));
-    }
+    let checkpoint = store.projection_checkpoint_at_journal_cut(through, id)?;
     let end = (offset as usize)
         .saturating_add(limit)
         .min(checkpoint.candidate.items.len());

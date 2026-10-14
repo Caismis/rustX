@@ -6,7 +6,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
-import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v48';
+import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v49';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';

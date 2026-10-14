@@ -344,7 +344,7 @@ impl RequestSnapshot {
         self.tool_associations = crate::model::occurrence::canonical_associations(
             conversation,
             &self.request_id,
-            &request.messages,
+            request,
         )
         .unwrap_or_default();
         self.semantic_input_fingerprint = request.semantic_input_fingerprint();
@@ -383,12 +383,6 @@ impl RequestSnapshot {
                 }
             })
             .collect::<Result<Vec<_>, RequestReconstructionError>>()?;
-        crate::model::occurrence::validate_associations(
-            &self.request_id,
-            &messages,
-            &self.tool_associations,
-        )
-        .map_err(RequestReconstructionError::Conversation)?;
         let request = ModelRequest {
             images: self.images.clone(),
             invocation: self.invocation.clone(),
@@ -398,6 +392,12 @@ impl RequestSnapshot {
             continuation: self.continuation.clone(),
             continuation_source: self.continuation_source.clone(),
         };
+        crate::model::occurrence::validate_associations(
+            &self.request_id,
+            &request,
+            &self.tool_associations,
+        )
+        .map_err(RequestReconstructionError::Conversation)?;
         if request.semantic_input_fingerprint() != self.semantic_input_fingerprint {
             return Err(RequestReconstructionError::Conversation(
                 "frozen input fingerprint mismatch or missing input bytes".into(),
@@ -468,6 +468,228 @@ mod tests {
             )
             .unwrap();
         snapshot
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One captured cross-protocol/native/Original-Derived request matrix.
+    fn frozen_tool_associations_equal_captured_adapter_wire_and_reconstruction() {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
+            ReasoningBlock, ToolCallOccurrenceRef, ToolMessageBlock,
+        };
+        use crate::model::{ModelProtocol, projected::CanonicalMessageRef};
+        use crate::runtime::continuation::{
+            AcceptedOutputContinuationSource, AnthropicContinuation, OpenAiResponsesContinuation,
+            ProviderContinuationState,
+        };
+        use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
+        use crate::tools::types::ToolCall;
+        let scope = ConversationId::new("conv_5cdad274-a06f-7a35-8b6c-e0beb9470e1f");
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            for mode in 0..5 {
+                if mode > 0 && protocol != ModelProtocol::OpenAiResponses {
+                    continue;
+                }
+                for derived_call in [false, true] {
+                    for derived_result in [false, true] {
+                        let mut request = crate::scripted_suites::common::simple_request(
+                            protocol, "test", "history",
+                        );
+                        if mode >= 2 {
+                            request.invocation.compat.responses_storage =
+                                crate::model::catalog::ResponsesStorageMode::Stateless;
+                        }
+                        for batch in 0..2 {
+                            let assistant_id = MessageId::new(format!("assistant-{batch}"));
+                            let mut content = Vec::new();
+                            let native = match protocol {
+                                ModelProtocol::AnthropicMessages => Some(
+                                    ProviderContinuationState::Anthropic(AnthropicContinuation {
+                                        opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":"original-signature"}),
+                                    }),
+                                ),
+                                ModelProtocol::OpenAiResponses if mode == 1 && batch == 1 => {
+                                    Some(ProviderContinuationState::OpenAiResponses(
+                                        OpenAiResponsesContinuation::Stored {
+                                            previous_response_id: "accepted-response".into(),
+                                        },
+                                    ))
+                                }
+                                ModelProtocol::OpenAiResponses
+                                    if ((mode == 2 || mode == 3) && batch == 1
+                                        || mode == 4 && batch == 0) =>
+                                {
+                                    Some(ProviderContinuationState::OpenAiResponses(
+                                        OpenAiResponsesContinuation::Stateless {
+                                            items: vec![
+                                                serde_json::json!({"type":"reasoning","id":"reasoning-native","encrypted_content":"original-encrypted"}),
+                                                serde_json::json!({"type":"function_call","id":"fc-a","call_id":"repeat-a","name":"tool","arguments":"{}"}),
+                                                serde_json::json!({"type":"function_call","id":"fc-b","call_id":"repeat-b","name":"tool","arguments":"{}"}),
+                                            ],
+                                        },
+                                    ))
+                                }
+                                _ => None,
+                            };
+                            if let Some(state) = native.clone() {
+                                content.push(AssistantContentBlock::Reasoning(ReasoningBlock {
+                                    text: (protocol == ModelProtocol::AnthropicMessages)
+                                        .then(|| "native".into()),
+                                    provider_state: Some(state),
+                                }));
+                            }
+                            let start = u32::try_from(content.len()).unwrap();
+                            for id in ["repeat-a", "repeat-b"] {
+                                content.push(AssistantContentBlock::ToolCall(ToolCall {
+                                    id: ToolCallId::new(id),
+                                    tool_id: ToolId::new("tool"),
+                                    name: "tool".into(),
+                                    arguments: serde_json::json!({}),
+                                }));
+                            }
+                            let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+                                id: assistant_id.clone(),
+                                content,
+                            });
+                            if (mode == 1 || mode == 2) && batch == 1 {
+                                request.continuation_source = Some(
+                                    AcceptedOutputContinuationSource::from_accepted_output(
+                                        RequestId::new("accepted-request"),
+                                        &scope,
+                                        &request.messages,
+                                        &assistant,
+                                    )
+                                    .unwrap(),
+                                );
+                                request.continuation = native;
+                            }
+                            request.messages.push(assistant.into());
+                            // Results deliberately reverse the call order within a complete batch.
+                            for (block, id) in [(start + 1, "repeat-b"), (start, "repeat-a")] {
+                                request.messages.push(
+                                    MessageBlock::Tool(ToolMessageBlock {
+                                        id: MessageId::new(format!("result-{batch}-{block}")),
+                                        tool_call_id: ToolCallId::new(id),
+                                        occurrence: ToolCallOccurrenceRef::new(
+                                            assistant_id.clone(),
+                                            ContentBlockIndex::new(block),
+                                        ),
+                                        tool_id: ToolId::new("tool"),
+                                        result:
+                                            crate::scripted_suites::support::fake::success_result(
+                                                "result",
+                                            ),
+                                    })
+                                    .into(),
+                                );
+                            }
+                        }
+                        let canonical: Vec<_> = request
+                            .messages
+                            .iter()
+                            .filter_map(|m| m.as_canonical().cloned())
+                            .collect();
+                        let mut snapshot = frozen(&request);
+                        if mode == 1 || mode == 2 {
+                            let covered =
+                                serde_json::to_value(&snapshot.tool_associations[..2]).unwrap();
+                            assert!(
+                                covered
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .all(|a| a["wire_id"].is_null()),
+                                "covered associations must not claim fields absent from the actual wire request"
+                            );
+                        }
+                        let associations = snapshot.tool_associations.clone();
+                        for message in &mut request.messages {
+                            let convert = matches!(
+                                message.view(),
+                                crate::model::projected::ModelMessageView::Assistant(_)
+                            ) && derived_call
+                                || matches!(
+                                    message.view(),
+                                    crate::model::projected::ModelMessageView::Tool(_, _)
+                                ) && derived_result;
+                            if convert {
+                                let original = message.as_canonical().unwrap();
+                                *message = ModelInputMessage::Derived(
+                                    crate::model::projected::DerivedModelMessage {
+                                        message: ProjectedMessage::from(original),
+                                        sources: vec![CanonicalMessageRef::of(&scope, original)],
+                                        checkpoint_sources: vec![],
+                                        transformations: vec![],
+                                    },
+                                );
+                            }
+                        }
+                        snapshot.freeze_input(&scope, &request).unwrap();
+                        snapshot.tool_associations = associations;
+                        if mode == 4 {
+                            assert!(
+                                crate::model::adapter::validation::validate_prepared_request(
+                                    &request
+                                )
+                                .is_err(),
+                                "opaque older output cannot receive fabricated correlation labels"
+                            );
+                            continue;
+                        }
+                        let translate = |input: &ModelRequest| {
+                            let tools = crate::model::adapter::validation::validate_request(
+                                input, protocol,
+                            )
+                            .unwrap();
+                            match protocol {
+                                ModelProtocol::OpenAiChatCompletions => crate::model::adapter::openai::chat_completions::translate_request(input).unwrap(),
+                                ModelProtocol::OpenAiResponses => crate::model::adapter::openai::responses::translate_request(input,&tools,input.invocation.compat.responses_storage).unwrap(),
+                                ModelProtocol::AnthropicMessages => crate::model::adapter::anthropic::mapping::translate_request(input,&tools).unwrap(),
+                            }
+                        };
+                        let mut captured = translate(&request);
+                        let actual = crate::model::adapter::correlation::observed_correlations(
+                            &mut captured,
+                            protocol,
+                        );
+                        let mut ordered = snapshot.tool_associations.clone();
+                        ordered.sort_by_key(|a| (a.call.message.item_index, a.call.block.0));
+                        let calls: Vec<_> = ordered
+                            .iter()
+                            .filter_map(|a| a.wire_id.as_ref().map(|id| id.0.clone()))
+                            .collect();
+                        ordered.sort_by_key(|a| a.result.item_index);
+                        let results: Vec<_> = ordered
+                            .iter()
+                            .filter_map(|a| a.wire_id.as_ref().map(|id| id.0.clone()))
+                            .collect();
+                        let actual_calls: Vec<_> = actual
+                            .iter()
+                            .filter(|(call, _)| *call)
+                            .map(|(_, id)| id.clone())
+                            .collect();
+                        let actual_results: Vec<_> = actual
+                            .iter()
+                            .filter(|(call, _)| !*call)
+                            .map(|(_, id)| id.clone())
+                            .collect();
+                        if mode == 1 {
+                            assert!(actual_calls.is_empty());
+                        } else {
+                            assert_eq!(actual_calls, calls);
+                        }
+                        assert_eq!(actual_results, results);
+                        let reconstructed =
+                            snapshot.reconstruct_from_canonical(&canonical).unwrap();
+                        assert_eq!(translate(&request), translate(&reconstructed));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

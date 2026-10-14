@@ -791,3 +791,143 @@ The unchanged full rerun recovered the dependency-fetch failure; both Clippy mod
 and formatting/diff checks passed on the same settled source. No blocker remains
 from local validation. The PR stays open for independent review, with merge and
 auto-merge disabled and the branch/worktree preserved.
+
+## Final architecture/runtime contract review: F1–F4
+
+Starting HEAD: `91befba0b8225961ddbf2a9faeed075569dd84bd`. Integrated main was
+already `97096020d64ea00218493a0a99b9b805821eeb28`; the worktree was clean and
+contained all preceding repair commits. PR #477 remains the sole open implementation PR.
+
+**F1 — mandatory admission.** Confirmed: preflight ran only after continuation
+coverage retirement. The deterministic red Agent test dispatched incompatible
+Responses history under Anthropic without active continuation (0 passes, 1 failure).
+`finalize_model_turn` now preflights every final semantic request after compaction,
+media materialization, coverage reconciliation and carryover adjustment. Exact input
+freezes afterward; hot continuation retirement follows successful replay/freeze.
+Transient retries bypass finalization and reuse the validated current input.
+
+**F2 — actual wire association.** All three adapters already shared the remapper,
+but two remaining defects were confirmed red: duplicate unresolved raw IDs overwrote
+the pending binding, and covered Responses input claimed synthetic wire fields absent
+from the actual request (each regression: 0 passes, 1 failure). The shared encoder now
+rejects empty/ambiguous unresolved IDs before editing its detached wire object. Adapter-owned
+neutral coordinate planning identifies the actual explicit wire segment. Fully covered
+pairs carry `wire_id: null`; stored results retain accepted output IDs; stateless replay
+labels only the native output and uncovered tail; full replay labels the full input.
+Snapshot freeze/reconstruction and captured translations validate the same plan.
+Opaque older encrypted output requiring relabeling remains rejected. No canonical IDs,
+native signatures or encrypted units change. Nullable wire correlation is a necessary
+breaking observation contract: App Server v49 / Runtime Client v70 replace v48/v69,
+with regenerated artifacts and mechanical consumer imports, without legacy readers.
+
+**F3 — historical eligibility.** Confirmed: Runtime Client paged unrestricted bodies
+then filtered. The deterministic file-backed red test failed decoding corrupt future
+P3 while observing the valid P1/P2 cut (0 passes, 1 failure). Durable published-cut page
+and detail queries now apply the established local Journal/destination-installation
+eligibility before body hydration. Cursor existence shares the same short read transaction;
+no active/future head body is loaded merely to compute continuation. Future oversized or
+corrupt bodies are excluded; eligible corruption fails explicitly. Same-Ledger activation
+ordering, inherited destination-J0 eligibility and source deletion remain covered.
+
+**F4 — model-visible Tool accounting.** Confirmed: full Tool result JSON changed price
+when only duration changed. The deterministic red test reported 100151 versus 100157
+bytes for identical visible output (0 passes, 1 failure). `ModelVisibleMessage` prices
+Tool Plane bounded semantic content. Text-only output joins canonical projection parts;
+media preserves ordered text/image parts. Hidden execution metadata/truncated tails
+contribute no cost. Fingerprints share normalization, retaining text-only identities.
+Message-local fixed surviving bytes plus whole-array separators, fixed core input and
+nonnegative frozen image charges re-establish monotone complete candidate discovery.
+No independently rounded estimates or mutable candidate resource reads are introduced.
+
+New deterministic owner regressions:
+
+- `mandatory_adapter_preflight_rejects_native_history_without_continuation_before_start`
+- `mandatory_preflight_rejects_retained_native_history_after_successful_compaction`
+- `mandatory_preflight_validates_once_for_frozen_transient_retries`
+- `frozen_tool_associations_equal_captured_adapter_wire_and_reconstruction`
+- `ambiguous_unresolved_wire_ids_fail_complete_adapter_preflight`
+- `published_history_cut_excludes_future_bodies_before_hydration`
+- `tool_accounting_ignores_runtime_metadata_and_truncated_tail`
+- `bounded_tool_media_suffix_accounting_matches_exact_projection_and_is_monotone`
+
+Preflight counters measure actual Agent validation calls; candidate decode counters prove
+SQL eligibility precedes materialization. Snapshot/event/request counts prove no admission
+on failure and distinct physical retry identity with equivalent frozen content. Media
+resource counters and exhaustive suffix oracles cover text-only/newest-16/repeated Tool
+images. No sleeps, real model calls, transport redesign or new execution owner are used.
+
+Validation results for this repair are recorded below after the settled-source matrix.
+
+Neighboring fixtures previously bypassed real translation: empty-history boundary fixtures
+now provide a trusted System input, and native continuation fixtures select matching
+protocols with complete replay units. Existing race/count/retention assertions and test
+deadlines stay intact. Context owners passed 91, Agent start/settlement owners passed 33,
+and scripted Agent owners passed 231 after these fixture corrections. A stalled interim
+workspace run was stopped, not counted as successful validation. Intermediate Clippy
+errors were corrected rather than suppressed; nested test runner futures are boxed.
+The Tool projection policy now borrows only visible fields per segment, avoiding full
+execution-result clones during media pricing and preserving the existing formatter.
+
+
+### Settled F1–F4 local validation
+
+All commands below completed successfully on the repaired implementation. Rust and
+process tests used the established isolated `TMPDIR=/run/user/1000/r466-477` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`; native binaries were rebuilt before process
+and client lanes. SQLite files, restart and SIGKILL tests exercise real durability,
+not a claim of power-loss testing. No real provider API or K3 infrastructure ran.
+
+| Exact command | Result |
+| --- | --- |
+| `git diff --check` | Pass; also checked the complete diff against `origin/main` and staged artifacts |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Pass |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Pass |
+| `cargo build --bins --example document_artifact_fixture --locked` | Pass; default process/client fixtures |
+| `cargo build --bins --all-features --locked` | Pass |
+| `cargo test --workspace -- --test-threads=2` | 4,197 passed, 0 failed, 8 existing ignored |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites:: --test-threads=2` | 3,507 passed, 0 failed, 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features -- --test-threads=2` | 208 passed, 0 failed, 5 existing live-provider ignores |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=2` | 200 passed, 0 failed |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output -- --test-threads=2` | 432 passed, 0 failed: durable 129, process 61, subagent 47, tools 135, conformance 29, catalog 26, managed output 5 |
+| `cargo run --all-features --example check_test_lanes -- --job rust-contracts` | Pass; Linux lane coverage holds |
+| `cargo run --all-features --example check_test_lanes -- --job rust-boundaries` | Pass; Linux lane coverage holds |
+| `uv run --project test-support/fake-provider --frozen pytest` | 54 passed |
+| `pnpm --dir protocol/app-server check` | Pass; generated v49 drift check |
+| `pnpm --dir protocol/app-server typecheck` | Pass |
+| `pnpm --dir dev typecheck` | Pass |
+| `pnpm --dir dev test` | 41 passed, 0 failed |
+| `pnpm --dir tui typecheck` | Pass |
+| `pnpm --dir tui test` | 1,025 passed, 0 failed, 1 existing platform skip |
+| `pnpm --dir web-console typecheck` | Pass |
+| `pnpm --dir web-console test` | 2,585 passed, 0 failed, 4 existing platform skips |
+| `pnpm --dir web-console build` | Pass; native host modules, production bundle, provenance and notices |
+| `pnpm --dir web-console check:i18n` | Pass; product-copy ownership |
+| `pnpm --dir web-console check:provenance` | Pass; 276 source records, 264 package notices |
+| `node web-console/scripts/check-office-sandbox.ts` | Pass; cgroup and filesystem admission |
+| `bash web-console/scripts/browser-tests.sh test/e2e/compaction.spec.ts test/e2e/trajectory-integration.spec.ts` | 5 passed; immutable pinned Playwright Linux image, unchanged references |
+| `python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v` | 15 passed |
+
+Intermediate failures were diagnosed and repaired rather than classified as
+infrastructure: obsolete unsupported-Tool fixture expectations; current documentation
+naming the wrong rejected predecessor version; two TUI negotiation assertions still
+expecting v48; the WebUI requesting v49 while its strict reply check still expected v48;
+and stale local provenance hashes after protocol imports/display labels changed.
+The settled suites and unchanged affected commands passed after correction. All 22
+updated local provenance hashes were verified to differ only by current protocol
+imports/labels, reversible byte-for-byte to HEAD; upstream pins/hashes remain intact.
+No screenshot references, test deadlines, CI selectors, host quotas, lockfiles or
+workflow definitions changed. Documentation admission was also rerun directly.
+
+The five defect regressions were genuinely red before their owner repairs (one
+failure each), and all eight new owner regressions are green in both default and
+all-feature runs. Existing cancellation channels/start gates, COMMIT fault hooks,
+retry-version tests, native replay tests, projection lineage/archive tests, and
+129-boundary/media/exhaustive accounting oracles passed in their established lanes.
+The generic arbitrary-estimator `SearchIncomplete` limitation remains conservative;
+production frozen media uses complete monotone discovery. JSON-byte pricing is exact
+under the neutral accounting policy, not a claim of a provider's proprietary tokenizer.
+
+Remote checks are verified separately on the exact pushed repair HEAD and recorded
+in PR #477 and the final engineering report. Starting-HEAD checks are not evidence for
+this repair. The PR remains open for independent review, without merge or auto-merge.

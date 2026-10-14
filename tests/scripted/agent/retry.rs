@@ -1366,12 +1366,25 @@ async fn transient_retry_preserves_frozen_provider_continuation() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime(CONVERSATION);
     let publication = common::RecordingPublicationObserver::default();
+    let mut input = continuation_request(
+        "attempt-134-continuation",
+        vec![user("seed", "hello")],
+        &model,
+    );
+    input.model = support::model::fixture_session_model(
+        &[support::model::FixtureModel::text(
+            "fixture/fake-model",
+            rustx::model::ModelProtocol::OpenAiResponses,
+        )
+        .with_context_window(10_000_000)
+        .with_max_output_tokens(512)],
+        "fixture/fake-model",
+        &support::model::ScriptedAdapterFactory::new(model.clone()),
+    )
+    .snapshot()
+    .unwrap();
     let execution = make_execution(
-        continuation_request(
-            "attempt-134-continuation",
-            vec![user("seed", "hello")],
-            &model,
-        ),
+        input,
         tools,
         &cancellation,
         runtime(Vec::new()),

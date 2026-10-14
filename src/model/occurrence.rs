@@ -25,7 +25,9 @@ pub struct ActualRequestToolAssociation {
     pub call: ActualRequestCallCoordinate,
     pub result: RequestMessageOccurrence,
     pub source: CanonicalCallSource,
-    pub wire_id: ProviderWireCorrelationId,
+    /// Absent only when both occurrences are covered by native continuation
+    /// and no correlation field is transmitted in this actual request.
+    pub wire_id: Option<ProviderWireCorrelationId>,
 }
 /// An intermediate coordinate in the detached compiled historical sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,22 +71,23 @@ pub(crate) fn freeze_associations(
                     item_index: position(association.result_message)?,
                 },
                 source: association.source.clone(),
-                wire_id: association.wire_id.clone(),
+                wire_id: Some(association.wire_id.clone()),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    install_wire_labels(&request.messages, &mut associations);
-    validate_associations(request_id, &request.messages, &associations)?;
+    install_wire_labels(request, &mut associations)?;
+    validate_associations(request_id, request, &associations)?;
     Ok(associations)
 }
 
 #[allow(clippy::too_many_lines)] // One complete request coordinate and Tool-batch validation fold.
 pub(crate) fn validate_associations(
     request_id: &RequestId,
-    messages: &[crate::model::ModelInputMessage],
+    request: &crate::model::ModelRequest,
     associations: &[ActualRequestToolAssociation],
 ) -> Result<(), String> {
-    let labels = wire_map(messages);
+    let messages = &request.messages;
+    let labels = crate::model::adapter::correlation::request_labels(request)?;
     let mut calls = std::collections::BTreeSet::new();
     let mut results = std::collections::BTreeSet::new();
     for association in associations {
@@ -122,7 +125,7 @@ pub(crate) fn validate_associations(
             || labels.get(&(
                 association.call.message.item_index,
                 association.call.block.0,
-            )) != Some(&association.wire_id.0)
+            )) != association.wire_id.as_ref().map(|id| &id.0)
         {
             return Err("actual request wire correlation disagrees with frozen association".into());
         }
@@ -195,8 +198,9 @@ pub(crate) fn validate_associations(
 pub(crate) fn canonical_associations(
     scope: &crate::runtime::identity::ConversationId,
     request_id: &RequestId,
-    messages: &[crate::model::ModelInputMessage],
+    request: &crate::model::ModelRequest,
 ) -> Option<Vec<ActualRequestToolAssociation>> {
+    let messages = &request.messages;
     let mut pending = std::collections::BTreeMap::new();
     let mut associations = Vec::new();
     for (index, message) in messages.iter().enumerate() {
@@ -253,7 +257,7 @@ pub(crate) fn canonical_associations(
                         assistant,
                         block: result.occurrence.block_index,
                     },
-                    wire_id: ProviderWireCorrelationId(id.to_string()),
+                    wire_id: Some(ProviderWireCorrelationId(id.to_string())),
                 });
             }
             crate::model::ModelInputMessage::Derived(_)
@@ -267,7 +271,7 @@ pub(crate) fn canonical_associations(
             _ => {}
         }
     }
-    install_wire_labels(messages, &mut associations);
+    install_wire_labels(request, &mut associations).ok()?;
     pending.is_empty().then_some(associations)
 }
 
@@ -299,40 +303,15 @@ pub(crate) fn wire_labels(raw: &[String]) -> Vec<String> {
         })
         .collect()
 }
-fn wire_map(
-    messages: &[crate::model::ModelInputMessage],
-) -> std::collections::BTreeMap<(u32, u32), String> {
-    let mut calls = Vec::new();
-    for (message, item) in messages.iter().enumerate() {
-        if let ModelMessageView::Assistant(content) = item.view() {
-            for (block, item) in content.iter().enumerate() {
-                if let AssistantContentBlock::ToolCall(call) = item {
-                    calls.push((
-                        (
-                            u32::try_from(message).expect("bounded request item coordinate"),
-                            u32::try_from(block).expect("bounded request block coordinate"),
-                        ),
-                        call.id.to_string(),
-                    ));
-                }
-            }
-        }
-    }
-    let labels = wire_labels(&calls.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>());
-    calls
-        .into_iter()
-        .zip(labels)
-        .map(|((coordinate, _), label)| (coordinate, label))
-        .collect()
-}
 fn install_wire_labels(
-    messages: &[crate::model::ModelInputMessage],
+    request: &crate::model::ModelRequest,
     associations: &mut [ActualRequestToolAssociation],
-) {
-    let labels = wire_map(messages);
+) -> Result<(), String> {
+    let labels = crate::model::adapter::correlation::request_labels(request)?;
     for a in associations {
-        if let Some(label) = labels.get(&(a.call.message.item_index, a.call.block.0)) {
-            a.wire_id = ProviderWireCorrelationId(label.clone());
-        }
+        a.wire_id = labels
+            .get(&(a.call.message.item_index, a.call.block.0))
+            .map(|label| ProviderWireCorrelationId(label.clone()));
     }
+    Ok(())
 }

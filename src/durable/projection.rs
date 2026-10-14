@@ -22,6 +22,12 @@ pub struct ProjectionCheckpoint {
     pub occupancy: Option<ContextOccupancy>,
 }
 
+/// One bounded historical page selected under a single native read snapshot.
+pub struct ProjectionTimelinePage {
+    pub records: Vec<ProjectionCheckpoint>,
+    pub next_activation: Option<crate::context::checkpoint::ProjectionActivationId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionCommitReceipt {
     pub operation_id: CompactionOperationId,

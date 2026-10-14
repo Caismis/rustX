@@ -185,6 +185,53 @@ pub(super) fn timeline(
     )
 }
 
+pub(super) fn timeline_at_journal_cut(
+    connection: &Connection,
+    through: u64,
+    after: ProjectionActivationId,
+    limit: usize,
+) -> Result<crate::durable::projection::ProjectionTimelinePage, ConversationStoreError> {
+    let records = timeline_page(
+        connection,
+        after,
+        limit,
+        Some((
+            LedgerFrontier(u64::try_from(i64::MAX).expect("positive SQLite coordinate maximum")),
+            JournalFrontier(through),
+            ProjectionActivationId(
+                u64::try_from(i64::MAX).expect("positive SQLite coordinate maximum"),
+            ),
+        )),
+        ResourceLimits::default().total_bytes,
+    )?;
+    let next_activation = if let Some(last) = records.last() {
+        let last = last.activation.activation;
+        let more: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projection_activations WHERE activation>?1 AND (json_type(activation_json,'$.destination_installation')!='null' OR json_extract(activation_json,'$.origin.completed_journal')<=?2))",
+            params![seq_to_i64(last.0)?, seq_to_i64(through)?], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
+        more.then_some(last)
+    } else {
+        None
+    };
+    Ok(crate::durable::projection::ProjectionTimelinePage {
+        records,
+        next_activation,
+    })
+}
+
+pub(super) fn checkpoint_at_journal_cut(
+    connection: &Connection,
+    through: u64,
+    id: &CheckpointId,
+) -> Result<ProjectionCheckpoint, ConversationStoreError> {
+    let activation: Option<u64> = connection.query_row(
+        "SELECT activation FROM projection_activations WHERE checkpoint_id=?1 AND (json_type(activation_json,'$.destination_installation')!='null' OR json_extract(activation_json,'$.origin.completed_journal')<=?2)",
+        params![id.as_str(), seq_to_i64(through)?], |r| r.get(0)).optional().map_err(|e| storage(e.to_string()))?;
+    let activation =
+        activation.ok_or_else(|| invalid("projection is not installed at the published cut"))?;
+    activated(connection, activation)
+}
+
 pub(super) fn timeline_page(
     connection: &Connection,
     after: ProjectionActivationId,

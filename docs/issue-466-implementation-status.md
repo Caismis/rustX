@@ -320,3 +320,33 @@ passed. One repeat's managed-package setup failed fetching PyPI rich metadata;
 the unchanged isolated test and complete workspace rerun passed after endpoint
 recovery. Exact commands/counts and failure evidence remain in the repair record.
 Current-head remote CI is reported on PR #477 after the final push.
+
+## Final request-admission, wire, observation and accounting repair
+
+Final semantic preparation now mandates complete adapter replay/translation preflight
+before input freeze and request-start commit, including no-continuation and recovered
+inputs. Transient retries reuse the validated frozen version. Captured translations
+verify that the existing shared Tool correlation encoder agrees with frozen occurrence
+associations for Original/Derived combinations and supported native continuations;
+unsafe encrypted replay remains rejected. Historical observation pagination/detail
+selects eligibility inside durable SQL before hydration, with authoritative continuation
+cursors under one short read snapshot. Default Tool pricing and media fingerprints use
+the existing bounded Tool projection rather than execution metadata.
+
+The JSON-byte monotonicity proof remains sound after message-local Tool normalization,
+with no candidate-time resource I/O. The 129-boundary N1/media regressions and generic
+non-monotone estimator contract remain required owner coverage. No canonical facts, write transaction boundaries, cancellation gates or lineage
+ownership are changed. Nullable Tool wire correlation for fully native-covered input
+requires App Server v49 / Runtime Client v70 and regenerated current-only artifacts. Exact validation evidence is maintained in the existing PR repair record.
+
+
+### Final PR #477 runtime contract repair
+
+F1–F4 now establish mandatory final adapter admission before Snapshot freeze/start,
+adapter-owned nullable actual wire correlation (App Server v49 / Runtime Client v70),
+durable historical eligibility before body hydration, and bounded model-visible Tool
+pricing/fingerprints. Canonical facts, COMMIT/start arbitration, frozen retries and
+lineage owners remain unchanged. Eight new deterministic owner tests and the complete
+local matrix passed; exact commands, counts, intermediate repairs and proofs are in
+[the existing architecture repair record](pr-477-architecture-review-repairs.md#settled-f1f4-local-validation).
+Exact pushed-HEAD CI is reported in PR #477 independently of local validation.

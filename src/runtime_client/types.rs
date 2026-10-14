@@ -273,7 +273,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 68 adds the immutable inherited transcript boundary. Version 67 peers
 /// are rejected before an attachment or application operation is admitted.
 /// Version 69 separates typed projection history and exact frozen request occurrences from canonical execution.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 69;
+/// Version 70 represents absent wire fields for native-covered Tool associations.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 70;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1107,7 +1108,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 69);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 70);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

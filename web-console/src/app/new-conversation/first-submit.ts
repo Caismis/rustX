@@ -3,7 +3,7 @@ import { UploadFailure, uploadFailureState } from '../../client/uploads';
 import { uploadOperationId } from '../../../../protocol/app-server/upload';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { WorkspaceHostError } from '../../workspaces/host';
-import type { SessionModelConfig, UploadReceipt, UploadOutcome } from '../../../../protocol/app-server/v48';
+import type { SessionModelConfig, UploadReceipt, UploadOutcome } from '../../../../protocol/app-server/v49';
 
 export interface FirstDraft { submission?: ComposerSubmission; workspaceId: string; text: string; files: readonly File[]; attachmentIds?: readonly string[]; model?: SessionModelConfig }
 export interface CreatedSession { id: string; node?: string; conversation: string; diagnostic?: string }

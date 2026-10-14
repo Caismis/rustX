@@ -788,7 +788,7 @@ struct PendingPostToolBatch {
 }
 
 /// The intermediate staged view of one model turn: scratch conversation,
-/// Effective System Prompt, projection, frozen snapshot, and request — all
+/// Effective System Prompt, projection, snapshot metadata, and request — all
 /// transient, nothing committed.
 struct StagedModelTurn {
     /// The staged projection (over the scratch conversation that includes
@@ -796,10 +796,12 @@ struct StagedModelTurn {
     projection: ContextProjection,
     /// The staged Effective System Prompt.
     effective_system_prompt: String,
-    /// The frozen snapshot of this actual request.
+    /// Snapshot metadata; exact input is frozen only after final preflight.
     snapshot: RequestSnapshot,
     /// The exact provider-neutral request of the staged projection.
     request: ModelRequest,
+    /// Coverage reconciliation is committed to hot state only after preflight.
+    retire_continuation: bool,
     /// The deterministic estimate of the exact mixed request input.
     estimated_input: u64,
 }
@@ -2781,20 +2783,9 @@ impl<'a> AgentExecution<'a> {
                 },
             },
         };
-        if request
+        let retire_continuation = request
             .reconcile_continuation()
-            .map_err(compatibility_failure)?
-        {
-            // The next immutable logical input version owns this decision.
-            // Canonical native output remains intact for adapter replay validation.
-            crate::model::adapter::validation::validate_prepared_request(&request)
-                .map_err(|error| compatibility_failure(error.message))?;
-            self.retire_continuation();
-            // The changed covered prefix is no longer the input measured by
-            // that provider, even if the no-continuation identity matches again.
-            self.observed = None;
-            self.observed_request_identity = None;
-        }
+            .map_err(compatibility_failure)?;
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
@@ -2847,14 +2838,6 @@ impl<'a> AgentExecution<'a> {
                 .filter_map(|m| m.as_canonical().cloned())
                 .collect::<Vec<_>>(),
         );
-        snapshot
-            .freeze_input(&self.request.conversation_id, &request)
-            .map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::CannotFit,
-                    error,
-                ))
-            })?;
         let inserted_at = request
             .messages
             .iter()
@@ -2876,6 +2859,7 @@ impl<'a> AgentExecution<'a> {
             .engine
             .estimate_frozen_request(&request);
         Ok(StagedModelTurn {
+            retire_continuation,
             projection,
             effective_system_prompt: request.effective_system_prompt.clone(),
             snapshot,
@@ -2891,7 +2875,7 @@ impl<'a> AgentExecution<'a> {
     fn finalize_model_turn(
         &mut self,
         staged_context: &[MessageBlock],
-        staged: StagedModelTurn,
+        mut staged: StagedModelTurn,
     ) -> Result<PreparedModelTurn, Terminal> {
         let soft_limit = self
             .context_runtime
@@ -2903,6 +2887,34 @@ impl<'a> AgentExecution<'a> {
                 ContextErrorKind::CannotFit,
                 "final frozen request exceeds the soft input limit",
             )));
+        }
+        // The single mandatory adapter-owned semantic admission boundary follows
+        // all compaction/carryover/media transformations, before freeze and start.
+        // Ordinary retries bypass finalization and reuse this validated input.
+        crate::model::adapter::validation::validate_prepared_request(&staged.request).map_err(
+            |error| Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::Unsupported {
+                        message: format!("native model input compatibility: {}", error.message),
+                    },
+                },
+            },
+        )?;
+        let associations = std::mem::take(&mut staged.snapshot.tool_associations);
+        staged
+            .snapshot
+            .freeze_input(&self.request.conversation_id, &staged.request)
+            .map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::CannotFit,
+                    error,
+                ))
+            })?;
+        staged.snapshot.tool_associations = associations;
+        if staged.retire_continuation {
+            self.retire_continuation();
+            self.observed = None;
+            self.observed_request_identity = None;
         }
         let mut context = Vec::with_capacity(staged_context.len());
         for block in staged_context {
@@ -7234,7 +7246,7 @@ mod tests {
     /// snapshot as the execution. The window is far larger than any scripted
     /// request, so no compaction ever triggers in these tests.
     fn runtime(adapter: &Arc<ScriptedAdapter>) -> ContextRuntime {
-        ContextRuntime::for_attempt(
+        let mut context = ContextRuntime::for_attempt(
             crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -7246,7 +7258,12 @@ mod tests {
             crate::model::ModelTimeoutPolicy::default(),
             crate::scripted_suites::support::default_monotonic_clock(),
         )
-        .expect("valid context runtime")
+        .expect("valid context runtime");
+        // Boundary fixtures intentionally have no canonical history. Supply a
+        // real trusted System input so adapter preflight can admit the request.
+        context.native_system.core_runtime_identity =
+            Some("Execute the scripted boundary fixture.".into());
+        context
     }
 
     fn inbound_message(id: &str, text: &str) -> UserMessageBlock {
@@ -9298,7 +9315,7 @@ mod tests {
 
     /// A [`runtime`] variant over a `dyn` adapter handle.
     fn runtime_dyn(adapter: &Arc<dyn ModelAdapter>) -> ContextRuntime {
-        ContextRuntime::for_attempt(
+        let mut context = ContextRuntime::for_attempt(
             crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -9310,7 +9327,12 @@ mod tests {
             crate::model::ModelTimeoutPolicy::default(),
             crate::scripted_suites::support::default_monotonic_clock(),
         )
-        .expect("valid context runtime")
+        .expect("valid context runtime");
+        // Boundary fixtures intentionally have no canonical history. Supply a
+        // real trusted System input so adapter preflight can admit the request.
+        context.native_system.core_runtime_identity =
+            Some("Execute the scripted boundary fixture.".into());
+        context
     }
 
     /// Cancellation may become observable while a contributor is awaiting

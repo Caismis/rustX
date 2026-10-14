@@ -1935,6 +1935,18 @@ pub trait ConversationStore: Send + Sync + 'static {
         after: crate::context::checkpoint::ProjectionActivationId,
         limit: usize,
     ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError>;
+    /// Decide published-cut eligibility before immutable checkpoint hydration.
+    fn projection_timeline_at_journal_cut(
+        &self,
+        through: u64,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<super::projection::ProjectionTimelinePage, ConversationStoreError>;
+    fn projection_checkpoint_at_journal_cut(
+        &self,
+        through: u64,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError>;
     fn projection_owner(
         &self,
         attempt: Option<&crate::runtime::identity::AttemptId>,
