@@ -28,7 +28,11 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "/attach", description: "Upload a selected local file to this Session.", argumentHint: "<local-path>" },
   { name: "/queue", description: "Edit or remove exact observed queued Human input." },
   { name: "/export", description: "Export this Session archive to a client-local file.", argumentHint: "[output-path]" },
-  { name: "/settings", description: "Read, rescan, and edit User/Workspace configuration." },
+  {
+    name: "/settings",
+    description: "Read, rescan, and edit User/Workspace configuration, or inspect its automatic repairs.",
+    argumentHint: "[repairs | user … | workspace …]",
+  },
   { name: "/help", description: "List the available commands." },
   { name: "/goal", description: "Show, create, pause, resume, edit, or budget a persistent Goal." },
   {

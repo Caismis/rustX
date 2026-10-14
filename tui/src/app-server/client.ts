@@ -43,6 +43,7 @@ import { transferUpload } from '../../../protocol/app-server/upload.ts';
  * never to resend.
  */
 
+import { retainSource, sourceKey } from "../presentation/source-repairs.ts";
 import { decodeProtocolMessage } from "../protocol/decoder.ts";
 
 import {
@@ -71,7 +72,11 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 46;
+export const APP_SERVER_PROTOCOL_VERSION = 47;
+
+/** Notifications retained before the first subscription; level-triggered
+ * owners re-announce or reread anything beyond this. */
+const UNROUTED_NOTIFICATIONS = 64;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -278,9 +283,30 @@ export class AppServerClient {
    * settles, so this never outgrows the in-flight delivery requests. */
   readonly #cancels = new Set<RequestId>();
   readonly #notificationListeners = new Set<NotificationListener>();
+  /**
+   * Notifications that arrived before anything subscribed, replayed to the
+   * first subscriber. A server may notify right after `initialize` answers,
+   * before the composition root has built the host that routes notifications;
+   * that gap must not lose a level-triggered notice. Finite, and retired by
+   * the first subscription.
+   *
+   * Source repair observations are kept apart, coalesced to the latest one
+   * per source — a withdrawal included — so no amount of unrelated traffic
+   * crowds them out. The server advances its per-source delivery cursor as
+   * it sends one and never sends it again, so a dropped observation would be
+   * lost for good; the latest per source is all a subscriber needs. Bounded
+   * by `retainSource`: the least recently observed Workspace goes beyond 64,
+   * as the native ledger forgets it; the User never does. A source dropped
+   * here was never observed by a subscriber, so nothing it held can go stale.
+   */
+  #unrouted: { notifications: Notification[]; sourceRepairs: Map<string, Notification> } | undefined = {
+    notifications: [],
+    sourceRepairs: new Map(),
+  };
   readonly #closeListeners = new Set<CloseListener>();
   #nextRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
+  #authorityId = "";
   #closed: TransportClosedError | undefined;
 
   private constructor(transport: AppServerTransport) {
@@ -310,8 +336,22 @@ export class AppServerClient {
         `the App Server negotiated protocol ${initialized.protocol_version}, this client speaks ${APP_SERVER_PROTOCOL_VERSION}`,
       );
     }
+    if (!initialized.authority_id) {
+      throw new Error("the App Server did not negotiate an authority identity");
+    }
     client.#capabilities = initialized.capabilities;
+    client.#authorityId = initialized.authority_id;
     return client;
+  }
+
+  /**
+   * The App Server authority this connection negotiated in `initialize`.
+   * Stable across reconnects to the same server process; a replacement process
+   * at the same endpoint negotiates another. Never derived from the endpoint,
+   * the transport or a Session.
+   */
+  get authorityId(): string {
+    return this.#authorityId;
   }
 
   /** The server capabilities advertised at initialization. */
@@ -385,6 +425,20 @@ export class AppServerClient {
   /** Subscribes to server notifications. Returns an unsubscribe function. */
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
+    // The first subscriber drains the buffer before anything is dispatched
+    // to it directly: a notification arriving during the replay — a newer
+    // observation of a source already buffered included — joins the buffer
+    // and is replayed after everything older, so the handoff never delivers
+    // an older observation after a newer one, and never drops or repeats one.
+    const unrouted = this.#unrouted;
+    if (unrouted !== undefined) {
+      for (;;) {
+        const next = unrouted.notifications.shift() ?? first(unrouted.sourceRepairs);
+        if (next === undefined) break;
+        listener(next);
+      }
+      this.#unrouted = undefined;
+    }
     return () => this.#notificationListeners.delete(listener);
   }
 
@@ -480,11 +534,19 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v46 protocol message");
+      this.#fail("invalid App Server v47 protocol message");
       return;
     }
 
     if (isNotification(record)) {
+      if (this.#unrouted !== undefined) {
+        if (record.method === "configuration/sourceRepairChanged") {
+          retainSource(this.#unrouted.sourceRepairs, sourceKey(record.params.target), record);
+        } else if (this.#unrouted.notifications.length < UNROUTED_NOTIFICATIONS) {
+          this.#unrouted.notifications.push(record);
+        }
+        return;
+      }
       for (const listener of [...this.#notificationListeners]) {
         listener(record);
       }
@@ -576,6 +638,15 @@ export function isDeliveryCancelled(error: unknown): boolean {
 /** Whether a side-effecting request's outcome is genuinely unknown. */
 export function isUncertainOutcome(error: unknown): boolean {
   return error instanceof UncertainOutcomeError;
+}
+
+/** Removes and returns the oldest entry of `entries`, if any. */
+function first<V>(entries: Map<string, V>): V | undefined {
+  for (const [key, value] of entries) {
+    entries.delete(key);
+    return value;
+  }
+  return undefined;
 }
 
 /** Whether the server asked for an authoritative projection repair. */

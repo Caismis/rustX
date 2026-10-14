@@ -762,6 +762,12 @@ pub struct ProviderDefinition {
     pub api_key: CredentialSource,
 }
 
+/// Individually validated catalog entries, before reference closure.
+type CatalogEntries = (
+    BTreeMap<ProviderId, ProviderDefinition>,
+    BTreeMap<ModelRef, Arc<ModelDefinition>>,
+);
+
 /// The validated model catalog.
 ///
 /// Validation is complete at this point: every provider has an explicit
@@ -829,14 +835,43 @@ impl ModelCatalog {
     ///
     /// Returns the first validation failure.
     pub fn from_document(document: ModelCatalogDocument) -> Result<Self, ModelCatalogError> {
+        let (providers, models) = Self::validated_entries(document)?;
+        if providers.is_empty() || models.is_empty() {
+            return Err(ModelCatalogError::EmptyCatalog);
+        }
+        if let Some(model) = models
+            .values()
+            .find(|model| !providers.contains_key(&model.provider))
+        {
+            return Err(ModelCatalogError::UnknownProvider {
+                provider: model.provider.clone(),
+            });
+        }
+        Ok(Self { providers, models })
+    }
+
+    /// Validates every authored Provider and Model on its own terms.
+    ///
+    /// This is exactly the part of [`Self::from_document`] one entry decides
+    /// alone. Whether a Model's Provider exists and whether the catalog is
+    /// nonempty are facts of the complete catalog: a configuration source may
+    /// leave either to the other scope it is composed with.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first entry validation failure.
+    pub fn validate_entries(document: ModelCatalogDocument) -> Result<(), ModelCatalogError> {
+        Self::validated_entries(document).map(drop)
+    }
+
+    fn validated_entries(
+        document: ModelCatalogDocument,
+    ) -> Result<CatalogEntries, ModelCatalogError> {
         if document.schema_version != MODEL_CATALOG_SCHEMA_VERSION {
             return Err(ModelCatalogError::UnsupportedSchemaVersion {
                 supported: MODEL_CATALOG_SCHEMA_VERSION,
                 found: document.schema_version,
             });
-        }
-        if document.providers.is_empty() {
-            return Err(ModelCatalogError::EmptyCatalog);
         }
         let mut providers = BTreeMap::new();
         for (raw_id, provider) in document.providers {
@@ -847,19 +882,12 @@ impl ModelCatalog {
         let mut models = BTreeMap::new();
         for (name, document) in document.models {
             let reference = ModelRef::parse(&name)?;
-            let provider = ProviderId::parse(&document.provider)?;
-            if !providers.contains_key(&provider) {
-                return Err(ModelCatalogError::UnknownProvider { provider });
-            }
             models.insert(
                 reference.clone(),
                 Arc::new(validate_model(&reference, document)?),
             );
         }
-        if models.is_empty() {
-            return Err(ModelCatalogError::EmptyCatalog);
-        }
-        Ok(Self { providers, models })
+        Ok((providers, models))
     }
 
     /// The providers in deterministic identity order.
@@ -1627,6 +1655,71 @@ pub enum ModelCatalogError {
         /// The environment variable name (never a value).
         variable: String,
     },
+}
+
+impl ModelCatalogError {
+    /// The authored location and fixed category of this failure.
+    ///
+    /// Both are native constants: an identity appears only as `*`, and no
+    /// authored value, identity or detail is ever part of either, so they can
+    /// be shown where the [`fmt::Display`] text (which quotes values) cannot.
+    #[must_use]
+    pub fn classification(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Syntax { .. } => ("models", "malformed model catalog"),
+            Self::UnsupportedSchemaVersion { .. } => {
+                ("models", "unsupported model catalog schema version")
+            }
+            Self::EmptyCatalog => (
+                "providers",
+                "the composed model catalog declares no Provider or no Model",
+            ),
+            Self::InvalidIdentity { kind, .. } => match *kind {
+                "provider" => ("providers", "invalid Provider identity"),
+                "model profile" => ("models.*.profiles", "invalid Model Profile identity"),
+                _ => ("models", "invalid Model identity"),
+            },
+            Self::InvalidModelRef { .. } => (
+                "models",
+                "invalid Model reference; expected provider-id/model-id",
+            ),
+            Self::InvalidBaseUrl { .. } => (
+                "providers.*.base_url",
+                "invalid Provider endpoint; an absolute http(s) URL without credentials, query or fragment is required",
+            ),
+            Self::InvalidCredentialSource { .. } => {
+                ("providers.*.api_key", "invalid Provider credential source")
+            }
+            Self::ProviderWithoutModels { .. } => ("providers.*", "a Provider declares no Model"),
+            Self::DuplicateModel { .. } => ("models.*", "duplicate Model identity"),
+            Self::InvalidLimits { .. } => ("models.*", "invalid Model context or output limits"),
+            Self::InvalidCapabilities { .. } => {
+                ("models.*.capabilities", "unusable Model capabilities")
+            }
+            Self::InvalidProfiles { .. } => ("models.*.profiles", "invalid Model Profiles"),
+            Self::InvalidCompat { .. } => ("models.*.compat", "invalid Model compatibility fields"),
+            Self::ProtectedKey { .. } => (
+                "models.*.request_params",
+                "request parameters set a runtime-owned key",
+            ),
+            Self::InexactNumber { .. } => (
+                "models.*.request_params",
+                "request parameters carry a number without an exact binary64 value",
+            ),
+            Self::UnknownProvider { .. } => (
+                "models.*.provider",
+                "a Model names a Provider the composed catalog does not define",
+            ),
+            Self::UnknownModel { .. } => (
+                "agent.model",
+                "a selected Model is not defined by the composed catalog",
+            ),
+            Self::MissingEnvironmentCredential { .. } => (
+                "providers.*.api_key",
+                "the credential environment variable is unset",
+            ),
+        }
+    }
 }
 
 impl fmt::Display for ModelCatalogError {

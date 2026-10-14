@@ -2014,9 +2014,15 @@ pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
     let (_, stale) = initialize(&mut *driver, 1).await;
 
     submit(&mut *driver, 2, "go").await;
-    // Barrier: the model parked, so the admission burst is complete and
-    // no further publication can happen.
+    // Barrier: the model parked and the projection settled, so the admission
+    // burst is complete — including the derived Trace and read-domain
+    // publications its worker makes asynchronously — and nothing more is
+    // published until this test acts. Parking alone is not enough: a read
+    // that installs pending read domains would publish after the repaired
+    // cursor, and with the ring of two the next admission and its own
+    // read-domain update would then evict the event after that cursor.
     await_model_parked(&fixture.model).await;
+    fixture.host.projection_settled().await;
 
     let response = driver
         .request(RuntimeClientRequest::SubscribeEvents {
@@ -2045,7 +2051,8 @@ pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
     subscribe(&mut *driver, 5, repaired_cursor).await;
 
     // Continuing from the repaired cursor is contiguous: one further
-    // admission publishes exactly the next event.
+    // admission publishes the next event, and at most one read-domain update
+    // follows it, which the ring of two still holds.
     let RuntimeClientResult::InboundAccepted {
         inbound_sequence, ..
     } = submit(&mut *driver, 6, "again").await

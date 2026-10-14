@@ -161,7 +161,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":46,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":47,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -223,9 +223,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v46"),
+            Some("rustx.app-server.v47"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v46, rustx-token.wrong"),
+            Some("rustx.app-server.v47, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -341,7 +341,20 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
         drop(input);
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
-        assert!(output.next_line().await.unwrap().is_none());
+        // The only record a negotiated connection may still owe is the User
+        // source's repair level, which is empty here (Issue #464).
+        let mut levels = 0;
+        while let Some(line) = output.next_line().await.unwrap() {
+            let record: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                record["method"], "configuration/sourceRepairChanged",
+                "{record}"
+            );
+            assert_eq!(record["params"]["target"]["kind"], "user", "{record}");
+            assert!(record["params"]["receipt"].is_null(), "{record}");
+            levels += 1;
+        }
+        assert!(levels <= 1);
         for bytes in [
             vec![0xff, b'\n'],
             b"{}".to_vec(),
@@ -918,8 +931,13 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             use app_server_conformance::AppServerConformanceDriver;
             let notification = client.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event and is
-            // not routed by attachment target (Issue #386).
-            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+            // not routed by attachment target (Issue #386); nor is a
+            // source-scoped repair level (Issue #464).
+            if matches!(
+                notification,
+                NotificationMethod::SummaryInvalidated { .. }
+                    | NotificationMethod::SourceRepairChanged { .. }
+            ) {
                 continue;
             }
             let NotificationMethod::Event { target, event, .. } = notification else {
@@ -1726,7 +1744,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v46, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v47, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -1736,7 +1754,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v46, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v47, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),
@@ -1747,6 +1765,92 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
             Signal::SIGTERM,
         )
         .unwrap();
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+/// Issue #464: a real App Server repairs its bound User source before it
+/// parses process policy or opens a transport, and the first client to
+/// connect reads the receipt. Startup selects no Workspace (ISO-05): its
+/// working directory, which here encloses the runtime root, is neither
+/// scanned nor treated as one, and the backup is private.
+#[tokio::test]
+async fn app_server_startup_repairs_the_user_source_before_process_policy() {
+    use rustx::app_server::protocol::{
+        JsonRpcVersion, Method, MethodResult, Request, RequestId, Response,
+    };
+    use rustx::local_runtime::configuration::repair::{ConfigRepairChange, ConfigRepairStatus};
+    use rustx::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::new().await;
+        let authored = f.root.path().join("home/rustx/rustx.toml");
+        let valid = std::fs::read_to_string(&authored).unwrap();
+        // Strictly, every one of these rejects the document before policy
+        // parsing; the process policy itself is authored and must survive.
+        let original = format!(
+            "schema_version = 8\nlegacy_root = true\n{valid}\n[app_server]\nmax_connections = 7\nfuture_isolation = \"none\"\n"
+        );
+        std::fs::write(&authored, &original).unwrap();
+        let cwd_source = f.root.path().join("rustx.toml");
+        let cwd_text = "[agent]\nlegacy_cwd = 1\n";
+        std::fs::write(&cwd_source, cwd_text).unwrap();
+        let mut child = f.command("stdio").spawn().unwrap();
+        let driver = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let call = |id: i64, call: Method| {
+            let driver = &driver;
+            async move {
+                let Response::Success(success) = app_server_conformance::AppServerConformanceDriver::request(
+                    driver,
+                    Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(id), call },
+                )
+                .await
+                else {
+                    panic!("request {id} failed")
+                };
+                success.result
+            }
+        };
+        call(1, serde_json::from_str::<Request>(INITIALIZE).unwrap().call).await;
+        let MethodResult::SourceSettings { projection } =
+            call(2, Method::SourcesRead { target: SourceTarget::User }).await
+        else {
+            panic!("source settings")
+        };
+        assert_eq!(projection.process_bindings.unwrap().max_connections, 7);
+        let receipt = projection.user_repair.expect("startup repair receipt");
+        assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+        assert_eq!(receipt.target, SourceTarget::User);
+        assert!(receipt.backup_available);
+        assert_eq!(
+            receipt.changes,
+            vec![
+                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 10 },
+                ConfigRepairChange::RemovedField { object_path: String::new() },
+                ConfigRepairChange::RemovedField {
+                    object_path: "app_server".into()
+                },
+            ]
+        );
+        assert_eq!(receipt.after_revision.as_ref(), Some(&projection.user.revision));
+        let repaired = std::fs::read_to_string(&authored).unwrap();
+        assert!(!repaired.contains("legacy_root") && !repaired.contains("future_isolation"));
+        assert!(repaired.contains("max_connections = 7"));
+        let backups: Vec<_> = std::fs::read_dir(f.root.path().join("runtime/configuration-backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
+        let mode = |path: &std::path::Path| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+        };
+        assert_eq!(mode(&backups[0]), 0o600);
+        assert_eq!(mode(backups[0].parent().unwrap()), 0o700);
+        assert_eq!(std::fs::read_to_string(&cwd_source).unwrap(), cwd_text);
+        driver.close().await;
+        detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
     })
     .await;

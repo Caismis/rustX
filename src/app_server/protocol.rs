@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v46 envelope and method vocabulary.
+//! Rust authority for the App Server v47 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 46;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 47;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -886,6 +886,36 @@ pub enum NotificationMethod {
     #[serde(rename = "configuration/changed")]
     ConfigurationChanged {
         application: crate::local_runtime::configuration::application::ConfigurationApplication,
+    },
+    /// The latest automatic `rustx.toml` repair observation of one source
+    /// changed (Issue #464).
+    ///
+    /// Source-scoped: it names a `SourceTarget`, never a Session, attachment
+    /// or application scope, and it says nothing about runtime application,
+    /// which `configuration/changed` reports separately. A connection observes
+    /// the User source and each Workspace source it addressed, the least
+    /// recently addressed of its 64 Workspaces forgotten first. Each admission
+    /// of a source — including addressing a forgotten one again — announces
+    /// its current level once, then every change of it, and a delivered
+    /// receipt the finite ledger later forgets is followed by its absence
+    /// once. `receipt: null` says the finite process-local ledger retains no
+    /// receipt for the source — never recorded, withdrawn, or forgotten —
+    /// never that the document is valid, which only a source read reports.
+    /// It is a state, not a repair, and presents nothing. Delivery is
+    /// level-triggered: after a gap, the authoritative
+    /// `configuration/sourcesRead` carries the same receipts. A notice is not
+    /// history: one receipt id is one repair occurrence, and a later notice
+    /// may carry it again at a higher `sequence`.
+    #[serde(rename = "configuration/sourceRepairChanged")]
+    SourceRepairChanged {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        receipt: Option<crate::local_runtime::configuration::repair::ConfigRepairReceipt>,
+        /// The native repair-ledger sequence this level is current at. Within
+        /// one App Server authority it orders this observation against every
+        /// other observation of the same source, including the
+        /// `repair_sequence` of a `configuration/sourcesRead`: the higher one
+        /// is the newer, and two at one sequence agree.
+        sequence: u64,
     },
     #[serde(rename = "session/event")]
     Event {

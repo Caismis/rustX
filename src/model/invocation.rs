@@ -887,6 +887,61 @@ pub enum ModelInvocationError {
     },
 }
 
+impl ModelInvocationError {
+    /// The authored location and fixed category of this failure; native
+    /// constants only, like [`crate::model::catalog::ModelCatalogError::classification`].
+    #[must_use]
+    pub fn classification(&self) -> (&'static str, &'static str) {
+        let overrides = |layer: RequestParamsLayer| match layer {
+            RequestParamsLayer::SummaryOverrides => "agent.model.summary_model.request_params",
+            RequestParamsLayer::ModelParams | RequestParamsLayer::ModelProfile => {
+                "models.*.request_params"
+            }
+            RequestParamsLayer::SessionOverrides | RequestParamsLayer::EffectiveRequest => {
+                "agent.model.request_params"
+            }
+        };
+        match self {
+            Self::Catalog(error) => error.classification(),
+            Self::UnknownProfile { .. } => (
+                "agent.model.profile",
+                "the selected Model Profile is not declared by the Model",
+            ),
+            Self::ModelDeclaresNoProfiles { .. } => (
+                "agent.model.profile",
+                "a Model Profile is selected for a Model that declares none",
+            ),
+            Self::ProfileKeyOwnership { layer, .. } => (
+                overrides(*layer),
+                "request parameter overrides set a key the selected Model Profile owns",
+            ),
+            Self::ProtectedKey(collision) => (
+                overrides(collision.layer),
+                "request parameters set a runtime-owned key",
+            ),
+            Self::InexactNumber(inexact) => (
+                overrides(inexact.layer),
+                "request parameters carry a number without an exact binary64 value",
+            ),
+            Self::InvalidOutputBudget { .. } => (
+                "agent.model.max_output_tokens",
+                "the output budget is impossible for the selected Model",
+            ),
+            Self::UnusableCapabilities { .. } => (
+                "agent.model",
+                "the selected Model cannot carry a rustX conversation",
+            ),
+            Self::MissingAdapter { .. } => (
+                "agent.model",
+                "no adapter binds the selected Model's protocol",
+            ),
+            Self::ImmutableModelAuthority { .. } => {
+                ("agent.model", "the Session's model authority is frozen")
+            }
+        }
+    }
+}
+
 impl fmt::Display for ModelInvocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -7,7 +7,7 @@ import { useMcpProbes } from './mcp/useMcpProbes';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v46';
+import type { SourceScope } from '../../../../protocol/app-server/v47';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -125,6 +125,8 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   // never treated as current — the machine owes a fresh read on every ATTACH,
   // and authoring stays closed until that read is adopted.
   const observed = useSelector(actor, snapshot => snapshot.context.observation);
+  // A View details inspection awaiting this owner's Auto Repair details.
+  const inspection = useSelector(navigation, snapshot => snapshot.context.inspection);
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
   const mcpProbes = useMcpProbes(client, host, activeTarget, observed, current === 'mcp' && !focus.mcp, associations);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
@@ -154,7 +156,7 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   // that subtree, and the key deliberately carries no source revision, so
   // neither a page change nor an authoritative read can remount a dirty form.
   const editorKey = `${transport.endpoint ?? ''}|${transport.authorityRevision ?? 0}|${settingsTargetKey(activeTarget)}:${current}`;
-  const connectionFocused = current === 'advanced' && focus.advanced !== undefined;
+  const connectionFocused = current === 'advanced' && focus.advanced?.kind === 'connection';
   // Whether this owner's Advanced page reaches Connection at all is the
   // navigation capability, not whether a connection controller exists.
   const connectionReachable = current === 'advanced' && admitsFocus(target, 'advanced', connectionFocus);
@@ -188,6 +190,9 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
       scopeControl={<SettingsScopeMenu key={`${transport.endpoint}:${transport.authorityRevision}`} target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'extensions'}); }}/>} />}
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}
       config={structured ? { document: config.document, revision: config.revision } : undefined}
+      repairFocused={focus.advanced?.kind === 'auto_repair'}
+      inspection={inspection}
+      repairPresented={observed && targetValid ? receiptId => navigation.send({ type: 'INSPECTED', receiptId, source: scope === 'user' ? { kind: 'user' } : observed.target }) : undefined}
       closed={<MalformedNotice config={config} diagnostic={false} />}
       processPolicyImpacts={source.process_policy_impacts} busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact

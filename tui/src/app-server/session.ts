@@ -258,6 +258,11 @@ export class AppServerSession {
       // and never treated as invalid protocol input.
       return false;
     }
+    if (notification.method === "configuration/sourceRepairChanged") {
+      // Source-scoped (Issue #464): it addresses a configuration source, never
+      // a Session, and is never folded into conversation presentation.
+      return false;
+    }
     if (this.#released || this.#serverClosed || !sameTarget(notification.params.target, this.#target)) {
       return false;
     }
@@ -662,7 +667,7 @@ export class AppServerSession {
     return result.agent;
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v46.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v47.js").UploadReceipt[] = []) {
     return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 

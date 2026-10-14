@@ -3,11 +3,11 @@ import { message, displayText, type Message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useClientSelector, transportSelection, sameValue } from '../../client/selectors';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
-import { useEffect, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
-import type { SessionModelConfig } from '../../../../protocol/app-server/v46';
+import { useEffect, useEffectEvent, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
+import type { SessionModelConfig } from '../../../../protocol/app-server/v47';
 import type { AppServerClient, SessionView } from '../../client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from '../../workspaces/host';
-import type { WorkspaceAuthority } from '../../workspaces/authority';
+import type { WorkspaceAuthority, WorkspaceAuthorityObservation } from '../../workspaces/authority';
 import type { WorkspaceAssociations, WorkspaceMutation } from '../../workspaces/associations';
 import { sameEndpoint } from '../../workspaces/endpoint';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -49,11 +49,16 @@ export function ConversationComposer({ client, host, authority, associations, in
   }, [binding, owner, initialWorkspace]);
   const live = transport.connection === 'connected' && current();
   const connecting = live && activeView?.attachment === 'attaching' && activeView.attachmentIntent === 'wanted' && !activeView.deleting;
+  // The Workspace catalog belongs to the Product Host authority of this
+  // endpoint, never to an App Server connection generation: a transport flap
+  // re-lists nothing. `current` only fences committing an answer.
+  const catalogObserved = useEffectEvent((value: WorkspaceAuthorityObservation) => { if (current() && value.current()) setCatalog(value.catalog); });
+  const catalogFailed = useEffectEvent((e: unknown) => { if (current()) setError(String(e)); });
   useEffect(() => {
     let alive = true;
-    void authority.observe().then(value => { if (alive && current() && value.current()) setCatalog(value.catalog); }, e => { if (alive && current()) setError(String(e)); });
+    void authority.observe().then(value => { if (alive) catalogObserved(value); }, e => { if (alive) catalogFailed(e); });
     return () => { alive = false; };
-  }, [authority, current, transport.endpoint, transport.authorityRevision]);
+  }, [authority, transport.endpoint, transport.authorityRevision]);
   const bound = sameEndpoint(catalog?.endpoint, transport.endpoint);
   const selected = bound ? catalog?.workspaces.find(w => w.id === workspaceId) : undefined;
   const pick = (id: string) => { setWorkspace(id); workspacePicked?.(id); setMenu(false); };

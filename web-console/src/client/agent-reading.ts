@@ -1,4 +1,4 @@
-import type { AttachmentTarget, ConversationTurn, ConversationTurnPage, ConversationWindowAt, RuntimeClientSnapshot } from '../../../protocol/app-server/v46';
+import type { AttachmentTarget, ConversationTurn, ConversationTurnPage, ConversationWindowAt, RuntimeClientSnapshot } from '../../../protocol/app-server/v47';
 import type { AppServerClient } from './app-server';
 import { extendTranscriptWindow, HISTORY_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, sameReadCut, turnKey, type TranscriptCache } from './transcript';
 

@@ -262,9 +262,10 @@ jobs:
   rust-platform-boundaries:
     name: Platform-sensitive boundaries (macOS)
     runs-on: macos-latest
-    # Keep the same budget and native selectors. See docs/pr-424-validation.md
-    # for the audited cold-build cancellation and the pending native comparison.
-    timeout-minutes: 40
+    # Keep the same native selectors. See docs/pr-424-validation.md for the
+    # audited cold-build cancellation, the pending native comparison and the
+    # measured warm-cache lane that set this budget (PR #465).
+    timeout-minutes: 70
     env:
       # Job-local build metadata only: assertions, overflow checks, unwind,
       # optimization and release profiles retain their Cargo defaults.

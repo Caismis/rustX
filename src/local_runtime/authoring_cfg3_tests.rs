@@ -101,7 +101,11 @@ fn model_selection_replacement_cannot_inherit_request_fields() {
 fn incomplete_higher_model_selection_does_not_borrow_lower_identity() {
     for text in ["[agent.model]", "[agent.model]\nrequest_params = '{}'"] {
         let (layer, _) = overlay(LOWER, text);
-        assert!(layer.resolve().is_err(), "{text}");
+        // The replaced selection names no model; the composition is
+        // incomplete, never completed with the lower model.
+        let config = layer.resolve().unwrap();
+        assert!(config.agent.model.is_none(), "{text}");
+        assert!(config.validate().is_err(), "{text}");
     }
 }
 

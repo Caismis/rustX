@@ -132,6 +132,8 @@ import { ResumeSelector } from "./components/resume-selector.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
+import { SourceRepairStatus } from "./components/source-repair-status.ts";
+import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
 import {
   FooterView,
   renderStartup,
@@ -160,7 +162,7 @@ import { banded } from "./components/transcript-block.ts";
 import { SubagentTranscript } from "../app-server/subagent-transcript.ts";
 import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts";
 import { HumanInteractionOverlay } from "./components/hitl.ts";
-import type { InteractionResponse } from "../protocol/app-server.ts";
+import type { InteractionResponse, SourceTarget } from "../protocol/app-server.ts";
 
 export interface RustxTuiAppOptions {
   /** The App Server connection, its Session catalog, and who owns its process. */
@@ -224,6 +226,10 @@ export class RustxTuiApp {
    */
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
+  /** Newly observed configuration repairs of the current App Server
+   * authority; presentation only (Issue #464). */
+  readonly #repairStatus = new SourceRepairStatus();
+  #removeRepairListener: () => void = () => {};
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
@@ -317,6 +323,7 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#transcript);
     this.#tui.addChild(this.#activity);
     this.#tui.addChild(this.#transient);
+    this.#tui.addChild(this.#repairStatus);
     this.#tui.addChild(this.#todos);
     this.#tui.addChild(new Spacer(1));
     this.#tui.addChild(this.#composerContext);
@@ -324,7 +331,66 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#footer);
 
     this.#watchConnection();
+    this.#watchSourceRepairs();
     this.#bindSession(this.#session);
+  }
+
+  /**
+   * Presents source repair observations of the current connection's App
+   * Server authority: those already held by the host, then each new one. A
+   * replacement authority retires the previous one's line, and its receipts
+   * are its own. Only the current host is observed: a replaced connection's
+   * late notice or read changes nothing.
+   *
+   * A reconnect to the same authority keeps the line, and then rereads each
+   * source it still presents: the new connection observes a Workspace only
+   * once it is addressed again, so a Workspace whose receipt was withdrawn
+   * while this client was away is announced to no one until that read.
+   */
+  #watchSourceRepairs(): void {
+    this.#removeRepairListener();
+    const host = this.#host;
+    const kept = this.#repairStatus.adopt(host.authorityId);
+    const observe = (observation: SourceRepairObservation) => {
+      if (this.#host !== host || this.#quitting || this.#finished || !this.#repairStatus.observe(host.authorityId, observation)) return;
+      if (this.#started) this.#tui.requestRender();
+    };
+    for (const observation of host.sourceRepairs()) observe(observation);
+    this.#removeRepairListener = host.onSourceRepair(observe);
+    if (this.#started) this.#tui.requestRender();
+    if (kept) void this.#reconcileSourceRepairs(host);
+  }
+
+  /**
+   * Rereads, through `host`, every source the repair line still presents:
+   * each Workspace, whose read also rereads the User, and the User alone
+   * only when no Workspace read succeeded — a Workspace that can no longer
+   * be read never keeps the independent User source from its own read.
+   * Bounded by the line's finite sources, one read at a time, and read-only
+   * (`configuration/sourcesRead` never repairs, reconciles, loads a Session
+   * or reaches a model). Each result reaches the line through the host's
+   * sequence-ordered observations, so it never overwrites a newer notice.
+   * It stops once `host` is replaced, closed or the client quits. A failed
+   * read proves nothing — the entry stays until a later read or notice —
+   * and it never fails the connection.
+   */
+  async #reconcileSourceRepairs(host: AppServerHost): Promise<void> {
+    const pending = this.#repairStatus.pendingSources();
+    let userRead = false;
+    const read = async (target: SourceTarget) => {
+      if (this.#host !== host || host.client.closed !== undefined || this.#quitting || this.#finished) return false;
+      try {
+        await host.readSourceRepairs(target);
+        userRead = true;
+      } catch {
+        // Not a withdrawal; `/settings repairs` reads again explicitly.
+      }
+      return true;
+    };
+    for (const target of pending.filter(source => source.kind === "workspace")) {
+      if (!await read(target)) return;
+    }
+    if (!userRead && pending.some(source => source.kind === "user")) await read({ kind: "user" });
   }
 
   #watchConnection(): void {
@@ -385,6 +451,7 @@ export class RustxTuiApp {
       this.#dispatcher.setHost(replacement);
       this.#bindSession(session);
       this.#watchConnection();
+      this.#watchSourceRepairs();
       if (session !== undefined && this.#reconnectChild !== undefined) this.#openChildTranscript(this.#reconnectChild);
       this.#reconnectChild = undefined;
       if (session !== undefined) this.#renderState(session.state);
@@ -1746,10 +1813,11 @@ export class RustxTuiApp {
   }
 
   #acknowledgeTransient(): void {
-    if (this.#transient.feedback === undefined) {
+    if (this.#transient.feedback === undefined && !this.#repairStatus.visible) {
       return;
     }
     this.#transient.acknowledge();
+    this.#repairStatus.acknowledge();
     this.#tui.requestRender();
   }
 

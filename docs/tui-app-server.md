@@ -1,12 +1,115 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v46. It does not parse
+The TUI is a projection/control client of App Server protocol v47. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v46.ts`](../protocol/app-server/v46.ts).
+[`protocol/app-server/v47.ts`](../protocol/app-server/v47.ts).
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
 policy|full_access|inherit` operate on that explicit target with source CAS.
+`/settings repairs`, `/settings user repairs` and `/settings workspace repairs`
+inspect native automatic repair receipts (#464) read-only — changes are listed
+as applied, eligible but not applied, or possibly published with durability not
+confirmed, never an uncertain publication as applied. The current Workspace of
+`/settings repairs` and `/settings workspace repairs` is the one the focused
+Session is natively bound to: its canonical durable cwd, read with
+`session/summary`, which loads no runtime. It is never the TUI's Session-creation
+defaults and never a path resolved on the TUI machine, which may not be the App
+Server's. With no focused Session, `/settings repairs` shows the User source and
+says there is no current Workspace, and `/settings workspace repairs` reports
+that instead of guessing; `/settings workspace "<path>" repairs` always inspects
+exactly the named Workspace. A command captures the App Server and the Session
+when it starts: a later focus change does not retarget it, and a result from a
+replaced App Server is refused, never shown. Inspection sends only
+`session/summary` and `configuration/sourcesRead` — no source write,
+reconciliation, Turn or model request.
+
+The host routes `configuration/sourceRepairChanged` without a Session. Before
+anything subscribes, the client keeps source repair notices apart from other
+early notifications, coalesced to the latest observation per source — a
+withdrawal included — so no amount of unrelated traffic crowds them out (the
+server advances its per-source cursor as it sends one, so a dropped notice would
+be lost for good). They are bounded to the User and 64 Workspaces, the least
+recently observed Workspace going first; a notice dropped there never reached a
+subscriber, so nothing it would have ordered can go stale.
+The first subscriber drains that buffer before anything is dispatched to it
+directly, so the handoff never delivers an older observation after a newer one,
+and never drops or repeats one.
+
+The repair status line belongs to the App Server authority this connection's
+`initialize` negotiated (`AppServerClient.authorityId`, exposed read-only by the
+host). Three facts stay apart. A source's current native observation is ordered
+by the native ledger sequence a notice (`sequence`) or read (`repair_sequence`)
+carries — never by receipt id, status or arrival — so an older read answered
+after a newer notice, or a late notice after a fresher read, changes nothing,
+and an observation at an equal sequence is the same observation: one that
+disagrees with the source's current one is never adopted, and the source is
+read again. Announcements
+are kept once per `(authority_id, receipt id)`; a receipt id names one native
+repair occurrence, so a second commit of identical changes is announced again. What the line presents is a
+source's current receipt from its first announcement until the user
+acknowledges it or a newer observation replaces or withdraws it. A newer
+observation therefore always updates its source even when its receipt was
+announced before: it becomes current without a second announcement and retires
+whatever the source presented (R1 → R2 → R1 ends with R1 current and nothing
+presented). An acknowledgement never changes what a source holds. A withdrawal
+(`receipt: null`) says only that native retains no receipt for the source —
+withdrawn, never recorded, or forgotten by its finite ledger, which delivers
+that absence once to a connection still observing a source whose receipt it
+announced — never that the document is valid: it retires what the line
+presents for the source and announces nothing.
+
+A new connection observes the User at once and a Workspace only once it
+addresses it again, so a Workspace whose receipt was withdrawn while the client
+was away is announced to no one until then. A reconnect to the same App
+Server therefore keeps the line and then rereads, through `configuration/sourcesRead`
+on that exact connection, each source the line still presents — each Workspace,
+whose read also rereads the User — one read at a time, bounded by the line's
+sources. When the User is presented and no Workspace read succeeded (a
+Workspace deleted or no longer a valid source refuses its read), one User-only
+read follows, so an unreadable Workspace never keeps the independent User
+source from reconciling; after a successful Workspace read the User is not read
+again. A read that fails proves no withdrawal — not of its Workspace, not of the
+User: the entry stays until a later read or notice (`/settings repairs` reads
+again), nothing is retried or polled, and the connection is unaffected. Results of a replaced connection — checked by host
+instance, not authority — and anything after quitting change nothing. A
+replacement process, or another server, retires the previous line — a warning
+never carries into a process that does not hold it — and its sequences start a
+new ordering domain; its receipts are its own, even with equal ids.
+
+One retention policy bounds every per-source repair map (`retainSource`: at
+most 64 Workspaces, the ledger's own bound, whether or not the User has an
+entry, plus the User in its own slot; the least recently observed Workspace is
+forgotten first, the User never, and re-observing a Workspace makes it the most
+recent). Each owner applies it to its own state: the client to its
+pre-subscription buffer, the host to its connection's observations, the status
+line to what it presents, retiring a forgotten source's warning with it.
+Announcements are bounded separately (256). All of it is in memory only.
+
+Forgetting a source never resets its order. The host keeps one frontier — the
+highest sequence at which it forgot any source — so whatever an absent source
+held was current at or before it. Its source is admitted when it is observed
+again at or after the frontier: a newer native change, or a fresh read, whose
+sequence native takes after receiving the request and so is never lower than
+anything the host observed before sending it. A notice of an absent source
+ordered before the frontier is ambiguous — the late history of a forgotten
+source, or the old receipt of a source this connection only now addresses,
+which native delivers at the sequence it was recorded — so it is never applied;
+the host recovers that source with one authoritative `configuration/sourcesRead`
+instead, one read at a time, one queued entry per source (at most 64), read
+once more if noticed again while its read is in flight, and never after the
+connection closed. A read is never ambiguous: each Workspace read in flight
+remembers the highest sequence at which its own source was forgotten while it
+was in flight, and its answer is applied to an absent source only when it is at
+least that new, so a held read can never resurrect a source a newer
+observation withdrew and then forgot. The caller still receives that read as
+the snapshot it is. Beyond the current sources, the host keeps that one
+sequence, its in-flight reads (each removed when it settles), and the bounded
+recovery queue — nothing per source ever seen. The status line orders only what
+the host admitted, which is never older for a source than what it already
+delivered — and a later connection to the same authority observes each source
+no older than its predecessor delivered it — so the line forgetting a source of
+its own lets nothing stale back in.
 `/session settings` inspects Session selections, binding, pending candidate and
 the runtime's published adoption eligibility (Runtime Client state, never part of
 the application). `/session adopt` sends only the last inspected candidate and

@@ -1058,8 +1058,13 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         while seen.len() != 2 || checked_cursor < after_cursor {
             let notification = connection.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event: it
-            // carries no cursor and no attachment target (Issue #386).
-            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+            // carries no cursor and no attachment target (Issue #386); nor is
+            // a source-scoped repair level (Issue #464).
+            if matches!(
+                notification,
+                NotificationMethod::SummaryInvalidated { .. }
+                    | NotificationMethod::SourceRepairChanged { .. }
+            ) {
                 continue;
             }
             let NotificationMethod::Event {
@@ -1419,8 +1424,13 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
             let notification = connection.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event: it
             // carries no cursor, so it never participates in this cursor
-            // monotonicity check (Issue #386).
-            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+            // monotonicity check (Issue #386); nor does a source-scoped repair
+            // level (Issue #464).
+            if matches!(
+                notification,
+                NotificationMethod::SummaryInvalidated { .. }
+                    | NotificationMethod::SourceRepairChanged { .. }
+            ) {
                 continue;
             }
             let NotificationMethod::Event {

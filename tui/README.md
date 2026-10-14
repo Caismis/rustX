@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v46. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v47. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -127,7 +127,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server protocol v46. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v47. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -163,7 +163,7 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v46)
+  -> initialize (App Server protocol v47)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -477,7 +477,21 @@ read to reconstruct effective capabilities.
 `/settings user` reads User sources; `/settings workspace "/canonical/path"` reads
 an explicit Workspace. Add `approval policy`, `approval full_access`, or `approval
 inherit` to save typed source intent with exact revision CAS. Add `rescan` for native
-reconciliation. No Session is required. `/session settings` reports native preparation,
+reconciliation. No Session is required.
+
+Native automatic `rustx.toml` repair (#464) is presented, never performed, here.
+`/settings repairs` inspects the latest repair receipts of the User source and the
+current Workspace (this client's Session directory); `/settings user repairs` and
+`/settings workspace repairs` inspect one of them, and `/settings workspace
+"/canonical/path" repairs` names another Workspace explicitly. Each is one
+authoritative `configuration/sourcesRead` in the scrollable inspection view, with
+redacted `-`/`~` change lines, reasons, revisions and backup availability — never a
+value or the file. A newly observed receipt shows one nonblocking status line under
+the transcript, combined for User and Workspace; an `unresolved` or
+`commit_uncertain` receipt shows as a warning or error. The first keystroke
+acknowledges it, a receipt identity is announced once across reconnects, and the
+line is never a conversation Turn or model input. Source notices are routed by the
+host itself, independently of any attached Session. `/session settings` reports native preparation,
 candidate and eligibility; `/session adopt` submits the inspected candidate and
 binding. Uncertain mutations are reread, never replayed. Runtime approval prompts
 remain independent of these source-authoring commands.

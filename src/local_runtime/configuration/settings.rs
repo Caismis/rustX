@@ -4,13 +4,13 @@ use super::super::authoring::{
     ContextLayer, McpAuthoring, ModelLayer, RuntimeLayer, SubagentsLayer, TimeoutLayer,
     ToolDeadlineLayer,
 };
+use super::super::settings::{AdmittedSource, SourceDirectory, SourceReread};
 use super::UserConfigManager;
 use crate::model::authoring::{Model, Provider};
 use crate::model::catalog::{CredentialSource, CredentialSourceView};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -38,8 +38,9 @@ impl SourceTarget {
         }
     }
 
-    /// Revalidate the physical authority on every operation; do not follow a
-    /// replaced directory to a different source owner.
+    /// Revalidate the target on every operation; do not follow a replaced
+    /// directory to a different source owner. A source transaction then holds
+    /// the physical directory it admits (see `publish_locked`).
     /// # Errors
     /// Rejects relative, removed, redirected, or noncanonical Workspace paths.
     pub fn validate(&self) -> Result<(), SettingsError> {
@@ -164,6 +165,18 @@ pub struct SourceSettings {
     pub provenance: BTreeMap<String, super::Origin>,
     pub user: SourceView<SourceDocumentView>,
     pub workspace: Option<SourceView<SourceDocumentView>>,
+    /// The latest automatic repair observation of the User source in this
+    /// process. Absent when the finite ledger retains none — never needed,
+    /// withdrawn, or forgotten — which never proves the source valid; the
+    /// views' diagnostics report that.
+    pub user_repair: Option<super::repair::ConfigRepairReceipt>,
+    /// The latest automatic repair observation of the target Workspace source.
+    pub workspace_repair: Option<super::repair::ConfigRepairReceipt>,
+    /// The native repair-ledger sequence `user_repair` and `workspace_repair`
+    /// are current at, read with them under one lock. It orders this read
+    /// against the `sequence` of each `configuration/sourceRepairChanged`
+    /// for the same source: the higher one is the newer observation.
+    pub repair_sequence: u64,
     pub user_resource_root: PathBuf,
     pub workspace_resource_root: Option<PathBuf>,
     pub runtime_root: PathBuf,
@@ -355,35 +368,60 @@ pub enum SettingsError {
 fn read(path: &Path) -> Result<Option<Vec<u8>>, SettingsError> {
     super::super::settings::read_document(path).map_err(|_| SettingsError::Io)
 }
+
+/// A source pathname that cannot be admitted is `Invalid` when the target is
+/// redirected, exactly as at entry; otherwise `Io`.
+fn refused(target: &SourceTarget) -> SettingsError {
+    target.validate().err().unwrap_or(SettingsError::Io)
+}
+
+/// Admit one `rustx.toml` of a capture round ([`AdmittedSource`]).
+fn admit(path: &Path, target: &SourceTarget) -> Result<AdmittedSource, SettingsError> {
+    AdmittedSource::admit(path).map_err(|_| refused(target))
+}
+
+/// A capture round's reread of `document` ([`AdmittedSource::reread`]): a
+/// pathname that no longer names the admitted directory is `Invalid`.
+fn reread(
+    document: &AdmittedSource,
+    target: &SourceTarget,
+) -> Result<Option<Vec<u8>>, SettingsError> {
+    document.reread().map_err(|failure| match failure {
+        SourceReread::Redirected => SettingsError::Invalid,
+        SourceReread::Unadmitted(_) => refused(target),
+        SourceReread::Unreadable(_) => SettingsError::Io,
+    })
+}
 fn revision(bytes: Option<&[u8]>) -> String {
     super::super::settings::revision(bytes)
 }
-fn parse(bytes: Option<&[u8]>) -> Result<RuntimeLayer, SettingsError> {
-    crate::toml_authoring::parse(bytes.unwrap_or(b"")).map_err(|_| SettingsError::Invalid)
-}
+/// The prospective composition's native semantics, as Session resolution and
+/// automatic repair decide them; safe text only.
 fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
-    let validate = || -> Result<(), String> {
-        let config = document.clone().resolve()?;
-        let catalog = crate::model::catalog::ModelCatalog::from_document(
-            crate::model::authoring::Catalog {
-                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
-                providers: document.providers.clone().unwrap_or_default(),
-                models: document.models.clone().unwrap_or_default(),
-            }
-            .into(),
-        )
-        .map_err(|error| error.to_string())?;
-        catalog
-            .model(&config.initial_model().model)
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    };
-    validate().err()
+    match super::composition_semantics(document) {
+        Ok(super::Composition::Complete) => None,
+        Ok(super::Composition::NoDefaultModel) => Some(
+            "no unambiguous default model selected; set agent.model.model in User or Workspace rustx.toml"
+                .into(),
+        ),
+        Err(failure) => Some(failure.summary()),
+    }
 }
-fn view(path: PathBuf, bytes: Option<&[u8]>) -> SourceView<SourceDocumentView> {
+fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<SourceDocumentView> {
     let (authored, diagnostic) =
         match crate::toml_authoring::parse_detailed::<RuntimeLayer>(bytes.unwrap_or(b"")) {
-            Ok(document) => (Some(redact(document)), None),
+            // A document violating its source contract is not editable either:
+            // ordinary writes refuse it and manual repair accepts it.
+            Ok(document) => match super::source_restrictions(&path, &document, workspace) {
+                Ok(()) => (Some(redact(document)), None),
+                Err(failure) => (
+                    None,
+                    Some(format!(
+                        "invalid rustx.toml; source was not loaded: {} at {}",
+                        failure.diagnostic.reason, failure.diagnostic.path
+                    )),
+                ),
+            },
             // A request_params failure names only its field path, category
             // and locations, so it can say why the source cannot be edited.
             // Other parser messages may quote authored text.
@@ -886,7 +924,7 @@ impl UserConfigManager {
             SourceTarget::Workspace { directory } => directory.join(".agents"),
         }
     }
-    fn config_path(&self, target: &SourceTarget) -> PathBuf {
+    pub(super) fn config_path(&self, target: &SourceTarget) -> PathBuf {
         match target {
             SourceTarget::User => self.sources.config_path.clone(),
             SourceTarget::Workspace { directory } => directory.join("rustx.toml"),
@@ -905,7 +943,18 @@ impl UserConfigManager {
 
     /// Capture source facts and their native identity in the same revision fence.
     /// Presentation, redaction, and protocol fields never participate in identity.
-    #[allow(clippy::too_many_lines)] // One revision-fenced source capture.
+    ///
+    /// Read-only: capture creates, locks into existence and writes nothing.
+    /// It excludes rustX writers through the documents' persistent writer
+    /// locks held shared, but only through locks that already exist. A
+    /// document without one has never had a rustX writer, and the capture is
+    /// accepted only if it still has none afterwards, so no rustX writer ran
+    /// during it either: each lock that appears — lock inodes are never
+    /// unlinked — sends the capture round once more, now holding that lock,
+    /// so there are at most one more rounds than documents. Within a round,
+    /// every document and resource revision is reread after the facts are
+    /// derived; a change by a writer outside rustX, which no advisory lock
+    /// excludes, is an explicit conflict.
     pub(crate) fn capture_source_settings(
         &self,
         target: &SourceTarget,
@@ -915,25 +964,74 @@ impl UserConfigManager {
         let workspace = target
             .workspace()
             .map(|directory| directory.join("rustx.toml"));
-        let mut paths: Vec<_> = std::iter::once(user.clone())
-            .chain(workspace.clone())
-            .collect();
-        paths.sort();
-        paths.dedup();
-        #[cfg(test)]
-        self.test_hooks.reach("before_documents");
-        let mut locks = Vec::new();
-        for path in &paths {
-            std::fs::create_dir_all(path.parent().ok_or(SettingsError::Io)?)
-                .map_err(|_| SettingsError::Io)?;
-            locks.push(super::super::settings::lock_document(path).map_err(|_| SettingsError::Io)?);
+        let distinct = 1 + usize::from(workspace.as_ref().is_some_and(|path| *path != user));
+        for _ in 0..=distinct {
+            #[cfg(test)]
+            self.test_hooks.reach("before_documents");
+            // Each round admits every document's physical directory once;
+            // its lock, bytes and lock appearance are all relative to it.
+            let user = admit(&user, target)?;
+            let workspace = workspace
+                .as_ref()
+                .map(|path| admit(path, target))
+                .transpose()?;
+            let documents: Vec<_> = std::iter::once(&user)
+                .chain(
+                    workspace
+                        .as_ref()
+                        .filter(|document| document.path() != user.path()),
+                )
+                .collect();
+            let mut locks = Vec::new();
+            let mut unlocked = Vec::new();
+            for document in documents {
+                match document.share_lock().map_err(|_| SettingsError::Io)? {
+                    Some(lock) => locks.push(lock),
+                    None => unlocked.push(document),
+                }
+            }
+            let captured = self
+                .capture_round(target, &user, workspace.as_ref())
+                .map_err(|error| {
+                    // Whatever failed, a round whose pathname no longer names
+                    // an admitted directory is refused as redirected.
+                    if user.redirected()
+                        || workspace.as_ref().is_some_and(AdmittedSource::redirected)
+                    {
+                        SettingsError::Invalid
+                    } else {
+                        error
+                    }
+                });
+            let mut appeared = false;
+            for document in unlocked {
+                match document.lock_exists().map_err(|_| refused(target)) {
+                    Ok(exists) => appeared |= exists,
+                    // A round that failed reports its own failure.
+                    Err(error) => return captured.and(Err(error)),
+                }
+            }
+            if !appeared {
+                return captured;
+            }
         }
-        let user_bytes = read(&user)?;
-        let workspace_bytes = workspace
-            .as_ref()
-            .map(|path| read(path))
-            .transpose()?
-            .flatten();
+        // Only an actor outside rustX unlinking writer locks gets here.
+        Err(SettingsError::Io)
+    }
+
+    /// One capture round, revision-fenced by rereading every input.
+    #[allow(clippy::too_many_lines)] // One revision-fenced source capture.
+    fn capture_round(
+        &self,
+        target: &SourceTarget,
+        user_document: &AdmittedSource,
+        workspace_document: Option<&AdmittedSource>,
+    ) -> Result<(SourceSettings, String), SettingsError> {
+        let user = user_document.path().to_path_buf();
+        let workspace = workspace_document.map(|document| document.path().to_path_buf());
+        let read = |document: &AdmittedSource| document.read().map_err(|_| SettingsError::Io);
+        let user_bytes = read(user_document)?;
+        let workspace_bytes = workspace_document.map(read).transpose()?.flatten();
         let roots: Vec<_> =
             std::iter::once((SourceScope::User, self.resource_root(&SourceTarget::User)))
                 .chain(
@@ -960,8 +1058,11 @@ impl UserConfigManager {
         let input_revision = super::source_manifest_revision(&manifest);
         let mut provenance = BTreeMap::new();
         let resolved = (|| {
+            // Composition reads each document under its own source contract,
+            // exactly as its source view and Session resolution do.
             let mut merged = RuntimeLayer::default();
-            let user_layer = parse(user_bytes.as_deref())?;
+            let user_layer = super::parse_layer(&user, user_bytes.as_deref().unwrap_or(b""), false)
+                .map_err(|_| SettingsError::Invalid)?;
             merged.overlay(
                 user_layer,
                 &super::Origin::User {
@@ -997,6 +1098,7 @@ impl UserConfigManager {
             Ok(document) => source_resolution_diagnostic(document),
         };
         let prospective_resources = Some(self.authoring_inventory(target));
+        let (repair_sequence, user_repair, workspace_repair) = self.repairs().snapshot(target);
         let result = SourceSettings {
             target: target.clone(),
             process_policy_impacts: [
@@ -1036,21 +1138,29 @@ impl UserConfigManager {
                         .unwrap_or_default(),
                 )
                 .collect(),
-            user: view(user.clone(), user_bytes.as_deref()),
+            user: view(user.clone(), user_bytes.as_deref(), false),
             workspace: workspace
                 .as_ref()
-                .map(|path| view(path.clone(), workspace_bytes.as_deref())),
+                .map(|path| view(path.clone(), workspace_bytes.as_deref(), true)),
+            user_repair,
+            workspace_repair,
+            repair_sequence,
             user_resource_root: self.resource_root(&SourceTarget::User),
             workspace_resource_root: target
                 .workspace()
                 .map(|directory| directory.join(".agents")),
             runtime_root: self.sources.runtime_root.clone(),
         };
-        for (scope, path, captured) in std::iter::once((SourceScope::User, user, user_bytes))
-            .chain(workspace.map(|path| (SourceScope::Workspace, path, workspace_bytes)))
+        #[cfg(test)]
+        self.test_hooks.reach("before_capture_verification");
+        for (scope, document, captured) in
+            std::iter::once((SourceScope::User, user_document, user_bytes)).chain(
+                workspace_document
+                    .map(|document| (SourceScope::Workspace, document, workspace_bytes)),
+            )
         {
             let expected = revision(captured.as_deref());
-            let actual = revision(read(&path)?.as_deref());
+            let actual = revision(reread(document, target)?.as_deref());
             if actual != expected {
                 return Err(SettingsError::Conflict {
                     scope,
@@ -1084,6 +1194,10 @@ impl UserConfigManager {
     ) -> Result<SourceSettings, SettingsError> {
         target.validate()?;
         let scope = target.scope();
+        let authors_config = matches!(
+            &mutation,
+            SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. }
+        );
         let path = match &mutation {
             SourceMutation::Mcp { .. } => self.resource_root(target).join("mcp.toml"),
             SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. } => {
@@ -1094,12 +1208,17 @@ impl UserConfigManager {
                 .join("agents")
                 .join(format!("{name}.toml")),
         };
-        std::fs::create_dir_all(path.parent().ok_or(SettingsError::Io)?)
-            .map_err(|_| SettingsError::Io)?;
+        // The physical source of this transaction, created when missing and
+        // confirmed durable by `publish_locked`. A target redirected since
+        // entry is invalid, as at entry.
+        let source = SourceDirectory::create(&path)
+            .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?;
+        let name = path.file_name().ok_or(SettingsError::Invalid)?;
+        #[cfg(test)]
+        self.test_hooks.reach("write_before_lock");
         {
-            let _lock =
-                super::super::settings::lock_document(&path).map_err(|_| SettingsError::Io)?;
-            let original = read(&path)?;
+            let _lock = source.lock(name).map_err(|_| SettingsError::Io)?;
+            let original = source.read(name).map_err(|_| SettingsError::Io)?;
             let actual = revision(original.as_deref());
             if actual != expected {
                 return Err(SettingsError::Conflict {
@@ -1110,7 +1229,16 @@ impl UserConfigManager {
             }
             let candidate = match mutation {
                 SourceMutation::RepairConfig { document } => {
-                    if parse(original.as_deref()).is_ok() {
+                    // Manual repair exists for documents that fail their own
+                    // source contract, including TOML-parsable ones; it never
+                    // overwrites a valid source.
+                    if super::parse_layer(
+                        &path,
+                        original.as_deref().unwrap_or(b""),
+                        scope == SourceScope::Workspace,
+                    )
+                    .is_ok()
+                    {
                         return Err(SettingsError::Invalid);
                     }
                     let repaired = super::parse_layer(
@@ -1130,7 +1258,14 @@ impl UserConfigManager {
                     {
                         return Err(SettingsError::Invalid);
                     }
-                    let mut document = parse(original.as_deref())?;
+                    // Ordinary editing requires a source satisfying its own
+                    // source contract; anything else is manual repair's.
+                    let mut document = super::parse_layer(
+                        &path,
+                        original.as_deref().unwrap_or(b""),
+                        scope == SourceScope::Workspace,
+                    )
+                    .map_err(|_| SettingsError::Invalid)?;
                     apply(&mut document, mutation)?;
                     Some(encode(document)?)
                 }
@@ -1154,50 +1289,158 @@ impl UserConfigManager {
                     })
                     .transpose()?,
             };
-            let actual = revision(read(&path)?.as_deref());
-            if actual != expected {
-                return Err(SettingsError::Conflict {
-                    scope,
-                    expected: expected.into(),
-                    actual,
-                });
-            }
-            if let Some(bytes) = candidate {
-                let mut staged =
-                    tempfile::NamedTempFile::new_in(path.parent().ok_or(SettingsError::Io)?)
-                        .map_err(|_| SettingsError::Io)?;
-                staged.write_all(&bytes).map_err(|_| SettingsError::Io)?;
-                staged.as_file().sync_all().map_err(|_| SettingsError::Io)?;
-                #[cfg(test)]
-                self.test_hooks.reach("before_publication");
-                let actual = revision(read(&path)?.as_deref());
-                if actual != expected {
-                    return Err(SettingsError::Conflict {
-                        scope,
-                        expected: expected.into(),
-                        actual,
-                    });
-                }
-                staged.persist(&path).map_err(|_| SettingsError::Io)?;
-            } else if original.is_some() {
-                #[cfg(test)]
-                self.test_hooks.reach("before_publication");
-                let actual = revision(read(&path)?.as_deref());
-                if actual != expected {
-                    return Err(SettingsError::Conflict {
-                        scope,
-                        expected: expected.into(),
-                        actual,
-                    });
-                }
-                std::fs::remove_file(&path).map_err(|_| SettingsError::Io)?;
-            }
-            std::fs::File::open(path.parent().ok_or(SettingsError::Committed)?)
-                .and_then(|dir| dir.sync_all())
-                .map_err(|_| SettingsError::Committed)?;
+            self.publish_locked(
+                &source,
+                name,
+                scope,
+                expected,
+                candidate.as_deref(),
+                original.is_some(),
+            )?;
+        }
+        if authors_config {
+            // A committed edit may have resolved an unresolved repair.
+            self.refresh_repair_observation(target);
         }
         self.read_source_settings(target)
             .map_err(|_| SettingsError::Committed)
+    }
+
+    /// The one native source publication primitive. Ordinary authoring and
+    /// automatic repair both publish through it, so every source commit has
+    /// the same physical authority, revision fence, staging, durability and
+    /// uncertainty rules.
+    ///
+    /// The caller opened `source` (the document's physical directory) when
+    /// its transaction began — observed, or created for a write; neither
+    /// claims durability — holds the writer lock of `name` in it and has
+    /// verified `expected`. `candidate` replaces the document; `None` removes
+    /// a present document. A candidate larger than the authored file bound
+    /// its readers enforce is `Invalid` before anything is staged: nothing is
+    /// ever published that its own reader would refuse. Everything goes
+    /// through the admitted directory handle: the candidate is staged in it
+    /// and synced; immediately before the atomic replacement the directory's
+    /// path is confirmed ([`SourceDirectory::confirm`]: every name leading to
+    /// it synced in its parent by this transaction, whoever created it, and
+    /// the pathname proven to still name that directory) and the document
+    /// must still have exactly `expected` bytes; the replacement is a
+    /// `renameat` inside it — the linearization point — and the directory is
+    /// synced afterwards. A success therefore means the published entry and
+    /// every name needed to reach it are durable.
+    ///
+    /// A pathname that no longer names the admitted directory before the
+    /// replacement is `Invalid`, exactly as [`SourceTarget::validate`] rejects
+    /// a redirected target; changed bytes are a `Conflict`; a confirmation
+    /// sync that fails while the pathname still names the directory is `Io`.
+    /// All leave every source unchanged, as does any other failure before
+    /// replacement (`Io`).
+    /// A failed replacement is classified by rereading the admitted document.
+    /// After replacement the bytes are in the admitted physical directory —
+    /// never in a directory the pathname was redirected to — but the outcome
+    /// is `Committed` (published, unconfirmed) when the directory sync fails
+    /// or the pathname no longer names that directory. Nothing here retries or
+    /// replays.
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the owner carries the test I/O fault hooks"
+        )
+    )]
+    pub(super) fn publish_locked(
+        &self,
+        source: &SourceDirectory,
+        name: &std::ffi::OsStr,
+        scope: SourceScope,
+        expected: &str,
+        candidate: Option<&[u8]>,
+        present: bool,
+    ) -> Result<(), SettingsError> {
+        let verify = || {
+            // Durable reachability of the admitted directory, confirmed by
+            // this transaction, and proof that the pathname still names it.
+            source.confirm().map_err(|_| {
+                if source.holds() {
+                    SettingsError::Io
+                } else {
+                    SettingsError::Invalid
+                }
+            })?;
+            let actual = revision(source.read(name).map_err(|_| SettingsError::Io)?.as_deref());
+            if actual == expected {
+                Ok(())
+            } else {
+                Err(SettingsError::Conflict {
+                    scope,
+                    expected: expected.into(),
+                    actual,
+                })
+            }
+        };
+        if let Some(bytes) = candidate {
+            if !crate::bounded_file::within_bound(bytes) {
+                return Err(SettingsError::Invalid);
+            }
+            #[cfg(test)]
+            if self.test_hooks.fault("stage_write") {
+                return Err(SettingsError::Io);
+            }
+            #[cfg(test)]
+            if self.test_hooks.fault("stage_sync") {
+                return Err(SettingsError::Io);
+            }
+            let staged = source.stage(bytes).map_err(|_| SettingsError::Io)?;
+            #[cfg(test)]
+            self.test_hooks.reach("before_publication");
+            verify()?;
+            // Injected replacement failures: refused before the rename, or
+            // reported after it already happened.
+            #[cfg(test)]
+            if self.test_hooks.fault("replace_refused") {
+                return Err(Self::classify_failed_replacement(source, name, expected));
+            }
+            #[cfg(test)]
+            if self.test_hooks.fault("replace") {
+                source
+                    .replace(staged, name)
+                    .map_err(|_| SettingsError::Io)?;
+                return Err(Self::classify_failed_replacement(source, name, expected));
+            }
+            source
+                .replace(staged, name)
+                .map_err(|_| Self::classify_failed_replacement(source, name, expected))?;
+        } else if present {
+            #[cfg(test)]
+            self.test_hooks.reach("before_publication");
+            verify()?;
+            source.remove(name).map_err(|_| SettingsError::Io)?;
+        }
+        #[cfg(test)]
+        self.test_hooks.reach("after_publication");
+        #[cfg(test)]
+        if self.test_hooks.fault("directory_sync") {
+            return Err(SettingsError::Committed);
+        }
+        source.sync().map_err(|_| SettingsError::Committed)?;
+        if source.holds() {
+            Ok(())
+        } else {
+            Err(SettingsError::Committed)
+        }
+    }
+
+    /// A replacement that reported failure is unchanged only while the
+    /// admitted document still has exactly the expected bytes; otherwise its
+    /// outcome is unknown.
+    fn classify_failed_replacement(
+        source: &SourceDirectory,
+        name: &std::ffi::OsStr,
+        expected: &str,
+    ) -> SettingsError {
+        match source.read(name) {
+            Ok(bytes) if revision(bytes.as_deref()) == expected => SettingsError::Io,
+            _ => SettingsError::Committed,
+        }
     }
 }
 
