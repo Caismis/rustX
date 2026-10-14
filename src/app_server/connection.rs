@@ -151,8 +151,7 @@ pub struct AppServerConnection {
     summary_invalidations_delivered: Arc<Mutex<u64>>,
     ownership_invalidations_delivered: Arc<Mutex<u64>>,
     /// The configuration sources whose automatic repair observations this
-    /// connection may see (Issue #464), with the ledger sequence it last
-    /// delivered for each.
+    /// connection may see (Issue #464), with what it delivered of each.
     source_repairs: Arc<Mutex<RepairInterest>>,
     /// Delivery access granted by this connection's transport authentication,
     /// never by a request. Close cancels it, retiring every admitted fence.
@@ -166,13 +165,25 @@ pub struct AppServerConnection {
 ///
 /// The User source always; a Workspace source once this connection addressed
 /// it in a request — exactly the sources its own `configuration/sourcesRead`
-/// could read — so no other Workspace identity reaches it. A source starts at
-/// sequence zero, so its latest receipt is announced once; the set is finite
-/// and forgets the least recently addressed Workspace first.
+/// could read — so no other Workspace identity reaches it. Each admission
+/// delivers the source's current level once, then every later change; the set
+/// is finite and forgets the least recently addressed Workspace first, so
+/// addressing it again is a new admission.
 struct RepairInterest {
-    delivered:
-        std::collections::BTreeMap<crate::local_runtime::configuration::repair::SourceKey, u64>,
+    delivered: std::collections::BTreeMap<
+        crate::local_runtime::configuration::repair::SourceKey,
+        RepairCursor,
+    >,
     workspaces: std::collections::VecDeque<std::path::PathBuf>,
+}
+
+/// Where one admitted source's observations stand for its connection.
+#[derive(Clone, Copy)]
+enum RepairCursor {
+    /// Admitted; its current level — a receipt or none — is still owed.
+    Admitted,
+    /// Delivered through this native ledger sequence.
+    Delivered(u64),
 }
 
 /// Workspace sources one connection observes for repair notices.
@@ -183,7 +194,7 @@ impl Default for RepairInterest {
         Self {
             delivered: [(
                 crate::local_runtime::configuration::repair::SourceKey::User,
-                0,
+                RepairCursor::Admitted,
             )]
             .into(),
             workspaces: std::collections::VecDeque::new(),
@@ -192,7 +203,8 @@ impl Default for RepairInterest {
 }
 
 impl RepairInterest {
-    /// Admit one Workspace source; whether it was newly admitted.
+    /// Admit one Workspace source; whether it was newly admitted. Addressing
+    /// an admitted source only makes it the most recently addressed.
     fn observe(&mut self, directory: std::path::PathBuf) -> bool {
         use crate::local_runtime::configuration::repair::SourceKey;
         let admitted =
@@ -200,8 +212,10 @@ impl RepairInterest {
                 self.workspaces.remove(position);
                 false
             } else {
-                self.delivered
-                    .insert(SourceKey::Workspace(directory.clone()), 0);
+                self.delivered.insert(
+                    SourceKey::Workspace(directory.clone()),
+                    RepairCursor::Admitted,
+                );
                 true
             };
         self.workspaces.push_back(directory);
@@ -1222,11 +1236,11 @@ impl AppServerConnection {
     /// fails on an unrepairable source still announces why.
     ///
     /// Admission is the linearization point: under the interest lock the
-    /// source enters at cursor zero, and the connection's notification wakeup
-    /// is signalled after the lock is released. A parked reader therefore
-    /// rechecks and delivers an observation the ledger already holds, with no
-    /// further ledger change; a reader between its check and its wait keeps
-    /// the stored permit. Re-addressing a known source changes nothing.
+    /// source enters owing its current level, and the connection's
+    /// notification wakeup is signalled after the lock is released. A parked
+    /// reader therefore rechecks and delivers that level with no ledger
+    /// change; a reader between its check and its wait keeps the stored
+    /// permit. Re-addressing an admitted source changes nothing it delivers.
     async fn observe_repair_source(&self, method: &Method) {
         let directory = match method {
             Method::SourcesRead { target }
@@ -1259,6 +1273,15 @@ impl AppServerConnection {
 
     /// The next source repair observation this connection has not delivered.
     /// Level-triggered against the native ledger and per-source cursors.
+    ///
+    /// A newly admitted source delivers its current level — its receipt, or
+    /// none, even when the ledger has forgotten it or never held it — at the
+    /// ledger sequence it was read at; every later change of it follows. The
+    /// level and that sequence are read under one ledger lock, and the cursor
+    /// is set to it while the interest lock is held throughout, so a change
+    /// committed after that read carries a higher sequence and is delivered
+    /// next, and one committed before it is part of the level: nothing is
+    /// lost, stale or delivered twice.
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::SourceKey;
         use crate::local_runtime::configuration::settings::SourceTarget;
@@ -1268,16 +1291,17 @@ impl AppServerConnection {
         }
         let ledger = self.host.manager().source_repairs();
         let mut interest = self.source_repairs.lock().expect("source repair interest");
-        for (key, delivered) in &mut interest.delivered {
-            let Some((sequence, receipt)) = ledger.changed_after(key, *delivered) else {
-                continue;
+        for (key, cursor) in &mut interest.delivered {
+            let (sequence, receipt) = match *cursor {
+                RepairCursor::Admitted => ledger.level(key),
+                RepairCursor::Delivered(delivered) => {
+                    let Some(changed) = ledger.changed_after(key, delivered) else {
+                        continue;
+                    };
+                    changed
+                }
             };
-            let first = *delivered == 0;
-            *delivered = sequence;
-            // Nothing to withdraw from a connection that never saw a receipt.
-            if receipt.is_none() && first {
-                continue;
-            }
+            *cursor = RepairCursor::Delivered(sequence);
             let target = match key {
                 SourceKey::User => SourceTarget::User,
                 SourceKey::Workspace(directory) => SourceTarget::Workspace {

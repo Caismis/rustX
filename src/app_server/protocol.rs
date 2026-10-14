@@ -893,22 +893,26 @@ pub enum NotificationMethod {
     /// Source-scoped: it names a `SourceTarget`, never a Session, attachment
     /// or application scope, and it says nothing about runtime application,
     /// which `configuration/changed` reports separately. A connection observes
-    /// the User source and each Workspace source it addressed; a newly
-    /// observed source announces its latest receipt once. `receipt: null`
-    /// means the source no longer reports an unresolved repair. Delivery is
-    /// level-triggered from a finite process-local ledger: after a gap, the
-    /// authoritative `configuration/sourcesRead` carries the same receipts.
-    /// A notice is not history: a connection's first observation of a source
-    /// without a receipt is never announced, so a client that kept an
-    /// observation across a reconnect rereads it.
+    /// the User source and each Workspace source it addressed, the least
+    /// recently addressed of its 64 Workspaces forgotten first. Each admission
+    /// of a source — including addressing a forgotten one again — announces
+    /// its current level once, then every change of it. `receipt: null` is
+    /// that level when the source reports no repair: never recorded,
+    /// withdrawn, or forgotten by the finite process-local ledger. It is a
+    /// state, not a repair, and presents nothing. Delivery is
+    /// level-triggered: after a gap, the authoritative
+    /// `configuration/sourcesRead` carries the same receipts. A notice is not
+    /// history: one receipt id is one repair occurrence, and a later notice
+    /// may carry it again at a higher `sequence`.
     #[serde(rename = "configuration/sourceRepairChanged")]
     SourceRepairChanged {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         receipt: Option<crate::local_runtime::configuration::repair::ConfigRepairReceipt>,
-        /// The native repair-ledger sequence of this change. Within one App
-        /// Server authority it orders this observation against every other
-        /// observation of the same source, including the `repair_sequence`
-        /// of a `configuration/sourcesRead`: the higher one is the newer.
+        /// The native repair-ledger sequence this level is current at. Within
+        /// one App Server authority it orders this observation against every
+        /// other observation of the same source, including the
+        /// `repair_sequence` of a `configuration/sourcesRead`: the higher one
+        /// is the newer, and two at one sequence agree.
         sequence: u64,
     },
     #[serde(rename = "session/event")]

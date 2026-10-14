@@ -29,8 +29,8 @@
  *
  * Reconnecting to the same authority keeps the entries and the sequences they
  * are current at; the caller rereads the sources still presented, because a
- * missing notice proves nothing (a connection's first observation of a source
- * without a receipt is never announced). A replacement authority retires
+ * missing notice proves nothing (a new connection observes a Workspace only
+ * once it addresses it again). A replacement authority retires
  * everything — its sequences are not comparable — and an observation of any
  * other authority changes nothing.
  */
@@ -72,17 +72,18 @@ export class SourceRepairStatus implements Component {
   }
 
   /**
-   * Applies one native observation of `authorityId`, unless it is older than
-   * the source's current one. The source's presented receipt stays while it
-   * is still the current receipt; a receipt new to the source is presented
-   * only on its first announcement; no receipt withdraws the source. Returns
-   * whether the line changed.
+   * Applies one native observation of `authorityId`, unless it is not newer
+   * than the source's current one: one at an equal sequence states the same
+   * level. The source's presented receipt stays while it is still the
+   * current receipt; a receipt new to the source is presented only on its
+   * first announcement; no receipt withdraws the source. Returns whether the
+   * line changed.
    */
   observe(authorityId: string, { target, receipt, sequence }: SourceRepairObservation): boolean {
     if (authorityId !== this.#authorityId) return false;
     const key = sourceKey(target);
     const known = this.#sources.get(key);
-    if (known !== undefined && olderSequence(sequence, known.sequence)) return false;
+    if (known !== undefined && !olderSequence(known.sequence, sequence)) return false;
     const pending = receipt === undefined ? undefined
       : known?.pending?.id === receipt.id ? known.pending
       : this.#announced.announce(authorityId, receipt) ? receipt : undefined;

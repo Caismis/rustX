@@ -343,9 +343,9 @@ export class RustxTuiApp {
    * late notice or read changes nothing.
    *
    * A reconnect to the same authority keeps the line, and then rereads each
-   * source it still presents: notices are not history, and a source whose
-   * receipt was withdrawn while this client was away is never announced to
-   * the new connection, so only an authoritative read can retire its entry.
+   * source it still presents: the new connection observes a Workspace only
+   * once it is addressed again, so a Workspace whose receipt was withdrawn
+   * while this client was away is announced to no one until that read.
    */
   #watchSourceRepairs(): void {
     this.#removeRepairListener();

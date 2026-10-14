@@ -297,8 +297,8 @@ it("a reconnect to the same authority keeps the line and announces nothing twice
   status.adopt("authority-a");
   assert.equal(status.observe("authority-a", user(receipt())), false);
   assert.equal(status.visible, false);
-  // A new receipt of that authority is still announced.
-  assert.equal(status.observe("authority-a", user(receipt({ id: "receipt-user-2" }))), true);
+  // A new receipt of that authority, at a later sequence, is still announced.
+  assert.equal(status.observe("authority-a", user(receipt({ id: "receipt-user-2" }), "2")), true);
 });
 
 it("a replacement authority retires the previous authority's line", () => {
@@ -340,13 +340,13 @@ it("a native withdrawal removes its source before and after a reconnect", () => 
   status.adopt("authority-a");
   status.observe("authority-a", user(receipt()));
   status.observe("authority-a", workspace(receipt({ id: "w", changed_count: 1 })));
-  assert.equal(status.observe("authority-a", workspace(undefined)), true);
+  assert.equal(status.observe("authority-a", workspace(undefined, WORKSPACE, "2")), true);
   assert.doesNotMatch(presented(status), /Workspace/);
   status.adopt("authority-a");
-  assert.equal(status.observe("authority-a", user(undefined)), true);
+  assert.equal(status.observe("authority-a", user(undefined, "3")), true);
   assert.equal(status.visible, false);
   // Withdrawing nothing changes nothing.
-  assert.equal(status.observe("authority-a", user(undefined)), false);
+  assert.equal(status.observe("authority-a", user(undefined, "4")), false);
 });
 
 it("an observation of any other authority never reaches the current line", () => {
@@ -1137,4 +1137,55 @@ it("P2-03 a combined notice names its most severe receipt and the command inspec
     assert.ok(sections.includes(subject.target.kind === "user" ? "## User rustx.toml" : `## Workspace rustx.toml (${WORKSPACE.directory})`), label);
     assertReadOnly(h);
   }
+});
+
+// P2-05: native ledger sequence alone orders a source's observations.
+
+it("TUI-SEQ-01 a higher sequence of the same receipt advances the source without announcing it again", async () => {
+  const { transport, host, status } = await watched();
+  transport.notify(repairChanged(WORKSPACE, receipt({ id: "repair-12", status: "unresolved", diagnostic: "invalid value" }), "20"));
+  assert.equal(status.visible, true);
+  status.acknowledge();
+  transport.notify(repairChanged(WORKSPACE, receipt({ id: "repair-12", status: "unresolved", diagnostic: "invalid value" }), "100"));
+  assert.equal(held(host, WORKSPACE)?.sequence, "100");
+  assert.equal(held(host, WORKSPACE)?.receipt?.id, "repair-12");
+  assert.equal(status.visible, false, "the same occurrence is not presented again");
+});
+
+it("TUI-SEQ-02 a higher empty level advances an empty source and presents nothing", async () => {
+  const { transport, host, status } = await watched();
+  transport.notify(repairChanged(WORKSPACE, null, "20"));
+  transport.notify(repairChanged(WORKSPACE, null, "100"));
+  assert.deepEqual(held(host, WORKSPACE), { target: WORKSPACE, receipt: undefined, sequence: "100" });
+  assert.equal(status.visible, false);
+});
+
+it("TUI-SEQ-03 an equal-sequence conflict is never applied: the held level stays and its source is read again", async () => {
+  const { transport, host, status } = await watched();
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "20"));
+  const before = held(host, WORKSPACE);
+  transport.notify(repairChanged(WORKSPACE, null, "20"));
+  assert.equal(held(host, WORKSPACE), before);
+  assert.equal(status.visible, true);
+  const [recovery] = await transport.log.awaitMethod("configuration/sourcesRead");
+  assert.deepEqual(paramsOf(recovery!, "configuration/sourcesRead"), { target: WORKSPACE });
+  // A conflicting read at the same sequence is never applied either.
+  answer(transport, recovery!, WORKSPACE, undefined, "20");
+  await settle();
+  assert.equal(held(host, WORKSPACE), before);
+  assert.equal(transport.log.count("configuration/sourcesRead"), 1, "a read never reads again");
+  // Native's next level replaces it.
+  transport.notify(repairChanged(WORKSPACE, null, "21"));
+  assert.deepEqual(held(host, WORKSPACE), { target: WORKSPACE, receipt: undefined, sequence: "21" });
+  assert.equal(status.visible, false);
+});
+
+it("TUI-SEQ-04 a newer observation of the same receipt refreshes its retention", async () => {
+  const { transport, host } = await watched();
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "1"));
+  churn(transport, 2, 63);
+  transport.notify(repairChanged(WORKSPACE, UNRESOLVED_R1, "70"));
+  churn(transport, 71, 1);
+  assert.equal(held(host, WORKSPACE)?.sequence, "70");
+  assert.equal(held(host, { kind: "workspace", directory: "/work/churn2" }), undefined, "the least recently observed went");
 });

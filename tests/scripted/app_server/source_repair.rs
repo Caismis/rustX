@@ -53,17 +53,25 @@ async fn sources(
     *projection
 }
 
-/// The next source repair notice, skipping application notices, which are a
-/// different owner and scope.
-async fn repair_notice(
+/// The next repair notice of `target` with its sequence, skipping
+/// application notices, which are a different owner and scope. Another
+/// source's notice before it may only be the empty level of a source this
+/// connection admitted healthy.
+async fn sequenced_repair_notice(
     connection: &AppServerConnection,
-) -> (SourceTarget, Option<ConfigRepairReceipt>) {
+    target: &SourceTarget,
+) -> (Option<ConfigRepairReceipt>, u64) {
     loop {
         match connection.next_notification().await.notification {
             NotificationMethod::SourceRepairChanged {
-                target, receipt, ..
+                target: announced,
+                receipt,
+                sequence,
             } => {
-                return (target, receipt);
+                if announced == *target {
+                    return (receipt, sequence);
+                }
+                assert!(receipt.is_none(), "{receipt:?}");
             }
             NotificationMethod::ConfigurationChanged { application } => {
                 // Application scopes are Session or source application keys,
@@ -75,6 +83,32 @@ async fn repair_notice(
     }
 }
 
+/// The next repair notice of `target`.
+async fn repair_notice(
+    connection: &AppServerConnection,
+    target: &SourceTarget,
+) -> Option<ConfigRepairReceipt> {
+    sequenced_repair_notice(connection, target).await.0
+}
+
+/// Every repair notice this connection owes now, by source: the levels of
+/// sources it newly admitted. Each is empty — admitting a healthy source
+/// presents nothing — and no source is delivered twice.
+fn empty_levels(connection: &AppServerConnection) -> std::collections::BTreeSet<String> {
+    let mut levels = std::collections::BTreeSet::new();
+    while let Some(notice) = connection.next_source_repair() {
+        let NotificationMethod::SourceRepairChanged {
+            target, receipt, ..
+        } = notice
+        else {
+            panic!("a source repair notice")
+        };
+        assert!(receipt.is_none(), "{receipt:?}");
+        assert!(levels.insert(key(&target)), "a level was delivered twice");
+    }
+    levels
+}
+
 /// Collect exactly `count` repair notices, keyed by source.
 async fn repair_notices(
     connection: &AppServerConnection,
@@ -82,7 +116,14 @@ async fn repair_notices(
 ) -> std::collections::BTreeMap<String, Option<ConfigRepairReceipt>> {
     let mut notices = std::collections::BTreeMap::new();
     while notices.len() < count {
-        let (target, receipt) = repair_notice(connection).await;
+        let (target, receipt) = loop {
+            if let NotificationMethod::SourceRepairChanged {
+                target, receipt, ..
+            } = connection.next_notification().await.notification
+            {
+                break (target, receipt);
+            }
+        };
         assert!(
             notices
                 .insert(serde_json::to_string(&target).unwrap(), receipt)
@@ -149,8 +190,7 @@ async fn session_creation_repairs_both_sources_before_resolution() {
 
         // Another connection observes the User source, but no Workspace it
         // never addressed.
-        let (announced, receipt) = repair_notice(&observer).await;
-        assert_eq!(announced, SourceTarget::User);
+        let receipt = repair_notice(&observer, &SourceTarget::User).await;
         assert_eq!(receipt.unwrap().id, user.id);
         assert!(observer.next_source_repair().is_none());
         // Addressing the Workspace makes its receipt readable, and announces
@@ -158,8 +198,7 @@ async fn session_creation_repairs_both_sources_before_resolution() {
         let read = sources(&observer, 2, &target).await;
         assert_eq!(read.workspace_repair.as_ref(), Some(&repaired));
         assert_eq!(read.user_repair.as_ref(), Some(&user));
-        let (announced, receipt) = repair_notice(&observer).await;
-        assert_eq!(announced, target);
+        let receipt = repair_notice(&observer, &target).await;
         assert_eq!(receipt.unwrap().id, repaired.id);
         for id in 3..6 {
             sources(&observer, id, &target).await;
@@ -215,6 +254,11 @@ async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
             assert!(read.workspace_repair.is_none());
         }
         assert_eq!(std::fs::read_to_string(&workspace_file).unwrap(), edited);
+        // Only the empty levels this connection's admissions owe it.
+        assert_eq!(
+            empty_levels(&connection),
+            [key(&SourceTarget::User), key(&target)].into()
+        );
         assert!(connection.next_source_repair().is_none());
         let probe = f.manager.probe(&f.id(0).await);
         let baseline = super::configuration::settled(&f, 0).await;
@@ -232,9 +276,7 @@ async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
         };
         let repaired = std::fs::read_to_string(&workspace_file).unwrap();
         assert!(!repaired.contains("future_trust"));
-        let (announced, receipt) = repair_notice(&connection).await;
-        assert_eq!(announced, target);
-        let receipt = receipt.unwrap();
+        let receipt = repair_notice(&connection, &target).await.unwrap();
         assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
         assert_eq!(
             receipt.changes,
@@ -305,9 +347,7 @@ async fn an_unrepairable_workspace_is_announced_and_manual_repair_clears_it() {
             panic!("an unrepairable Workspace still fails Session creation")
         };
         assert_eq!(std::fs::read_to_string(&workspace_file).unwrap(), broken);
-        let (announced, receipt) = repair_notice(&connection).await;
-        assert_eq!(announced, target);
-        let receipt = receipt.unwrap();
+        let receipt = repair_notice(&connection, &target).await.unwrap();
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
         assert!(receipt.after_revision.is_none());
         assert!(receipt.diagnostic.unwrap().contains("malformed TOML"));
@@ -334,9 +374,7 @@ async fn an_unrepairable_workspace_is_announced_and_manual_repair_clears_it() {
             panic!("manual repair")
         };
         assert!(projection.workspace_repair.is_none());
-        let (announced, receipt) = repair_notice(&connection).await;
-        assert_eq!(announced, target);
-        assert!(receipt.is_none());
+        assert!(repair_notice(&connection, &target).await.is_none());
         assert!(connection.next_source_repair().is_none());
     })
     .await;
@@ -528,7 +566,10 @@ async fn a_source_write_into_a_replaced_workspace_is_refused_before_application(
             super::configuration::settled(&f, 0).await.desired,
             baseline.desired
         );
-        assert!(connection.next_source_repair().is_none());
+        assert_eq!(
+            empty_levels(&connection),
+            [key(&SourceTarget::User), key(&target)].into()
+        );
         drop(runtime);
         f.close().await;
     })
@@ -659,7 +700,20 @@ async fn session_creation_admits_the_selected_workspace_before_any_repair() {
                 sequence,
                 "{overlap}"
             );
-            assert!(connection.next_source_repair().is_none(), "{overlap}");
+            // The refused Workspace was addressed, so its level is owed; it is
+            // as empty as everything else here.
+            assert_eq!(
+                empty_levels(&connection),
+                [
+                    key(&SourceTarget::User),
+                    key(&workspace(&f, 0)),
+                    key(&SourceTarget::Workspace {
+                        directory: std::fs::canonicalize(&selected).unwrap()
+                    })
+                ]
+                .into(),
+                "{overlap}"
+            );
             assert_eq!(
                 super::configuration::settled(&f, 0).await.desired,
                 baseline.desired,
@@ -811,7 +865,8 @@ async fn an_unresolvable_session_workspace_repairs_no_source() {
                 .latest(&SourceTarget::User)
                 .is_none()
         );
-        assert!(connection.next_source_repair().is_none());
+        // A Workspace that does not resolve is never admitted.
+        assert_eq!(empty_levels(&connection), [key(&SourceTarget::User)].into());
     })
     .await;
 }
@@ -899,105 +954,392 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
     .await;
 }
 
-/// The next source repair notice with its native ledger sequence.
-async fn sequenced_repair_notice(
-    connection: &AppServerConnection,
-) -> (SourceTarget, Option<ConfigRepairReceipt>, u64) {
-    loop {
-        if let NotificationMethod::SourceRepairChanged {
-            target,
-            receipt,
-            sequence,
-        } = connection.next_notification().await.notification
-        {
-            return (target, receipt, sequence);
-        }
-    }
-}
-
-/// REC-INT: a withdrawal while a client is away is never announced to its
-/// next connection — a connection's first observation of a source without a
-/// receipt is suppressed — so only the authoritative read can retire the
-/// warning that client kept, and its `repair_sequence` orders that read
-/// after every notice the client saw before.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_withdrawal_while_away_reaches_a_fresh_connection_only_through_its_read() {
-    bounded(async {
-        let f = Fixture::with_session_count(None, 0).await;
-        let target = workspace(&f, 1);
-        std::fs::write(f.workspaces[1].join("rustx.toml"), "[agent\nlegacy = 1\n").unwrap();
-        // The first connection sees the unresolved receipt, then goes away.
-        let away = AppServerConnection::new(f.host.clone());
-        initialize(&away).await;
-        let Response::Failure(_) = away
-            .handle_request(Request {
-                jsonrpc: JsonRpcVersion::V2,
-                id: RequestId::Integer(1),
-                call: Method::SessionCreate {
-                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
-                        f.workspaces[1].clone(),
-                    )),
-                },
-            })
-            .await
-        else {
-            panic!("an unrepairable Workspace still fails Session creation")
-        };
-        let (announced, receipt, kept) = sequenced_repair_notice(&away).await;
-        assert_eq!(announced, target);
-        assert_eq!(receipt.unwrap().status, ConfigRepairStatus::Unresolved);
-        drop(away);
-        // Another client repairs the Workspace while the first is away.
-        let other = AppServerConnection::new(f.host.clone());
-        initialize(&other).await;
-        let read = sources(&other, 1, &target).await;
-        assert_eq!(read.repair_sequence, kept);
-        // Addressing the Workspace announces its receipt at the same sequence.
-        let (_, receipt, sequence) = sequenced_repair_notice(&other).await;
-        assert!(receipt.is_some());
-        assert_eq!(sequence, kept);
-        let MethodResult::SourceSettings { projection } = call(
-            &other,
-            2,
-            Method::SourcesWrite {
-                target: target.clone(),
-                expected_revision: read.workspace.unwrap().revision,
-                mutation: SourceMutation::RepairConfig {
-                    document: "[environment]\nRESIDENCY_SESSION = \"B\"\n".into(),
-                },
-            },
-        )
-        .await
-        else {
-            panic!("manual repair")
-        };
-        assert!(projection.workspace_repair.is_none());
-        let withdrawn = projection.repair_sequence;
-        assert!(withdrawn > kept);
-        // The connection that saw the receipt hears the withdrawal, at the
-        // sequence its write reported.
-        let (_, receipt, sequence) = sequenced_repair_notice(&other).await;
-        assert!(receipt.is_none());
-        assert_eq!(sequence, withdrawn);
-        // The returning client's fresh connection is told nothing about the
-        // Workspace, even once it addresses it ...
-        let returning = AppServerConnection::new(f.host.clone());
-        initialize(&returning).await;
-        let reread = sources(&returning, 1, &target).await;
-        while let Some(notice) = returning.next_source_repair() {
+/// Every repair notice this connection owes now, in delivery order.
+fn owed(connection: &AppServerConnection) -> Vec<(SourceTarget, Option<ConfigRepairReceipt>, u64)> {
+    std::iter::from_fn(|| connection.next_source_repair())
+        .map(|notice| {
             let NotificationMethod::SourceRepairChanged {
-                target: noticed, ..
+                target,
+                receipt,
+                sequence,
             } = notice
             else {
                 panic!("a source repair notice")
             };
-            assert_ne!(noticed, target, "a first withdrawal is never announced");
+            (target, receipt, sequence)
+        })
+        .collect()
+}
+
+/// `count` further Workspaces beside the fixture's, named `{prefix}-{index}`,
+/// each holding `document`.
+fn more_workspaces(f: &Fixture, prefix: &str, count: usize, document: &str) -> Vec<SourceTarget> {
+    let root = f.workspaces[0].parent().unwrap();
+    (0..count)
+        .map(|index| {
+            let directory = root.join(format!("{prefix}-{index}"));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("rustx.toml"), document).unwrap();
+            SourceTarget::Workspace {
+                directory: std::fs::canonicalize(&directory).unwrap(),
+            }
+        })
+        .collect()
+}
+
+/// Record an unresolved receipt for `target` by observing it malformed.
+fn record_unresolved(f: &Fixture, target: &SourceTarget) {
+    std::fs::write(
+        target.workspace().unwrap().join("rustx.toml"),
+        "[agent\nlegacy = 1\n",
+    )
+    .unwrap();
+    let configuration = &f.manager.configuration;
+    assert_eq!(
+        configuration.repair_source(target, &configuration.admit_repair_scope(target).unwrap()),
+        crate::local_runtime::configuration::repair::RepairOutcome::Unchanged
+    );
+    assert_eq!(
+        f.manager.source_repairs().latest(target).unwrap().status,
+        ConfigRepairStatus::Unresolved
+    );
+}
+
+/// Commit an automatic repair of `target`.
+fn commit_repair(f: &Fixture, target: &SourceTarget) -> ConfigRepairReceipt {
+    std::fs::write(
+        target.workspace().unwrap().join("rustx.toml"),
+        "[agent]\nfuture_trust = true\n",
+    )
+    .unwrap();
+    let configuration = &f.manager.configuration;
+    assert_eq!(
+        configuration.repair_source(target, &configuration.admit_repair_scope(target).unwrap()),
+        crate::local_runtime::configuration::repair::RepairOutcome::Committed
+    );
+    f.manager.source_repairs().latest(target).unwrap()
+}
+
+/// Withdraw `target`'s unresolved receipt through the existing manual repair
+/// on `connection`; the sequence the write reported.
+async fn withdraw(connection: &AppServerConnection, id: i64, target: &SourceTarget) -> u64 {
+    let read = sources(connection, id, target).await;
+    let MethodResult::SourceSettings { projection } = call(
+        connection,
+        id + 1,
+        Method::SourcesWrite {
+            target: target.clone(),
+            expected_revision: read.workspace.unwrap().revision,
+            mutation: SourceMutation::RepairConfig {
+                document: "[environment]\nRESIDENCY_SESSION = \"B\"\n".into(),
+            },
+        },
+    )
+    .await
+    else {
+        panic!("manual repair")
+    };
+    assert!(projection.workspace_repair.is_none());
+    projection.repair_sequence
+}
+
+fn sequence(f: &Fixture) -> u64 {
+    *f.manager.source_repairs().subscribe().borrow()
+}
+
+/// NATIVE-LEVEL-01: admitting a healthy Workspace owes its empty level once,
+/// at the ledger sequence it was read at; addressing it again owes nothing.
+/// The level is a state, not a repair: nothing is recorded, written, backed
+/// up, prepared, journaled or requested. No notice precedes `initialize`, and
+/// a Workspace this connection never addressed — even one the ledger holds a
+/// receipt for — never reaches it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_healthy_admission_owes_its_empty_level_exactly_once() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let target = workspace(&f, 0);
+        let runtime = f.load(0).await.unwrap().unwrap();
+        let live = runtime.inspect_runtime().unwrap();
+        let journal = events(&live).len();
+        let requests = f.provider.attempt_count();
+        // Another Workspace holds a receipt this connection never addresses.
+        let [unaddressed] = more_workspaces(&f, "unaddressed", 1, "")
+            .try_into()
+            .unwrap();
+        record_unresolved(&f, &unaddressed);
+        let current = sequence(&f);
+        assert!(current > 0);
+        let connection = AppServerConnection::new(f.host.clone());
+        assert!(owed(&connection).is_empty(), "nothing before initialize");
+        initialize(&connection).await;
+        assert_eq!(owed(&connection), [(SourceTarget::User, None, current)]);
+        let probe = f.manager.probe(&f.id(0).await);
+        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let text = std::fs::read_to_string(f.workspaces[0].join("rustx.toml")).unwrap();
+        for id in 1..4 {
+            sources(&connection, id, &target).await;
+            if id == 1 {
+                assert_eq!(owed(&connection), [(target.clone(), None, current)]);
+            }
+            assert!(
+                owed(&connection).is_empty(),
+                "an admitted source is owed once"
+            );
         }
-        // ... and only its read says the receipt is gone, at a sequence
-        // later than the notice it kept.
-        assert!(reread.workspace_repair.is_none());
-        assert!(reread.repair_sequence >= withdrawn);
-        assert!(reread.repair_sequence > kept);
+        assert_eq!(sequence(&f), current, "a level records nothing");
+        assert_eq!(
+            std::fs::read_to_string(f.workspaces[0].join("rustx.toml")).unwrap(),
+            text
+        );
+        assert!(!f.archive_root.join("configuration-backups").exists());
+        assert_eq!(
+            probe.configuration_preparations.load(Ordering::SeqCst),
+            preparations
+        );
+        assert_eq!(events(&live).len(), journal);
+        assert_eq!(f.provider.attempt_count(), requests);
+        drop(live);
+        drop(runtime);
+        f.close().await;
+    })
+    .await;
+}
+
+/// Connection A holds W0's unresolved receipt, then addresses 64 other
+/// Workspaces, so its interest forgets W0 while a client of A may still
+/// present the receipt (a client orders by observation, not addressing).
+/// Another connection withdraws the receipt; A, no longer interested, hears
+/// nothing. Addressing W0 again is a new admission, and its level is the
+/// withdrawal — and, when `ledger_forgets`, the ledger has meanwhile
+/// forgotten W0 entirely.
+async fn readmission_after_interest_eviction(ledger_forgets: bool) {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let w0 = workspace(&f, 1);
+        let a = AppServerConnection::new(f.host.clone());
+        let other = AppServerConnection::new(f.host.clone());
+        initialize(&a).await;
+        initialize(&other).await;
+        owed(&a);
+        record_unresolved(&f, &w0);
+        sources(&a, 1, &w0).await;
+        let kept = match owed(&a).as_slice() {
+            [(announced, Some(receipt), kept)] => {
+                assert_eq!(*announced, w0);
+                assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
+                *kept
+            }
+            owed => panic!("W0's receipt: {owed:?}"),
+        };
+        // 64 more Workspaces evict W0 from A's interest.
+        let more = more_workspaces(&f, "more", 64, "");
+        for (index, target) in (2..).zip(&more) {
+            sources(&a, index, target).await;
+        }
+        for (target, receipt, _) in owed(&a) {
+            assert!(more.contains(&target) && receipt.is_none());
+        }
+        let withdrawn = withdraw(&other, 1, &w0).await;
+        assert!(withdrawn > kept);
+        assert!(f.manager.source_repairs().holds(&w0));
+        if ledger_forgets {
+            // 64 newer Workspace entries make the ledger forget W0.
+            for target in &more {
+                record_unresolved(&f, target);
+            }
+            assert!(!f.manager.source_repairs().holds(&w0));
+        }
+        // A is not interested in W0 any more: nothing of it reaches A.
+        for (target, _, _) in owed(&a) {
+            assert_ne!(target, w0);
+        }
+        let current = sequence(&f);
+        // Re-admission: W0's current level is the withdrawal, at a
+        // sequence that orders it after every receipt A ever saw of W0.
+        sources(&a, 100, &w0).await;
+        assert_eq!(owed(&a), [(w0.clone(), None, current)], "{ledger_forgets}");
+        assert!(current >= withdrawn);
+        sources(&a, 101, &w0).await;
+        assert!(owed(&a).is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+/// NATIVE-LEVEL-02: re-admission delivers a withdrawal the ledger retains.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_readmitted_workspace_delivers_its_retained_withdrawal() {
+    readmission_after_interest_eviction(false).await;
+}
+
+/// NATIVE-LEVEL-03: re-admission delivers an empty level for a Workspace the
+/// ledger has forgotten: a missing entry is no retained receipt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_readmitted_workspace_forgotten_by_the_ledger_delivers_an_empty_level() {
+    readmission_after_interest_eviction(true).await;
+}
+
+/// NATIVE-LEVEL-04: with the ledger at sequence zero, the User's and a
+/// Workspace's empty levels are delivered once each at zero — never again —
+/// and the first repair recorded afterwards is delivered at its own, later
+/// sequence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn empty_levels_at_sequence_zero_are_delivered_once() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let target = workspace(&f, 0);
+        assert_eq!(sequence(&f), 0);
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        sources(&connection, 1, &target).await;
+        assert_eq!(
+            owed(&connection),
+            [(SourceTarget::User, None, 0), (target.clone(), None, 0)]
+        );
+        for id in 2..4 {
+            sources(&connection, id, &target).await;
+            assert!(owed(&connection).is_empty());
+        }
+        let receipt = commit_repair(&f, &target);
+        assert_eq!(owed(&connection), [(target.clone(), Some(receipt), 1)]);
+        assert!(owed(&connection).is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+/// NATIVE-LEVEL-05: a ledger change interleaved with a new admission is never
+/// lost and never delivered stale.
+///
+/// 1. Admission, then a commit, then delivery: the one level delivered is the
+///    commit, never an empty level before it.
+/// 2. Admission, delivery of the empty level, then a commit: the commit
+///    follows at a higher sequence.
+/// 3. A parked reader, woken by the admission, then a withdrawal committed
+///    before it runs: it delivers the latest level once, and nothing after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_racing_a_new_admission_is_neither_lost_nor_stale() {
+    use std::future::Future;
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let [first, second, third] = more_workspaces(&f, "race", 3, "").try_into().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        owed(&connection);
+        // 1. Admitted, changed, then delivered: one coalesced level.
+        sources(&connection, 1, &first).await;
+        let receipt = commit_repair(&f, &first);
+        assert_eq!(
+            owed(&connection),
+            [(first.clone(), Some(receipt), sequence(&f))]
+        );
+        // 2. Delivered empty, then changed: the change follows.
+        sources(&connection, 2, &second).await;
+        let level = sequence(&f);
+        assert_eq!(owed(&connection), [(second.clone(), None, level)]);
+        let receipt = commit_repair(&f, &second);
+        assert_eq!(
+            owed(&connection),
+            [(second.clone(), Some(receipt), sequence(&f))]
+        );
+        assert!(sequence(&f) > level);
+        // 3. A parked reader is woken by the admission; before it runs, the
+        //    source's receipt is recorded and then withdrawn.
+        record_unresolved(&f, &third);
+        let mut next = park(&connection, &third);
+        let flag = std::sync::Arc::new(WakeFlag(std::sync::atomic::AtomicBool::new(false)));
+        let waker = std::task::Waker::from(flag.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(next.as_mut().poll(&mut context).is_pending());
+        sources(&connection, 3, &third).await;
+        assert!(flag.0.load(Ordering::SeqCst), "admission wakes the reader");
+        let other = AppServerConnection::new(f.host.clone());
+        initialize(&other).await;
+        withdraw(&other, 1, &third).await;
+        let std::task::Poll::Ready(notification) = next.as_mut().poll(&mut context) else {
+            panic!("the admitted level is deliverable")
+        };
+        drop(next);
+        // The withdrawal's application notice is another owner's and may come
+        // first; of the source, only its latest level is delivered.
+        let mut levels = Vec::new();
+        match notification.notification {
+            NotificationMethod::SourceRepairChanged {
+                target,
+                receipt,
+                sequence,
+            } => levels.push((target, receipt, sequence)),
+            NotificationMethod::ConfigurationChanged { .. } => {}
+            other => panic!("{other:?}"),
+        }
+        levels.extend(owed(&connection));
+        assert_eq!(levels, [(third.clone(), None, sequence(&f))]);
+        assert!(owed(&connection).is_empty(), "nothing older follows");
+        f.close().await;
+    })
+    .await;
+}
+
+/// NATIVE-LEVEL-06: a connection's interest is the User and its 64 most
+/// recently addressed Workspaces. Re-addressing an admitted Workspace only
+/// refreshes it; addressing a forgotten one is a new admission with a new
+/// level; the User is never forgotten. Another connection's interest is its
+/// own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repair_interest_is_bounded_and_readmission_is_distinct_from_access() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let more = more_workspaces(&f, "bound", 65, "");
+        let connection = AppServerConnection::new(f.host.clone());
+        let bystander = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        initialize(&bystander).await;
+        let mut id = 0;
+        let mut address = async |target: &SourceTarget| {
+            id += 1;
+            sources(&connection, id, target).await;
+            owed(&connection)
+                .into_iter()
+                .map(|(target, receipt, _)| {
+                    assert!(receipt.is_none());
+                    target
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            address(&more[0]).await,
+            [SourceTarget::User, more[0].clone()]
+        );
+        for target in &more[1..] {
+            assert_eq!(address(target).await, std::slice::from_ref(target));
+        }
+        // 65 addressed: the first was forgotten, the other 64 are admitted.
+        for target in &more[1..] {
+            assert!(address(target).await.is_empty(), "access is not admission");
+        }
+        assert_eq!(address(&more[0]).await, [more[0].clone()], "re-admission");
+        // That re-admission forgot the least recently addressed, more[1].
+        assert_eq!(address(&more[1]).await, [more[1].clone()]);
+        // The User has its own slot, never forgotten.
+        prepend(&user_path(&f), "legacy_user = true\n");
+        let configuration = &f.manager.configuration;
+        assert_eq!(
+            configuration.repair_source(
+                &SourceTarget::User,
+                &configuration
+                    .admit_repair_scope(&SourceTarget::User)
+                    .unwrap()
+            ),
+            crate::local_runtime::configuration::repair::RepairOutcome::Committed
+        );
+        let [(SourceTarget::User, Some(_), _)] = owed(&connection).as_slice() else {
+            panic!("the User repair")
+        };
+        // The bystander observes the User and no Workspace.
+        let seen = owed(&bystander);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, SourceTarget::User);
+        f.close().await;
     })
     .await;
 }
@@ -1020,8 +1362,7 @@ async fn reconcile_announced(
     else {
         panic!("reconciled")
     };
-    let (announced, receipt, sequence) = sequenced_repair_notice(connection).await;
-    assert_eq!(announced, target);
+    let (receipt, sequence) = sequenced_repair_notice(connection, &target).await;
     (receipt.unwrap(), sequence)
 }
 
@@ -1146,8 +1487,16 @@ async fn notices_and_reads_carry_the_same_redacted_receipt() {
         };
         let notice = loop {
             let notification = connection.next_notification().await.notification;
-            if matches!(notification, NotificationMethod::SourceRepairChanged { .. }) {
-                break notification;
+            if let NotificationMethod::SourceRepairChanged {
+                target: announced,
+                receipt,
+                ..
+            } = &notification
+            {
+                if *announced == target {
+                    break notification;
+                }
+                assert!(receipt.is_none(), "{receipt:?}");
             }
         };
         let serialized = serde_json::to_string(&notice).unwrap();
@@ -1371,7 +1720,10 @@ async fn source_reads_are_physically_bound_and_trigger_nothing() {
             ),
             namespace
         );
-        assert!(connection.next_source_repair().is_none());
+        assert_eq!(
+            empty_levels(&connection),
+            [key(&SourceTarget::User), key(&target)].into()
+        );
         assert!(f.manager.source_repairs().latest(&target).is_none());
         assert_eq!(
             probe.configuration_preparations.load(Ordering::SeqCst),

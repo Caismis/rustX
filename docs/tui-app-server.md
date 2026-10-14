@@ -42,7 +42,9 @@ host). Three facts stay apart. A source's current native observation is ordered
 by the native ledger sequence a notice (`sequence`) or read (`repair_sequence`)
 carries — never by receipt id, status or arrival — so an older read answered
 after a newer notice, or a late notice after a fresher read, changes nothing,
-and an observation at an equal sequence is the same observation. Announcements
+and an observation at an equal sequence is the same observation: one that
+disagrees with the source's current one is never adopted, and the source is
+read again. Announcements
 are kept once per `(authority_id, receipt id)`; a receipt id names one native
 repair occurrence, so a second commit of identical changes is announced again. What the line presents is a
 source's current receipt from its first announcement until the user
@@ -52,8 +54,9 @@ announced before: it becomes current without a second announcement and retires
 whatever the source presented (R1 → R2 → R1 ends with R1 current and nothing
 presented). An acknowledgement never changes what a source holds.
 
-Notices are not history: a source whose receipt was withdrawn while the client
-was away is never announced to its next connection. A reconnect to the same App
+A new connection observes the User at once and a Workspace only once it
+addresses it again, so a Workspace whose receipt was withdrawn while the client
+was away is announced to no one until then. A reconnect to the same App
 Server therefore keeps the line and then rereads, through `configuration/sourcesRead`
 on that exact connection, each source the line still presents — each Workspace,
 whose read also rereads the User — one read at a time, bounded by the line's

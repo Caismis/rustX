@@ -155,6 +155,11 @@ export function retainSourceRepair<V>(sources: Readonly<Record<string, V>>, key:
 function olderSequence(a: string, b: string): boolean {
   return BigInt(a) < BigInt(b);
 }
+/** Whether two observations of one source state the same level: the same
+ * receipt occurrence, or no receipt on either side. */
+function sameLevel(a: SourceRepairObservation, b: SourceRepairObservation): boolean {
+  return a.receipt?.id === b.receipt?.id;
+}
 export interface ClientView {
   configuration?: Readonly<Record<string, ConfigurationApplication>>;
   /** Source repair observations of this connection, by `sourceRepairKey`,
@@ -669,16 +674,25 @@ export class AppServerClient {
   }
   /** Applies one native observation of this connection's authority unless
    * it is not newer than what this connection holds, or may have held, of its
-   * source. A held source orders it by sequence; an equal receipt is the same
-   * occurrence and changes nothing. An absent one may have been forgotten
-   * through `forgotten` — for a read, its own bound; for a notice, the
-   * connection's frontier — and an observation older than that is never
-   * applied; an ambiguous notice is recovered by reading its source again. */
+   * source. A held source orders it by sequence alone: a higher sequence
+   * replaces it, even with the same receipt or with no receipt on either
+   * side, so a withdrawal retires the receipt and an unchanged one advances
+   * without being presented again (presentation follows receipt ids). Two
+   * observations at one sequence agree; one that disagrees is inconsistent,
+   * never newer, so the held one stays and a notice's source is read again.
+   * An absent source may have been forgotten through `forgotten` — for a
+   * read, its own bound; for a notice, the connection's frontier — and an
+   * observation older than that is never applied; an ambiguous notice is
+   * recovered by reading its source again. */
   private observeRepair(observation: SourceRepairObservation, forgotten?: string) {
     const key = sourceRepairKey(observation.target);
     const known = this.state.sourceRepairs?.[key];
     if (known) {
-      if (olderSequence(observation.sequence, known.sequence) || observation.receipt?.id === known.receipt?.id) return;
+      if (olderSequence(observation.sequence, known.sequence)) return;
+      if (!olderSequence(known.sequence, observation.sequence)) {
+        if (!sameLevel(observation, known) && forgotten === undefined) this.recoverRepairs(observation.target);
+        return;
+      }
     } else if (key !== 'user' && olderSequence(observation.sequence, forgotten ?? this.repairsForgottenThrough)) {
       if (forgotten === undefined) this.recoverRepairs(observation.target);
       return;
@@ -739,11 +753,12 @@ export class AppServerClient {
     })();
   }
   /** A Session of Workspace `directory` was attached: native now observes
-   * that source for this connection. Once this connection has forgotten a
-   * source, an absent one may be one of them, so it is read again rather than
-   * assumed healthy or still as it was. Before that, an absent source was
-   * never observed: native announces the current receipt of each source it
-   * newly observes for this connection, and nothing is read. */
+   * that source for this connection. Native announces the current level of
+   * each source it newly admits for this connection — a receipt or none — so
+   * a source native admits anew needs no read. But native forgets by
+   * addressing and this client by observation: once this client has
+   * forgotten a source, an absent one may be one native still observes and
+   * so never announces again, and it is read rather than assumed healthy. */
   private visitRepairs(directory: string) {
     const target: SourceTarget = { kind: 'workspace', directory };
     if (olderSequence('0', this.repairsForgottenThrough) && !this.state.sourceRepairs?.[sourceRepairKey(target)]) this.recoverRepairs(target);
@@ -1003,7 +1018,7 @@ export class AppServerClient {
       else {
         const key = sourceRepairKey(target);
         const held = this.unattributedRepairs[key];
-        if (!held || !olderSequence(sequence, held.sequence)) [this.unattributedRepairs] = retainSourceRepair<Omit<SourceRepairObservation, 'authorityId'>>(this.unattributedRepairs, key, { target, receipt, sequence });
+        if (!held || olderSequence(held.sequence, sequence)) [this.unattributedRepairs] = retainSourceRepair<Omit<SourceRepairObservation, 'authorityId'>>(this.unattributedRepairs, key, { target, receipt, sequence });
       }
       return;
     }

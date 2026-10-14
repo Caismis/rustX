@@ -341,7 +341,20 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
         drop(input);
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
-        assert!(output.next_line().await.unwrap().is_none());
+        // The only record a negotiated connection may still owe is the User
+        // source's repair level, which is empty here (Issue #464).
+        let mut levels = 0;
+        while let Some(line) = output.next_line().await.unwrap() {
+            let record: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                record["method"], "configuration/sourceRepairChanged",
+                "{record}"
+            );
+            assert_eq!(record["params"]["target"]["kind"], "user", "{record}");
+            assert!(record["params"]["receipt"].is_null(), "{record}");
+            levels += 1;
+        }
+        assert!(levels <= 1);
         for bytes in [
             vec![0xff, b'\n'],
             b"{}".to_vec(),
@@ -918,8 +931,13 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             use app_server_conformance::AppServerConformanceDriver;
             let notification = client.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event and is
-            // not routed by attachment target (Issue #386).
-            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+            // not routed by attachment target (Issue #386); nor is a
+            // source-scoped repair level (Issue #464).
+            if matches!(
+                notification,
+                NotificationMethod::SummaryInvalidated { .. }
+                    | NotificationMethod::SourceRepairChanged { .. }
+            ) {
                 continue;
             }
             let NotificationMethod::Event { target, event, .. } = notification else {

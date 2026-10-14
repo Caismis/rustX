@@ -810,6 +810,13 @@ impl RepairLedger {
             .and_then(|entry| entry.receipt.clone())
     }
 
+    /// Whether the ledger still holds an entry for the source, with or
+    /// without a receipt.
+    #[cfg(test)]
+    pub(crate) fn holds(&self, target: &SourceTarget) -> bool {
+        self.lock().entries.contains_key(&SourceKey::from(target))
+    }
+
     /// The User's and, given a Workspace target, that Workspace's latest
     /// receipts, read under one lock with the ledger sequence they are
     /// current at. Every change of any source advances that sequence, so a
@@ -834,6 +841,20 @@ impl RepairLedger {
             .workspace()
             .and_then(|_| latest(&SourceKey::from(target)));
         (state.sequence, latest(&SourceKey::User), workspace)
+    }
+
+    /// The source's current level with the ledger sequence it is current
+    /// at: its latest receipt, or none when it has none — withdrawn, never
+    /// recorded, or forgotten by this finite ledger. Forgetting happens only
+    /// while recording another source, which advances the sequence, so a
+    /// level read here is never older than anything recorded of the source.
+    pub(crate) fn level(&self, key: &SourceKey) -> (u64, Option<ConfigRepairReceipt>) {
+        let state = self.lock();
+        let receipt = state
+            .entries
+            .get(key)
+            .and_then(|entry| entry.receipt.clone());
+        (state.sequence, receipt)
     }
 
     /// The source's observation if it changed after `cursor`, with its

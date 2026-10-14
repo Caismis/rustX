@@ -335,17 +335,24 @@ export class AppServerHost {
   /**
    * Applies one native observation unless it is not newer than what this
    * connection holds, or may have held, of its source. A held source orders
-   * it by sequence. An absent one may have been forgotten through `forgotten`
-   * — for a read, its own bound; for a notice, the connection's frontier —
-   * and an observation older than that is never applied; an ambiguous notice
-   * is recovered by reading its source again.
+   * it by sequence alone: a higher sequence replaces it, even with the same
+   * receipt or with no receipt on either side. Two observations at one
+   * sequence agree; one that disagrees is inconsistent, never newer, so the
+   * held one stays and a notice's source is read again. An absent one may
+   * have been forgotten through `forgotten` — for a read, its own bound; for
+   * a notice, the connection's frontier — and an observation older than that
+   * is never applied; an ambiguous notice is recovered by reading its source
+   * again.
    */
   #observeSourceRepair(observation: SourceRepairObservation, forgotten?: string): void {
     const key = sourceKey(observation.target);
     const known = this.#sourceRepairs.get(key);
     if (known !== undefined) {
-      if (olderSequence(observation.sequence, known.sequence)
-        || (observation.sequence === known.sequence && observation.receipt?.id === known.receipt?.id)) return;
+      if (olderSequence(observation.sequence, known.sequence)) return;
+      if (!olderSequence(known.sequence, observation.sequence)) {
+        if (observation.receipt?.id !== known.receipt?.id && forgotten === undefined) this.#recover(observation.target);
+        return;
+      }
     } else if (key !== "user" && olderSequence(observation.sequence, forgotten ?? this.#forgottenThrough)) {
       if (forgotten === undefined) this.#recover(observation.target);
       return;
@@ -365,7 +372,8 @@ export class AppServerHost {
   }
 
   /**
-   * Reads `target` again because a notice of it was ambiguous. Sequential
+   * Reads `target` again because a notice of it was ambiguous or disagreed
+   * with what this connection holds at the same sequence. Sequential
    * and bounded: one read in flight, one queued entry per source; a source
    * noticed again while its read is in flight is read once more after it,
    * since that read may predate the notice. A failed read proves nothing,

@@ -2418,8 +2418,8 @@ it("repair status is scoped to the App Server authority across reconnects and re
 
 it("REC-01 a withdrawal while away retires the warning through the reconnect read", async () => {
   const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
-    // The returning connection is told nothing about the Workspace: its
-    // first observation without a receipt is never announced.
+    // The returning connection is told nothing about the Workspace until it
+    // addresses it again: only the User is observed at once.
     [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }]);
   try {
     await waitForApplicationContinuation();

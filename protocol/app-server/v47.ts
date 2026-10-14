@@ -3209,10 +3209,11 @@ export type Notification1 =
         target: SourceTarget;
         receipt?: ConfigRepairReceipt | null;
         /**
-         * The native repair-ledger sequence of this change. Within one App
-         * Server authority it orders this observation against every other
-         * observation of the same source, including the `repair_sequence`
-         * of a `configuration/sourcesRead`: the higher one is the newer.
+         * The native repair-ledger sequence this level is current at. Within
+         * one App Server authority it orders this observation against every
+         * other observation of the same source, including the
+         * `repair_sequence` of a `configuration/sourcesRead`: the higher one
+         * is the newer, and two at one sequence agree.
          */
         sequence: string;
       };

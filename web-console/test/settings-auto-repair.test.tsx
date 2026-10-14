@@ -49,8 +49,8 @@ it('keeps source repair observations source-scoped, deduplicated and per connect
   const observed = s.client.getSnapshot().sourceRepairs;
   expect(observed).toEqual({ user: { authorityId: s.authorityId, target: { kind: 'user' }, receipt: receipt(), sequence: String(announcedSequence) } });
   const publications = listener.mock.calls.length;
-  // The same receipt again is no change.
-  await announce(s, { kind: 'user' }, receipt());
+  // The same level again, at the same sequence, is no change.
+  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/sourceRepairChanged', params: { target: { kind: 'user' }, receipt: receipt(), sequence: String(announcedSequence) } }); });
   expect(listener.mock.calls.length).toBe(publications);
   expect(s.client.getSnapshot().sourceRepairs).toBe(observed);
   await announce(s, workspace, receipt({ id: 'w', target: workspace, status: 'unresolved', after_revision: null }));
@@ -882,5 +882,246 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   expect((screen.getByLabelText('max_connections') as HTMLInputElement).value).toBe('19');
   await openSettingsPage('Agent');
   expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  s.client.disconnect();
+});
+
+// P1-04 / P2-05: native ledger sequence alone orders a source's observations;
+// an empty level is a state; native re-admission converges a stale receipt.
+
+/** Delivers one native observation of `target` at exactly `sequence`. */
+const deliverAt = (s: Server, target: SourceTarget, value: ConfigRepairReceipt | null, sequence: number) =>
+  act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/sourceRepairChanged', params: { target, receipt: value, sequence: String(sequence) } }); });
+const held = (s: Server, target: SourceTarget) => s.client.getSnapshot().sourceRepairs?.[target.kind === 'user' ? 'user' : `workspace:${target.directory}`];
+const unresolvedAt = (target: SourceTarget, id: string) => receiptOf(target, id, unresolved);
+/** Native answers every Workspace read with `current()` at `sequence()`. */
+function answering(s: Server, sequence: () => number, current: () => ConfigRepairReceipt | null) {
+  s.handlers.set('configuration/sourcesRead', request => {
+    const asked = (request.params as { target: SourceTarget }).target;
+    return { type: 'source_settings', projection: nativeRead(asked, String(sequence()), asked.kind === 'workspace' ? current() : null) };
+  });
+}
+
+it('WEB-SEQ-01 a higher sequence of the same receipt advances its observation without a second notice', async () => {
+  const s = new Server(); await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={vi.fn()} />);
+  await deliverAt(s, workspace, unresolvedAt(workspace, 'repair-12'), 20);
+  const presented = notice();
+  expect(presented!.textContent).toMatch(/Workspace configuration could not be repaired automatically/);
+  await deliverAt(s, workspace, unresolvedAt(workspace, 'repair-12'), 100);
+  expect(held(s, workspace)).toMatchObject({ sequence: '100', receipt: { id: 'repair-12' } });
+  // The same occurrence: the same notice element, not a new one.
+  expect(notice()).toBe(presented);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  await deliverAt(s, workspace, unresolvedAt(workspace, 'repair-12'), 150);
+  expect(held(s, workspace)!.sequence).toBe('150');
+  expect(notice()).toBeNull();
+  s.client.disconnect();
+});
+
+it('WEB-SEQ-02 a higher empty level advances an empty observation', async () => {
+  const s = new Server(); await s.connect();
+  render(<RepairNotice client={s.client} acknowledgements={new RepairAcknowledgements(undefined, undefined)} viewDetails={vi.fn()} />);
+  await deliverAt(s, workspace, null, 20);
+  expect(held(s, workspace)).toMatchObject({ sequence: '20', receipt: undefined });
+  await deliverAt(s, workspace, null, 100);
+  expect(held(s, workspace)).toMatchObject({ sequence: '100', receipt: undefined });
+  // An empty level is a state, never a notice.
+  expect(notice()).toBeNull();
+  s.client.disconnect();
+});
+
+describe('WEB-SEQ-03/04 an empty level at a higher sequence withdraws a receipt, and nothing older restores it', () => {
+  for (const [name, byRead] of [['withdrawn by a notice', false], ['withdrawn by an authoritative read', true]] as const) {
+    it(name, async () => {
+      const s = new Server();
+      answering(s, () => 100, () => null);
+      await s.connect();
+      render(<RepairNotice client={s.client} acknowledgements={new RepairAcknowledgements(undefined, undefined)} viewDetails={vi.fn()} />);
+      await deliverAt(s, workspace, unresolvedAt(workspace, 'w-20'), 20);
+      expect(notice()!.textContent).toMatch(/could not be repaired automatically/);
+      if (byRead) {
+        // An inconsistent notice at the held sequence is never applied; the
+        // source is read from native authority instead.
+        await deliverAt(s, workspace, null, 20);
+        await waitFor(() => expect(held(s, workspace)!.sequence).toBe('100'));
+        expect(sent(s, 'configuration/sourcesRead').map(request => request.params)).toEqual([{ target: workspace }]);
+      } else {
+        await deliverAt(s, workspace, null, 100);
+      }
+      expect(held(s, workspace)).toMatchObject({ sequence: '100', receipt: undefined });
+      expect(notice()).toBeNull();
+      // WEB-SEQ-04: a delayed notice ordered before the withdrawal.
+      await deliverAt(s, workspace, unresolvedAt(workspace, 'w-90'), 90);
+      expect(held(s, workspace)).toMatchObject({ sequence: '100', receipt: undefined });
+      expect(notice()).toBeNull();
+      s.client.disconnect();
+    });
+  }
+});
+
+it('WEB-SEQ-05 a delayed read cannot overwrite a newer notice of a held source', async () => {
+  const s = new Server();
+  answering(s, () => 90, () => unresolvedAt(workspace, 'w-older'));
+  await s.connect();
+  await deliverAt(s, workspace, unresolvedAt(workspace, 'w-20'), 20);
+  // A conflicting notice at 20 sends a recovery read, held at native.
+  s.held.add('configuration/sourcesRead');
+  const reading = s.waitFor('configuration/sourcesRead');
+  await deliverAt(s, workspace, null, 20);
+  const read = await reading;
+  await deliverAt(s, workspace, unresolvedAt(workspace, 'w-newer'), 100);
+  s.held.delete('configuration/sourcesRead');
+  await act(async () => { s.reply(read); await Promise.resolve(); });
+  expect(held(s, workspace)).toMatchObject({ sequence: '100', receipt: { id: 'w-newer' } });
+  s.client.disconnect();
+});
+
+it('WEB-SEQ-06 a newer observation of the same receipt refreshes its retention without presenting it again', async () => {
+  const s = new Server(); await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={vi.fn()} />);
+  const w0 = workspaceAt(0);
+  await deliverAt(s, w0, unresolvedAt(w0, 'w0'), 1);
+  for (let index = 1; index < 64; index++) await deliverAt(s, workspaceAt(index), null, 1 + index);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  // W0's receipt observed again, later: it is now the most recently observed.
+  await deliverAt(s, w0, unresolvedAt(w0, 'w0'), 70);
+  expect(notice()).toBeNull();
+  await deliverAt(s, workspaceAt(64), null, 71);
+  expect(observedKeys(s)).toContain('workspace:/workspace/w0');
+  expect(observedKeys(s)).not.toContain('workspace:/workspace/w1');
+  expect(held(s, w0)).toMatchObject({ sequence: '70', receipt: { id: 'w0' } });
+  expect(notice()).toBeNull();
+  s.client.disconnect();
+});
+
+describe('WEB-SEQ-07 an equal-sequence conflict never overwrites the held observation', () => {
+  for (const [name, conflicting] of [['a withdrawal', null], ['another receipt', unresolvedAt(workspace, 'w-other')]] as const) {
+    it(name, async () => {
+      const s = new Server();
+      answering(s, () => 20, () => unresolvedAt(workspace, 'w-20'));
+      await s.connect();
+      await deliverAt(s, workspace, unresolvedAt(workspace, 'w-20'), 20);
+      const before = held(s, workspace);
+      await deliverAt(s, workspace, conflicting, 20);
+      expect(held(s, workspace)).toBe(before);
+      // Recovered from native authority: one read, whose answer at the same
+      // sequence agrees with what is held and changes nothing.
+      await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(1));
+      await act(async () => { await Promise.resolve(); });
+      expect(held(s, workspace)).toMatchObject({ sequence: '20', receipt: { id: 'w-20' } });
+      // A conflicting read is never applied either, and reads nothing more.
+      answering(s, () => 20, () => null);
+      await deliverAt(s, workspace, conflicting, 20);
+      await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(2));
+      await act(async () => { await Promise.resolve(); });
+      expect(held(s, workspace)).toMatchObject({ sequence: '20', receipt: { id: 'w-20' } });
+      expect(sent(s, 'configuration/sourcesRead')).toHaveLength(2);
+      s.client.disconnect();
+    });
+  }
+});
+
+describe('WEB-SEQ-08 an in-flight recovery read never publishes into a later connection', () => {
+  for (const [name, replacement] of [['reconnect to the same authority', undefined], ['replacement authority', 'replacement-authority']] as const) {
+    it(name, async () => {
+      const s = new Server();
+      answering(s, () => 500, () => unresolvedAt(workspace, 'w-stale-read'));
+      await s.connect();
+      await deliverAt(s, workspace, unresolvedAt(workspace, 'w-20'), 20);
+      s.held.add('configuration/sourcesRead');
+      const reading = s.waitFor('configuration/sourcesRead');
+      await deliverAt(s, workspace, null, 20);
+      const read = await reading;
+      const socket = s.socket;
+      if (replacement) await replaceProcess(s, replacement);
+      else { s.client.disconnect(); await s.connect(); }
+      await deliverAt(s, workspace, null, 3);
+      s.held.delete('configuration/sourcesRead');
+      await act(async () => { s.reply(read, socket); await Promise.resolve(); });
+      expect(held(s, workspace)).toMatchObject({ sequence: '3', receipt: undefined });
+      expect(Object.values(s.client.getSnapshot().sourceRepairs!).some(observation => observation.receipt?.id === 'w-stale-read')).toBe(false);
+      s.client.disconnect();
+    });
+  }
+});
+
+/** The repair notice, also while open Settings hides the page behind it. */
+const shownNotice = () => screen.queryByRole('status', { name: 'Configuration repair', hidden: true }) ?? screen.queryByRole('alert', { name: 'Configuration repair', hidden: true });
+
+it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Workspace, with no side effect', async () => {
+  const native = new Native();
+  const s = new Server();
+  const w0 = workspace;
+  // Native's state of W0, which another connection withdraws.
+  let sequence = 0;
+  let w0Receipt: ConfigRepairReceipt | null = null;
+  s.handlers.set('configuration/sourcesRead', request => {
+    const asked = (request.params as { target: SourceTarget }).target;
+    if (asked.kind === 'user') return { type: 'source_settings', projection: native.projection() };
+    return { type: 'source_settings', projection: nativeRead(asked, String(sequence), asked.directory === w0.directory ? w0Receipt : null) };
+  });
+  s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: w0.directory } }));
+  await s.connect();
+  const acknowledgements = new RepairAcknowledgements(localStorage);
+  render(<>
+    <RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={vi.fn()} />
+    <SettingsSurface client={s.client} target={userSettingsTarget} />
+  </>);
+  await settingsReady();
+  await openSettingsPage('Agent');
+  fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  // 1. W0 is unresolved, and the notice warns.
+  w0Receipt = unresolvedAt(w0, 'w0-1');
+  await deliverAt(s, w0, w0Receipt, ++sequence);
+  // 2. This connection addresses 63 more Workspaces: native announces each
+  //    empty level, and its interest is full.
+  for (let index = 1; index < 64; index++) await deliverAt(s, workspaceAt(index), null, ++sequence);
+  // 3. W0's unresolved document changes: a newer level, observed most
+  //    recently by the client, while native interest still orders W0 first.
+  w0Receipt = unresolvedAt(w0, 'w0-2');
+  await deliverAt(s, w0, w0Receipt, ++sequence);
+  // 4. A 65th Workspace: native forgets W0; the client forgets W1, keeps W0.
+  await deliverAt(s, workspaceAt(64), null, ++sequence);
+  expect(observedKeys(s)).toContain(`workspace:${w0.directory}`);
+  expect(observedKeys(s)).not.toContain('workspace:/workspace/w1');
+  // 5. Another connection withdraws W0; native tells this one nothing.
+  w0Receipt = null; ++sequence;
+  expect(shownNotice()!.textContent).toMatch(/Workspace configuration could not be repaired automatically/);
+  const requests = s.requests.length;
+  const before = s.client.getSnapshot();
+  // 6. Re-admission: native announces W0's current level, which is empty.
+  await deliverAt(s, w0, null, sequence);
+  expect(held(s, w0)).toMatchObject({ sequence: String(sequence), receipt: undefined });
+  expect(shownNotice()).toBeNull();
+  // Observation alone: no request, and no Session, application or summary
+  // state changed.
+  expect(s.requests.length).toBe(requests);
+  const after = s.client.getSnapshot();
+  expect(after.views).toBe(before.views);
+  expect(after.configuration).toBe(before.configuration);
+  expect(after.sessions).toBe(before.sessions);
+  // 7. Older notices never restore it; attaching a Session of W0 reads
+  //    nothing while W0 is held; a reconnect to the same authority converges
+  //    again from native levels.
+  await deliverAt(s, w0, unresolvedAt(w0, 'w0-2'), sequence - 2);
+  await deliverAt(s, w0, unresolvedAt(w0, 'w0-1'), 1);
+  await s.client.attach('A');
+  expect(sent(s, 'configuration/sourcesRead').filter(request => (request.params as { target: SourceTarget }).target.kind === 'workspace')).toHaveLength(0);
+  s.client.disconnect(); await s.connect();
+  await deliverAt(s, w0, null, sequence);
+  expect(held(s, w0)!.receipt).toBeUndefined();
+  expect(shownNotice()).toBeNull();
+  expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
+  expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
+  // The Settings draft and its CAS base are untouched.
+  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  await openSettingsPage('Advanced');
+  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
+  expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();
 });

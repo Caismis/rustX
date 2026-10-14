@@ -1351,16 +1351,25 @@ connection observes the User source and each Workspace source it addressed in a
 request (`configuration/sourcesRead`, `configuration/sourceWrite`,
 `configuration/reconcile`, `mcp/probe`, `session/create`, `session/attach`) —
 exactly the sources its own reads could inspect — so no other Workspace identity
-reaches it. Notices begin after `initialize`. Delivery is level-triggered against
-the ledger with a per-connection cursor per source: a newly observed source
-announces its latest receipt once — admitting a source wakes the connection's
-notification reader, so a receipt the ledger already holds is delivered without
-any further ledger change — the same receipt is never announced twice on a
-connection, and a reconnecting client receives each latest receipt once more and
-deduplicates by `id`. Notices are not history: a connection's first observation
-of a source without a receipt is never announced, so a receipt withdrawn while a
-client was away is invisible to its next connection, and a client that kept an
-observation across a reconnect rereads it with `configuration/sourcesRead`.
+reaches it. Notices begin after `initialize`. The interest is finite: the User
+and the 64 most recently addressed Workspaces; addressing a forgotten Workspace
+again admits it anew. Delivery is level-triggered against the ledger with a
+per-connection cursor per source. Each admission of a source — the User at
+`initialize`, a Workspace on the request that addresses it — owes the source's
+current level once: its latest receipt, or `receipt: null` when it reports no
+repair, whether its receipt was withdrawn, never recorded, or forgotten by the
+finite ledger. That level carries the ledger sequence it was read at, never
+lower than anything recorded of the source; it is a state, not a repair, so a
+null level presents nothing. Admitting a source wakes the connection's
+notification reader, so the level is delivered without any further ledger
+change; every later change of the source follows. The level and its sequence
+are read under one ledger lock and become the source's cursor under the
+connection's interest lock, so a change committed after that read carries a
+higher sequence and is delivered next, and one committed before it is folded
+into the level. Addressing an admitted source again delivers nothing.
+Notices are not history: a reconnecting client receives each source's level
+once more, a receipt id may arrive again at a higher `sequence`, and clients
+deduplicate presentation by `id`.
 
 Every change of any source advances the ledger sequence. A notice carries the
 `sequence` of its change and a read its `repair_sequence`; within one App Server
@@ -1368,12 +1377,16 @@ authority the higher one is the newer observation of a source, whatever arrives
 first — a read answered after a newer notice, or a notice produced before a
 fresher read and delivered after it. Receipt ids name occurrences and never
 order observations; sequences of different authorities are not comparable.
-Sequences order observations of one source, not deliveries across sources: a
-newly observed source's latest receipt carries the sequence of the change that
-recorded it, which may be lower than sequences already delivered for other
-sources. A client that forgets sources therefore cannot order a notice of a
-source it no longer holds by arrival; the TUI rereads it (see
-[TUI and App Server](tui-app-server.md)). Receipts are not persisted, not Event Journal facts and never canonical history.
+Two observations of one source at one sequence agree; a client keeps the one it
+holds and reads the source again rather than adopt a conflicting one. A higher
+sequence always replaces what a client holds of a source, even with the same
+receipt id or with no receipt on either side, so a withdrawal or an unchanged
+level advances its ordering without presenting anything again. Sequences order
+observations of one source, not deliveries across sources: a change notice
+carries the sequence of the change that recorded it, which may be lower than
+sequences already delivered for other sources. A client that forgets sources
+therefore cannot order a change notice of a source it no longer holds by
+arrival; it rereads that source (see [TUI and App Server](tui-app-server.md)). Receipts are not persisted, not Event Journal facts and never canonical history.
 
 ## Session configuration adoption eligibility (v47)
 

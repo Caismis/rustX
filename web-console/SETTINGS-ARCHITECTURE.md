@@ -599,7 +599,18 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
   from the published state itself, which is replaced, never mutated. Two
   observations of a source are ordered by their native repair-ledger
   sequence — a notice's `sequence`, a read's `repair_sequence` — never by
-  arrival or receipt id. One frontier records the highest sequence at which
+  arrival or receipt id. A higher sequence always replaces what the client
+  holds, even with the same receipt id or with no receipt on either side: a
+  withdrawal retires the receipt, and an unchanged receipt advances its
+  sequence and retention without being presented again, since presentation
+  follows receipt ids. Two observations at one sequence agree; one that
+  disagrees is never applied, and a notice's source is read again. Native
+  announces each source's current level — a receipt or none — whenever it
+  admits the source for this connection, including when it re-admits a
+  Workspace it forgot, so a stale receipt is replaced by native's next
+  admission of its source. Native forgets by addressing and the client by
+  observation, so the client recovers what it may have missed itself. One
+  frontier records the highest sequence at which
   the connection forgot a source: a notice of an absent source ordered before
   it is ambiguous and never applied; that source is read again instead, as is
   an absent Workspace whose Session is attached once the connection has
