@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ProjectionHistory } from '../src/app/agent/ProjectionHistory';
 import { Server, projectionHead } from './fixture';
-import type { ProjectionDetail } from '../../protocol/app-server/v47';
+import type { ProjectionDetail } from '../../protocol/app-server/v48';
 afterEach(cleanup);
 it('reads historical activations and typed occurrences on demand without manufacturing execution rows', async () => {
   const server = new Server(); await server.attached('A');

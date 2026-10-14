@@ -754,11 +754,91 @@ fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
     assert_bounded_cause(&report, "agents.bad", "invalid");
 }
 
+/// The analyzed failure of a composition without a default model.
+fn analyzed_failure(f: &Fixture) -> super::diagnostics::LaunchFailure {
+    match analyze(&f.request, &f.host) {
+        Ok(_) => panic!("the composition resolved"),
+        Err(failure) => failure,
+    }
+}
+
+#[test]
+fn issue464_semantic_diagnostics_name_the_document_that_authored_the_field() {
+    let invalid = json!({"subagents":{"max_concurrent":0}});
+    let valid = json!({"subagents":{"max_concurrent":2}});
+    for (user, workspace, owner) in [
+        (Some(invalid.clone()), None, Some(true)),
+        (None, Some(invalid.clone()), Some(false)),
+        // The Workspace unit replaces the User unit: it authored the value.
+        (Some(valid.clone()), Some(invalid.clone()), Some(false)),
+        (Some(invalid.clone()), Some(valid.clone()), None),
+    ] {
+        let f = Fixture::new();
+        let user_path = f.host.config_directory.join("rustx.toml");
+        let workspace_path = f.host.launch_directory.join("rustx.toml");
+        match &user {
+            // The User authors only this value; no default model anywhere.
+            Some(value) => f.user(value.clone()),
+            None => std::fs::write(&user_path, "").unwrap(),
+        }
+        if let Some(value) = &workspace {
+            f.project(value.clone());
+        }
+        let failure = analyzed_failure(&f);
+        let Some(user_owned) = owner else {
+            // The Workspace corrected the User value: only the default model
+            // is missing.
+            assert!(failure.incomplete, "{user:?} {workspace:?}");
+            assert_eq!(failure.diagnostic.path, "agent.model.model");
+            continue;
+        };
+        assert!(!failure.incomplete, "{user:?} {workspace:?}");
+        assert_eq!(failure.diagnostic.category, "invalid");
+        assert_eq!(failure.diagnostic.path, "subagents.max_concurrent");
+        assert_eq!(
+            failure.diagnostic.file,
+            Some(if user_owned {
+                user_path
+            } else {
+                workspace_path
+            }),
+            "{user:?} {workspace:?}"
+        );
+    }
+}
+
+#[test]
+fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
+    let f = Fixture::new();
+    // The User defines `host` and its Models; the Workspace adds a Model of a
+    // Provider nobody defines. The failing field `models.*.provider` covers
+    // Models of both documents, so neither owns the failure.
+    f.user(json!({}));
+    f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
+        "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
+        "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
+        "tool_calls":true,"reasoning":false}}}}));
+    let failure = analyzed_failure(&f);
+    assert!(!failure.incomplete);
+    assert_eq!(failure.diagnostic.category, "invalid");
+    assert_eq!(failure.diagnostic.path, "models.*.provider");
+    assert_eq!(failure.diagnostic.file, None);
+    assert!(!failure.diagnostic.reason.contains("missing"));
+
+    // A valid partial composition is incomplete, not invalid.
+    std::fs::remove_file(f.host.launch_directory.join("rustx.toml")).unwrap();
+    let failure = analyzed_failure(&f);
+    assert!(failure.incomplete);
+    assert_eq!(failure.diagnostic.path, "agent.model.model");
+}
+
 #[test]
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();
     f.user(json!({}));
-    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "agent": {"tools": {"builtin": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>()}}}));
+    // Policies naming `.agents` MCP servers are composition facts: valid in
+    // the source, unresolved here, and large enough to omit the projection.
+    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "mcp_tool_policies": (0..12000).map(|index| (format!("unresolved_server_identity_{index}"), json!({"execution": "background_only"}))).collect::<serde_json::Map<_,_>>()}));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 3);
     assert!(report.partial.is_some());
@@ -1911,10 +1991,11 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
 fn dangling_workspace_source_is_a_read_error() {
     let f = Fixture::new();
     std::os::unix::fs::symlink("missing.toml", f.host.launch_directory.join("rustx.toml")).unwrap();
+    // Refused as a symlink, never followed: neither absent nor its target.
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
-            .contains("cannot read")
+            .contains("not a symlink")
     );
 }
 
@@ -2842,5 +2923,60 @@ mod session_resolution {
                 assert!(!text.contains("secret-model-parameter"));
             }
         }
+    }
+}
+
+/// Every entry below `root`, with the bytes of every regular file.
+fn tree(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    let mut entries = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            let content = if std::fs::symlink_metadata(&path).unwrap().is_dir() {
+                pending.push(path.clone());
+                None
+            } else {
+                Some(std::fs::read(&path).unwrap())
+            };
+            entries.insert(path, content);
+        }
+    }
+    entries
+}
+
+/// FS-AUTH-06: offline inspection — `rustx config check` and `rustx config
+/// show` — is read-only for missing sources, even a missing User source
+/// directory, and for valid ones: no directory, writer lock, staged file or
+/// backup appears, nothing changes, and no effect is performed.
+#[test]
+fn offline_inspection_of_missing_and_valid_sources_is_read_only() {
+    let f = Fixture::new();
+    std::fs::remove_dir_all(&f.host.config_directory).unwrap();
+    for valid in [false, true] {
+        if valid {
+            std::fs::create_dir_all(&f.host.config_directory).unwrap();
+            f.user(json!({"agent": {"model": {"model":"host/one"}}}));
+            std::fs::write(
+                f.host.launch_directory.join("rustx.toml"),
+                "[subagents]\nmax_concurrent = 2\n",
+            )
+            .unwrap();
+        }
+        let before = tree(f.root.path());
+        for operation in ["config_check", "config_show"] {
+            let ((report, _), effects) = super::static_effects::measure(|| {
+                super::diagnostics::inspect(operation, &f.request, &f.host)
+            });
+            assert_eq!(effects, [0; 11], "{operation} valid={valid}");
+            assert_eq!(
+                report.validity == super::diagnostics::Validity::Valid,
+                valid,
+                "{operation}: {:?}",
+                report.diagnostics
+            );
+        }
+        assert_eq!(tree(f.root.path()), before, "valid={valid}");
+        assert_eq!(f.host.config_directory.exists(), valid);
     }
 }

@@ -290,6 +290,32 @@ impl ClientInner {
         Some(guard.projection.snapshot().expect("projection is live"))
     }
 
+    /// Test-only: waits until the projection has nothing left to publish
+    /// without new input — every observation folded, none awaiting its
+    /// journal commit, and the read domains installed — so a read publishes
+    /// nothing and the next events are caused only by what the test does
+    /// next. Level-triggered: the condition is checked under the projection
+    /// lock now and after every later worker turn.
+    pub(crate) async fn projection_settled(&self) {
+        let mut turns = self.worker_turns.subscribe();
+        loop {
+            turns.borrow_and_update();
+            {
+                let guard = self
+                    .state
+                    .lock()
+                    .expect("runtime client host lock poisoned");
+                if self.pending.settled() && guard.projection.read_domain_cut().is_none() {
+                    return;
+                }
+            }
+            turns
+                .changed()
+                .await
+                .expect("the host owns the worker turn signal");
+        }
+    }
+
     /// Test-only: how many observations are waiting to be folded.
     pub(crate) fn queued_observations(&self) -> usize {
         self.pending.queued()
@@ -341,6 +367,9 @@ pub(crate) struct ClientInner {
     trace_cut_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     snapshot_read_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    /// Test-only: advanced after every projection worker turn.
+    #[cfg(test)]
+    worker_turns: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 #[cfg(test)]
@@ -515,6 +544,8 @@ impl ClientInner {
             .map(crate::runtime::workflow::read_model::WorkflowReadModel::subscribe);
         #[cfg(test)]
         let read_domain_hook = self.read_domain_hook.clone();
+        #[cfg(test)]
+        let worker_turns = Arc::clone(&self.worker_turns);
         let worker = tokio::spawn(async move {
             let mut read = None;
             loop {
@@ -582,6 +613,8 @@ impl ClientInner {
                         (cut, candidate.read_domains(store.as_ref()))
                     }));
                 }
+                #[cfg(test)]
+                worker_turns.send_modify(|turn| *turn += 1);
             }
             if let Some(store) = store.upgrade() {
                 store.close_presentation_reader();
@@ -2262,6 +2295,8 @@ impl RuntimeClientHost {
             snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
             read_domain_hook: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            worker_turns: Arc::new(tokio::sync::watch::channel(0).0),
         });
         // No authoritative runtime can enqueue observations into this host,
         // but using the normal worker setup keeps attachment/subscription
@@ -2379,6 +2414,8 @@ impl RuntimeClientHost {
             snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
             read_domain_hook: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            worker_turns: Arc::new(tokio::sync::watch::channel(0).0),
         });
         if let Some(runtime) = inner.runtime.as_ref() {
             runtime.set_interaction_provider_available(true);
@@ -2719,6 +2756,13 @@ impl RuntimeClientHost {
             .as_ref()
             .expect("live host has a conversation runtime")
             .weak_inner()
+    }
+
+    /// Waits until the projection has nothing left to publish without new
+    /// input (see [`ClientInner::projection_settled`]).
+    #[cfg(test)]
+    pub(crate) async fn projection_settled(&self) {
+        self.inner.projection_settled().await;
     }
 
     /// Installs the deterministic worker-exit signal of the projection

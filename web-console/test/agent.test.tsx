@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v47';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v48';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { localeController } from '../src/locale/controller';
 import { AgentControls } from '../src/app/agent/AgentControls';
@@ -446,7 +446,7 @@ it('a late acknowledgement for the current-model gesture cannot report success a
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v47').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v48').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });

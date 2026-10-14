@@ -70,9 +70,12 @@ preparation additionally requires `--prepare`.
 
 The authoritative structural reference is
 [`rustx.schema.json`](../schemas/rustx.schema.json), generated from
-`local_runtime::authoring::RuntimeLayer`. Unknown fields are rejected. TOML
-tables and arrays preserve authored omission versus explicit empty values.
-The current document version is `schema_version = 10`.
+`local_runtime::authoring::RuntimeLayer`. Unknown fields are rejected by the
+parser; the App Server deletes them from a source at its native boundaries
+before parsing, together with a few other exactly recognizable constructs (see
+[Automatic source repair](#automatic-source-repair-464)). TOML tables and arrays
+preserve authored omission versus explicit empty values. The current document
+version is `schema_version = 10`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -456,6 +459,92 @@ checks the exact byte revision, validates and canonicalizes TOML, stages and syn
 it, checks again, renames it, and syncs its parent. External edits invalidate stale
 drafts. Secret retention is scoped to the same authored source.
 
+Every source transaction has a physical authority as well as a byte revision.
+When it begins, the writer opens the document's directory from `/` one
+component at a time without following any symlink (source paths are canonical:
+a Workspace is validated canonical, the User binding is normalized when bound)
+and keeps that directory handle and its device/inode identity. The read, the
+writer lock, the staged file, the atomic replacement (`renameat` inside the
+handle — the linearization point) and the directory sync all go through that
+one handle, so replacing or redirecting any component of the pathname cannot
+move the write into another directory. Opening the directory — and creating its
+missing components, for a new document — claims nothing about durability.
+Immediately before the replacement the transaction confirms the directory's
+path: it walks the pathname from `/` again without creating or following
+anything, syncs the parent of every component — whether this transaction
+created it, another writer created it a moment earlier without syncing yet, or
+it was merely visible — and requires the walk to end at the admitted directory
+(same device and inode); the handle is never replaced by what the walk opened.
+The document must then still have exactly the expected bytes. A redirected
+target is refused as `invalid_params`, as an invalid target is at entry; changed
+bytes are a `source_conflict`; a confirmation sync that fails while the pathname
+still names the directory is an I/O failure — all leave every source unchanged.
+A committed write therefore means the published entry and every name needed to
+reach it after a crash are durable, as this transaction itself confirmed them. The writer lock is
+advisory: it orders rustX writers, not an external rename of the directory
+itself. A directory renamed between that check and the replacement still
+receives the bytes, but only the physical directory the transaction admitted;
+the writer checks the pathname again after the replacement and reports
+`committed_durability_uncertain` when it no longer names that directory, as it
+does when the directory sync fails. An uncertain write is never replayed.
+
+Writer artifacts have fixed-length names, so every basename the filesystem
+accepts for a source document stays writable. The persistent writer lock beside a
+document is `.rustx-lock-<sha256 of the exact basename bytes>.lock`: every native
+writer of that document — source authoring, automatic repair and create-only
+initialization — locks the same inode exclusively, and distinct documents never
+share one. Writers create it; nothing unlinks it.
+
+Every reader of a `rustx.toml` has the same physical authority as a write.
+Session resolution — Session creation and loading, configuration application
+capture and preparation, the App Server process policy, `rustx config check`
+and `rustx config show` — reads both documents through the same admission as
+source capture and repair: admitted once, never followed, a missing directory
+an absent document, and reread at the end of the capture through the admitted
+directory, which the pathname must still name. A symlinked source, or a
+directory replaced or redirected during the capture, is refused as an
+unavailable source rather than answered from the replacement, even with
+identical bytes. Session resolution holds no writer lock: rustX writers
+publish only by atomic replacement after every check, so its revision fence —
+every document and resource reread after the capture — makes a concurrent
+write an explicit "changed during capture" failure, never a mixed capture, and
+never blocks a writer. The User source pathname is bound once, when the
+process binds `--config` (or the default) to its canonical path; a symlink
+named there is resolved at binding, and a symlink appearing at the bound
+pathname afterwards is refused like any other.
+
+Source capture (`configuration/sourcesRead`, the read after a write and
+coordinator capture) is read-only: it creates no directory, lock, staged file
+or backup and changes no source. Each round admits every document's directory
+once, from `/` without following any symlink and without creating anything (a
+missing directory is an absent document); the shared writer lock, the bytes and
+their reread are all relative to that one handle, each opened
+`O_NOFOLLOW | O_NONBLOCK` and checked as a regular file on the opened
+descriptor, which is then read within the 1 MiB bound. The pathname is never
+resolved again to reach the document, so a symlink, FIFO or directory swapped in
+at any moment is refused without its target being opened. Before a round
+answers, the pathname must still name every admitted directory — including a
+directory that was missing and is admitted again for the reread: a directory
+replaced or redirected during the capture is refused as `invalid_params`, as at
+entry, never answered from the replacement, whatever else the round reports.
+Repair's own reads of a `rustx.toml`
+use the same admitted read. It holds each
+document's existing writer lock *shared* for the whole capture, opened without
+creating or following it, so every rustX writer of that document is excluded and
+other readers are not. A document without a lock has never had a rustX writer;
+the capture is accepted only if it still has none afterwards. A lock that
+appeared meanwhile means a rustX writer may have run unexcluded — even one whose
+bytes changed back — so the capture is taken once more, now holding that lock: at
+most one more round than documents. Within a round every document and resource
+revision is reread after the facts are derived, so a writer outside rustX, which
+no advisory lock excludes, makes the capture an explicit revision conflict rather
+than a mixed snapshot. A staged candidate is `.rustx-stage-<uuid>.tmp`, created exclusively
+and removed unless it is renamed into place. A document's basename is a native
+filesystem name, not text: reading, locking, staging, replacement and removal use
+its exact bytes, so a name that is not UTF-8 — where the operating system and
+filesystem allow one — is written like any other. The App Server process
+bindings still require a lossless UTF-8 representation for the JSON protocol.
+
 After persistence, native configuration coordination captures a finite immutable
 input manifest and owns reconciliation independently of the RPC. Save requires no
 second action. Saved source is desired state; it is not proof of effective state.
@@ -624,6 +713,252 @@ apply through their owners; the process drain deadline waits for restart. Fixed
 startup storage/transport bindings remain process-owned. Notifications identify
 scope and monotonically ordered native versions; clients discard stale versions.
 Reconnect rereads authority and never replays uncertain mutations.
+
+## Automatic source repair (#464)
+
+The App Server repairs a small, exactly recognizable set of invalid authored
+constructs in the two `rustx.toml` sources — the bound User document (including
+a process `--config` override) and the selected Workspace document — with the
+same rules for both. The strict parser is never weakened: repair rewrites the
+file, and the rewritten file must then pass the same validation every consumer
+applies. Repair is deletion-first and deterministic; it never guesses, renames,
+coerces or invents a value.
+
+| Authored problem | Automatic transformation |
+| --- | --- |
+| Field unknown to its closed schema object — including inside policy, approval, security, plugin or isolation objects | The field and its value are deleted; there is no semantic exemption |
+| Unknown configuration table | The table is deleted; unrelated tables stay |
+| Unknown entry in `agent.tools.builtin` | That element is deleted |
+| Repeated ordinary `agent.tools.builtin` entry | Later occurrences are deleted; the first stays |
+| Agent control or Plugin-owned Tool in `agent.tools.builtin` | That element is deleted, with its classified reason |
+| Unsupported key under `native_tools` | That policy entry is deleted |
+| Explicit `schema_version` other than the current version (older or newer) | Set to the current version, only if the whole candidate then validates |
+| Omitted `schema_version` | Stays omitted |
+| Invalid TOML syntax, wrong type or value of a known field, missing required facts, broken Provider/Model references, invalid `request_params` JSON, `app_server` in a Workspace, any other remaining failure | Nothing is edited; the source is unchanged and reported `unresolved` |
+
+Eligibility comes from the generated source schema of `RuntimeLayer`
+(`schemas/rustx.schema.json`): only keys of closed objects
+(`additionalProperties: false`) are fields. Declared open maps — Provider,
+Model and Profile identities, `agent.tools.sources`, `environment`,
+`mcp_tool_policies` — hold authored identities, never unknown fields, and the
+JSON inside `request_params` is an opaque string that is never entered. A union
+is entered only through the one alternative that admits the authored shape, so
+an unknown `mode` tag selects nothing and nothing beneath it is touched. Tool
+entries are classified by the native Tool domain itself (the Agent control
+vocabulary, the extension plane and the definitions a root profile can select),
+which is also the owner of the strict `agent.tools.builtin` validation.
+
+Candidate construction uses `toml_edit` in one finite pass over one exact byte
+revision: comments, formatting, quoting, secrets and every unrelated value stay as
+the editing model allows, and a second plan of the candidate must find nothing
+left to do. The candidate is valid only if the production source parser accepts
+it (types, required fields, `request_params`, Workspace `app_server`, the current
+schema version) and it satisfies one native semantic contract that Session
+resolution and source inspection share:
+
+- **Source-intrinsic constraints always apply**, with or without a default
+  model: App Server process policy, every Provider and Model entry on its own
+  terms (identities, endpoint, credential source, limits, capabilities, Profiles,
+  compatibility fields, Model `request_params`), and every root runtime
+  constraint the document decides alone (context and deadline policies, the Tool
+  environment, the root Agent profile and Tool selection, subagent concurrency,
+  admission and Workflow identities).
+- **Composition-dependent constraints apply once the composition is known**: a
+  Model's Provider, a non-empty catalog, the selected models, their Profiles and
+  overrides, and the context budgets they bound. A source may leave these facts
+  to the other scope. A Workspace is composed over the current User source; the
+  User is composed with the selected Workspace at Session creation, load and
+  reconcile, and is checked on its own terms only at startup, where no Workspace
+  is selected and none is scanned. An unreadable or itself invalid other source
+  supplies no facts, so it never blocks this source's repair. A composition
+  without a default model is incomplete, not invalid, once everything else holds.
+
+Every candidate is also bounded in bytes: its complete serialization must fit the
+1 MiB limit every authored file reader enforces (`bounded_file`), checked before
+any lock or backup. A repair that would grow a source past it — `schema_version
+= 9` becoming `10` in a document already at the limit — is `unresolved` with no
+backup, and the source is unchanged. The source publication primitive fences the
+same bound for every write, so `configuration/sourceWrite` refuses an oversized
+document as invalid; nothing is published that its own reader would refuse.
+
+`.agents` resources (MCP servers named by `mcp_tool_policies`, Agents, Skills)
+are not source facts. Nothing here resolves credentials, connects MCP, prepares
+Python, creates a Session or calls a model.
+
+A changed source is committed through the same native writer primitive as
+`configuration/sourceWrite`, under the same physical authority: the directory
+observed when the observation read the source, the source writer lock, an exact
+revision and identity check before the candidate is used, a staged and synced
+file, the confirmation of the source directory's path and the exact revision
+check immediately before publication, atomic replacement and a
+parent-directory sync. Before that, an
+exact copy of the original bytes is written to private storage under the bound
+runtime root (`<runtime_root>/configuration-backups/`, directory `0700`, file
+`0600`, never inside the Workspace), named by source identity and original
+revision; a backup failure leaves the source unchanged. The backup is confirmed
+only by the transaction that publishes the source, and only once every name
+leading to it is durable: a missing component of the backup path — runtime-root
+ancestor, runtime root or backup directory — is created, and the path is then
+confirmed exactly as a source directory's is, before anything is copied.
+Visibility is not durability, so nothing relies on another writer's sync or
+cleanup: a failed sync fails the backup and removes nothing, and the next
+transaction confirms a leftover entry before using it. The copy is then linked
+and the backup directory synced; only then may the source be replaced, and only
+then does a receipt report a backup.
+
+`repaired` therefore guarantees that the exact original bytes are durably
+backed up outside the Workspace, that the candidate replaced the source
+atomically, and that the replacement and every name needed to reach the source
+— each confirmed by this transaction, whoever created it — are durable. A
+failure to confirm the source directory's path before the replacement is
+`unresolved` with the backup reported and the source unchanged; nothing is
+retried.
+
+Observation is separate from durable writes and creates and syncs nothing:
+reading a source, finding it healthy and admitting a Session's scope cost no
+durability I/O, and a healthy source gets no lock file, staged file or backup. The bound runtime root is
+the trust anchor (canonical when bound). Each backup opens it the way a source
+directory is opened: walked from `/` one component at a time without following
+any symlink, missing components created relative to their verified parent, and,
+whenever the boundary has selected a Workspace — for the User source as much as
+for the Workspace source — checked to be physically disjoint from that admitted
+Workspace (following `..` from both handles). The backup directory is then created or opened relative to that handle and verified
+as the current user's `0700` directory; the staged copy, its no-clobber
+publication link, the comparison with an existing copy and the directory sync all
+go through that one handle, so a symlink in any ancestor, or replacing any
+component after admission, cannot redirect the bytes. Physical safety does not
+depend on the pathname afterwards; confirmation does: the backup counts only if,
+once durable, the bound path still names the directory holding it. Otherwise the
+copy stays in the admitted (moved) directory, the receipt is `unresolved` without
+a backup and the source is unchanged. A healthy source is read
+once without a lock or any write, so it gets no lock file, no backup and no
+receipt. An external edit that races the repair, or a Workspace pathname that no
+longer names the admitted directory, supersedes it: nothing is published, nothing
+is reported and the next boundary plans from whatever the target names then. A
+failure before replacement leaves the source unchanged; a replacement that may
+have happened, a parent sync that failed, or a pathname that stopped naming the
+written directory after the replacement is reported `commit_uncertain` with the
+revision observed by rereading the admitted document (unknown once the pathname
+names another directory), and is never replayed. User and Workspace are independent
+transactions, so one may be repaired while the other stays unresolved.
+
+Repair runs only at native source boundaries:
+
+- App Server startup repairs the bound User source after the runtime root is
+  opened and before process `app_server` policy is parsed or any transport opens;
+- Session creation, and a Session load that has to resolve configuration afresh,
+  repair the User source and the exact selected Workspace document first;
+- `configuration/reconcile` repairs the User source and, for a Workspace target,
+  that Workspace before it captures them.
+
+A boundary that has selected a Workspace admits it before either source is
+touched. The Workspace must be a canonical directory disjoint from the bound
+runtime root under the rule Session resolution applies (neither contains the
+other, checked on the canonical paths), and then physically: both are observed
+as no-follow directory handles and neither may lie within the other. Admission
+creates nothing; runtime storage that does not exist yet is checked against the
+admitted Workspace by the backup that creates it. A Session locates its Workspace exactly as its resolution
+does, so a request whose Workspace does not resolve selects none. A scope that
+fails admission, or a request that selects no Workspace, repairs neither source —
+no backup, no rewrite, no receipt, nothing for the coordinator — and the Session
+resolution that follows rejects it as before. The admitted Workspace handle is
+the one every transaction of the boundary uses: the Workspace source is
+published through it, and both sources' backups are checked against it, so a
+Workspace pathname replaced after admission can neither receive the Workspace
+repair nor host a backup. Startup has no selected Workspace and proves nothing
+about Workspaces chosen later; it neither scans nor invents one, and later
+boundaries admit their own. Once a scope is admitted, User and Workspace remain
+independent transactions: a later failure of one never rolls back the other.
+
+`rustx config check`, `rustx config show --sources`, `configuration/sourcesRead`
+and every client navigation stay read-only. There is no watcher and no periodic
+check. A committed repair is handed to the configuration coordinator exactly like a
+committed `configuration/sourceWrite`, under the same lock, so one commit is
+captured once and application, preparation and Session adoption keep their
+existing contracts: a repaired file is desired state, not proof that anything was
+applied. A receipt never enters canonical history, the Event Journal or model
+context.
+
+Each source keeps its latest repair observation in a finite, process-local
+ledger: `repaired`, `unresolved` or `commit_uncertain`, the exact before and
+committed revisions, the change count and up to 64 changes (the schema object an
+unknown field was removed from, a removed Tool selection's position and reason
+with its name only when that is a native Tool, the schema version update),
+whether more were
+omitted, whether a backup exists, and for a failure a diagnostic built only from
+native constants: the parser's or the semantic owner's fixed category, line and
+column, and a schema location in which every Provider, Model, Profile or other
+open-map identity is `*` (a path the schema cannot explain is dropped). It never
+holds a removed value, an invalid value or identity, a domain error message, a
+source excerpt, a credential, a `request_params` payload, an authored key or
+identity, an unsupported Tool name or backup content: repair edits by exact
+authored keys, but a receipt reports only their projection onto the source schema
+(property names, `*` for an open-map identity, `[n]` for a position).
+
+A receipt's `id` names one repair occurrence, separate from its content and from
+the ledger order. Every publication that happened or may have happened is a new
+occurrence, so restoring the original bytes externally and repairing them again
+reports a second receipt with a new id, even though its changes and revisions
+equal the first. Rereading, redelivering or re-observing a receipt keeps its id.
+An unresolved observation equal to the source's current unresolved receipt is
+that episode again and changes nothing; once the episode was withdrawn, the same
+invalid bytes start a new one. A superseded transaction publishes nothing and
+reports nothing.
+
+Every change the ledger publishes — a new receipt, a replaced one, a withdrawal
+— advances one process-wide sequence, under the ledger lock that applies the
+change; the least recently observed Workspace is forgotten beyond the bound.
+That sequence is the only order of observations: a notification carries the
+sequence of its change, and a source read takes the receipts and the current
+sequence together under the same lock, so the read's sequence is never lower
+than any change it reflects — including for a Workspace the ledger has
+forgotten, which reads as having no receipt. Receipt ids name occurrences; they
+never order them. A receipt is withdrawn only when its source is found intrinsically healthy;
+a client deciding what to present reconciles against that order, never against
+which receipts it already showed (see [TUI and App Server](tui-app-server.md)
+and the [protocol](app-server-protocol.md#automatic-source-repair-receipts-v48)).
+A connection's interest is the User and the 64 Workspaces it most recently
+addressed. Each admission — including addressing a forgotten Workspace again —
+delivers the source's current level once, at the sequence it was read at: its
+receipt, or none when the source reports no repair, whether withdrawn, never
+recorded, or forgotten by the ledger. A Workspace the connection keeps
+observing whose delivered receipt the ledger then forgets is delivered that
+absence once, without being addressed again. That empty level is a state, never
+a repair, and presents nothing; it reports what the ledger retains, never that
+the document is valid, which only the source read's diagnostics establish. The TUI and the Web console retain the same
+finite number of observations — the User and 64 Workspaces, the least recently
+observed Workspace forgotten first — replace an observation only with one of a
+higher sequence (even of the same receipt, which is not presented again), never
+adopt a conflicting one at an equal sequence, recover a forgotten source by a
+read-only source read rather than assuming it, and word a combined notice by
+its most severe receipt: `commit_uncertain`, then `unresolved`, then
+`repaired`.
+
+A source is healthy under one source-intrinsic contract: the production strict
+parser and source restrictions accept it, every source-intrinsic constraint
+above holds, and no repair is eligible. Nothing being eligible proves nothing on
+its own: a parsable document violating a source-intrinsic constraint (for
+example `subagents.max_concurrent = 0`) is left unchanged and reported
+`unresolved` with that constraint's location. Facts another scope may supply —
+Model definitions, the default selection — are never part of it. An unresolved
+receipt is withdrawn only when the source satisfies this contract, at a later
+boundary or after a committed `configuration/sourceWrite`; a committed write that
+leaves it still invalid replaces the receipt with the current observation. A
+write never creates a receipt for a source that had none.
+
+A semantic failure of Session resolution names the document that authored the
+failing field, decided from the overlay provenance of the composition: every
+authored unit containing the field, or contained in it, must come from the same
+User or Workspace document (process `app_server` policy is User-only). A failure
+whose field spans both documents — such as a Model naming an undefined Provider
+when both documents define Models — names no file: it belongs to the
+composition.
+
+Manual `repair_config` remains the editor for documents that fail their own source
+contract — syntax, types, Workspace `app_server`, a foreign schema version —
+including TOML-parsable ones; ordinary semantic-unit writes require a document that
+satisfies it, and the source projection marks a document violating it as not
+loaded.
 
 ## Durable identity and retention
 

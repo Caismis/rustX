@@ -68,3 +68,9 @@ label { display: grid; gap: 5px; font-size: 12px; }
    resident parent-session surface. Only scrollports with a composer need
    its clearance; Agent transcripts keep their own bottom alignment. */
 [data-conversation-scroll]:has([data-composer-seat]) ~ .chat-return-latest { bottom: calc(var(--dsh-composer-height, 0px) + 16px); }
+
+/* Issue #464: one brief, nonblocking configuration repair notification. */
+.repair-notice { position: fixed; z-index: 900; right: 20px; bottom: 20px; max-width: min(520px, calc(100vw - 40px)); display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; border-radius: 12px; font-size: 12px; color: var(--dsw-static-neutral-bluish-00); background: var(--dsw-alias-toast-bg); box-shadow: var(--dsw-shadow-lv3); overflow-wrap: anywhere; }
+.repair-notice > span { flex: 1; }
+.repair-notice.error { border: 1px solid var(--dsw-alias-state-error-secondary); }
+.repair-notice button { color: inherit; }

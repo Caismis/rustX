@@ -3104,6 +3104,48 @@ export type SessionModelsView =
       diagnostic: string;
       kind: 'unavailable';
     };
+/**
+ * The outcome of one automatic repair observation. A source that never
+ * needed repair has no receipt — nor has one whose receipt was withdrawn or
+ * forgotten, so having none never proves a source valid.
+ */
+export type ConfigRepairStatus = 'repaired' | 'unresolved' | 'commit_uncertain';
+/**
+ * One deterministic edit of an authored source, in native vocabulary only:
+ * never an authored key, identity or value.
+ */
+export type ConfigRepairChange =
+  | {
+      /**
+       * The closed schema object the field was removed from: schema
+       * property names, `*` for an open-map identity and `[n]` for a
+       * zero-based array position; empty for the document root.
+       */
+      object_path: string;
+      kind: 'removed_field';
+    }
+  | {
+      /**
+       * The element's zero-based position in the authored selection.
+       */
+      position: number;
+      /**
+       * The native Tool identity the element names; null when `reason`
+       * is `unknown`, since a name no native Tool has is authored text.
+       */
+      name?: string | null;
+      reason: NativeToolRemoval;
+      kind: 'removed_native_tool';
+    }
+  | {
+      from: number;
+      to: number;
+      kind: 'updated_schema_version';
+    };
+/**
+ * Why a Native Tool selection entry was removed.
+ */
+export type NativeToolRemoval = 'unknown' | 'duplicate' | 'agent_control' | 'plugin_owned';
 export type ErrorData =
   | {
       reason: SessionFileReadFailure;
@@ -3291,6 +3333,21 @@ export type Notification1 =
       method: 'configuration/changed';
       params: {
         application: ConfigurationApplication;
+      };
+    }
+  | {
+      method: 'configuration/sourceRepairChanged';
+      params: {
+        target: SourceTarget;
+        receipt?: ConfigRepairReceipt | null;
+        /**
+         * The native repair-ledger sequence this level is current at. Within
+         * one App Server authority it orders this observation against every
+         * other observation of the same source, including the
+         * `repair_sequence` of a `configuration/sourcesRead`: the higher one
+         * is the newer, and two at one sequence agree.
+         */
+        sequence: string;
       };
     }
   | {
@@ -10066,6 +10123,24 @@ export interface SourceSettings {
   };
   user: SourceView;
   workspace?: SourceView | null;
+  /**
+   * The latest automatic repair observation of the User source in this
+   * process. Absent when the finite ledger retains none — never needed,
+   * withdrawn, or forgotten — which never proves the source valid; the
+   * views' diagnostics report that.
+   */
+  user_repair?: ConfigRepairReceipt | null;
+  /**
+   * The latest automatic repair observation of the target Workspace source.
+   */
+  workspace_repair?: ConfigRepairReceipt | null;
+  /**
+   * The native repair-ledger sequence `user_repair` and `workspace_repair`
+   * are current at, read with them under one lock. It orders this read
+   * against the `sequence` of each `configuration/sourceRepairChanged`
+   * for the same source: the higher one is the newer observation.
+   */
+  repair_sequence: string;
   user_resource_root: string;
   workspace_resource_root?: string | null;
   runtime_root: string;
@@ -10077,6 +10152,49 @@ export interface SourceView {
   path: string;
   revision: string;
   authored?: RuntimeLayer | null;
+  diagnostic?: string | null;
+}
+/**
+ * Bounded, redacted native fact about one automatic repair of one source.
+ *
+ * It describes authored bytes only: it never claims that any configuration
+ * was prepared, applied or adopted.
+ */
+export interface ConfigRepairReceipt {
+  /**
+   * Opaque identity of this repair occurrence within its App Server
+   * authority: one committed (or possibly committed) publication, or one
+   * unresolved episode. Rereading or redelivering the receipt keeps it;
+   * another commit gets another, even of identical bytes and changes.
+   */
+  id: string;
+  target: SourceTarget;
+  status: ConfigRepairStatus;
+  /**
+   * The exact source revision the repair was planned from.
+   */
+  before_revision: string;
+  /**
+   * The committed revision, or the revision observed after an uncertain
+   * publication. Absent when nothing was published.
+   */
+  after_revision?: string | null;
+  /**
+   * Every eligible change, including those beyond `changes`.
+   */
+  changed_count: number;
+  changes: ConfigRepairChange[];
+  /**
+   * Whether `changes` omits entries beyond [`MAX_RECEIPT_CHANGES`].
+   */
+  truncated: boolean;
+  /**
+   * Whether an exact private copy of the original bytes exists.
+   */
+  backup_available: boolean;
+  /**
+   * Why the source is unresolved or uncertain; never source excerpts.
+   */
   diagnostic?: string | null;
 }
 export interface SourceView2 {

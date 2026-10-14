@@ -20490,6 +20490,33 @@
             }
           ]
         },
+        "user_repair": {
+          "description": "The latest automatic repair observation of the User source in this\nprocess. Absent when the finite ledger retains none — never needed,\nwithdrawn, or forgotten — which never proves the source valid; the\nviews' diagnostics report that.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigRepairReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_repair": {
+          "description": "The latest automatic repair observation of the target Workspace source.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigRepairReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repair_sequence": {
+          "description": "The native repair-ledger sequence `user_repair` and `workspace_repair`\nare current at, read with them under one lock. It orders this read\nagainst the `sequence` of each `configuration/sourceRepairChanged`\nfor the same source: the higher one is the newer observation.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
         "user_resource_root": {
           "type": "string"
         },
@@ -20529,6 +20556,7 @@
         "resource_revisions",
         "provenance",
         "user",
+        "repair_sequence",
         "user_resource_root",
         "runtime_root",
         "user_mcp",
@@ -20616,6 +20644,202 @@
       "required": [
         "path",
         "revision"
+      ]
+    },
+    "ConfigRepairReceipt": {
+      "description": "Bounded, redacted native fact about one automatic repair of one source.\n\nIt describes authored bytes only: it never claims that any configuration\nwas prepared, applied or adopted.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Opaque identity of this repair occurrence within its App Server\nauthority: one committed (or possibly committed) publication, or one\nunresolved episode. Rereading or redelivering the receipt keeps it;\nanother commit gets another, even of identical bytes and changes.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SourceTarget"
+        },
+        "status": {
+          "$ref": "#/$defs/ConfigRepairStatus"
+        },
+        "before_revision": {
+          "description": "The exact source revision the repair was planned from.",
+          "type": "string"
+        },
+        "after_revision": {
+          "description": "The committed revision, or the revision observed after an uncertain\npublication. Absent when nothing was published.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changed_count": {
+          "description": "Every eligible change, including those beyond `changes`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigRepairChange"
+          }
+        },
+        "truncated": {
+          "description": "Whether `changes` omits entries beyond [`MAX_RECEIPT_CHANGES`].",
+          "type": "boolean"
+        },
+        "backup_available": {
+          "description": "Whether an exact private copy of the original bytes exists.",
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "description": "Why the source is unresolved or uncertain; never source excerpts.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "target",
+        "status",
+        "before_revision",
+        "changed_count",
+        "changes",
+        "truncated",
+        "backup_available"
+      ]
+    },
+    "ConfigRepairStatus": {
+      "description": "The outcome of one automatic repair observation. A source that never\nneeded repair has no receipt — nor has one whose receipt was withdrawn or\nforgotten, so having none never proves a source valid.",
+      "oneOf": [
+        {
+          "description": "A validated candidate was atomically published.",
+          "type": "string",
+          "const": "repaired"
+        },
+        {
+          "description": "The source is invalid and no valid candidate exists; it is unchanged.",
+          "type": "string",
+          "const": "unresolved"
+        },
+        {
+          "description": "Publication may have happened but was not durably confirmed. The\nobserved revision is reported; the mutation is never replayed.",
+          "type": "string",
+          "const": "commit_uncertain"
+        }
+      ]
+    },
+    "ConfigRepairChange": {
+      "description": "One deterministic edit of an authored source, in native vocabulary only:\nnever an authored key, identity or value.",
+      "oneOf": [
+        {
+          "description": "A field or table unknown to its closed schema object was deleted. The\nremoved key is authored text and is never carried.",
+          "type": "object",
+          "properties": {
+            "object_path": {
+              "description": "The closed schema object the field was removed from: schema\nproperty names, `*` for an open-map identity and `[n]` for a\nzero-based array position; empty for the document root.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "removed_field"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "object_path"
+          ]
+        },
+        {
+          "description": "An illegal `agent.tools.builtin` element was deleted.",
+          "type": "object",
+          "properties": {
+            "position": {
+              "description": "The element's zero-based position in the authored selection.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "name": {
+              "description": "The native Tool identity the element names; null when `reason`\nis `unknown`, since a name no native Tool has is authored text.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/NativeToolRemoval"
+            },
+            "kind": {
+              "type": "string",
+              "const": "removed_native_tool"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "position",
+            "reason"
+          ]
+        },
+        {
+          "description": "An explicit `schema_version` was normalized to the current version.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "to": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "kind": {
+              "type": "string",
+              "const": "updated_schema_version"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "from",
+            "to"
+          ]
+        }
+      ]
+    },
+    "NativeToolRemoval": {
+      "description": "Why a Native Tool selection entry was removed.",
+      "oneOf": [
+        {
+          "description": "No native Tool of the root selection plane has this name.",
+          "type": "string",
+          "const": "unknown"
+        },
+        {
+          "description": "A later repeat of an ordinary selection; the first occurrence stays.",
+          "type": "string",
+          "const": "duplicate"
+        },
+        {
+          "description": "An Agent control Tool composed automatically when agents are admitted.",
+          "type": "string",
+          "const": "agent_control"
+        },
+        {
+          "description": "A Tool owned by a Plugin and selected through `agent.plugins`.",
+          "type": "string",
+          "const": "plugin_owned"
+        }
       ]
     },
     "SourceView2": {
@@ -21505,6 +21729,48 @@
               "additionalProperties": false,
               "required": [
                 "application"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "The latest automatic `rustx.toml` repair observation of one source\nchanged (Issue #464).\n\nSource-scoped: it names a `SourceTarget`, never a Session, attachment\nor application scope, and it says nothing about runtime application,\nwhich `configuration/changed` reports separately. A connection observes\nthe User source and each Workspace source it addressed, the least\nrecently addressed of its 64 Workspaces forgotten first. Each admission\nof a source — including addressing a forgotten one again — announces\nits current level once, then every change of it, and a delivered\nreceipt the finite ledger later forgets is followed by its absence\nonce. `receipt: null` says the finite process-local ledger retains no\nreceipt for the source — never recorded, withdrawn, or forgotten —\nnever that the document is valid, which only a source read reports.\nIt is a state, not a repair, and presents nothing. Delivery is\nlevel-triggered: after a gap, the authoritative\n`configuration/sourcesRead` carries the same receipts. A notice is not\nhistory: one receipt id is one repair occurrence, and a later notice\nmay carry it again at a higher `sequence`.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "configuration/sourceRepairChanged"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ConfigRepairReceipt"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sequence": {
+                  "description": "The native repair-ledger sequence this level is current at. Within\none App Server authority it orders this observation against every\nother observation of the same source, including the\n`repair_sequence` of a `configuration/sourcesRead`: the higher one\nis the newer, and two at one sequence agree.",
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "sequence"
               ]
             }
           },

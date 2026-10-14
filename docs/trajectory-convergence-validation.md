@@ -21,7 +21,7 @@ frozen Tool-catalog relationship classification, and bounded predecessor prompt
 content. Existing Context, ToolCall scope, canonical message IDs, request ordinal,
 provider clock bridge and detail/authorization primitives were reused.
 
-App Server v20 / Runtime Client v47 replace v19/v45 because mandatory Trace fields
+App Server v20 / Runtime Client v48 replace v19/v45 because mandatory Trace fields
 change the strict negotiated vocabulary; SQLite remains v44, with no migrations,
 aliases, new events or persistent Trace store. Generated Rust-schema/TS fixtures,
 consumers, client admission and protocol tests move together. Native summary/page/
@@ -270,7 +270,7 @@ whether or not that record is loaded. Structural activation/focus clears Inspect
 selection and never reads details; regrouping follows the same structure's segment
 containing the old anchor, never the child itself. Search no longer borrows an
 anchor child's content/state for structural headers. Attempt ordinals remain
-loaded-window labels. No protocol/native change is necessary: v20/v47 and SQLite
+loaded-window labels. No protocol/native change is necessary: v20/v48 and SQLite
 are unchanged. See `docs/trace.md` for keyboard and disappearance behavior.
 
 Tool Input/Result/Schema render explicit unavailable states; absent bounded Tool

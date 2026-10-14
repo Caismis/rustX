@@ -27,7 +27,7 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync, realpathSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,7 +44,8 @@ import { StdioTransport } from "../src/app-server/stdio-transport.ts";
 import { WebSocketTransport } from "../src/app-server/websocket-transport.ts";
 import { TransportClosedError } from "../src/app-server/transport.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
-import type { SessionSettings } from "../src/protocol/app-server.ts";
+import type { SessionSettings, SourceTarget } from "../src/protocol/app-server.ts";
+import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/app-server-peer.ts";
@@ -614,6 +615,157 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
         error instanceof TransportClosedError && error.reason === "handshake_failed",
     );
     assert.ok(external.running, "a refused client never stops the listener");
+  });
+
+  it("CONVERGE-TUI a stale warning retires when native re-admits its forgotten Workspace", { timeout: 120_000 }, async () => {
+    const malformed = (revision: number) => `[agent\nlegacy = ${revision}\n`;
+    const directory = (name: string) => {
+      const path = server.fixture.path(name);
+      mkdirSync(path, { recursive: true });
+      return { kind: "workspace", directory: realpathSync(path) } as const;
+    };
+    const w0 = directory("converge-w0");
+    const w0File = join(w0.directory, "rustx.toml");
+    const others = Array.from({ length: 64 }, (_, index) => directory(`converge-w${index + 1}`));
+    const key = (target: SourceTarget) => target.kind === "user" ? "user" : `workspace:${target.directory}`;
+    const held = (host: AppServerHost) => host.sourceRepairs().find(observation => key(observation.target) === key(w0));
+    const requests = (await provider.requests()).length;
+    const a = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const b = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    // The status line, composed exactly as the TUI composes it.
+    const status = new SourceRepairStatus();
+    status.adopt(a.authorityId);
+    for (const observation of a.sourceRepairs()) status.observe(a.authorityId, observation);
+    a.onSourceRepair(observation => status.observe(a.authorityId, observation));
+    const warned = () => status.pendingSources().some(source => key(source) === key(w0));
+    try {
+      // 1. A observes W0's unresolved receipt: its failed Session admits W0.
+      writeFileSync(w0File, malformed(1));
+      await assert.rejects(a.createSession({ cwd: w0.directory }));
+      await until(() => held(a)?.receipt?.status === "unresolved", "A observes W0 unresolved");
+      assert.ok(warned());
+      const first = held(a)!;
+      // 2. A addresses 63 more Workspaces: native interest is full.
+      for (const target of others.slice(0, 63)) await a.readSourceRepairs(target);
+      // 3. W0's unresolved document changes, observed through B: a newer
+      //    unresolved level, which A — still interested — observes most
+      //    recently.
+      writeFileSync(w0File, malformed(2));
+      await assert.rejects(b.createSession({ cwd: w0.directory }));
+      await until(() => held(a) !== undefined && BigInt(held(a)!.sequence) > BigInt(first.sequence), "A observes W0's newer level");
+      assert.equal(held(a)!.receipt?.status, "unresolved");
+      // 4. A 65th Workspace: native forgets W0, the least recently addressed;
+      //    A's caches forget the least recently observed, and keep W0.
+      await a.readSourceRepairs(others[63]!);
+      assert.equal(held(a)?.receipt?.status, "unresolved");
+      assert.ok(warned());
+      // 5. B resolves W0 through the manual repair; A is no longer interested.
+      const read = await b.readSourceRepairs(w0);
+      await b.client.call("configuration/sourceWrite", {
+        target: w0,
+        expected_revision: read.workspace!.revision,
+        mutation: { kind: "repair_config", document: '[environment]\nRESIDENCY_SESSION = "converged"\n' },
+      }, "source_settings");
+      const healthy = readFileSync(w0File, "utf8");
+      // 6. A re-admits W0 by opening a Session there — no read of W0 — and the
+      //    native admission level withdraws the stale warning.
+      const session = await openSession(a, { cwd: w0.directory });
+      await until(() => held(a)?.receipt === undefined, "native announces W0's empty level");
+      assert.equal(warned(), false);
+      assert.equal(status.visible, status.pendingSources().length > 0);
+      assert.ok(!status.pendingSources().some(source => key(source) === key(w0)));
+      // 7. Reads and a reconnect to the same authority never restore it.
+      await a.readSourceRepairs(w0);
+      assert.equal(held(a)?.receipt, undefined);
+      const reconnected = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+      try {
+        assert.equal(status.adopt(reconnected.authorityId), true, "the same authority");
+        reconnected.onSourceRepair(observation => status.observe(reconnected.authorityId, observation));
+        await reconnected.readSourceRepairs(w0);
+        assert.equal(reconnected.sourceRepairs().find(observation => key(observation.target) === key(w0))?.receipt, undefined);
+        assert.equal(warned(), false);
+      } finally {
+        await reconnected.shutdown();
+      }
+      // Observation alone: W0's bytes are B's write, the Session is idle, and
+      // no model was asked anything.
+      assert.equal(readFileSync(w0File, "utf8"), healthy);
+      assert.equal(session.state.attempt, undefined);
+      assert.equal((await provider.requests()).length, requests);
+    } finally {
+      await a.shutdown();
+      await b.shutdown();
+    }
+  });
+
+  it("LEDGER-EVICT-08 a warning whose receipt native's ledger forgets retires while A keeps observing W0", { timeout: 120_000 }, async (t) => {
+    const malformed = (revision: number) => `[agent\nlegacy = ${revision}\n`;
+    const directory = (name: string) => {
+      const path = server.fixture.path(name);
+      mkdirSync(path, { recursive: true });
+      return { kind: "workspace", directory: realpathSync(path) } as const;
+    };
+    const w0 = directory("evict-w0");
+    const w0File = join(w0.directory, "rustx.toml");
+    const others = Array.from({ length: 64 }, (_, index) => directory(`evict-w${index + 1}`));
+    for (const target of others) writeFileSync(join(target.directory, "rustx.toml"), malformed(1));
+    const key = (target: SourceTarget) => target.kind === "user" ? "user" : `workspace:${target.directory}`;
+    const held = (host: AppServerHost) => host.sourceRepairs().find(observation => key(observation.target) === key(w0));
+    const requests = (await provider.requests()).length;
+    const a = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const b = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const status = new SourceRepairStatus();
+    status.adopt(a.authorityId);
+    for (const observation of a.sourceRepairs()) status.observe(a.authorityId, observation);
+    a.onSourceRepair(observation => status.observe(a.authorityId, observation));
+    const warned = () => status.pendingSources().some(source => key(source) === key(w0));
+    try {
+      // 1. A's failed Session admits W0, and A observes its unresolved R0.
+      writeFileSync(w0File, malformed(1));
+      await assert.rejects(a.createSession({ cwd: w0.directory }));
+      await until(() => held(a)?.receipt?.status === "unresolved", "A observes W0 unresolved");
+      assert.ok(warned());
+      const r0 = held(a)!;
+      // From here A sends nothing: no read, no Session, so no re-admission.
+      const sent: string[] = [];
+      const call = a.client.call.bind(a.client);
+      t.mock.method(a.client, "call", (...args: Parameters<typeof call>) => {
+        sent.push(args[0]);
+        return call(...args);
+      });
+      // 2. B reconciles 64 malformed Workspaces A never addressed; each is a
+      //    newer ledger entry, so native's finite ledger forgets W0.
+      for (const target of others) await b.client.call("configuration/reconcile", { target }, "configuration_application");
+      // 3. Native still observes W0 for A and delivers its absence.
+      await until(() => held(a)?.receipt === undefined, "native delivers W0's absence");
+      assert.ok(BigInt(held(a)!.sequence) > BigInt(r0.sequence));
+      assert.equal(warned(), false);
+      assert.deepEqual(sent, []);
+      // Absence is not health: W0's bytes are unchanged and its read still
+      // reports the malformed document.
+      assert.equal(readFileSync(w0File, "utf8"), malformed(1));
+      const read = await b.readSourceRepairs(w0);
+      assert.equal(read.workspace_repair ?? null, null);
+      assert.ok(read.workspace?.diagnostic);
+      // 4. R0 delivered again late is older and restores nothing.
+      assert.equal(status.observe(a.authorityId, r0), false);
+      assert.equal(warned(), false);
+      // 5. A still observes W0: a new episode reaches it with no request.
+      writeFileSync(w0File, malformed(2));
+      await assert.rejects(b.createSession({ cwd: w0.directory }));
+      await until(() => held(a)?.receipt?.status === "unresolved", "A observes W0's new episode");
+      assert.notEqual(held(a)!.receipt!.id, r0.receipt!.id);
+      assert.ok(warned());
+      assert.deepEqual(sent, []);
+      // R0's announcement identity survived its retirement: R0 current again
+      // at a newer sequence retires R1 from the line and is not announced.
+      assert.equal(status.observe(a.authorityId, { ...r0, sequence: String(BigInt(held(a)!.sequence) + 1n) }), true);
+      assert.equal(warned(), false);
+      assert.equal((await provider.requests()).length, requests);
+    } finally {
+      await a.shutdown();
+      await b.shutdown();
+    }
   });
 
   it("keeps the server and its accepted work alive across disconnect and reconnect", { timeout: 120_000 }, async () => {

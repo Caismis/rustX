@@ -251,3 +251,25 @@ No unexplained liveness failures occurred in this follow-up matrix.
 
 Final-commit GitHub CI is recorded in the linked PR after push. This local validation
 record does not claim remote checks completed before the commit was published.
+
+
+## Latest-main integration
+
+Main advanced during validation to `97096020d64ea00218493a0a99b9b805821eeb28`
+(PR #465, deterministic User/Workspace configuration auto-repair). The F1/F2
+repair is preserved in commit `2a09dfcf`; its complete validation above was
+performed before this integration. Shared client/documentation conflicts were
+resolved by retaining auto-repair notices and typed projection history, with no
+canonical compaction-marker or Surface compaction path restored.
+
+Both lines had independently used App Server v47 for different contracts. The
+combined authoritative contract is now v48, with regenerated schema/TypeScript
+artifacts, synchronized client imports/subprotocols/initialization checks, and no
+v47 reader or alias. Runtime Client remains v69. Local Harness source hashes and
+retained import inventories were refreshed for the actual merged source; original
+upstream attribution, hashes and license data remain intact. Protocol drift, all
+client typechecks, i18n and provenance checks passed. Full integrated-source
+validation and final-commit CI are reported in the PR.
+
+The upstream macOS CI job budget change belongs to PR #465 and is retained from
+main; this repair changes no native test deadline, assertion or lane selector.

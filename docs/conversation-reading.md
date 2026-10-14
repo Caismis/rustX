@@ -305,7 +305,7 @@ request; ChatViewport preserves the reading anchor through the resulting reflow.
 
 ## Exact fork source message windows
 
-App Server v47 adds the Message window selector over canonical MessageId. The
+App Server v48 adds the Message window selector over canonical MessageId. The
 store resolves its existing indexed transcript position inside the same read
 transaction, then returns at most 64 entries forward from that exact position.
 It never scans intervening transcript pages or substitutes a nearby Turn. A

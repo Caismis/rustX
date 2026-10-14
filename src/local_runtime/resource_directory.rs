@@ -115,10 +115,9 @@ pub(crate) fn revision(root: &Path) -> String {
             entries.sort_by_key(std::fs::DirEntry::file_name);
             for entry in entries {
                 let name = entry.file_name();
-                let text = name.to_string_lossy();
                 if depth <= 1
-                    && (text.starts_with(".tmp")
-                        || (text.starts_with('.') && text.ends_with(".toml.lock")))
+                    && (name.as_encoded_bytes().starts_with(b".tmp")
+                        || super::settings::is_writer_artifact(&name))
                 {
                     continue;
                 }

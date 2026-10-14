@@ -8,7 +8,7 @@ import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/Tool.module.css';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v47';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v48';
 import { ToolCard, ToolInspectionButton } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 

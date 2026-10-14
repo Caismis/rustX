@@ -1,5 +1,6 @@
 import { isAttemptActive } from "../presentation/state.ts";
 import { archiveDestination } from "../app-server/archive.ts";
+import { renderRepairInspection, type SourceRepairObservation } from "../presentation/source-repairs.ts";
 /**
  * The command/input dispatcher.
  *
@@ -178,12 +179,14 @@ export interface DebugDiagnostics {
   resyncCount: number;
 }
 
+const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
+
 export class CommandDispatcher {
   #context: DispatcherContext;
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v47.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v48.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -518,11 +521,15 @@ export class CommandDispatcher {
 
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
+    const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
+    if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v47.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v48.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
+    else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
-    else return transient("error", 'usage: /settings [user | workspace "<canonical absolute path>"] [rescan | approval policy|full_access|inherit]');
+    else return usage;
+    if (words[0] === "repairs") return words.length === 1 ? this.#repairs(target) : usage;
     const action = words.shift();
     const client = this.#context.host.client;
     let source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
@@ -535,6 +542,48 @@ export class CommandDispatcher {
     } else if (action) return transient("error", "Unknown Settings action");
     if (action) source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
     return inspect(target.kind === "user" ? "User Settings" : "Workspace Settings", JSON.stringify(source, null, 2));
+  }
+
+  /**
+   * The redacted native repair receipts of the User source, a Workspace
+   * source, or both, read authoritatively. Read-only: this never triggers a
+   * repair, and nothing in it reaches the conversation.
+   *
+   * `"current"` is the User and the current Workspace; `"current workspace"`
+   * the current Workspace alone. The current Workspace is the one the focused
+   * Session is natively bound to — its canonical durable cwd, read from the
+   * App Server (`session/summary`, which loads no runtime) — never this
+   * client's Session-creation defaults, and never a path resolved on this
+   * machine, which may not be the App Server's. The App Server and Session
+   * are captured when the command starts: a later focus change does not
+   * retarget it, and a result from a replaced App Server is never shown.
+   */
+  async #repairs(
+    target: import("../../../protocol/app-server/v48.ts").SourceTarget | "current" | "current workspace",
+  ): Promise<CommandOutcome> {
+    const { host, session } = this.#context;
+    let workspace: import("../../../protocol/app-server/v48.ts").SourceTarget | undefined;
+    if (typeof target === "string") {
+      if (session !== undefined) {
+        const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");
+        workspace = { kind: "workspace", directory: summary.cwd };
+      } else if (target === "current workspace") {
+        return transient("error", NO_CURRENT_WORKSPACE);
+      }
+    } else if (target.kind === "workspace") {
+      workspace = target;
+    }
+    const projection = await host.readSourceRepairs(workspace ?? { kind: "user" });
+    if (this.#context.host !== host) return transient("error", "The App Server connection changed during the inspection; nothing was shown. Run it again.");
+    const observations: SourceRepairObservation[] = [];
+    if (target === "current" || (typeof target !== "string" && target.kind === "user")) {
+      observations.push({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined, sequence: projection.repair_sequence });
+    }
+    if (workspace !== undefined) {
+      observations.push({ target: projection.target, receipt: projection.workspace_repair ?? undefined, sequence: projection.repair_sequence });
+    }
+    const body = renderRepairInspection(observations);
+    return inspect("Configuration repairs", target === "current" && workspace === undefined ? `${body}\n\n${NO_CURRENT_WORKSPACE}` : body);
   }
 
   async #configuration(session: AppServerSession, argument: string): Promise<CommandOutcome> {
@@ -1242,6 +1291,6 @@ export function renderSettings(state: PresentationState, configuration?: import(
       `Admitted Attempt: ${JSON.stringify(configuration.admitted_attempt ?? null)}`,
       "Effective configuration and provenance:", JSON.stringify(configuration, null, 2),
     ] : []),
-    "/settings edits User/Workspace sources. /session settings inspects Session state; /session adopt explicitly adopts the inspected candidate.",
+    "/settings edits User/Workspace sources; /settings repairs shows their automatic repairs. /session settings inspects Session state; /session adopt explicitly adopts the inspected candidate.",
   ].join("\n");
 }

@@ -1,4 +1,4 @@
-import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v47';
+import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v48';
 
 export type TurnNode =
   | { kind: 'fork-point' }

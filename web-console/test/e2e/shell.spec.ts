@@ -407,7 +407,7 @@ test('authoritative narrow navigation commits while a background snapshot is hel
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v47').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v48').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });
@@ -823,7 +823,7 @@ for (const beforeReturn of [false, true]) test(`known input acceptance settles i
 });
 test('Discard creates a stable replacement editor through repeated read-only history', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html?fork&initial=cold');
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html?fork&initial=cold`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   const editor = page.getByRole('textbox', { name: 'Message', exact: true });
   await editor.fill('Discarded First Submission');
@@ -875,7 +875,7 @@ for (const width of [390, 1440]) test(`reselecting the current Session preserves
 });
 for (const width of [390, 1440]) test(`a native Fork seed remains authored after destination reselect: ${width}px`, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', item => { if (item.type() === 'error' || item.type() === 'warning') errors.push(item.text()); });
-  await page.setViewportSize({ width, height: 900 }); await page.goto('http://127.0.0.1:5174/test/fixtures/shell.html?editor-seed');
+  await page.setViewportSize({ width, height: 900 }); await page.goto(`${fixtureOrigin}/test/fixtures/shell.html?editor-seed`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.getByRole('button', { name: 'Branch into a new Session', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'Message', exact: true });

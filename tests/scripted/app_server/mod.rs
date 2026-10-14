@@ -10,6 +10,7 @@ mod model_selection;
 mod model_selection_noop;
 pub(crate) mod protocol;
 mod residency_policy;
+mod source_repair;
 mod startup_measurements;
 mod transports;
 use super::*;

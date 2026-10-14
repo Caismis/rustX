@@ -1,6 +1,6 @@
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient, OperationAdmission } from '../../client/app-server';
-import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v47';
+import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v48';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
 import type { CommandRequest } from '../commands/CommandPanel';
@@ -56,7 +56,7 @@ export type ShellNavigationEvent =
   | { type: 'RETURN'; route: HistoryRoute }
   | { type: 'COMMAND'; request: CommandRequest }
   | { type: 'COMMAND.CLOSE'; command: NonNullable<ShellNavigationContext['command']> }
-  | { type: 'SETTINGS'; destination: Extract<SettingsNavigationEvent, { type: 'OPEN' | 'OPEN.CONNECTION' | 'OPEN.OWNER' }> }
+  | { type: 'SETTINGS'; destination: Extract<SettingsNavigationEvent, { type: 'OPEN' | 'OPEN.CONNECTION' | 'OPEN.OWNER' | 'OPEN.REPAIRS' }> }
   | { type: 'SIDEBAR.DISMISS' | 'DISMISS.ERROR' }
   | { type: 'CANCEL'; pending?: Pending }
   | { type: 'AUTHORITY'; generation: number; authority: number | undefined };
