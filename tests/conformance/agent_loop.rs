@@ -1994,8 +1994,123 @@ async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, P
     let emulator = ProviderEmulator::start_with_workspace(scenario, Some(&workspace)).await?;
     let mut setup = Setup::new(model);
     setup.images = true;
+    if scenario == "image_coverage_overflow_retry" {
+        setup.keep_recent_tokens = setup.context_window;
+        setup.summary_model = Some("emulator/summary-model".into());
+    }
     let driver = Driver::start_in(root, &emulator, &setup).await;
     Some((driver, emulator))
+}
+
+#[tokio::test]
+async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_retry() {
+    let Some((driver, emulator)) = image_coverage_driver(
+        "image_coverage_overflow_retry",
+        "emulator-anthropic/anthropic-model",
+    )
+    .await
+    else {
+        return;
+    };
+    driver.submit("Read sixteen images, then one more.");
+    let outcome = driver.settle().await.1;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(
+        requests.len(),
+        6,
+        "five actual primary requests and one summary"
+    );
+    assert_eq!(
+        requests[4]["body"], requests[5]["body"],
+        "transient retry retains the post-compaction frozen input"
+    );
+    assert!(
+        !requests[3]["body"]
+            .to_string()
+            .contains("seventeenth-image"),
+        "summary selection did not receive the retired continuation anchor"
+    );
+    let canonical = driver.snapshot().unwrap().0.messages;
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Assistant(_)))
+            .count(),
+        3
+    );
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Tool(_)))
+            .count(),
+        17
+    );
+    let history = driver.request_history();
+    let snapshots = history.page(None, 32).unwrap().snapshots;
+    assert_eq!(
+        snapshots.len(),
+        5,
+        "summary creates no actual primary request snapshot"
+    );
+    assert!(
+        snapshots[1].continuation.is_some(),
+        "unchanged coverage remains active"
+    );
+    assert!(
+        snapshots[2..].iter().all(|s| s.continuation.is_none()),
+        "reconciliation and Summary retire continuation ownership"
+    );
+    assert_ne!(
+        snapshots[2].semantic_input_fingerprint,
+        snapshots[3].semantic_input_fingerprint
+    );
+    assert_eq!(
+        snapshots[3].semantic_input_fingerprint,
+        snapshots[4].semantic_input_fingerprint
+    );
+    assert_ne!(snapshots[3].request_id, snapshots[4].request_id);
+    assert_ne!(
+        snapshots[3].provisional_message_id,
+        snapshots[4].provisional_message_id
+    );
+    assert_eq!(
+        history.reconstruct(&snapshots[3].identity).unwrap(),
+        history.reconstruct(&snapshots[4].identity).unwrap()
+    );
+    let introduced: Vec<_> = snapshots
+        .iter()
+        .flat_map(|s| &s.request_context_ids)
+        .collect();
+    let unique: std::collections::BTreeSet<_> = introduced.iter().copied().collect();
+    assert!(
+        !unique.is_empty(),
+        "native Agent Context participates in this flow"
+    );
+    assert_eq!(introduced.len(), unique.len(), "Context is introduced once");
+    for snapshot in &snapshots {
+        let reconstructed = history.reconstruct(&snapshot.identity).unwrap();
+        for id in &unique {
+            assert!(
+                reconstructed
+                    .messages
+                    .iter()
+                    .filter(|m| m.canonical_id() == Some(*id))
+                    .count()
+                    <= 1,
+                "Context is never duplicated through Tail and staged input"
+            );
+        }
+    }
+    assert!(
+        snapshots[3..]
+            .iter()
+            .all(|s| s.request_context_ids.is_empty())
+    );
+    emulator.finish().await;
 }
 
 #[tokio::test]

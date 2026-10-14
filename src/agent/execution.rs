@@ -1884,8 +1884,7 @@ impl<'a> AgentExecution<'a> {
         if self.pending_continuation.is_some() {
             self.continuation_owner = Some(assistant_message_id.clone());
         } else {
-            self.continuation_owner = None;
-            self.continuation_source = None;
+            self.retire_continuation();
         }
         let has_tool_calls = !turn_assembly.tool_calls.is_empty();
         if let Err(error) = self.state.model_finished(has_tool_calls) {
@@ -1920,9 +1919,7 @@ impl<'a> AgentExecution<'a> {
                 }
                 match workflow_output.submit(protocol_calls[0].arguments.clone()) {
                     crate::runtime::workflow::WorkflowOutputSubmission::Committed => {
-                        self.pending_continuation.take();
-                        self.continuation_owner.take();
-                        self.continuation_source.take();
+                        self.retire_continuation();
                         self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
                         if let Err(error) = self.state.tools_finished() {
                             return Some(Terminal::Failed {
@@ -2094,14 +2091,20 @@ impl<'a> AgentExecution<'a> {
             feedback.to_owned(),
             2048,
         ));
-        self.pending_continuation.take();
-        self.continuation_owner.take();
-        self.continuation_source.take();
+        self.retire_continuation();
         self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
         if had_tool_calls {
             let _ = self.state.tools_finished();
         }
         self.emit(RuntimeEvent::TurnCompleted);
+    }
+
+    /// Relinquish native state, accepted-output provenance and its planning
+    /// anchor together. This never changes canonical accepted output.
+    fn retire_continuation(&mut self) {
+        self.pending_continuation = None;
+        self.continuation_source = None;
+        self.continuation_owner = None;
     }
 
     /// Preflights every model-issued tool call of the turn.
@@ -2796,10 +2799,13 @@ impl<'a> AgentExecution<'a> {
         {
             // The next immutable logical input version owns this decision.
             // Canonical native output remains intact for adapter replay validation.
-            self.pending_continuation = None;
-            self.continuation_source = None;
             crate::model::adapter::validation::validate_prepared_request(&request)
                 .map_err(|error| compatibility_failure(error.message))?;
+            self.retire_continuation();
+            // The changed covered prefix is no longer the input measured by
+            // that provider, even if the no-continuation identity matches again.
+            self.observed = None;
+            self.observed_request_identity = None;
         }
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
@@ -3528,15 +3534,10 @@ impl<'a> AgentExecution<'a> {
                 .await
             {
                 Ok(_completed) => {
-                    // The semantic commit already happened: the summary is a
-                    // Ledger fact and the new Surface revision exists. The
-                    // opaque provider continuation is now known to be
-                    // incompatible, and this is the single place that discards
-                    // it. The observed provider measurement belonged to the old
-                    // request context and is dropped with it.
-                    self.pending_continuation = None;
-                    self.continuation_owner = None;
-                    self.continuation_source = None;
+                    // The typed checkpoint and Projection Head are committed.
+                    // Complete replay replaces all primary continuation ownership;
+                    // the old request measurement is no longer evidence for it.
+                    self.retire_continuation();
                     self.observed = None;
                     self.observed_request_identity = None;
                     // `commit_projection` persisted and returned the exact

@@ -280,6 +280,19 @@ pub(super) fn validate_dependencies(
         &value.read_cut,
         ResourceLimits::default(),
     )?;
+    // Historical authority and current-head CAS are independent checks. The
+    // candidate must name precisely the predecessor observed at its cut.
+    let observed = activation_at_journal_cut(connection, value.read_cut.journal.0)?;
+    if observed
+        .as_ref()
+        .map_or(ProjectionActivationId(0), |a| a.activation)
+        != value.read_cut.projection_activation
+        || observed.as_ref().map(|a| &a.checkpoint_id) != value.expected_head.as_ref()
+    {
+        return Err(invalid(
+            "checkpoint predecessor disagrees with Resource Read Cut head",
+        ));
+    }
     validate_current_dependencies(connection, scope, value)?;
     compile_checkpoint(value, |source, body_required| {
         super::compaction_resources::dependency(
@@ -801,9 +814,19 @@ pub(super) fn at_journal_cut(
     connection: &Connection,
     through: u64,
 ) -> Result<Option<ProjectionCheckpoint>, ConversationStoreError> {
+    activation_at_journal_cut(connection, through)?
+        .map(|activation| activated(connection, activation.activation.0))
+        .transpose()
+}
+
+fn activation_at_journal_cut(
+    connection: &Connection,
+    through: u64,
+) -> Result<Option<ProjectionActivation>, ConversationStoreError> {
     // Inherited Source.J is never compared with the destination Journal.
     let id:Option<u64> = connection.query_row("SELECT activation FROM projection_activations WHERE json_type(activation_json,'$.destination_installation') != 'null' OR json_extract(activation_json,'$.origin.completed_journal')<=?1 ORDER BY activation DESC LIMIT 1",[seq_to_i64(through)?],|r|r.get(0)).optional().map_err(|e|storage(e.to_string()))?;
-    id.map(|id| activated(connection, id)).transpose()
+    id.map(|id| activation_at(connection, ProjectionActivationId(id)))
+        .transpose()
 }
 
 /// Validate selection without repeating any dynamic semantic transformation.

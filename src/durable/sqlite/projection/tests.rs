@@ -933,3 +933,134 @@ fn historical_selection_rejects_missing_eligible_checkpoint_closure() {
             .is_err()
     );
 }
+
+#[test]
+fn checkpoint_predecessor_must_match_the_head_visible_at_its_read_cut() {
+    for defect in ["zero_activation", "wrong_predecessor", "wrong_journal"] {
+        let store = store();
+        store.initialize(&[message(1)]).unwrap();
+        let first = store
+            .commit_projection(commit_input(
+                &store,
+                "O1",
+                candidate(&store, "P1", vec![summary("first")]),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        if defect != "zero_activation" {
+            store
+                .commit_projection(commit_input(
+                    &store,
+                    "O2",
+                    candidate(&store, "P2", vec![summary("second")]),
+                    &CancellationSignal::new(),
+                ))
+                .unwrap();
+        }
+        let mut value = candidate(&store, "invalid", vec![summary("dependency-free")]);
+        value.read_cut.projection_activation = if defect == "zero_activation" {
+            ProjectionActivationId(0)
+        } else {
+            ProjectionActivationId(1)
+        };
+        if defect == "wrong_predecessor" {
+            value.read_cut.journal = first.checkpoint.activation.origin.completed_journal;
+        }
+        let before = store.compaction_resource_cut().unwrap();
+        let head = store.projection_head().unwrap();
+        let counts = || {
+            let connection = store.lock().unwrap();
+            [
+                "projection_checkpoints",
+                "projection_activations",
+                "compaction_operations",
+                "events",
+            ]
+            .map(|table| {
+                connection
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| {
+                        r.get::<_, u64>(0)
+                    })
+                    .unwrap()
+            })
+        };
+        let before_counts = counts();
+        assert!(
+            store
+                .commit_projection(commit_input(
+                    &store,
+                    "invalid",
+                    value,
+                    &CancellationSignal::new()
+                ))
+                .is_err(),
+            "accepted incoherent {defect}"
+        );
+        assert_eq!(store.compaction_resource_cut().unwrap(), before);
+        assert_eq!(store.projection_head().unwrap(), head);
+        assert_eq!(
+            counts(),
+            before_counts,
+            "no partial checkpoint or completion"
+        );
+    }
+}
+
+#[test]
+fn historical_head_validation_preserves_growth_same_ledger_and_old_receipts() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    let first_input = commit_input(
+        &store,
+        "O1",
+        candidate(&store, "P1", vec![summary("first")]),
+        &CancellationSignal::new(),
+    );
+    assert_eq!(first_input.candidate.expected_head, None);
+    assert_eq!(
+        first_input.candidate.read_cut.projection_activation,
+        ProjectionActivationId(0)
+    );
+    store.append_canonical(&message(2)).unwrap();
+    let first = store.commit_projection(first_input.clone()).unwrap();
+    let second_input = commit_input(
+        &store,
+        "O2",
+        candidate(&store, "P2", vec![summary("second")]),
+        &CancellationSignal::new(),
+    );
+    store
+        .append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(""),
+            sequence: 0,
+            conversation_id: store.conversation_id().clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+            event: RuntimeEvent::CompactionStarted {
+                operation_id: CompactionOperationId::new("unrelated"),
+            },
+        })
+        .unwrap();
+    store.append_canonical(&message(3)).unwrap();
+    let second = store.commit_projection(second_input).unwrap();
+    let third = store
+        .commit_projection(commit_input(
+            &store,
+            "O3",
+            candidate(&store, "P3", vec![summary("third")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    assert_eq!(
+        second.checkpoint.activation.ledger,
+        third.checkpoint.activation.ledger
+    );
+    assert_ne!(
+        second.checkpoint.activation.activation,
+        third.checkpoint.activation.activation
+    );
+    assert_eq!(store.commit_projection(first_input).unwrap(), first);
+    assert_eq!(store.projection_head().unwrap().unwrap(), third.checkpoint);
+}

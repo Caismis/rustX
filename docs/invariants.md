@@ -7040,7 +7040,12 @@ missing or corrupt. Installation validates monotone activation Ledger coordinate
 base <= activation <= destination Ledger, checkpoint identity and predecessor order.
 
 Every new local checkpoint transaction validates the complete Resource Read Cut,
-including dependency-free Derived candidates, against durable authority. Historical
+including dependency-free Derived candidates, against durable authority. The
+declared activation and expected predecessor must equal the historical head selected
+by that cut’s Journal authority; activation zero requires an empty historical head.
+This source-observation check is separate from current-head CAS. Inherited source
+Journal coordinates remain distinct from destination installation. The existing
+journal-cut selector supplies bounded activation headers for validation. Historical
 cuts permit ordinary append growth. Existing matching operation receipts are resolved
 before revalidation, preserving uncertain-commit recovery. Trusted metadata sources
 share one cumulative byte/item allowance across canonical reads and parent checkpoint
@@ -7053,7 +7058,11 @@ covered prefix clears the active continuation pointer and compiles complete nati
 replay through the existing protocol adapters. Accepted Assistant output remains the
 sole continuation authority; opaque canonical output is never edited or fabricated.
 Unavailable complete replay is an explicit native-input compatibility failure,
-not token exhaustion. Ordinary transient retries clone this newly frozen decision
+not token exhaustion. Replay preflight completes before the Agent publishes
+retirement of native state, accepted-output source and continuation compaction owner
+together. Coverage invalidation also discards old provider measurement evidence,
+even if a no-continuation invocation identity could otherwise match again. Fresh
+Inbound, Context and carryover retention constraints are independent of retirement. Ordinary transient retries clone this newly frozen decision
 and exact materialized content without repeating transformations or contributors.
 
 ### Bounded native projections

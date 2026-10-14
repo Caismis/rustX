@@ -162,3 +162,92 @@ claim those executions passed before their completion. Earlier baseline CI had n
 conformance failure: 315 browser tests passed, while a model-error fixture shutdown
 reported a closed socket after its UI assertions completed. Downloaded trace and
 job logs were inspected; that baseline result is not represented as a green check.
+
+
+## Final review follow-up: F1 and F2
+
+This follow-up starts at `e87867ebf3166af0111d23935654f7c1a40773e6`, whose
+complete local browser rerun passed 316 cases and whose ten GitHub checks passed.
+Fetched main remains `6c73e456e826024fdbe153198a48c9128142e115`.
+
+F1 was confirmed by `checkpoint_predecessor_must_match_the_head_visible_at_its_read_cut`: the old transaction accepted a dependency-free candidate naming P1 but
+claiming activation zero after P1's completion. The transaction now reuses the
+existing journal-cut selection authority to read an integrity-validated activation
+header, checks both its activation and checkpoint identity against the candidate,
+and performs this validation before checkpoint mutations. Current-head CAS and
+execution fencing still protect commit separately. Historical matching receipts
+resolve first. No current Ledger/Journal equality is required.
+
+The regression checks zero activation, predecessor mismatch and inconsistent
+Journal/activation coordinates, asserting unchanged content/activation/receipt
+tables, Projection Head and Journal state after rejection.
+`historical_head_validation_preserves_growth_same_ledger_and_old_receipts` proves
+a legal empty first head, subsequent canonical and unrelated Journal growth,
+same-Ledger activations, and historical receipt recovery after a newer head.
+All 21 SQLite projection owner tests passed.
+
+F2 was confirmed by the composed Provider Emulator regression
+`retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_retry`.
+The stale owner made planning require retirement through the seventeenth-image
+Assistant instead of permitting the first legal prefix. The final scripted summary
+expectation explicitly excludes that old-owner span. The Agent now performs adapter replay preflight before retiring native state,
+accepted-output source and continuation compaction anchor through one synchronous
+private transition. Successful Summary and existing retirement call sites use the
+same transition. Changed coverage also discards old measured-input evidence.
+No canonical native units, Fresh Inbound, Context or carryover ownership are erased.
+
+The final scenario provides signed native thinking and usage observations, retains
+an unchanged continuation, then introduces image 17, returns overflow, performs
+real summary compaction, fails transiently and succeeds. It proves five primary
+snapshots plus one separate summary invocation, identical final retry wire/input
+content and fingerprints, distinct request/provisional identities, exact
+reconstruction, Context introduction once, three accepted Assistant facts and
+seventeen physical Tool results. The test passed. The existing missing-native-replay
+regression continues to verify that failed preflight starts no extra request.
+
+The updated complete validation matrix and final-commit CI results are recorded in
+the [PR #477 review report](https://github.com/Caismis/rustX/pull/477). Prior R1–R5
+regressions remain in their existing owner suites. There are no schema, generated
+protocol, dependency, transport, UI behavior, golden-reference or CI-selector changes.
+
+
+Follow-up validation completed on the repaired implementation, using the same
+isolated environment and serialized native/client order as above:
+
+| Command | Follow-up result |
+| --- | --- |
+| `git diff --check` | Passed |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Passed |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed |
+| `cargo build --bins --example document_artifact_fixture --locked` | Passed, repeated before client/process fixtures |
+| `cargo build --bins --all-features --locked` | Passed |
+| `cargo test --workspace -- --test-threads=2` | 4,019 passed; 0 failed; 8 existing ignored |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites:: --test-threads=2` | 3,330 passed; 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features -- --test-threads=2` | 208 passed; 5 existing live tests ignored |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=2` | 200 passed |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output -- --test-threads=2` | 431 passed: CFG3 31, conformance 29, SQLite 129, process 60, subagent 47, tools 135 |
+| `cargo run --all-features --example check_test_lanes -- --job rust-contracts` | Passed |
+| `cargo run --all-features --example check_test_lanes -- --job rust-boundaries` | Passed |
+| `uv run --project test-support/fake-provider --frozen pytest` | 54 passed |
+| `pnpm --dir protocol/app-server check` | Passed; no generated drift |
+| `pnpm --dir protocol/app-server typecheck` | Passed |
+| `pnpm --dir dev typecheck`; `pnpm --dir dev test` | Passed; 41 tests passed |
+| `pnpm --dir tui typecheck`; `pnpm --dir tui test` | Passed; 956 passed, 1 existing platform skip |
+| `pnpm --dir web-console typecheck`; `pnpm --dir web-console test` | Passed; 2,530 passed, 4 existing platform skips |
+| `pnpm --dir web-console build` | Passed; existing bundle-size warning |
+| `pnpm --dir web-console check:i18n`; `pnpm --dir web-console check:provenance` | Passed |
+| `node web-console/scripts/check-office-sandbox.ts` | Passed |
+| `bash web-console/scripts/browser-tests.sh test/e2e/compaction.spec.ts test/e2e/reading.spec.ts test/e2e/uploads.spec.ts` | 8 passed (4.5 minutes), pinned browser container |
+
+The F1 red execution accepted an activation-zero candidate after P1's completion;
+the revised owner suite rejects all three incoherent cases atomically. The F2 red
+execution failed overflow recovery with the stale owner. The first green execution
+then exposed a fixture omission: its first response had no native continuation,
+so the unchanged-continuation assertion was inapplicable. The fixture now provides
+signed thinking on both accepted tool turns and actual usage observations. The
+complete final scenario and all full lanes passed without weakening assertions.
+No unexplained liveness failures occurred in this follow-up matrix.
+
+Final-commit GitHub CI is recorded in the linked PR after push. This local validation
+record does not claim remote checks completed before the commit was published.

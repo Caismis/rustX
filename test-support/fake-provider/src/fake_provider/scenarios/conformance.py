@@ -699,7 +699,26 @@ def image_coverage_missing_replay() -> Scenario:
              Stream(Reasoning("stored reasoning requires unavailable native replay"), ToolCall("seventeenth-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"))))
 
 
+def image_coverage_overflow_retry() -> Scenario:
+    return Scenario("image_coverage_overflow_retry",
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, tools_include=("read_image",)),
+             Stream(Reasoning("first signed native thinking"), *(ToolCall(f"first-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(16)), Finish("tool_calls"), Usage(16, 1))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("image/png",)),
+             Stream(Reasoning("complete signed native thinking"), ToolCall("seventeenth-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"), Usage(17, 1))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("image/png", "Image artifact")),
+             HttpError(400, {"error": {"type": "invalid_request_error", "message": "prompt is too long: context window exceeded"}})),
+        # With no continuation anchor, keep-recent selects the first legal
+        # prefix. A stale owner instead forces retirement through image #17.
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=SUMMARY_MODEL, body_contains=(SUMMARY_INSTRUCTION,), body_excludes=("seventeenth-image", "complete signed native thinking")),
+             Stream(Text("coverage retirement summary"), Finish("stop"))),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("coverage retirement summary", "image/png", "Image artifact")),
+             HttpError(503, {"error": {"type": "server_error", "message": "temporary unavailable"}})),
+        Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("coverage retirement summary", "image/png", "Image artifact")),
+             Stream(Text("coverage overflow recovered"), Finish("stop"))))
+
+
 SCENARIOS = {
+    "image_coverage_overflow_retry": image_coverage_overflow_retry,
     "image_coverage_missing_replay": image_coverage_missing_replay,
     "image_coverage_growth": image_coverage_growth,
     "image_coverage_growth_responses": lambda: image_coverage_growth(OPENAI_RESPONSES, "responses-image", "image_coverage_growth_responses"),
