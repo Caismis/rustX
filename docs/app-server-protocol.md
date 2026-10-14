@@ -1533,7 +1533,7 @@ the authored unit in that scope. Clients never write whole config documents.
 ## Current Session lifecycle contract
 
 Initialization requires exactly v48 and WebSocket requires `rustx.app-server.v48`.
-v46 and all earlier versions are rejected without fallback. Rust DTOs generate
+v47 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v48.ts`, `v48.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session

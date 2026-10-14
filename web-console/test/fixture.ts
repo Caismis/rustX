@@ -9,6 +9,7 @@ export const TOKEN = 'fixture-transport-token-'.padEnd(43, 'x');
 export const endpoint = 'ws://127.0.0.1:8080/';
 const rustHello = fixtures.find(message => 'result' in message && message.result?.type === 'initialized');
 if (!rustHello || !('result' in rustHello) || rustHello.result?.type !== 'initialized') throw new Error('Missing Rust-serialized initialize fixture');
+const protocolVersion = rustHello.result.protocol_version;
 export const capabilities: ServerCapabilities = rustHello.result.capabilities;
 export function snapshot(id = 'A'): RuntimeClientSnapshot {
   return {
@@ -80,7 +81,7 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 47;
+  version = protocolVersion;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
