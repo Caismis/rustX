@@ -25,23 +25,47 @@ pub struct ResolvedUpload {
     pub file: UploadedFileRef,
     pub path: String,
 }
-pub(crate) fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\'', "&apos;")
-        .replace('\n', "&#10;")
-        .replace('\r', "&#13;")
-        .replace('\t', "&#9;")
+fn escaped_character(character: char) -> Option<&'static str> {
+    match character {
+        '&' => Some("&amp;"),
+        '"' => Some("&quot;"),
+        '<' => Some("&lt;"),
+        '>' => Some("&gt;"),
+        '\'' => Some("&apos;"),
+        '\n' => Some("&#10;"),
+        '\r' => Some("&#13;"),
+        '\t' => Some("&#9;"),
+        _ => None,
+    }
 }
+pub(crate) fn escaped_len(value: &str) -> Option<usize> {
+    value.chars().try_fold(0usize, |total, character| {
+        total.checked_add(escaped_character(character).map_or(character.len_utf8(), str::len))
+    })
+}
+pub(crate) fn escape(value: &str) -> String {
+    let mut escaped = String::new();
+    for character in value.chars() {
+        if let Some(replacement) = escaped_character(character) {
+            escaped.push_str(replacement);
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
 impl UploadProjection {
     /// Render all upload-bearing User items, preserving text bytes and order.
     /// # Errors
     /// A typed file without a Session-resolved path is rejected.
     pub fn apply(&self, messages: &mut [ModelInputMessage]) -> Result<(), String> {
         use std::fmt::Write;
+        let files: std::collections::BTreeMap<_, _> =
+            self.files.iter().map(|file| (&file.file, file)).collect();
+        if files.len() != self.files.len() {
+            return Err("duplicate upload resolution".into());
+        }
         for message in messages {
             let user_content = match message {
                 ModelInputMessage::Canonical(MessageBlock::User(user)) => &mut user.content,
@@ -60,11 +84,7 @@ impl UploadProjection {
             let mut prefix = String::from("<user_uploaded_files>\n");
             for content in user_content.iter() {
                 if let UserContentBlock::UploadedFile(reference) = content {
-                    let file = self
-                        .files
-                        .iter()
-                        .find(|f| &f.file == reference)
-                        .ok_or("unresolved Session upload")?;
+                    let file = files.get(reference).ok_or("unresolved Session upload")?;
                     if !std::path::Path::new(&file.path).is_absolute() {
                         return Err("upload projection path must be absolute".into());
                     }
@@ -116,6 +136,12 @@ mod tests {
     use super::*;
     use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
     use crate::runtime::identity::MessageId;
+    #[test]
+    fn escaped_byte_accounting_equals_the_authoritative_renderer() {
+        for value in ["plain", "Unicode: λ 雪", "&\"<>'\n\r\t", "/long/file&.txt"] {
+            assert_eq!(escaped_len(value), Some(escape(value).len()));
+        }
+    }
     #[test]
     fn exact_escaped_ordered_projection_preserves_body_and_plain_turns() {
         let first = UploadedFileRef {

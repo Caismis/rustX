@@ -7393,8 +7393,16 @@ Default Summary planning renders history once. Exact monotone whole-request pric
 from `DefaultTokenEstimator` support complete binary interval selection without
 per-message rounded token sums: growing Summary transcript bytes cannot reduce its
 price; deleting a prefix with fixed core inputs cannot increase primary/recent
-prices. Identity image/upload wrappers preserve that proof, while dynamic media
-rendering does not claim it. Choose the largest feasible boundary retaining the
+prices. Production image/upload capture freezes validated resources for the logical
+generation (manual Compaction: operation lifetime). Shared upload-then-image
+materialization preserves surviving message bytes under prefix deletion: newest-16
+cannot promote an older omitted occurrence whose sixteen newer occurrences survive.
+Historical-only and complete-primary image unions are frozen separately for slot
+coverage. Nonnegative immutable PNG occurrence charges preserve monotonicity.
+Candidate prices perform no resource reads; final request staging uses the same
+capture and still validates complete frozen input before request-start admission.
+Unknown, corrupt, unauthorized or excessive required resources fail explicitly.
+Arbitrary estimators retain their independent, unpromised search contract. Choose the largest feasible boundary retaining the
 keep-recent target, otherwise the earliest feasible fallback.
 
 Arbitrary estimators receive at most 64 descending complete-boundary queries. A

@@ -565,7 +565,9 @@ Without a monotonicity guarantee, at most 64 descending exact queries may establ
 a preferred fit. Exhaustive evaluation alone authorizes the earliest fallback or
 proven infeasibility. Remaining unexamined candidates yield `SearchIncomplete`, even
 when a nonpreferred fit is already known. This makes the guarantee explicit for
-non-monotone estimators and typed dynamic media. Agent execution settles that outcome
+non-monotone estimators. N1 initially also used that route for dynamic media wrappers;
+the production media repair below replaces their conservative refusal with frozen
+accounting. Agent execution settles a genuinely incomplete outcome
 once as a runtime compaction failure, including after a real overflow; it does not
 start a Summary, commit a Checkpoint or start another actual provider request.
 Cancellation retains its existing owner and is observed between exact queries.
@@ -646,10 +648,146 @@ reported in PR #477 after pushing; previous-head CI is historical evidence only.
 
 ### N1 remaining bounded limitation
 
-Arbitrary/non-monotone estimators and dynamic typed image/upload estimators do not
-promise complete efficient selection. If their 64 exact queries cannot establish
+Arbitrary/non-monotone estimators do not promise complete efficient selection.
+Production typed image/upload accounting now uses the frozen media proof below;
+it no longer takes this generic path merely for containing media. If an arbitrary
+estimator's 64 exact queries cannot establish
 preference or feasibility, the runtime terminates once with `SearchIncomplete`.
 This explicitly preserves the unknown result and does not claim `CannotFit`.
 Individual synchronous estimator calls finish before cancellation is observed at
 the next checkpoint; the planner bounds calls/materialization, not arbitrary callback
 CPU behavior. Production JSON-byte accounting has the documented complete guarantee.
+
+
+## Production media Compaction candidate discovery
+
+Starting HEAD: `b1837237f70606243e40c466ee6a66144ff16240`; base/main remains
+`97096020d64ea00218493a0a99b9b805821eeb28`. All ten starting-HEAD CI checks passed.
+ImageEstimator and UploadEstimator previously withheld monotonicity for any typed
+media, leaving the last 64 descending boundaries unable to reach the sole feasible
+boundary 2 of a 129-boundary production fixture. Genuine pre-fix image, upload and
+mixed Agent tests each failed with zero Summary invocations. No resource/fake-model
+failure was used to simulate this search defect.
+
+The owning repair removes both dynamic wrappers. Agent preparation freezes media
+through existing ArtifactStore/Session owners into `model::media::MediaSnapshot`;
+the shared compaction pipeline captures/extends the same authority for automatic,
+overflow and manual operations. Context Engine keeps the original estimator and
+applies the same frozen media materializer as request staging. Captured resources
+never grant monotonicity to an arbitrary estimator. `context-engine.md` records the
+prefix-deletion proof, budgets, lifetime and complete whole-request accounting.
+The mixed-media transformation order now agrees exactly with actual staging.
+Existing native replay reconciliation, snapshot freeze, retry versions, cancellation
+arbitration, SQLite COMMIT and historical activation/provenance ownership remain.
+
+Deterministic regression mapping:
+
+- T1/T2/T3: `production_image_compaction_discovers_second_of_129_boundaries`,
+  `production_upload_compaction_discovers_second_of_129_boundaries`,
+  `production_mixed_media_compaction_discovers_second_of_129_boundaries` drive real
+  Agent execution, DefaultTokenEstimator composition, file-backed SQLite, local
+  image artifacts and real Session-owned upload catalog resolution. An exhaustive
+  exact-cost oracle confirms only boundary 2 fits. Summary receives original retired
+  items; retained upload content becomes scoped request-local Derived data, selected
+  image bytes freeze, and persisted exact request reconstruction equals dispatch.
+- T4/T5: `frozen_mixed_media_suffix_prices_equal_exact_materialization_with_seventeen_images`
+  compares every suffix with independent upload/image materialization, including
+  fixed Context slots, repeated artifacts and text-only omission. Every exact suffix
+  price is nonincreasing and snapshot materialization performs no resource reads.
+- T6: `derived_media_and_arbitrary_estimator_do_not_acquire_a_false_monotone_contract`
+  commits canonically backed Derived media in SQLite and proves frozen pricing retains
+  provenance; a deliberately non-monotone inner estimator still refuses the guarantee.
+- T7: `complete_tool_batch_and_core_owned_boundaries_constrain_every_probe` covers
+  both the existing arbitrary estimator and frozen production-image interval search,
+  with reordered multi-call results, must-cover, Fresh Inbound, protected Context and
+  a mandatory carryover anchor. Existing preference/fallback and budget tests remain.
+- T8: `missing_corrupt_unresolved_relative_and_expanding_media_fail_before_materialization`
+  and `production_media_failures_and_cancelled_resolution_start_no_request_or_checkpoint`
+  reject required missing/corrupt images, unavailable uploads, invalid paths and
+  excessive expansion. `captured_image_bytes_survive_source_change_but_a_new_capture_revalidates`
+  proves frozen bytes survive backing-file changes, a new capture rejects corruption,
+  and a foreign conversation scope is rejected before reads. Agent cases retain
+  canonical facts and empty projection state.
+- T9: `cancellation_at_upload_resolution_prevents_the_first_image_read` and the Agent
+  failure/cancellation test cancel synchronously inside the existing resolver callback,
+  before capture's post-resolution check. Subsequent image reads, Summary, checkpoint
+  transitions and request starts are absent; the Agent records one terminal cancellation.
+- T10: `production_media_search_bounds_reads_renders_queries_and_copied_bytes` measures
+  512/1,024 mixed-image/upload histories: one unique artifact read/one resolver call
+  at preparation, zero candidate resource reads, one transcript pass and logarithmically
+  bounded complete estimator queries/copy bytes. No timing thresholds are used.
+- T11: existing N1 non-monotone/incomplete-search and Agent terminal regressions remain
+  unchanged; their generic-estimator guarantee is not broadened.
+
+The earlier immutable-history, operation receipt, process-death, lineage/archive,
+continuation and retry owner suites provide neighboring contract evidence. Local
+validation results and exact pushed-HEAD CI are recorded below after final execution.
+
+### Production media validation evidence
+
+All commands use the existing executable isolation, `TMPDIR=/run/user/1000/r466-477`,
+and mandatory local emulator discovery, `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
+Counts below are runner-reported executions per command, not unique tests or a claim
+that fixture child entry points independently establish correctness.
+
+| Command | Result |
+| --- | --- |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Pass on settled source |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Pass on settled source |
+| `cargo build --bins --example document_artifact_fixture --locked` | Pass, including rebuild before client/browser checks |
+| `cargo build --bins --all-features --locked` | Pass |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites:: --test-threads=2` | Pass: 3,499; 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features -- --test-threads=2` | Pass: 208; 5 opt-in live provider ignores |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=2` | Pass: 200 |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output -- --test-threads=2` | Pass: 432 (129 SQLite, 61 process, 47 subagent, 135 tools, 29 conformance, 26 + 5 CFG3) |
+| `cargo run --all-features --example check_test_lanes -- --job rust-contracts` | Pass |
+| `cargo run --all-features --example check_test_lanes -- --job rust-boundaries` | Pass |
+| `uv run --project test-support/fake-provider --frozen pytest` | Pass: 54 |
+| `pnpm --dir protocol/app-server check` | Pass: generated artifacts unchanged |
+| `pnpm --dir protocol/app-server typecheck` | Pass |
+| `pnpm --dir dev typecheck` | Pass |
+| `pnpm --dir dev test` | Pass: 41 |
+| `pnpm --dir tui typecheck` | Pass |
+| `pnpm --dir tui test` | Pass: 1,025; 1 existing platform skip |
+| `pnpm --dir web-console typecheck` | Pass |
+| `pnpm --dir web-console test` | Pass: 2,585; 4 existing platform skips |
+| `pnpm --dir web-console build` | Pass |
+| `pnpm --dir web-console check:i18n` | Pass |
+| `pnpm --dir web-console check:provenance` | Pass: 276 source records, 264 package notices |
+| `node web-console/scripts/check-office-sandbox.ts` | Pass |
+| `bash web-console/scripts/browser-tests.sh test/e2e/compaction.spec.ts test/e2e/trajectory-integration.spec.ts` | Pass: 5/5, real native App Server/Product Host and pinned browser |
+
+The initial workspace run passed 4,188 executions with 8 existing ignores. The
+escaping-accounting unit was added during that build, so this earlier result is not
+substituted for final-source workspace validation. A settled-source repeat reported
+3,567 library passes, one failure and three existing ignores: the managed FastMCP
+Tasks environment failed in `uv lock --no-config` fetching
+`https://pypi.org/simple/rich/`, after three network retries in 124.6 seconds, before
+MCP startup or media code. An endpoint check returned HTTP 200, and the unchanged
+isolated test passed (`cargo test --lib boundary_suites::mcp_tasks_managed::a_real_managed_fastmcp_task_completes_through_one_tool_result -- --exact --nocapture --test-threads=1`).
+The complete unchanged workspace command was then rerun; its final result is recorded
+below. No source/assertion/deadline/selector/golden/quota changes were used to resolve
+the dependency-fetch failure. Other slow managed-package preparation completed
+successfully; observed host I/O pressure is not asserted to explain the network error.
+
+Intermediate development checks caught a timeline fixture requesting 100 records
+against the existing 64-record bound, missing/incorrect test API imports/borrows,
+and ordinary Clippy issues. Those were repaired before the successful validation;
+no failed or zero-test development command is counted as a passing regression.
+The genuine three pre-fix discovery regressions failed with zero Summary calls;
+final focused Context owner checks passed 88 and media owner checks passed 5.
+
+No real model API or K3 infrastructure was used. Source history, SQLite transactions,
+request replay, native continuation, lineage/archive and browser presentation retain
+their existing authoritative owner tests. Remote CI must be inspected on the exact
+pushed media-repair commit; its current result is maintained in PR #477 and the final
+engineering report, without substituting the starting HEAD's ten green checks.
+
+Final settled-source `cargo test --workspace -- --test-threads=2`: **4,189 passed,
+0 failed, 8 existing ignored**, including 3,568 library passes and all external targets.
+The unchanged full rerun recovered the dependency-fetch failure; both Clippy modes
+and formatting/diff checks passed on the same settled source. No blocker remains
+from local validation. The PR stays open for independent review, with merge and
+auto-merge disabled and the branch/worktree preserved.

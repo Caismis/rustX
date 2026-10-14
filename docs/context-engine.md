@@ -137,9 +137,9 @@ independent item encodings have nonnegative byte costs; removing a prefix cannot
 increase the primary or recent suffix price. Appending rendered transcript text
 cannot decrease the escaped JSON byte count of the fixed Summary wrapper. Tools,
 prompt and core overlays remain fixed. Rounding preserves monotonicity, but does
-**not** justify adding separately rounded per-message estimates. Image/upload
-wrappers inherit this proof only when the complete input contains no corresponding
-typed media; dynamic rendering and resource selection do not advertise it.
+**not** justify adding separately rounded per-message estimates. Production media
+preparation freezes authorized resources before advertising this proof, as described
+below. An arbitrary estimator never inherits a guarantee from media preparation.
 
 For a guaranteed estimator, binary partition queries find the intersection of the
 Summary-fit initial interval and primary-fit final interval. Whole recent prices
@@ -152,6 +152,72 @@ queried materialization is O(B log N), and memory is O(N + B), including bounded
 core overlays. At most `3 ceil(log2(N+1)) + 1` distinct candidates are priced, with
 three complete estimator calls each; cached prices do not retain copied bodies.
 Estimator implementations remain responsible for their own query complexity.
+
+### Frozen production media accounting
+
+The Agent owns a `model::media::MediaSnapshot` through its Context Engine for the
+current logical generation. It captures committed history before proactive planning
+and extends the same immutable resource authority for accepted staged Context.
+Existing upload resolutions and image bytes are never resampled. The next logical
+generation clears that capture; transient retries retain the exact frozen request.
+Idle/manual Compaction uses an operation-scoped capture in the shared pipeline,
+without starting a primary request or invoking dynamic contributors.
+
+Session-owned upload resolution runs once for newly needed references. Capture
+validates the returned identity set and absolute paths, rejects duplicate/unresolved
+results, and budgets paths and expanded text before rendering. ArtifactStore owns
+bounded, conversation-scoped PNG reads and validation. Only the union of images
+selected by the historical-only and complete-primary accounting views is captured:
+at most 32 unique images, each at most 256 KiB. The two views are necessary because
+fixed staged Context can occupy primary image slots absent from keep-recent pricing.
+Pure candidate materialization performs no artifact/catalog I/O.
+
+Both prices and actual request staging call the same materializer: apply the existing
+upload renderer, then the existing image policy, then mark semantically changed
+Originals as scoped request-local Derived values. This corrects the previous mixed
+wrapper order (images before uploads), which could merge an omission into upload
+body text differently from the actual request. Final staging copies only selected
+image bytes into RequestSnapshot; post-materialization complete-request validation
+and native continuation reconciliation still precede ModelRequestStarted.
+
+The monotonicity proof covers each transform independently:
+
+- Frozen upload rendering is message-local; deleting a prefix removes complete
+  rendered messages and preserves every surviving rendered message byte-for-byte.
+  Upload rendering preserves the order of image occurrences.
+- Text-only image omission is message-local and uses the same bounded reference text
+  as request staging.
+- For newest-16 retention, an omitted occurrence has at least sixteen newer image
+  occurrences. A historical prefix deletion that retains that occurrence also
+  retains all its newer occurrences. It therefore cannot promote the omitted image.
+  A retained occurrence remains retained. Fixed Context and carryover preserve the
+  surviving order, and a protected before-message anchor cannot be retired.
+- Validated PNG dimensions give immutable nonnegative per-occurrence charges.
+  Removing a prefix can only remove charges, including repeated artifact references.
+
+Thus every surviving semantic JSON item and image charge is fixed separately in
+both primary and recent views. The DefaultTokenEstimator proof extends to their
+whole-request prices, including mixed and already-Derived media. Summary transcript
+rendering remains the existing one-pass textual rendering of raw historical items;
+it is not replaced by a simplified media request or a rounded per-message sum.
+Binary interval search is complete for these supported production cases.
+
+Capture admits at most 8,192 input items and 1,024 upload identities, at most 16 MiB
+of path/name bytes, and at most 16 MiB of bounded expanded upload-bearing User text
+per view. Escaping uses the renderer’s exact byte-length mapping before allocation; a bounded
+per-reference header allowance covers delimiters. Upload lookup uses an indexed map.
+Preparation is linear in input bytes plus reference indexing; pure hypothetical
+materialization remains O(B log N), with O(B + N + I + U) retained memory for bounded
+image bytes I and upload paths U. Each required unique image is read once per
+capture lifetime, and upload resolution is never invoked by candidate queries.
+Resources no longer selected by either view are released when capture is extended.
+
+Missing/corrupt selected images, unavailable Session uploads, invalid paths,
+changed capture ownership or excess budgets fail explicitly before Summary/request
+admission. Intentionally omitted images require no payload read. Cancellation is
+observed before/after resource resolution, between image reads, before/after capture,
+and at the existing planning yields; a synchronous bounded read/PNG decode itself
+is not preempted. Cancellation and commit/request authorization remain Agent-owned.
 
 For an arbitrary estimator, descending exact queries inspect at most 64 boundaries.
 A validated preferred fit is conclusive because every larger boundary has already

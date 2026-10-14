@@ -28,6 +28,7 @@
 //! `runtime_multi_compaction.rs`.
 
 use super::super::{common, support};
+use support::model::{FixtureModel, ScriptedAdapterFactory, fixture_session_model};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,6 +40,7 @@ use rustx::context::{
     ContextErrorKind, ContextProposal, ContextRuntime, TokenEstimator, UserMessageProposal,
 };
 use rustx::conversation::ConversationState;
+use rustx::durable::ConversationStore;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -3509,4 +3511,432 @@ async fn n1_cancellation_during_exact_query_settles_without_summary_commit_or_re
             .unwrap()
             .is_none()
     );
+}
+
+#[derive(Debug)]
+struct ProductionUploadFixture {
+    calls: Arc<AtomicUsize>,
+    owner: Arc<dyn rustx::model::uploads::UploadProjectionResolver>,
+}
+impl rustx::model::uploads::UploadProjectionResolver for ProductionUploadFixture {
+    fn resolve(
+        &self,
+        messages: &[ModelInputMessage],
+    ) -> Result<rustx::model::uploads::UploadProjection, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.owner.resolve(messages)
+    }
+}
+#[tokio::test]
+async fn production_image_compaction_discovers_second_of_129_boundaries() {
+    production_media_middle_candidate(true, false).await;
+}
+#[tokio::test]
+async fn production_upload_compaction_discovers_second_of_129_boundaries() {
+    production_media_middle_candidate(false, true).await;
+}
+#[tokio::test]
+async fn production_mixed_media_compaction_discovers_second_of_129_boundaries() {
+    production_media_middle_candidate(true, true).await;
+}
+async fn production_media_middle_candidate(image: bool, upload: bool) {
+    let model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "done")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let mut history: Vec<_> = (1..=129)
+        .map(|n| {
+            let text = if n <= 2 {
+                "x".repeat(100_000)
+            } else {
+                "history".into()
+            };
+            user(&format!("M{n}"), &text)
+        })
+        .collect();
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    if image {
+        let mut bytes = Vec::new();
+        png::Encoder::new(&mut bytes, 1, 1)
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0])
+            .unwrap();
+        let id = tool_runtime.artifacts().put_bounded(&bytes).unwrap();
+        let MessageBlock::User(first) = &mut history[0] else {
+            unreachable!()
+        };
+        first.content.push(UserContentBlock::Image(
+            rustx::message::content::ImageReference {
+                artifact_id: id,
+                alt: None,
+            },
+        ));
+    }
+    let session_root = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let upload_owner = if upload {
+        use rustx::local_runtime::session::uploads::{SessionUploadResolver, UploadFile};
+        use rustx::local_runtime::{
+            session::SessionPersistentState, session_controller::SessionController,
+        };
+        let controller = SessionController::open(session_root.path()).unwrap();
+        let session = controller
+            .create_session(SessionPersistentState::from_input(
+                &rustx::local_runtime::configuration::SessionConfigInput::new(
+                    workspace.path().to_path_buf(),
+                ),
+            ))
+            .await
+            .unwrap()
+            .session;
+        let files = controller
+            .upload(
+                &session.id,
+                None,
+                vec![UploadFile {
+                    name: "data.txt".into(),
+                    bytes: b"local, Session-owned contents".to_vec(),
+                }],
+            )
+            .await
+            .unwrap();
+        let MessageBlock::User(first) = &mut history[0] else {
+            unreachable!()
+        };
+        first
+            .content
+            .push(UserContentBlock::UploadedFile(files[0].file.clone()));
+        Some(Arc::new(SessionUploadResolver::for_session(
+            session_root.path(),
+            session.id,
+        ))
+            as Arc<dyn rustx::model::uploads::UploadProjectionResolver>)
+    } else {
+        None
+    };
+    let media: Vec<_> = match &history[0] {
+        MessageBlock::User(u) => u
+            .content
+            .iter()
+            .filter(|b| !matches!(b, UserContentBlock::Text(_)))
+            .cloned()
+            .collect(),
+        _ => unreachable!(),
+    };
+    let MessageBlock::User(last) = &mut history[128] else {
+        unreachable!()
+    };
+    last.content.extend(media);
+    let historical = rustx::model::input::canonical_input(&history);
+    let summary_input = rustx::context::SummaryRequest {
+        retired: historical[..2].to_vec(),
+    }
+    .model_input();
+    let summary_limit =
+        rustx::context::DefaultTokenEstimator.estimate_input(&summary_input.messages, "", &[]);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "Earlier work summarized.".into(),
+    )]));
+    let mut context = ContextRuntime::with_scripted_summarizer(
+        engine(
+            10_000,
+            0,
+            0,
+            Arc::new(rustx::context::DefaultTokenEstimator),
+        ),
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 128, summary_limit),
+    );
+    let resolutions = Arc::new(AtomicUsize::new(0));
+    if let Some(owner) = upload_owner {
+        context
+            .engine
+            .set_upload_resolver(Arc::new(ProductionUploadFixture {
+                calls: resolutions.clone(),
+                owner,
+            }));
+    }
+    // Independent exhaustive exact-cost oracle for this controlled fixture.
+    // Reset observations afterwards: production capture is measured separately.
+    let mut oracle = context.engine.clone();
+    oracle.set_image_projection(tool_runtime.artifacts().clone(), image);
+    oracle
+        .prepare_media(
+            &historical,
+            &historical,
+            &rustx::runtime::CancellationSignal::new(),
+        )
+        .await
+        .unwrap();
+    let feasible: Vec<_> = (1..=129)
+        .filter(|n| {
+            let summary = rustx::context::SummaryRequest {
+                retired: historical[..*n].to_vec(),
+            }
+            .model_input();
+            oracle.estimate_model_input(&summary.messages, "", &[]) <= summary_limit
+                && oracle
+                    .estimate_model_input(&historical[*n..], "", &[])
+                    .saturating_add(128)
+                    <= 9_999
+        })
+        .collect();
+    assert_eq!(feasible, vec![2]);
+    resolutions.store(0, Ordering::SeqCst);
+    rustx::model::media::take_work();
+    let mut execution_request = request("attempt-1", history.clone(), 1, &model);
+    if image {
+        let mut fixture = FixtureModel::text(
+            "fixture/media",
+            rustx::model::ModelProtocol::OpenAiChatCompletions,
+        );
+        fixture.extra_input_modalities.push("image");
+        execution_request.model = fixture_session_model(
+            &[fixture],
+            "fixture/media",
+            &ScriptedAdapterFactory::new(model.clone()),
+        )
+        .snapshot()
+        .unwrap();
+    }
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            execution_request,
+            capability.into_lease(),
+            &cancellation,
+            support::default_execution_policy(),
+            context,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
+    assert_eq!(
+        summarizer.requests().len(),
+        1,
+        "{:#?}",
+        result.event_history
+    );
+    assert_eq!(summarizer.requests()[0].retired, historical[..2]);
+    assert_eq!(model.requests().len(), 1);
+    let sent = &model.requests()[0];
+    assert!(!sent.messages.iter().any(|item| {
+        item.canonical_id()
+            .is_some_and(|id| ["M1", "M2"].contains(&id.as_str()))
+    }));
+    for n in 3..=128 {
+        assert!(
+            sent.messages
+                .iter()
+                .any(|item| item.canonical_id() == Some(history[n - 1].id()))
+        );
+    }
+    if image {
+        assert_eq!(sent.images.len(), 1);
+    }
+    if upload {
+        assert!(sent.messages.iter().any(|m| matches!(m, ModelInputMessage::Derived(d) if d.sources.iter().any(|r| r.message_id.as_str() == "M129") && d.transformations.contains(&rustx::model::projected::SemanticTransformation::UploadRendering))));
+        assert!(!sent.messages.iter().any(|m| matches!(m.view(), rustx::model::projected::ModelMessageView::User(blocks) if blocks.iter().any(|b| matches!(b, UserContentBlock::UploadedFile(_))))));
+    }
+    let store = tool_runtime.durable_store();
+    assert!(store.projection_head().unwrap().is_some());
+    let snapshot = &result.snapshot_history()[0];
+    assert_eq!(
+        store
+            .reconstruct_model_request(&snapshot.request_id)
+            .unwrap(),
+        *sent
+    );
+    let reopened = rustx::durable::SqliteConversationStore::open(
+        conversation(),
+        &tool_runtime.artifacts().root().join("conversation.sqlite"),
+    )
+    .unwrap();
+    assert_eq!(
+        reopened
+            .reconstruct_model_request(&snapshot.request_id)
+            .unwrap(),
+        *sent
+    );
+    assert_eq!(&store.load_canonical().unwrap()[..history.len()], history);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_single_terminal(&result.event_history);
+    if upload {
+        assert_eq!(resolutions.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[derive(Debug)]
+struct FailedMediaResolver {
+    cancellation: Option<AgentCancellation>,
+    path: Option<String>,
+    calls: Arc<AtomicUsize>,
+}
+impl rustx::model::uploads::UploadProjectionResolver for FailedMediaResolver {
+    fn resolve(
+        &self,
+        messages: &[ModelInputMessage],
+    ) -> Result<rustx::model::uploads::UploadProjection, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(cancel) = &self.cancellation {
+            cancel.cancel();
+        }
+        let path = self.path.as_ref().ok_or("Session upload unavailable")?;
+        let mut seen = std::collections::BTreeSet::new();
+        Ok(rustx::model::uploads::UploadProjection {
+            files: messages
+                .iter()
+                .filter_map(|m| match m.view() {
+                    rustx::model::projected::ModelMessageView::User(c) => Some(c),
+                    _ => None,
+                })
+                .flat_map(|c| c.iter())
+                .filter_map(|b| match b {
+                    UserContentBlock::UploadedFile(f) if seen.insert(f.clone()) => {
+                        Some(rustx::model::uploads::ResolvedUpload {
+                            file: f.clone(),
+                            path: path.clone(),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect(),
+        })
+    }
+}
+#[tokio::test]
+async fn production_media_failures_and_cancelled_resolution_start_no_request_or_checkpoint() {
+    for case in [
+        "missing-image",
+        "corrupt-image",
+        "unresolved-upload",
+        "relative-upload",
+        "cancel",
+    ] {
+        let model = fake_model(vec![]);
+        let summarizer = Arc::new(FakeContextSummarizer::new(vec![]));
+        let mut context = ContextRuntime::with_scripted_summarizer(
+            engine(100, 0, 0, Arc::new(rustx::context::DefaultTokenEstimator)),
+            summarizer.clone(),
+            None,
+            CompactionBudgets::new(1, 10, 100_000),
+        );
+        let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut history = vec![user("M1", &"history".repeat(1000)), user("M2", "history")];
+        let MessageBlock::User(first) = &mut history[0] else {
+            unreachable!()
+        };
+        if case.contains("image") || case == "cancel" {
+            let id = if case == "corrupt-image" {
+                tool_runtime.artifacts().put_bounded(b"not PNG").unwrap()
+            } else {
+                rustx::runtime::ArtifactId::new("artifact_999")
+            };
+            first.content.push(UserContentBlock::Image(
+                rustx::message::content::ImageReference {
+                    artifact_id: id,
+                    alt: None,
+                },
+            ));
+        }
+        if case.contains("upload") || case == "cancel" {
+            first.content.push(UserContentBlock::UploadedFile(
+                rustx::message::content::UploadedFileRef {
+                    batch_id: "batch".into(),
+                    name: "file.txt".into(),
+                },
+            ));
+            context
+                .engine
+                .set_upload_resolver(Arc::new(FailedMediaResolver {
+                    cancellation: (case == "cancel").then(|| cancellation.clone()),
+                    path: match case {
+                        "unresolved-upload" => None,
+                        "relative-upload" => Some("relative".into()),
+                        _ => Some("/session/file.txt".into()),
+                    },
+                    calls: calls.clone(),
+                }));
+        }
+        let mut execution_request = request("attempt-1", history.clone(), 1, &model);
+        let mut fixture = FixtureModel::text(
+            "fixture/media",
+            rustx::model::ModelProtocol::OpenAiChatCompletions,
+        );
+        fixture.extra_input_modalities.push("image");
+        execution_request.model = fixture_session_model(
+            &[fixture],
+            "fixture/media",
+            &ScriptedAdapterFactory::new(model.clone()),
+        )
+        .snapshot()
+        .unwrap();
+        let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        rustx::model::media::take_work();
+        let result = common::durable_agent_result(
+            AgentExecution::new(
+                execution_request,
+                capability.into_lease(),
+                &cancellation,
+                support::default_execution_policy(),
+                context,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap()
+            .run()
+            .await,
+            tool_runtime.durable_store().as_ref(),
+        );
+        assert_single_terminal(&result.event_history);
+        assert!(summarizer.requests().is_empty());
+        assert!(model.requests().is_empty());
+        assert_eq!(result.messages(), history);
+        assert!(!result.event_history.iter().any(|e| matches!(
+            e,
+            RuntimeEvent::ModelRequestStarted { .. }
+                | RuntimeEvent::CompactionStarted { .. }
+                | RuntimeEvent::CompactionCompleted { .. }
+        )));
+        let store = tool_runtime.durable_store();
+        assert!(store.projection_head().unwrap().is_none());
+        assert!(
+            store
+                .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+                .unwrap()
+                .is_empty()
+        );
+        if case == "cancel" {
+            assert!(matches!(
+                result.event_history.last(),
+                Some(RuntimeEvent::AttemptCancelled { .. })
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(rustx::model::media::take_work().reads, 0);
+        } else {
+            assert!(
+                matches!(
+                    result.event_history.last(),
+                    Some(RuntimeEvent::AttemptFailed { .. })
+                ),
+                "{case}: {:?}",
+                result.event_history
+            );
+        }
+    }
 }

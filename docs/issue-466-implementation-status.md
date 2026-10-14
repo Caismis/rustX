@@ -278,8 +278,10 @@ complete monotone interval search for the production JSON-byte estimator and an
 explicit `SearchIncomplete` outcome for bounded arbitrary-estimator searches.
 Keep-recent preference remains largest feasible preferred boundary, otherwise the
 earliest feasible fallback. A single rendered transcript and cached exact prices
-bound production materialization to O(B log N); dynamic media/upload paths retain
-bounded generic search unless their wrapper is identity. Search incompleteness
+bound production materialization to O(B log N). The subsequent production media
+repair replaces dynamic estimator wrappers with immutable generation/operation
+media capture and shared request materialization; supported image/upload histories
+now retain complete DefaultTokenEstimator search. Search incompleteness
 starts no Summary or Checkpoint and settles once through the existing Agent owner.
 See `context-engine.md` for the proof and `pr-477-architecture-review-repairs.md`
 for deterministic red/green and full-validation evidence. Schema/protocol ownership,
@@ -294,3 +296,27 @@ i18n/provenance and sandbox checks passed. After strengthening cancellation to a
 synchronous first-query hook, both complete Context owners passed 83 tests each and
 both Clippy modes passed again. Full command/count and intermediate-failure evidence
 is retained in the repair record. Remote CI must be checked on the pushed N1 HEAD.
+
+## Production media candidate discovery repair
+
+Image, Session-upload and mixed-media 129-boundary Agent/SQLite regressions reproduce
+the former incomplete search and now select the sole feasible boundary 2. Production
+media uses bounded frozen upload paths and the union of historical/primary selected
+images, with no candidate-time I/O. Shared upload-then-image materialization prices
+the exact provider-neutral representation used by request staging. Native replay,
+request snapshots, retries, canonical facts and transactional commit authority keep
+their existing owners. An independent exhaustive fixture oracle and suffix tests
+cover newest-16, repeated references, fixed Context, text-only projection and Derived
+media. Work counters and resolver-triggered cancellation prove finite work and
+no unauthorized subsequent reads/requests/commits. See the existing repair record
+for final validation evidence; no schema/protocol version changes are required.
+
+Production-media local validation passed on settled source: workspace 4,189;
+all-features contracts 3,499 + 208; all-features boundaries 200 + 432; emulator Python
+54; Dev 41; TUI 1,025 (one existing platform skip); Web 2,585 (four existing platform
+skips); pinned browser acceptance 5/5. Both Clippy modes, native builds, Linux lane
+coverage, protocol drift/typechecks, Web build/i18n/provenance and sandbox checks
+passed. One repeat's managed-package setup failed fetching PyPI rich metadata;
+the unchanged isolated test and complete workspace rerun passed after endpoint
+recovery. Exact commands/counts and failure evidence remain in the repair record.
+Current-head remote CI is reported on PR #477 after the final push.

@@ -119,7 +119,18 @@ pub(crate) async fn execute_compaction(
         crate::context::resources::ResourceLimits::default(),
     )
     .map_err(resource_failure)?;
-    let projection = context.engine.build_projection_input(
+    let complete = crate::model::input::assemble_model_input(
+        &history.messages,
+        constraints.staged_request_context,
+        constraints.carryover,
+        constraints.carryover_anchor,
+    )
+    .map_err(|e| ContextError::new(ContextErrorKind::MalformedHistory, e))?;
+    let mut engine = context.engine.clone();
+    engine
+        .prepare_media(&history.messages, &complete, cancellation)
+        .await?;
+    let projection = engine.build_projection_input(
         conversation.revision(),
         history.messages.clone(),
         tools,
@@ -134,7 +145,7 @@ pub(crate) async fn execute_compaction(
     let mut shrinks = 0;
     let (retired_count, summary) = loop {
         let n = super::planning::summary_prefix(
-            &context.engine,
+            &engine,
             &history.messages,
             effective_system_prompt,
             tools,
@@ -327,23 +338,21 @@ pub(crate) async fn execute_compaction(
                 e,
             ))
         })?;
-    let after_projection = context.engine.build_projection_input(
+    let after_projection = engine.build_projection_input(
         conversation.revision(),
         compiled.messages,
         tools,
         None,
         effective_system_prompt,
     );
-    let after = context.engine.estimate_with_staged_context_and_carryover(
+    let after = engine.estimate_with_staged_context_and_carryover(
         &after_projection,
         constraints.staged_request_context,
         tools,
         constraints.carryover,
         constraints.carryover_anchor,
     );
-    let mut limit = context
-        .engine
-        .soft_input_limit(budgets.primary_output_budget)?;
+    let mut limit = engine.soft_input_limit(budgets.primary_output_budget)?;
     if let Some(correction) = constraints.estimate_correction {
         limit = correction.apply(limit);
     }
@@ -357,12 +366,8 @@ pub(crate) async fn execute_compaction(
     // Progress belongs to historical selection alone. Core-owned staged Context,
     // carryover, prompt/tool overhead and provider observations cannot certify a
     // growing historical projection as a successful compaction.
-    let history_before = context
-        .engine
-        .estimate_model_input(&projection.messages, "", &[]);
-    let history_after = context
-        .engine
-        .estimate_model_input(&after_projection.messages, "", &[]);
+    let history_before = engine.estimate_model_input(&projection.messages, "", &[]);
+    let history_after = engine.estimate_model_input(&after_projection.messages, "", &[]);
     if history_after >= history_before {
         return Err(ContextError::new(
             ContextErrorKind::NoProgress,
@@ -384,7 +389,7 @@ pub(crate) async fn execute_compaction(
         estimated_tokens_after: after_projection.estimated_input.input_tokens,
         occupancy: Some(crate::context::occupancy::estimate(
             after,
-            context.engine.config().context_window_tokens,
+            engine.config().context_window_tokens,
             &context.primary_model,
             effective_system_prompt,
             tools,

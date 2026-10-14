@@ -17,9 +17,7 @@ use crate::context::projection::ContextProjection;
 use crate::context::tokens::{ProviderObservedInput, TokenEstimator};
 use crate::conversation::SurfaceRevision;
 use crate::message::types::MessageBlock;
-use crate::model::input::{
-    ModelInputMessage, RequestOnlyInsertionAnchor, assemble_model_input, canonical_input,
-};
+use crate::model::input::{ModelInputMessage, RequestOnlyInsertionAnchor, assemble_model_input};
 use crate::runtime::identity::MessageId;
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
@@ -303,6 +301,8 @@ impl EstimateCorrection {
 #[derive(Clone)]
 pub struct ContextEngine {
     image_input: Option<bool>,
+    artifacts: Option<crate::tools::artifacts::ArtifactStore>,
+    media: Option<Arc<crate::model::media::MediaSnapshot>>,
     uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     config: ContextConfig,
     estimator: Arc<dyn TokenEstimator>,
@@ -315,6 +315,8 @@ impl core::fmt::Debug for ContextEngine {
             .field("config", &self.config)
             .field("uploads", &self.uploads)
             .field("image_input", &self.image_input)
+            .field("artifacts", &self.artifacts)
+            .field("media", &self.media.is_some())
             .field("estimator", &"<opaque token estimator>")
             .finish()
     }
@@ -346,6 +348,8 @@ impl ContextEngine {
             estimator,
             uploads: None,
             image_input: None,
+            artifacts: None,
+            media: None,
         })
     }
 
@@ -354,36 +358,84 @@ impl ContextEngine {
         artifacts: crate::tools::artifacts::ArtifactStore,
         enabled: bool,
     ) {
-        self.estimator = Arc::new(super::images::ImageEstimator {
-            inner: self.estimator.clone(),
-            artifacts,
-            enabled,
-        });
+        self.artifacts = Some(artifacts);
         self.image_input = Some(enabled);
+        self.media = None;
     }
 
     pub(crate) fn set_upload_resolver(
         &mut self,
         owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
     ) {
-        self.estimator = Arc::new(UploadEstimator {
-            inner: self.estimator.clone(),
-            owner: owner.clone(),
-        });
         self.uploads = Some(owner);
+        self.media = None;
     }
-    pub(crate) fn project_uploads(
-        &self,
-        messages: &mut [ModelInputMessage],
-    ) -> Result<crate::model::uploads::UploadProjection, ContextError> {
-        let projection = match &self.uploads {
-            Some(owner) => owner.resolve(messages).map_err(|e| malformed(&e))?,
-            None => crate::model::uploads::UploadProjection::default(),
-        };
-        projection.apply(messages).map_err(|e| malformed(&e))?;
-        Ok(projection)
+    pub(crate) fn clear_media(&mut self) {
+        self.media = None;
     }
 
+    /// The execution owner calls this once before historical planning, then
+    /// extends it for admitted core input. Existing resources are never reread.
+    pub(crate) async fn prepare_media(
+        &mut self,
+        historical: &[ModelInputMessage],
+        complete: &[ModelInputMessage],
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> Result<(), ContextError> {
+        tokio::task::yield_now().await;
+        let captured = crate::model::media::MediaSnapshot::capture(
+            self.media.as_deref(),
+            historical,
+            complete,
+            self.artifacts.as_ref(),
+            self.image_input,
+            self.uploads.as_deref(),
+            cancellation,
+        )
+        .map_err(|e| {
+            ContextError::new(
+                if cancellation.is_cancelled() {
+                    ContextErrorKind::Cancelled
+                } else {
+                    ContextErrorKind::MalformedHistory
+                },
+                e,
+            )
+        })?;
+        self.media = Some(Arc::new(captured));
+        tokio::task::yield_now().await;
+        crate::model::media::check_cancelled(cancellation)
+            .map_err(|e| ContextError::new(ContextErrorKind::Cancelled, e))
+    }
+
+    fn media_for(
+        &self,
+        messages: &[ModelInputMessage],
+    ) -> Result<Arc<crate::model::media::MediaSnapshot>, String> {
+        if let Some(media) = &self.media {
+            return Ok(media.clone());
+        }
+        // Read-only diagnostics outside an executing generation use the same
+        // finite capture owner; they cannot advertise a frozen search proof.
+        crate::model::media::MediaSnapshot::capture(
+            None,
+            messages,
+            messages,
+            self.artifacts.as_ref(),
+            self.image_input,
+            self.uploads.as_deref(),
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .map(Arc::new)
+    }
+    pub(crate) fn materialize_media(
+        &self,
+        messages: &mut [ModelInputMessage],
+    ) -> Result<crate::model::images::ResolvedImages, ContextError> {
+        let media = self.media_for(messages).map_err(|e| malformed(&e))?;
+        media.materialize(messages).map_err(|e| malformed(&e))?;
+        media.selected_images(messages).map_err(|e| malformed(&e))
+    }
     /// The engine configuration.
     #[must_use]
     pub fn config(&self) -> &ContextConfig {
@@ -486,7 +538,7 @@ impl ContextEngine {
             carryover_anchor,
         )
         .expect("the context engine receives a valid frozen carryover anchor");
-        self.estimator.estimate_input(
+        self.estimate_model_input(
             &messages,
             &projection.effective_system_prompt,
             tool_definitions,
@@ -504,18 +556,59 @@ impl ContextEngine {
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
+        let Ok(media) = self.media_for(messages) else {
+            return u64::MAX;
+        };
+        #[cfg(test)]
+        crate::model::media::count_copy(messages);
+        let mut rendered = messages.to_vec();
+        if media.materialize(&mut rendered).is_err() {
+            return u64::MAX;
+        }
         self.estimator
-            .estimate_input(messages, effective_system_prompt, tool_definitions)
+            .estimate_input(&rendered, effective_system_prompt, tool_definitions)
+            .saturating_add(media.image_cost(&rendered))
     }
 
     pub(crate) fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
-        self.estimator.supports_monotone_compaction(messages)
+        // A snapshot proves prefix-deletion stability of our concrete media
+        // transforms; it never grants a property the underlying estimator lacks.
+        if self.image_input.is_some() || self.uploads.is_some() {
+            let Some(media) = &self.media else {
+                return false;
+            };
+            #[cfg(test)]
+            crate::model::media::count_copy(messages);
+            let mut rendered = messages.to_vec();
+            if media.materialize(&mut rendered).is_err() {
+                return false;
+            }
+            self.estimator.supports_monotone_compaction(&rendered)
+        } else {
+            self.estimator.supports_monotone_compaction(messages)
+        }
     }
 
     /// Price the frozen provider-neutral request after dynamic materialization.
     #[must_use]
     pub fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
-        self.estimator.estimate_frozen_request(request)
+        let costs: std::collections::BTreeMap<_, _> = request
+            .images
+            .iter()
+            .map(|(id, bytes)| {
+                (
+                    id.clone(),
+                    crate::model::images::measure_png(bytes)
+                        .ok()
+                        .map(crate::model::images::ImageMeasurement::input_tokens),
+                )
+            })
+            .collect();
+        self.estimator
+            .estimate_frozen_request(request)
+            .saturating_add(crate::model::media::image_cost(&request.messages, |id| {
+                costs.get(id).copied().flatten()
+            }))
     }
 
     /// Measure an already structurally compiled historical projection and core overlay.
@@ -540,9 +633,7 @@ impl ContextEngine {
         projection.estimated_input = observed
             .and_then(|o| self.reuse_measurement(o, &projection, tools))
             .unwrap_or_else(|| TokenMeasurement {
-                input_tokens: self
-                    .estimator
-                    .estimate_input(&projection.messages, prompt, tools),
+                input_tokens: self.estimate_model_input(&projection.messages, prompt, tools),
                 source: TokenMeasurementSource::Estimated,
             });
         projection
@@ -573,10 +664,10 @@ impl ContextEngine {
         tool_definitions: &[ModelToolDefinition],
     ) -> Option<TokenMeasurement> {
         let mut rendered = projection.messages.clone();
-        self.project_uploads(&mut rendered).ok()?;
-        if let Some(enabled) = self.image_input {
-            crate::model::images::project(&mut rendered, enabled);
-        }
+        self.media_for(&rendered)
+            .ok()?
+            .materialize(&mut rendered)
+            .ok()?;
         let mut projected = projection.clone();
         projected.messages.clone_from(&rendered);
         if observed.fingerprint == projected.fingerprint()
@@ -597,9 +688,7 @@ impl ContextEngine {
             &projection.effective_system_prompt,
             tool_definitions,
         )?;
-        let appended = self
-            .estimator
-            .estimate_input(&projected.messages[covered..], "", &[]);
+        let appended = self.estimate_model_input(&projected.messages[covered..], "", &[]);
         Some(TokenMeasurement {
             input_tokens: observed.input_tokens.saturating_add(appended),
             source: TokenMeasurementSource::ProviderAnchored,
@@ -609,68 +698,4 @@ impl ContextEngine {
 
 fn malformed(message: &str) -> ContextError {
     ContextError::new(ContextErrorKind::MalformedHistory, message)
-}
-
-/// Token estimation with the current upload renderer, used only during preparation.
-struct UploadEstimator {
-    inner: Arc<dyn TokenEstimator>,
-    owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
-}
-fn has_uploads(messages: &[ModelInputMessage]) -> bool {
-    messages.iter().any(|message| match message.view() {
-        crate::model::projected::ModelMessageView::User(content) => content.iter().any(|block| {
-            matches!(
-                block,
-                crate::message::types::UserContentBlock::UploadedFile(_)
-            )
-        }),
-        _ => false,
-    })
-}
-impl TokenEstimator for UploadEstimator {
-    fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
-        // No typed upload means apply() is identity. Dynamic upload resolution
-        // has no monotonicity promise; do not infer one from the inner formula.
-        !has_uploads(messages) && self.inner.supports_monotone_compaction(messages)
-    }
-
-    fn estimate_input(
-        &self,
-        messages: &[ModelInputMessage],
-        prompt: &str,
-        tools: &[ModelToolDefinition],
-    ) -> u64 {
-        if !has_uploads(messages) {
-            return self.inner.estimate_input(messages, prompt, tools);
-        }
-        let mut rendered = messages.to_vec();
-        let Ok(projection) = self.owner.resolve(messages) else {
-            return u64::MAX;
-        };
-        if projection.apply(&mut rendered).is_err() {
-            return u64::MAX;
-        }
-        self.inner.estimate_input(&rendered, prompt, tools)
-    }
-    fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
-        // Upload-bearing content was already rendered and frozen by the caller.
-        self.inner.estimate_frozen_request(request)
-    }
-    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
-        let mut rendered = canonical_input(messages);
-        let Ok(projection) = self.owner.resolve(&rendered) else {
-            return u64::MAX;
-        };
-        if projection.apply(&mut rendered).is_err() {
-            return u64::MAX;
-        }
-        let canonical = rendered
-            .into_iter()
-            .filter_map(|m| match m {
-                ModelInputMessage::Canonical(m) => Some(m),
-                ModelInputMessage::RequestOnly(_) | ModelInputMessage::Derived(_) => None,
-            })
-            .collect::<Vec<_>>();
-        self.inner.estimate_conversation_input(&canonical)
-    }
 }

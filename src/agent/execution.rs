@@ -1640,6 +1640,7 @@ impl<'a> AgentExecution<'a> {
         self.current_input = None;
         self.frozen_workflow_feedback = self.workflow_output_feedback.take();
         self.logical_context_ids.clear();
+        self.context_runtime.engine.clear_media();
         self.last_started_request = None;
         // The semantic corrective-generation budget and any unresolved
         // corrective hint are semantic state of the step that just ended, so
@@ -2331,6 +2332,7 @@ impl<'a> AgentExecution<'a> {
         // newly staged context cannot fit on its own. This compaction is
         // independent conversation-history maintenance with its own
         // canonical commit; it reserves no staged tokens.
+        self.freeze_model_media(&[]).await?;
         let baseline_prompt = self.effective_system_prompt()?;
         let baseline_projection = self.current_projection(&baseline_prompt)?;
         if self
@@ -2451,6 +2453,7 @@ impl<'a> AgentExecution<'a> {
         // the start arbitration wins.
         let staged_context = self.stage_context(accepted)?;
         self.logical_context_ids = staged_context.iter().map(|m| m.id().clone()).collect();
+        self.freeze_model_media(&staged_context).await?;
         let mut staged = self.stage_model_turn(request_ordinal, &staged_context)?;
         let budgets = self.compaction_budgets();
         let should_compact = match self
@@ -2659,6 +2662,50 @@ impl<'a> AgentExecution<'a> {
         })
     }
 
+    async fn freeze_model_media(
+        &mut self,
+        staged_context: &[MessageBlock],
+    ) -> Result<(), Terminal> {
+        let history = self.store.projected_history().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        let anchor = self
+            .frozen_carryover
+            .as_ref()
+            .and_then(|c| c.anchor.as_ref());
+        let carryover = self
+            .frozen_carryover
+            .as_ref()
+            .filter(|_| anchor.is_some())
+            .and_then(FrozenCarryover::admitted);
+        let complete = crate::model::input::assemble_model_input(
+            &history.messages,
+            staged_context,
+            carryover.as_ref(),
+            anchor,
+        )
+        .map_err(|e| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                e,
+            ))
+        })?;
+        self.context_runtime
+            .engine
+            .prepare_media(&history.messages, &complete, &self.cancellation.signal())
+            .await
+            .map_err(|e| {
+                if e.kind == ContextErrorKind::Cancelled {
+                    self.cancelled_terminal()
+                } else {
+                    Self::context_failure_terminal(&e)
+                }
+            })
+    }
+
     /// Builds the staged view of one actual model request: a scratch
     /// conversation (the current durable head plus the not-yet-committed
     /// request-scoped context), its Effective System Prompt, the staged
@@ -2720,72 +2767,13 @@ impl<'a> AgentExecution<'a> {
                 format!("request-only context cannot be assembled: {error}"),
             ))
         })?;
-        let untransformed = request_messages.clone();
-        self.context_runtime
+        let images = self
+            .context_runtime
             .engine
-            .project_uploads(&mut request_messages)
+            .materialize_media(&mut request_messages)
             .map_err(|error| Self::context_failure_terminal(&error))?;
-        let after_upload = request_messages.clone();
         let mut request = self.model_request_from_projection(&projection, request_messages);
-        crate::model::images::project(
-            &mut request.messages,
-            request
-                .invocation
-                .capabilities
-                .input_modalities
-                .contains(&crate::model::catalog::Modality::Image),
-        );
-        if request
-            .invocation
-            .capabilities
-            .input_modalities
-            .contains(&crate::model::catalog::Modality::Image)
-        {
-            request.images = crate::model::images::resolve(&request.messages, |id| {
-                self.tool_runtime
-                    .artifacts()
-                    .read_bounded(id)
-                    .map_err(|_| "image artifact is unavailable".to_owned())
-            })
-            .map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    error,
-                ))
-            })?;
-        }
-        for ((message, source), rendered_upload) in request
-            .messages
-            .iter_mut()
-            .zip(&untransformed)
-            .zip(&after_upload)
-        {
-            if let Some(source) = source.as_canonical() {
-                let transformation = if let MessageBlock::User(user) = source {
-                    if user.content.iter().any(|b| {
-                        matches!(b, crate::message::types::UserContentBlock::UploadedFile(_))
-                    }) {
-                        crate::model::projected::SemanticTransformation::UploadRendering
-                    } else {
-                        crate::model::projected::SemanticTransformation::ImageDowngrade
-                    }
-                } else {
-                    crate::model::projected::SemanticTransformation::ImageDowngrade
-                };
-                let image_changed = rendered_upload != message;
-                message.mark_transformed(source, &self.request.conversation_id, transformation);
-                if image_changed
-                    && let ModelInputMessage::Derived(derived) = message
-                    && !derived
-                        .transformations
-                        .contains(&crate::model::projected::SemanticTransformation::ImageDowngrade)
-                {
-                    derived
-                        .transformations
-                        .push(crate::model::projected::SemanticTransformation::ImageDowngrade);
-                }
-            }
-        }
+        request.images = images;
         let compatibility_failure = |message: String| Terminal::Failed {
             failure: AttemptFailure::Runtime {
                 error: RuntimeError::Unsupported {

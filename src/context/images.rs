@@ -1,149 +1,38 @@
-//! Attempt-frozen image projection and provider-neutral fit accounting.
-use crate::context::tokens::TokenEstimator;
-use crate::message::types::{MessageBlock, UserContentBlock};
-use crate::model::input::{ModelInputMessage, canonical_input};
-use crate::tools::{
-    artifacts::ArtifactStore,
-    types::{ModelToolDefinition, ToolResultContent},
-};
-use std::sync::Arc;
-
-pub(super) struct ImageEstimator {
-    pub inner: Arc<dyn TokenEstimator>,
-    pub artifacts: ArtifactStore,
-    pub enabled: bool,
-}
-impl ImageEstimator {
-    fn projected(&self, messages: &[ModelInputMessage]) -> (Vec<ModelInputMessage>, u64) {
-        let mut rendered = messages.to_vec();
-        crate::model::images::project(&mut rendered, self.enabled);
-        let images = crate::model::images::resolve(&rendered, |id| {
-            self.artifacts.read_bounded(id).map_err(|e| e.to_string())
-        });
-        let Ok(images) = images else {
-            return (rendered, u64::MAX);
-        };
-        let mut costs = std::collections::BTreeMap::new();
-        for (id, bytes) in images {
-            let Ok(measurement) = crate::model::images::measure_png(&bytes) else {
-                return (rendered, u64::MAX);
-            };
-            costs.insert(id, measurement.input_tokens());
-        }
-        let mut cost = 0_u64;
-        for message in &rendered {
-            match message.view() {
-                crate::model::projected::ModelMessageView::User(content) => {
-                    for block in content {
-                        if let UserContentBlock::Image(image) = block {
-                            cost = cost.saturating_add(costs[&image.artifact_id]);
-                        }
-                    }
-                }
-                crate::model::projected::ModelMessageView::Tool(_, result) => {
-                    for block in &result.content {
-                        if let ToolResultContent::Image(image) = block {
-                            cost = cost.saturating_add(costs[&image.artifact_id]);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        (rendered, cost)
-    }
-}
-impl TokenEstimator for ImageEstimator {
-    fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
-        // Only the identity case inherits the inner proof. Image selection and
-        // artifact resolution retain conservative bounded generic search.
-        !messages.iter().any(|message| match message.view() {
-            crate::model::projected::ModelMessageView::User(content) => content
-                .iter()
-                .any(|block| matches!(block, UserContentBlock::Image(_))),
-            crate::model::projected::ModelMessageView::Tool(_, result) => result
-                .content
-                .iter()
-                .any(|block| matches!(block, ToolResultContent::Image(_))),
-            _ => false,
-        }) && self.inner.supports_monotone_compaction(messages)
-    }
-
-    fn estimate_input(
-        &self,
-        messages: &[ModelInputMessage],
-        prompt: &str,
-        tools: &[ModelToolDefinition],
-    ) -> u64 {
-        let (rendered, cost) = self.projected(messages);
-        self.inner
-            .estimate_input(&rendered, prompt, tools)
-            .saturating_add(cost)
-    }
-    fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
-        use crate::model::projected::ModelMessageView;
-        let mut cost = 0u64;
-        for message in &request.messages {
-            let references: Vec<_> = match message.view() {
-                ModelMessageView::User(content) => content
-                    .iter()
-                    .filter_map(|block| match block {
-                        UserContentBlock::Image(image) => Some(image),
-                        _ => None,
-                    })
-                    .collect(),
-                ModelMessageView::Tool(_, result) => result
-                    .content
-                    .iter()
-                    .filter_map(|block| match block {
-                        ToolResultContent::Image(image) => Some(image),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => vec![],
-            };
-            for image in references {
-                let Some(bytes) = request.images.get(&image.artifact_id) else {
-                    return u64::MAX;
-                };
-                let Ok(measurement) = crate::model::images::measure_png(bytes) else {
-                    return u64::MAX;
-                };
-                cost = cost.saturating_add(measurement.input_tokens());
-            }
-        }
-        self.inner
-            .estimate_frozen_request(request)
-            .saturating_add(cost)
-    }
-    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
-        let (rendered, cost) = self.projected(&canonical_input(messages));
-        let canonical = rendered
-            .into_iter()
-            .filter_map(|m| match m {
-                ModelInputMessage::Canonical(m) => Some(m),
-                ModelInputMessage::RequestOnly(_) | ModelInputMessage::Derived(_) => None,
-            })
-            .collect::<Vec<_>>();
-        self.inner
-            .estimate_conversation_input(&canonical)
-            .saturating_add(cost)
-    }
-}
-
+//! Image accounting owner regressions. Production media preparation lives in
+//! `model::media` and `ContextEngine`, shared with actual request staging.
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::context::{
         engine::{ContextConfig, ContextEngine},
         tokens::{DefaultTokenEstimator, ObservedAnchor},
     };
     use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::message::types::{MessageBlock, UserContentBlock};
     use crate::message::{
         content::ImageReference,
         types::{InboundKind, UserMessageBlock, UserSource},
     };
+    use crate::model::input::canonical_input;
     use crate::runtime::identity::{ConversationId, MessageId};
+    use crate::tools::artifacts::ArtifactStore;
+    use std::sync::Arc;
+
+    fn image_engine(
+        artifacts: crate::tools::artifacts::ArtifactStore,
+        enabled: bool,
+    ) -> ContextEngine {
+        let mut engine = ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 100_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(DefaultTokenEstimator),
+        )
+        .unwrap();
+        engine.set_image_projection(artifacts, enabled);
+        engine
+    }
 
     fn png(width: u32, height: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -175,18 +64,12 @@ mod tests {
             let artifacts = ArtifactStore::new(conversation.clone(), root.path()).unwrap();
             let id = artifacts.put_bounded(&png(size, size)).unwrap();
             let canonical = vec![image(id, 0)];
-            let estimator = ImageEstimator {
-                inner: Arc::new(DefaultTokenEstimator),
-                artifacts: artifacts.clone(),
-                enabled: true,
-            };
-            let cost = estimator.estimate_input(&canonical_input(&canonical), "", &[]);
-            let plain = ImageEstimator {
-                inner: Arc::new(DefaultTokenEstimator),
-                artifacts: artifacts.clone(),
-                enabled: false,
-            };
-            assert!(cost > plain.estimate_input(&canonical_input(&canonical), "", &[]) + 1000);
+            let estimator = image_engine(artifacts.clone(), true);
+            let cost = estimator.estimate_model_input(&canonical_input(&canonical), "", &[]);
+            let plain = image_engine(artifacts.clone(), false);
+            assert!(
+                cost > plain.estimate_model_input(&canonical_input(&canonical), "", &[]) + 1000
+            );
             let database = root.path().join("conversation.sqlite");
             let store = SqliteConversationStore::open(conversation.clone(), &database).unwrap();
             store.append_canonical(&canonical[0]).unwrap();
@@ -194,7 +77,7 @@ mod tests {
             let reopened = SqliteConversationStore::open(conversation, &database).unwrap();
             assert_eq!(
                 cost,
-                estimator.estimate_input(
+                estimator.estimate_model_input(
                     &canonical_input(&reopened.load_canonical().unwrap()),
                     "",
                     &[]
@@ -310,11 +193,10 @@ mod tests {
     #[test]
     fn frozen_image_price_requires_no_live_artifact_read() {
         let root = tempfile::tempdir().unwrap();
-        let estimator = ImageEstimator {
-            inner: Arc::new(DefaultTokenEstimator),
-            artifacts: ArtifactStore::new(ConversationId::generate(), root.path()).unwrap(),
-            enabled: true,
-        };
+        let estimator = image_engine(
+            ArtifactStore::new(ConversationId::generate(), root.path()).unwrap(),
+            true,
+        );
         let id = crate::runtime::identity::ArtifactId::new("missing-live-artifact");
         let mut request = crate::scripted_suites::common::simple_request(
             crate::model::ModelProtocol::OpenAiChatCompletions,
@@ -324,7 +206,7 @@ mod tests {
         request.messages = canonical_input(&[image(id.clone(), 0)]);
         request.images.insert(id, png(1, 1));
         assert_eq!(
-            estimator.estimate_input(&request.messages, "", &[]),
+            estimator.estimate_model_input(&request.messages, "", &[]),
             u64::MAX
         );
         let frozen = estimator.estimate_frozen_request(&request);

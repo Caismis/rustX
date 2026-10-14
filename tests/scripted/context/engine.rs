@@ -491,48 +491,98 @@ async fn complete_tool_batch_and_core_owned_boundaries_constrain_every_probe() {
             },
         })
     });
-    let mut history = vec![message(1), assistant];
-    history.extend(results);
-    history.extend((5..=8).map(message));
-    let history = canonical_input(&history);
-    let cover = MessageId::new("calls");
-    let fresh = rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("M7")]).unwrap();
-    let protected = [MessageId::new("M6")];
-    let anchor = rustx::model::RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new("M5"));
-    let e = engine(10_000, 0, 0);
-    let constraints = CompactionConstraints {
-        must_cover_through: Some(&cover),
-        fresh_inbound: Some(&fresh),
-        protected_context_ids: &protected,
-        carryover_anchor: Some(&anchor),
-        ..Default::default()
-    };
-    assert_eq!(
-        plan(&e, &history, budgets(), &constraints).await.unwrap(),
-        4
-    );
-    for retained in ["M5", "M6", "M7"] {
-        assert!(history[4..].iter().any(|item| {
-            item.canonical_id()
-                .is_some_and(|id| id.as_str() == retained)
-        }));
-    }
-    let split = rustx::model::RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new("result-a"));
-    assert_eq!(
-        plan(
-            &e,
-            &history,
-            budgets(),
-            &CompactionConstraints {
-                carryover_anchor: Some(&split),
-                ..constraints
-            }
+    for with_media in [false, true] {
+        let mut history = vec![message(1), assistant.clone()];
+        history.extend(results.clone());
+        history.extend((5..=8).map(message));
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = rustx::tools::artifacts::ArtifactStore::new(
+            rustx::runtime::ConversationId::generate(),
+            root.path(),
         )
-        .await
-        .unwrap_err()
-        .kind,
-        ContextErrorKind::CannotFit
-    );
+        .unwrap();
+        if with_media {
+            let mut bytes = Vec::new();
+            png::Encoder::new(&mut bytes, 1, 1)
+                .write_header()
+                .unwrap()
+                .write_image_data(&[0])
+                .unwrap();
+            let MessageBlock::User(first) = &mut history[0] else {
+                unreachable!()
+            };
+            first.content.push(UserContentBlock::Image(
+                rustx::message::content::ImageReference {
+                    artifact_id: artifacts.put_bounded(&bytes).unwrap(),
+                    alt: None,
+                },
+            ));
+        }
+        let history = canonical_input(&history);
+        let cover = MessageId::new("calls");
+        let fresh =
+            rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("M7")]).unwrap();
+        let protected = [MessageId::new("M6")];
+        let anchor = rustx::model::RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new("M5"));
+        let mut e = if with_media {
+            ContextEngine::new(
+                ContextConfig {
+                    context_window_tokens: 10_000,
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                },
+                Arc::new(DefaultTokenEstimator),
+            )
+            .unwrap()
+        } else {
+            engine(10_000, 0, 0)
+        };
+        if with_media {
+            e.set_image_projection(artifacts, true);
+            e.prepare_media(
+                &history,
+                &history,
+                &rustx::runtime::CancellationSignal::new(),
+            )
+            .await
+            .unwrap();
+            assert!(e.supports_monotone_compaction(&history));
+        }
+        let constraints = CompactionConstraints {
+            must_cover_through: Some(&cover),
+            fresh_inbound: Some(&fresh),
+            protected_context_ids: &protected,
+            carryover_anchor: Some(&anchor),
+            ..Default::default()
+        };
+        assert_eq!(
+            plan(&e, &history, budgets(), &constraints).await.unwrap(),
+            4
+        );
+        for retained in ["M5", "M6", "M7"] {
+            assert!(history[4..].iter().any(|item| {
+                item.canonical_id()
+                    .is_some_and(|id| id.as_str() == retained)
+            }));
+        }
+        let split =
+            rustx::model::RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new("result-a"));
+        assert_eq!(
+            plan(
+                &e,
+                &history,
+                budgets(),
+                &CompactionConstraints {
+                    carryover_anchor: Some(&split),
+                    ..constraints
+                }
+            )
+            .await
+            .unwrap_err()
+            .kind,
+            ContextErrorKind::CannotFit
+        );
+    }
 }
 
 #[tokio::test]
@@ -790,5 +840,116 @@ async fn n1_default_search_bounds_actual_render_copy_and_serialization_work() {
             crate::context::tokens::take_accounted_bytes()
                 <= probes * (summary_bytes + 2 * logical_bytes + 100)
         );
+    }
+}
+
+#[tokio::test]
+async fn production_media_search_bounds_reads_renders_queries_and_copied_bytes() {
+    use rustx::message::content::{ImageReference, UploadedFileRef};
+    use rustx::model::uploads::{ResolvedUpload, UploadProjection, UploadProjectionResolver};
+    use rustx::runtime::ConversationId;
+    use rustx::tools::artifacts::ArtifactStore;
+    #[derive(Debug)]
+    struct Owner;
+    impl UploadProjectionResolver for Owner {
+        fn resolve(&self, input: &[ModelInputMessage]) -> Result<UploadProjection, String> {
+            let mut refs = std::collections::BTreeSet::new();
+            for m in input {
+                if let rustx::model::projected::ModelMessageView::User(c) = m.view() {
+                    for b in c {
+                        if let UserContentBlock::UploadedFile(f) = b {
+                            refs.insert(f.clone());
+                        }
+                    }
+                }
+            }
+            Ok(UploadProjection {
+                files: refs
+                    .into_iter()
+                    .map(|file| ResolvedUpload {
+                        file,
+                        path: "/session/file.txt".into(),
+                    })
+                    .collect(),
+            })
+        }
+    }
+    for length in [512, 1024] {
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = ArtifactStore::new(ConversationId::generate(), root.path()).unwrap();
+        let mut bytes = Vec::new();
+        png::Encoder::new(&mut bytes, 1, 1)
+            .write_header()
+            .unwrap()
+            .write_image_data(&[0])
+            .unwrap();
+        let id = artifacts.put_bounded(&bytes).unwrap();
+        let mut history = input(length);
+        for m in &mut history {
+            let ModelInputMessage::Canonical(MessageBlock::User(u)) = m else {
+                unreachable!()
+            };
+            u.content.extend([
+                UserContentBlock::Image(ImageReference {
+                    artifact_id: id.clone(),
+                    alt: None,
+                }),
+                UserContentBlock::UploadedFile(UploadedFileRef {
+                    batch_id: "batch".into(),
+                    name: "file.txt".into(),
+                }),
+            ]);
+        }
+        let mut e = ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 100_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: 100,
+            },
+            Arc::new(DefaultTokenEstimator),
+        )
+        .unwrap();
+        e.set_image_projection(artifacts, true);
+        e.set_upload_resolver(Arc::new(Owner));
+        crate::model::media::take_work();
+        e.prepare_media(
+            &history,
+            &history,
+            &rustx::runtime::CancellationSignal::new(),
+        )
+        .await
+        .unwrap();
+        let captured = crate::model::media::take_work();
+        assert_eq!(captured.reads, 1);
+        assert_eq!(captured.resolutions, 1);
+        let full_summary = rustx::context::SummaryRequest {
+            retired: history.clone(),
+        }
+        .model_input();
+        let logical_bytes = serde_json::to_vec(&history).unwrap().len();
+        let summary_bytes = serde_json::to_vec(&full_summary.messages).unwrap().len();
+        crate::context::summarizer::take_summary_rendered_messages();
+        crate::context::tokens::take_estimator_calls();
+        plan(
+            &e,
+            &history,
+            CompactionBudgets::new(0, 50, 1_000_000),
+            &CompactionConstraints::default(),
+        )
+        .await
+        .unwrap();
+        let probes = 3 * (length.ilog2() as usize + 1) + 1;
+        let work = crate::model::media::take_work();
+        assert_eq!(work.reads, 0);
+        assert_eq!(work.resolutions, 0);
+        assert_eq!(
+            crate::context::summarizer::take_summary_rendered_messages(),
+            length
+        );
+        assert!(
+            usize::try_from(crate::context::tokens::take_estimator_calls()).unwrap() <= 3 * probes
+        );
+        assert!(work.projections <= 9 * probes + 3);
+        assert!(work.copied_bytes <= (9 * probes + 3) * (summary_bytes + 2 * logical_bytes));
     }
 }

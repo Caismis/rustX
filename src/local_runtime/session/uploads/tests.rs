@@ -663,12 +663,25 @@ async fn context_estimates_the_same_rendering_as_provider_input() {
         estimator.clone(),
     )
     .unwrap();
-    engine.set_upload_resolver(Arc::new(SessionUploadResolver::new(
+    let owner = Arc::new(SessionUploadResolver::new(
         root.path(),
         session.active_conversation_id,
-    )));
+    ));
+    engine.set_upload_resolver(owner.clone());
     let mut rendered = canonical.clone();
-    engine.project_uploads(&mut rendered).unwrap();
+    owner
+        .resolve(&canonical)
+        .unwrap()
+        .apply(&mut rendered)
+        .unwrap();
+    engine
+        .prepare_media(
+            &canonical,
+            &canonical,
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         engine.estimate_model_input(&canonical, "system", &[]),
         estimator.estimate_input(&rendered, "system", &[])

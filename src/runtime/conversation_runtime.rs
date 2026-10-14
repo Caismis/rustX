@@ -2067,6 +2067,14 @@ impl RuntimeInner {
         if let Some(owner) = &self.tool_runtime.uploads {
             context.engine.set_upload_resolver(owner.clone());
         }
+        context.engine.set_image_projection(
+            self.tool_runtime.artifacts().clone(),
+            model
+                .primary()
+                .capabilities()
+                .input_modalities
+                .contains(&crate::model::catalog::Modality::Image),
+        );
         Ok(context)
     }
 
