@@ -91,7 +91,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::SurfaceRevision;
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::message::types::ContributionEmission;
 use crate::model::error::ModelError;
@@ -472,23 +471,16 @@ pub enum RuntimeEvent {
     },
 
     /// Context compaction started.
-    CompactionStarted,
-    /// Context compaction completed: the canonical runtime compaction
-    /// summary is committed to the Message Ledger and the new Conversation
-    /// Surface revision is established.
-    ///
-    /// The event is emitted strictly **after** that semantic commit, so it
-    /// can never imply success before the state exists.
+    CompactionStarted {
+        operation_id: crate::runtime::identity::CompactionOperationId,
+    },
+    /// A local typed checkpoint, activation/head and operation receipt committed
+    /// atomically with this real completion fact. Derived content is not a Ledger fact.
     CompactionCompleted {
-        /// The compaction generation, derived from Conversation Surface
-        /// history.
+        operation_id: crate::runtime::identity::CompactionOperationId,
+        checkpoint_id: crate::runtime::identity::CheckpointId,
+        activation_id: crate::context::checkpoint::ProjectionActivationId,
         generation: u64,
-        /// The identity of the committed canonical summary message. The
-        /// event references it by identity only; summary content lives in
-        /// the Message Ledger.
-        summary_message_id: MessageId,
-        /// The Conversation Surface revision established by the rewrite.
-        surface_revision: SurfaceRevision,
         /// The pre-compaction measurement, preserving its provenance.
         tokens_before: TokenMeasurement,
         /// The deterministic estimate of the rebuilt request context.
@@ -499,6 +491,7 @@ pub enum RuntimeEvent {
     },
     /// Context compaction failed.
     CompactionFailed {
+        operation_id: crate::runtime::identity::CompactionOperationId,
         /// Human-readable failure message.
         error: String,
     },
@@ -1241,11 +1234,14 @@ mod tests {
                 message_id: crate::runtime::identity::MessageId::new("msg-1"),
             },
             RuntimeEvent::CompactionCompleted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
                 generation: 1,
-                summary_message_id: crate::runtime::identity::MessageId::new(
+                checkpoint_id: crate::runtime::identity::CheckpointId::new(
                     "conv_bf9336db-1fdc-769c-91d4-5e2675927a3c",
                 ),
-                surface_revision: crate::conversation::SurfaceRevision::new(4),
+                activation_id: crate::context::checkpoint::ProjectionActivationId(4),
                 tokens_before: TokenMeasurement {
                     input_tokens: 100,
                     source: TokenMeasurementSource::Estimated,

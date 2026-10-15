@@ -522,6 +522,12 @@ export class AppServerSession {
   // Maintenance and settings
   // -------------------------------------------------------------------------
 
+  async projections(after = "0") {
+    return (await this.#client.call("session/projections", { target:this.#target, after, limit:16 }, "projections")).page;
+  }
+  async projectionDetail(checkpointId:string, offset = 0) {
+    return (await this.#client.call("session/projectionDetail", { target:this.#target, checkpoint_id:checkpointId, offset, limit:16 }, "projection_detail")).detail;
+  }
   /** Runs one manual idle compaction to its durable terminal result. */
   async compactContext(): Promise<RuntimeClientContextView> {
     const compacted = await this.#client.call(
@@ -667,7 +673,7 @@ export class AppServerSession {
     return result.agent;
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v47.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v49.js").UploadReceipt[] = []) {
     return this.#client.call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 

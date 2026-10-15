@@ -1,22 +1,22 @@
-//! The finite model-visible projection of one exact conversation Surface.
+//! Finite typed historical model input compiled from durable checkpoints and Tail.
 //!
-//! The projection contains complete canonical messages and the exact
+//! The projection contains ordered Original/Derived messages and the exact
 //! request-time Effective System Prompt. It owns no contributor, provenance,
 //! admission, or provider semantics; those are settled before this boundary.
 
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
-use crate::message::types::MessageBlock;
+use crate::model::ModelInputMessage;
 use crate::runtime::types::TokenMeasurement;
 
-/// The deterministic model-visible projection of one Surface revision.
+/// The measured typed model input at one canonical append frontier.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextProjection {
-    /// The exact Surface revision used for this projection.
+    /// Canonical append frontier used to identify this measured input.
     pub surface_revision: SurfaceRevision,
-    /// Ordered complete canonical messages selected by the Surface.
-    pub messages: Vec<MessageBlock>,
+    /// Ordered complete typed messages selected by checkpoint compilation.
+    pub messages: Vec<ModelInputMessage>,
     /// The exact rustX-owned Effective System Prompt for this request.
     #[serde(default)]
     pub effective_system_prompt: String,
@@ -68,7 +68,7 @@ mod tests {
     fn projection() -> ContextProjection {
         ContextProjection {
             surface_revision: SurfaceRevision::new(1),
-            messages: vec![MessageBlock::User(UserMessageBlock {
+            messages: (vec![MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("msg-1"),
                 content: vec![UserContentBlock::Text(TextBlock {
                     text: "hello".to_owned(),
@@ -76,7 +76,10 @@ mod tests {
                 source: UserSource::Human,
                 kind: InboundKind::Message,
                 timestamp: None,
-            })],
+            })])
+            .into_iter()
+            .map(Into::into)
+            .collect(),
             effective_system_prompt: "runtime identity".to_owned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 7,

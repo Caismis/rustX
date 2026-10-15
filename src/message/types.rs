@@ -60,9 +60,7 @@ impl MessageBlock {
         match self {
             Self::User(user) => match &user.kind {
                 InboundKind::Context(kind) => kind.agent_status_metadata(),
-                InboundKind::Message
-                | InboundKind::GoalContinuation(_)
-                | InboundKind::CompactionSummary(_) => None,
+                InboundKind::Message | InboundKind::GoalContinuation(_) => None,
             },
             Self::Assistant(_) | Self::Tool(_) => None,
         }
@@ -190,10 +188,10 @@ impl UserSource {
     ];
 }
 
-/// The cumulative native file-operation facts of one compaction summary
+/// The cumulative native file-operation metadata of a typed projection summary
 /// (Issue #140).
 ///
-/// This is the typed canonical authority for *which files the retired history
+/// This is the trusted checkpoint metadata for *which files the retired history
 /// read and which files it modified*. It is derived deterministically from
 /// the canonical tool calls of the selected retired span — native
 /// `read(path)` contributes a read, native `edit(path)` and `write(path)`
@@ -242,7 +240,7 @@ impl<'de> Deserialize<'de> for CompactionSummaryMetadata {
     }
 }
 
-/// An invalid canonical compaction summary metadata value.
+/// An invalid trusted cumulative compaction metadata value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompactionSummaryMetadataError {
     /// One path appeared more than once within a single list.
@@ -403,31 +401,9 @@ pub enum InboundKind {
     /// An ordinary inbound message.
     #[default]
     Message,
-    /// A runtime-provided compaction summary. It remains a `User` message so
-    /// no fifth canonical message role is needed for runtime-derived context.
-    /// The typed metadata is the cumulative canonical record of the native
-    /// file operations of the retired lineage.
-    CompactionSummary(CompactionSummaryMetadata),
     /// A model-visible context fact admitted through the rustX Context
     /// Assembly path.
     Context(ContextKind),
-}
-
-impl InboundKind {
-    /// Whether this inbound fact is a runtime compaction summary.
-    #[must_use]
-    pub const fn is_compaction_summary(&self) -> bool {
-        matches!(self, Self::CompactionSummary(_))
-    }
-
-    /// The cumulative file-operation metadata of a compaction summary.
-    #[must_use]
-    pub const fn compaction_summary_metadata(&self) -> Option<&CompactionSummaryMetadata> {
-        match self {
-            Self::CompactionSummary(metadata) => Some(metadata),
-            _ => None,
-        }
-    }
 }
 
 /// The stable identity of one code-owned Agent Status module.
@@ -895,32 +871,12 @@ mod tests {
     /// canonical role is required. Its typed cumulative file-operation
     /// metadata rides on the kind and round-trips exactly.
     #[test]
-    fn compaction_summary_is_user_role() {
-        let metadata = CompactionSummaryMetadata::new(
-            vec!["/src/a.rs".to_owned()],
-            vec!["/src/b.rs".to_owned()],
-        )
-        .expect("valid metadata");
-        let block = MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-summary-1"),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "Earlier in the conversation the agent listed files.".to_owned(),
-            })],
-            source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary(metadata),
-            timestamp: None,
-        });
-        let json = serde_json::to_string(&block).expect("serialize block");
-        let decoded: MessageBlock = serde_json::from_str(&json).expect("deserialize block");
-        assert_eq!(decoded, block);
-        assert!(matches!(
-            decoded,
-            MessageBlock::User(UserMessageBlock {
-                kind: InboundKind::CompactionSummary(_),
-                source: UserSource::Runtime,
-                ..
-            })
-        ));
+    fn canonical_inbound_kind_rejects_derived_summary_authority() {
+        let value = serde_json::json!({"role":"user","id":"summary","source":"runtime","kind":{"compaction_summary":{}},"content":[{"type":"text","text":"derived context"}]});
+        assert!(
+            serde_json::from_value::<MessageBlock>(value).is_err(),
+            "a Derived Summary has no canonical Message representation"
+        );
     }
 
     /// Valid metadata keeps its exact lists; invalid values are rejected

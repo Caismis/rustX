@@ -95,6 +95,23 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/projections';
+      params: {
+        target: AttachmentTarget;
+        after: ProjectionActivationId;
+        limit: number;
+      };
+    }
+  | {
+      method: 'session/projectionDetail';
+      params: {
+        target: AttachmentTarget;
+        checkpoint_id: CheckpointId;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/trace';
       params: {
         target: AttachmentTarget;
@@ -411,6 +428,15 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/forkProjection';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        ledger: LedgerFrontier;
+        activation: ProjectionActivationId;
+      };
+    }
+  | {
       method: 'session/fork';
       params: {
         session_id: SessionId;
@@ -619,6 +645,14 @@ export type ArtifactId = string;
 export type MessageId = string;
 export type SessionNodeId = string;
 /**
+ * Checkpoint activation order, independent of the Ledger and Journal domains.
+ */
+export type ProjectionActivationId = string;
+/**
+ * Immutable historical context content, independent of canonical message identity.
+ */
+export type CheckpointId = string;
+/**
  * Opaque Trace-only exclusive boundary, valid only in its conversation.
  *
  * It is not a live cursor, a transcript cursor, an Event Journal sequence,
@@ -763,6 +797,10 @@ export type SubagentId = string;
  * fails explicitly and never wraps.
  */
 export type RuntimeClientCursor = string;
+/**
+ * Inclusive canonical commit position, independent of Journal and activation order.
+ */
+export type LedgerFrontier = string;
 /**
  * The identity of one exact historical Conversation Surface state.
  *
@@ -1202,6 +1240,14 @@ export type MethodResult =
       type: 'context';
     }
   | {
+      page: ProjectionPage;
+      type: 'projections';
+    }
+  | {
+      detail: ProjectionDetail;
+      type: 'projection_detail';
+    }
+  | {
       page: TracePage;
       type: 'trace';
     }
@@ -1510,6 +1556,104 @@ export type SummaryModelView =
       mode: 'explicit';
     };
 /**
+ * Inclusive source Journal position, never an activation or Ledger position.
+ */
+export type JournalFrontier = string;
+/**
+ * Immutable destination bootstrap installation, distinct from source activations.
+ */
+export type LineageInstallationId = string;
+/**
+ * Identifies one actual provider-neutral model request.
+ *
+ * A request identity is distinct from an attempt, turn, retry ordinal,
+ * and Event Journal sequence. It is derived once from the immutable
+ * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
+ * the durable correlation key for the Request Snapshot and its
+ * request-start fact.
+ */
+export type RequestId2 = string;
+/**
+ * Input provenance is not execution ownership. Derived bodies have no canonical identity.
+ */
+export type TraceInputProvenance =
+  | {
+      source: CanonicalMessageRef;
+      type: 'original';
+    }
+  | {
+      sources: CanonicalMessageRef[];
+      checkpoint_sources: CheckpointSourceRef[];
+      transformations: SemanticTransformation[];
+      truncated: boolean;
+      type: 'derived';
+    }
+  | {
+      type: 'request_only';
+    };
+export type SemanticTransformation = 'summary' | 'image_downgrade' | 'upload_rendering';
+/**
+ * The role of one reconstructed request item.
+ */
+export type TraceMessageRole = ('user' | 'assistant' | 'tool') | 'request_only';
+/**
+ * The closed projected content vocabulary.
+ *
+ * Each variant is a semantic the browser can render with the matching
+ * presentation primitive: prose as Markdown, structure as a JSON reader,
+ * source as code, artifacts through the existing durable carrier.
+ */
+export type TraceContentBlock =
+  | {
+      text: TraceText;
+      type: 'text';
+    }
+  | {
+      text: TraceText;
+      type: 'reasoning';
+    }
+  | {
+      text: TraceText;
+      type: 'refusal';
+    }
+  | {
+      value: TraceJson;
+      type: 'json';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      name: string;
+      arguments: TraceJson;
+      type: 'tool_call';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      outcome: TraceToolOutcome;
+      blocks: TraceContentBlock[];
+      truncated: boolean;
+      type: 'tool_result';
+    }
+  | {
+      artifact: TraceArtifact;
+      alt?: string | null;
+      type: 'image';
+    }
+  | {
+      artifact: TraceArtifact;
+      type: 'file';
+    }
+  | {
+      name: string;
+      type: 'upload';
+    };
+/**
+ * The closed canonical Tool outcome vocabulary.
+ */
+export type TraceToolOutcome =
+  'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
+/**
  * Identifies one turn within an attempt.
  */
 export type TurnId = string;
@@ -1553,11 +1697,6 @@ export type ModelErrorKind =
   | 'generation_degenerated'
   | 'generation_budget_exceeded';
 /**
- * The closed canonical Tool outcome vocabulary.
- */
-export type TraceToolOutcome =
-  'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
-/**
  * The closed record vocabulary of the ledger.
  */
 export type TraceKind =
@@ -1575,16 +1714,6 @@ export type TraceKind =
     )
   | 'user'
   | 'context';
-/**
- * Identifies one actual provider-neutral model request.
- *
- * A request identity is distinct from an attempt, turn, retry ordinal,
- * and Event Journal sequence. It is derived once from the immutable
- * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
- * the durable correlation key for the Request Snapshot and its
- * request-start fact.
- */
-export type RequestId2 = string;
 /**
  * How one actual request's frozen System Prompt relates to its predecessor.
  *
@@ -1661,6 +1790,16 @@ export type AgentActivationOrigin =
       node_id: WorkflowNodeInstance;
       kind: 'workflow';
     };
+/**
+ * A stable index identifying one content block within the ordered content
+ * list of the canonical message being assembled.
+ *
+ * Streaming facts (text deltas, reasoning deltas, provider continuation
+ * state, tool-call content) reference the block they belong to by this
+ * index, so interleaved and multiple blocks remain unambiguous without
+ * exposing any provider-specific block id type.
+ */
+export type ContentBlockIndex = number;
 /**
  * The rustX-owned logical identity of a context contributor.
  *
@@ -1886,62 +2025,6 @@ export type ManagedOutputContinuation =
        */
       diagnostic: string;
       type: 'unavailable';
-    };
-/**
- * The role of one reconstructed request item.
- */
-export type TraceMessageRole = ('user' | 'assistant' | 'tool') | 'request_only';
-/**
- * The closed projected content vocabulary.
- *
- * Each variant is a semantic the browser can render with the matching
- * presentation primitive: prose as Markdown, structure as a JSON reader,
- * source as code, artifacts through the existing durable carrier.
- */
-export type TraceContentBlock =
-  | {
-      text: TraceText;
-      type: 'text';
-    }
-  | {
-      text: TraceText;
-      type: 'reasoning';
-    }
-  | {
-      text: TraceText;
-      type: 'refusal';
-    }
-  | {
-      value: TraceJson;
-      type: 'json';
-    }
-  | {
-      call_id: ToolCallId;
-      tool_id: ToolId;
-      name: string;
-      arguments: TraceJson;
-      type: 'tool_call';
-    }
-  | {
-      call_id: ToolCallId;
-      tool_id: ToolId;
-      outcome: TraceToolOutcome;
-      blocks: TraceContentBlock[];
-      truncated: boolean;
-      type: 'tool_result';
-    }
-  | {
-      artifact: TraceArtifact;
-      alt?: string | null;
-      type: 'image';
-    }
-  | {
-      artifact: TraceArtifact;
-      type: 'file';
-    }
-  | {
-      name: string;
-      type: 'upload';
     };
 /**
  * How far one Tool call progressed, by its own native evidence.
@@ -2240,7 +2323,13 @@ export type OpenAiResponsesContinuation =
 export type PublicationAuditBlock =
   | {
       /**
-       * The output block.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -2251,7 +2340,13 @@ export type PublicationAuditBlock =
     }
   | {
       /**
-       * The output block.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -2262,7 +2357,13 @@ export type PublicationAuditBlock =
     }
   | {
       /**
-       * The output block.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -2273,7 +2374,13 @@ export type PublicationAuditBlock =
     }
   | {
       /**
-       * The output block.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -2417,7 +2524,13 @@ export type MessageBlock =
 export type InFlightBlock =
   | {
       /**
-       * The canonical block index.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -2428,7 +2541,13 @@ export type InFlightBlock =
     }
   | {
       /**
-       * The canonical block index.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -2439,7 +2558,13 @@ export type InFlightBlock =
     }
   | {
       /**
-       * The canonical block index.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -2450,7 +2575,13 @@ export type InFlightBlock =
     }
   | {
       /**
-       * The canonical block index.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -3260,6 +3391,7 @@ export type Notification1 =
  */
 export type RuntimeClientEvent =
   | {
+      projection_head?: RuntimeClientProjectionHeadView | null;
       transcript: RuntimeClientTranscriptPage;
       occupancy?: ContextOccupancy | null;
       todos?: TodoSnapshot | null;
@@ -3654,7 +3786,13 @@ export type RuntimeClientEvent =
        */
       message_id: string;
       /**
-       * The output block the delta belongs to.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -3673,7 +3811,13 @@ export type RuntimeClientEvent =
        */
       message_id: string;
       /**
-       * The reasoning block the delta belongs to.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -3692,7 +3836,13 @@ export type RuntimeClientEvent =
        */
       message_id: string;
       /**
-       * The refusal block the delta belongs to.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -3711,7 +3861,13 @@ export type RuntimeClientEvent =
        */
       message_id: string;
       /**
-       * The tool-call content block being assembled.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       call: ToolCallStart;
@@ -3727,7 +3883,13 @@ export type RuntimeClientEvent =
        */
       message_id: string;
       /**
-       * The tool-call content block being assembled.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       /**
@@ -3755,7 +3917,13 @@ export type RuntimeClientEvent =
        */
       message_id: string;
       /**
-       * The tool-call content block that completed.
+       * A stable index identifying one content block within the ordered content
+       * list of the canonical message being assembled.
+       *
+       * Streaming facts (text deltas, reasoning deltas, provider continuation
+       * state, tool-call content) reference the block they belong to by this
+       * index, so interleaved and multiple blocks remain unambiguous without
+       * exposing any provider-specific block id type.
        */
       block_index: number;
       call: ToolCall1;
@@ -5361,6 +5529,10 @@ export interface CapabilitySourceView {
  */
 export interface RuntimeClientContextView {
   /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
    */
@@ -5388,6 +5560,35 @@ export interface RuntimeClientContextView {
    * The latest committed compaction metadata, when compaction occurred.
    */
   latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * Projection ownership is independent of the local execution trajectory.
+ */
+export interface RuntimeClientProjectionHeadView {
+  checkpoint_id: CheckpointId;
+  activation_id: ProjectionActivationId;
+  base_frontier: LedgerFrontier;
+  activation_ledger: LedgerFrontier;
+  origin: OriginActivation;
+  destination_installation?: LineageInstallationId | null;
+  original_items: number;
+  derived_items: number;
+  summary_preview?: TraceText | null;
+}
+/**
+ * Immutable source activation. Destination installation is a different coordinate.
+ */
+export interface OriginActivation {
+  conversation_id: ConversationId;
+  activation: ProjectionActivationId;
+  completed_journal: JournalFrontier;
+}
+/**
+ * Bounded text with an explicit completeness statement.
+ */
+export interface TraceText {
+  text: string;
+  truncated: boolean;
 }
 /**
  * Bounded read evidence for the most recently admitted manual compaction.
@@ -5440,34 +5641,23 @@ export interface ContextBreakdown {
 /**
  * Public metadata for one committed compaction.
  *
- * Every field is derived from already-committed conversation state. The
- * view names the canonical summary message by identity; its content is an
- * ordinary Ledger fact in [`RuntimeClientSnapshot::messages`].
+ * Every field is derived from an actual local checkpoint commit. The
+ * independent projection disclosure carries summary content; canonical
+ * execution rows never acquire a fabricated summary identity.
  */
 export interface RuntimeClientCompactionView {
   /**
-   * The compaction generation maintained in the current Conversation
-   * Surface head.
+   * The local committed projection generation.
    */
   generation: string;
   /**
-   * Identifies a committed canonical message block.
+   * Immutable historical context content, independent of canonical message identity.
    */
-  summary_message_id: string;
+  checkpoint_id: string;
   /**
-   * The identity of one exact historical Conversation Surface state.
-   *
-   * A revision is a monotonic counter in its own identity domain. The empty
-   * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
-   * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
-   * is precisely "the Surface after the first `n` accepted operations".
-   *
-   * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
-   * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
-   * or a `CapabilityRevision`: none of those identify a Surface state, and
-   * none of them may be substituted for one.
+   * Checkpoint activation order, independent of the Ledger and Journal domains.
    */
-  surface_revision: string;
+  activation_id: string;
   tokens_before: TokenMeasurement;
   /**
    * The deterministic estimate of the rebuilt request context.
@@ -5486,6 +5676,86 @@ export interface TokenMeasurement {
    * How the measurement was obtained.
    */
   source: 'provider_reported' | 'provider_anchored' | 'estimated';
+}
+export interface ProjectionPage {
+  records: RuntimeClientProjectionHeadView[];
+  next_activation?: ProjectionActivationId | null;
+}
+export interface ProjectionDetail {
+  checkpoint: RuntimeClientProjectionHeadView;
+  items: ProjectionItemDetail[];
+  next_item?: number | null;
+}
+export interface ProjectionItemDetail {
+  occurrence: CheckpointMessageOccurrence;
+  content: TraceRequestMessage;
+}
+export interface CheckpointMessageOccurrence {
+  checkpoint_id: CheckpointId;
+  item_index: number;
+}
+/**
+ * One reconstructed provider-neutral request item.
+ */
+export interface TraceRequestMessage {
+  /**
+   * Present only for one actual frozen request; projection detail has its own coordinate.
+   */
+  request_occurrence?: RequestMessageOccurrence | null;
+  provenance: TraceInputProvenance;
+  role: TraceMessageRole;
+  /**
+   * Canonical Ledger identity; absent for Derived and request-only input.
+   */
+  message_id?: MessageId | null;
+  /**
+   * User provenance or the request-local Derived transformation label.
+   */
+  source?: string | null;
+  blocks: TraceContentBlock[];
+  truncated: boolean;
+}
+export interface RequestMessageOccurrence {
+  request_id: RequestId2;
+  item_index: number;
+}
+/**
+ * Immutable source scope, distinct from a projected occurrence.
+ */
+export interface CanonicalMessageRef {
+  conversation_id: ConversationId;
+  message_id: MessageId;
+  /**
+   * Integrity of the complete immutable body, independent of semantic request hashing.
+   */
+  content_digest: string;
+}
+/**
+ * Scoped immutable projection provenance, used when a summary consumes an earlier summary.
+ */
+export interface CheckpointSourceRef {
+  conversation_id: ConversationId;
+  checkpoint_id: CheckpointId;
+  content_digest: string;
+}
+/**
+ * Bounded structured data with an explicit completeness statement.
+ *
+ * The value stays real JSON rather than a rendered string, so the browser
+ * can present it with a structured reader instead of a preformatted dump.
+ */
+export interface TraceJson {
+  value: unknown;
+  truncated: boolean;
+}
+/**
+ * Safe reference to the existing native artifact carrier, never a path.
+ */
+export interface TraceArtifact {
+  artifact_id: ArtifactId;
+  image: boolean;
+  name?: string | null;
+  mime_type?: string | null;
 }
 /**
  * One finite page of bounded summary records, oldest first.
@@ -5635,15 +5905,6 @@ export interface TraceToolOutcomeUpdate {
 export interface TracePreview {
   text: string;
   truncated: boolean;
-}
-/**
- * Safe reference to the existing native artifact carrier, never a path.
- */
-export interface TraceArtifact {
-  artifact_id: ArtifactId;
-  image: boolean;
-  name?: string | null;
-  mime_type?: string | null;
 }
 /**
  * One bounded pageable ledger record.
@@ -5852,6 +6113,10 @@ export interface TraceToolCall {
  */
 export interface TraceDetail {
   /**
+   * Historical projection content, distinct from committed execution messages.
+   */
+  projected_messages: TraceRequestMessage[];
+  /**
    * Echoes the requested identity so a late reply can be fenced.
    */
   id: string;
@@ -5874,6 +6139,11 @@ export interface TraceDetail {
  * still shows what was actually sent.
  */
 export interface TraceRequestDetail {
+  /**
+   * Frozen physical/request coordinates and provider correlation labels.
+   */
+  tool_associations: ActualRequestToolAssociation[];
+  tool_associations_truncated: boolean;
   /**
    * Typed historical context, never the current domain projection.
    */
@@ -5918,6 +6188,24 @@ export interface TraceRequestDetail {
   usage?: ModelUsage | null;
   failure?: TraceRequestFailure | null;
   generation?: TraceGeneration | null;
+}
+export interface ActualRequestToolAssociation {
+  call: ActualRequestCallCoordinate;
+  result: RequestMessageOccurrence;
+  source: CanonicalCallSource;
+  /**
+   * Absent only when both occurrences are covered by native continuation
+   * and no correlation field is transmitted in this actual request.
+   */
+  wire_id?: string | null;
+}
+export interface ActualRequestCallCoordinate {
+  message: RequestMessageOccurrence;
+  block: number;
+}
+export interface CanonicalCallSource {
+  assistant: CanonicalMessageRef;
+  block: ContentBlockIndex;
 }
 /**
  * The exact producer and typed data accepted for one historical request.
@@ -6341,39 +6629,6 @@ export interface TraceRequestOption {
   value: TraceJson;
 }
 /**
- * Bounded structured data with an explicit completeness statement.
- *
- * The value stays real JSON rather than a rendered string, so the browser
- * can present it with a structured reader instead of a preformatted dump.
- */
-export interface TraceJson {
-  value: unknown;
-  truncated: boolean;
-}
-/**
- * Bounded text with an explicit completeness statement.
- */
-export interface TraceText {
-  text: string;
-  truncated: boolean;
-}
-/**
- * One reconstructed provider-neutral request item.
- */
-export interface TraceRequestMessage {
-  role: TraceMessageRole;
-  /**
-   * Canonical Ledger identity; absent exactly for a request-only item.
-   */
-  message_id?: MessageId | null;
-  /**
-   * Provenance of a canonical User item.
-   */
-  source?: string | null;
-  blocks: TraceContentBlock[];
-  truncated: boolean;
-}
-/**
  * The historical model-facing Tool definition of one request.
  */
 export interface TraceToolDefinition {
@@ -6592,10 +6847,6 @@ export interface ConversationTiming {
  */
 export interface RuntimeClientTranscriptEntry {
   /**
-   * Native facts of a canonical compaction checkpoint, including copied lineage.
-   */
-  compaction?: CompactionMarker | null;
-  /**
    * Exact native Attempt process membership, derived by native owners.
    * Absence is not permission for a client to infer a process boundary.
    */
@@ -6779,23 +7030,6 @@ export interface RuntimeClientTranscriptEntry {
       };
 }
 /**
- * Facts of one checkpoint, not cumulative totals over the compaction lineage.
- */
-export interface CompactionMarker {
-  /**
-   * Exact number of canonical history messages replaced by this checkpoint.
-   */
-  retired_messages: string;
-  /**
-   * Native history-only estimate, excluding system prompt and tool schemas.
-   */
-  retired_tokens: string;
-  /**
-   * Local Journal attribution; copied lineage has no local command owner.
-   */
-  manual?: boolean | null;
-}
-/**
  * One native process owner shared by live, successful and unsuccessful Turns.
  * Repeated on each exact member so bounded pages are independently resolvable.
  */
@@ -6907,7 +7141,13 @@ export interface ForegroundToolExecution {
    */
   message_id: string;
   /**
-   * Canonical Assistant content block (also used by live publication frames).
+   * A stable index identifying one content block within the ordered content
+   * list of the canonical message being assembled.
+   *
+   * Streaming facts (text deltas, reasoning deltas, provider continuation
+   * state, tool-call content) reference the block they belong to by this
+   * index, so interleaved and multiple blocks remain unambiguous without
+   * exposing any provider-specific block id type.
    */
   block_index: number;
   /**
@@ -7121,9 +7361,6 @@ export interface UserMessageBlock {
       }
     | 'message'
     | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
-    | {
         context: ContextKind;
       };
   /**
@@ -7140,38 +7377,6 @@ export interface UserMessageBlock {
    * canonical encoding while absent.
    */
   timestamp?: string | null;
-}
-/**
- * The cumulative native file-operation facts of one compaction summary
- * (Issue #140).
- *
- * This is the typed canonical authority for *which files the retired history
- * read and which files it modified*. It is derived deterministically from
- * the canonical tool calls of the selected retired span — native
- * `read(path)` contributes a read, native `edit(path)` and `write(path)`
- * contribute a modification — merged with the metadata of every earlier
- * compaction summary inside that same span. It records conversation facts,
- * never current filesystem state: a path stays listed even when the file has
- * since been deleted, and the rendered `<read-files>`/`<modified-files>`
- * sections of the summary text are a model-visible projection of this value,
- * never its source.
- *
- * The fields are private so every value, including one decoded from durable
- * JSON, satisfies the canonical invariants: both lists are unique and in
- * ascending byte order, and `read_files ∩ modified_files = ∅` (modification
- * wins over read).
- *
- * ```compile_fail
- * use rustx::message::types::CompactionSummaryMetadata;
- *
- * fn mutate(metadata: &mut CompactionSummaryMetadata) {
- *     metadata.read_files = Vec::new();
- * }
- * ```
- */
-export interface CompactionSummaryMetadata {
-  read_files?: string[];
-  modified_files?: string[];
 }
 /**
  * One completed model generation produced by the current agent.
@@ -8718,9 +8923,6 @@ export interface UserMessageBlock1 {
       }
     | 'message'
     | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
-    | {
         context: ContextKind;
       };
   /**
@@ -8947,6 +9149,10 @@ export interface QuestionnaireSpecification1 {
  * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView1 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
   /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
@@ -9542,9 +9748,6 @@ export interface UserMessageBlock2 {
         goal_continuation: GoalRef;
       }
     | 'message'
-    | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
     | {
         context: ContextKind;
       };
@@ -10280,6 +10483,10 @@ export interface RuntimeClientTranscriptInteractionSettled {
  */
 export interface RuntimeClientContextView2 {
   /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
    */
@@ -10313,6 +10520,10 @@ export interface RuntimeClientContextView2 {
  */
 export interface RuntimeClientContextView3 {
   /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
    */
@@ -10345,6 +10556,10 @@ export interface RuntimeClientContextView3 {
  * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView4 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
   /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
@@ -10694,9 +10909,6 @@ export interface UserMessageBlock3 {
         goal_continuation: GoalRef;
       }
     | 'message'
-    | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
     | {
         context: ContextKind;
       };

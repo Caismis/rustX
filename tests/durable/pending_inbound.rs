@@ -9,7 +9,6 @@
 //! died here" boundary — no sleeps and no timing assumptions participate.
 
 use chrono::{DateTime, TimeZone, Utc};
-use rustx::context::TokenEstimator;
 use rustx::conversation::SurfaceOp;
 use rustx::durable::{
     AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft, LineageSeed,
@@ -17,8 +16,8 @@ use rustx::durable::{
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, InboundKind,
-    MessageBlock, ToolMessageBlock, UserContentBlock, UserSource,
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+    UserContentBlock, UserSource,
 };
 use rustx::runtime::identity::{AgentId, ConversationId, MessageId, ToolCallId, ToolId};
 use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus};
@@ -571,7 +570,7 @@ fn initialize_verifies_the_initial_history() {
 /// order is the history's rather than the Ledger's, and the seeded lineage
 /// retains that history as its own.
 #[test]
-fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
+fn a_seeded_lineage_retains_projection_dependencies_after_source_deletion() {
     let user = |id: &str, text: &str| {
         MessageBlock::User(rustx::message::types::UserMessageBlock {
             id: MessageId::new(id),
@@ -581,119 +580,71 @@ fn a_seeded_lineage_keeps_canonical_facts_its_surface_does_not_show() {
             timestamp: None,
         })
     };
-    let summary = MessageBlock::User(rustx::message::types::UserMessageBlock {
-        id: MessageId::new("msg-summary"),
-        content: text_blocks("earlier work, summarized"),
-        source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-        timestamp: None,
-    });
-    let dir = tempdir().expect("temp dir");
-    let path = dir.path().join("seeded.db");
-    // Ledger order is commit order, so it is the order the operations below
-    // introduced these rows: the two facts, the live message committed after
-    // them, and last the summary a compaction appended when it retired the
-    // first two.
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("source.sqlite");
+    let source_id = ConversationId::generate();
+    let source = SqliteConversationStore::open(source_id.clone(), &path).unwrap();
     let canonical = vec![
-        user("msg-retired-a", "A"),
-        user("msg-retired-b", "B"),
-        user("msg-live", "C"),
-        summary.clone(),
+        user("retired-a", "A"),
+        user("retired-b", "B"),
+        user("live", "C"),
     ];
-    // Surface history: the source appended the retired facts and the live
-    // one, then replaced the retired span with the summary. The summary is
-    // *first* on the Surface because a Replace lands where its span started,
-    // which is exactly the order the Ledger cannot express.
-    let surface_history = vec![
-        SurfaceOp::Append {
-            message_id: MessageId::new("msg-retired-a"),
-        },
-        SurfaceOp::Append {
-            message_id: MessageId::new("msg-retired-b"),
-        },
-        SurfaceOp::Append {
-            message_id: MessageId::new("msg-live"),
-        },
-        SurfaceOp::Replace {
-            start: MessageId::new("msg-retired-a"),
-            end: MessageId::new("msg-retired-b"),
-            replacement: MessageId::new("msg-summary"),
-        },
-    ];
-    let checkpoints = std::collections::BTreeMap::from([(
-        MessageId::new("msg-summary"),
-        rustx::durable::inbox::CompactionCheckpointStatistics {
-            retired_messages: 2,
-            retired_tokens: rustx::context::DefaultTokenEstimator
-                .estimate_conversation_input(&canonical[..2]),
-        },
-    )]);
-    let seed = LineageSeed::replayed(canonical.clone(), surface_history.clone(), checkpoints)
-        .expect("a Surface history over the seeded Ledger");
-
-    let store = SqliteConversationStore::open(
-        ConversationId::new("conv_3fa2e4ba-1bce-77e9-8bb7-54fdaf29d519"),
-        &path,
-    )
-    .expect("open");
-    store.initialize_lineage(&seed).expect("seed the lineage");
-
-    assert_eq!(
-        store.load_canonical().expect("canonical"),
-        canonical,
-        "the Ledger keeps every seeded fact, retired ones included"
+    source.initialize(&canonical).unwrap();
+    let receipt = super::checkpoint(&source, "P1", 2, "earlier work, summarized");
+    let destination_id = ConversationId::generate();
+    let mut copied = receipt.checkpoint;
+    copied.candidate.read_cut.conversation_id = destination_id.clone();
+    copied.candidate.read_cut.journal = rustx::context::resources::JournalFrontier(0);
+    copied.candidate.read_cut.transcript = rustx::durable::TranscriptCursor::new(0);
+    copied.activation.destination_installation = Some(
+        rustx::runtime::identity::LineageInstallationId::new("installation:copied"),
     );
-    let head = store.load_head().expect("head");
+    for item in &mut copied.candidate.items {
+        match &mut item.message {
+            rustx::context::checkpoint::CheckpointMessage::Original(reference) => {
+                reference.conversation_id = destination_id.clone();
+            }
+            rustx::context::checkpoint::CheckpointMessage::Derived(derived) => {
+                for reference in &mut derived.sources {
+                    reference.conversation_id = destination_id.clone();
+                }
+            }
+        }
+    }
+    copied.fingerprint = copied.candidate.fingerprint();
+    let seed = LineageSeed::history(canonical.clone())
+        .with_projections(vec![copied.clone()])
+        .unwrap();
+    let destination_path = directory.path().join("destination.sqlite");
+    let destination =
+        SqliteConversationStore::open(destination_id.clone(), &destination_path).unwrap();
+    destination.initialize_lineage(&seed).unwrap();
+    drop(source);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(destination.load_canonical().unwrap(), canonical);
     assert_eq!(
-        head.active_message_ids,
-        vec![MessageId::new("msg-summary"), MessageId::new("msg-live")],
-        "the Surface shows the seeded projection, in the seeded order"
+        destination.load_head().unwrap().active_message_ids,
+        [MessageId::new("live")]
     );
+    assert_eq!(destination.projection_head().unwrap().unwrap(), copied);
     assert_eq!(
-        store
-            .load_surface_snapshot(head.revision)
-            .expect("surface snapshot"),
-        vec![summary, user("msg-live", "C")],
-        "and materializes to those messages"
+        destination
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .activation
+            .origin
+            .conversation_id,
+        source_id
     );
-    assert_eq!(
-        store
-            .load_surface_history(head.revision)
-            .expect("seeded Surface history"),
-        surface_history,
-        "the seeded lineage retains the source's operations as its own, so its \
-         own historical boundaries are the source's boundaries"
-    );
-    assert_eq!(
-        head.compaction_generation, 1,
-        "and inherits the generation those operations record"
-    );
-
-    // Reopening re-supplies the canonical half. The projection is durable
-    // state the store already holds, so there is nothing to contradict.
-    drop(store);
-    let reopened = SqliteConversationStore::open(
-        ConversationId::new("conv_3fa2e4ba-1bce-77e9-8bb7-54fdaf29d519"),
-        &path,
-    )
-    .expect("reopen");
-    assert_eq!(
-        reopened
-            .load_bootstrap_history()
-            .expect("bootstrap history"),
-        canonical
-    );
-    reopened
-        .initialize(&canonical)
-        .expect("the canonical half is the bootstrap identity");
-    assert_eq!(
-        reopened
-            .load_head()
-            .expect("head after reopen")
-            .active_message_ids,
-        vec![MessageId::new("msg-summary"), MessageId::new("msg-live")],
-        "reopening does not put retired facts back on the Surface"
-    );
+    destination.projected_history().unwrap();
+    assert!(destination.read_events(None, 64).unwrap().events.is_empty());
+    drop(destination);
+    let reopened = SqliteConversationStore::open(destination_id, &destination_path).unwrap();
+    reopened.initialize(seed.canonical()).unwrap();
+    assert_eq!(reopened.load_canonical().unwrap(), canonical);
+    assert_eq!(reopened.projection_head().unwrap().unwrap(), copied);
+    reopened.projected_history().unwrap();
 }
 
 /// A seeded Surface history that does not replay against its own Ledger is
@@ -714,8 +665,7 @@ fn a_seeded_surface_history_must_replay_against_the_seeded_ledger() {
             vec![live.clone()],
             vec![SurfaceOp::Append {
                 message_id: MessageId::new("msg-absent"),
-            }],
-            std::collections::BTreeMap::new()
+            }]
         ),
         Err(ConversationStoreError::InvalidReference(_))
     ));
@@ -730,40 +680,17 @@ fn a_seeded_surface_history_must_replay_against_the_seeded_ledger() {
                 SurfaceOp::Append {
                     message_id: MessageId::new("msg-live"),
                 },
-            ],
-            std::collections::BTreeMap::new()
+            ]
         ),
         Err(ConversationStoreError::InvalidReference(_))
     ));
-    // A Replace whose replacement is not a compaction summary. Only
-    // compaction retires Surface facts, so only its summary may stand in for
-    // a span.
-    assert!(matches!(
-        LineageSeed::replayed(
-            vec![
-                live,
-                MessageBlock::User(rustx::message::types::UserMessageBlock {
-                    id: MessageId::new("msg-not-a-summary"),
-                    content: text_blocks("D"),
-                    source: UserSource::Human,
-                    kind: InboundKind::Message,
-                    timestamp: None,
-                }),
-            ],
-            vec![
-                SurfaceOp::Append {
-                    message_id: MessageId::new("msg-live"),
-                },
-                SurfaceOp::Replace {
-                    start: MessageId::new("msg-live"),
-                    end: MessageId::new("msg-live"),
-                    replacement: MessageId::new("msg-not-a-summary"),
-                },
-            ],
-            std::collections::BTreeMap::new()
-        ),
-        Err(ConversationStoreError::InvalidReference(_))
-    ));
+    assert!(
+        serde_json::from_value::<SurfaceOp>(
+            serde_json::json!({"op":"replace","start":"a","end":"b","replacement":"summary"})
+        )
+        .is_err(),
+        "Surface replacement is not an accepted durable operation"
+    );
 }
 
 /// Replaying is necessary and not sufficient. `LineageSeed` is the public
@@ -804,8 +731,7 @@ fn a_seeded_lineage_must_introduce_its_ledger_in_ledger_order() {
                     SurfaceOp::Append {
                         message_id: MessageId::new("msg-b"),
                     },
-                ],
-                std::collections::BTreeMap::new()
+                ]
             ),
             Err(ConversationStoreError::InvalidReference(_))
         ),
@@ -824,8 +750,7 @@ fn a_seeded_lineage_must_introduce_its_ledger_in_ledger_order() {
                 vec![user("msg-a", "A"), user("msg-orphan", "hidden")],
                 vec![SurfaceOp::Append {
                     message_id: MessageId::new("msg-a"),
-                }],
-                std::collections::BTreeMap::new()
+                }]
             ),
             Err(ConversationStoreError::InvalidReference(_))
         ),
@@ -1074,18 +999,7 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
         Err(rustx::conversation::RecoverySafetyError::IncompleteToolTurn { .. })
     ));
 
-    // Compaction summaries are ordinary durable Ledger facts whose Surface
-    // replacement is validated by the M8 store, so the predicate does not
-    // reject them.
-    let summary = MessageBlock::User(rustx::message::types::UserMessageBlock {
-        id: MessageId::new("summary-1"),
-        content: text_blocks("earlier context"),
-        source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-        timestamp: None,
-    });
-    recovery_safety(&[user("u0"), user("u1"), summary])
-        .expect("durable Surface history makes compaction restart-safe");
+    assert!(serde_json::from_value::<MessageBlock>(serde_json::json!({"role":"user","id":"summary","source":"runtime","kind":{"compaction_summary":{}},"content":[]})).is_err());
 }
 
 // WEB-06: sequential claim/mutation outcomes and concurrent mutation CAS.

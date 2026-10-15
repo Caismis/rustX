@@ -202,7 +202,6 @@ fn decorate_projection(
     through: u64,
     scopes: Option<&BTreeSet<AttemptId>>,
 ) -> Result<(), ConversationStoreError> {
-    super::compaction::decorate(store, page, through)?;
     for entry in &mut page.entries {
         entry.completed_response = None;
         entry.turn_process = None;
@@ -507,24 +506,7 @@ fn project(
                                 }
                             }
                             if wanted.contains(&closing) {
-                                let retry_message_id = match &evidence.last_request {
-                                    Some(id) => {
-                                        let request = store.load_request_snapshot(id)?;
-                                        store
-                                            .load_surface_snapshot(request.surface_revision)?
-                                            .iter()
-                                            .rev()
-                                            .find_map(|message| match message {
-                                                MessageBlock::User(user)
-                                                    if user.kind == InboundKind::Message =>
-                                                {
-                                                    Some(user.id.clone())
-                                                }
-                                                _ => None,
-                                            })
-                                    }
-                                    None => None,
-                                };
+                                let retry_message_id = store.attempt_prompt(&id, through)?;
                                 completed.insert(
                                     closing.clone(),
                                     CompletedResponseProvenance {

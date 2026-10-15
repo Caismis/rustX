@@ -2,8 +2,8 @@
 //!
 //! The one rule this module exists to enforce: **a historical request is
 //! reconstructed, never re-derived**. Every value comes from that request's
-//! own immutable [`RequestSnapshot`] and the historical Conversation Surface
-//! revision the snapshot froze, through the durable store's existing
+//! own immutable [`RequestSnapshot`] and its exact frozen input dependencies,
+//! through the durable store's existing
 //! [`reconstruct_model_request`] seam. Current model configuration, the
 //! current tool catalog, the current system prompt and the current Surface
 //! are never read here, so changing a Session's model or tools after the
@@ -50,8 +50,9 @@ pub(super) struct RequestOutcome {
 ///
 /// # Errors
 ///
-/// Propagates the durable read failure of snapshot or Surface
+/// Propagates the durable read failure of snapshot or immutable-input
 /// reconstruction; a failure is never interpreted as an empty request.
+#[allow(clippy::too_many_lines)] // One bounded exact-snapshot inspection with independently scoped coordinates.
 pub(super) fn request_detail(
     store: &dyn ConversationStore,
     snapshot: &RequestSnapshot,
@@ -65,11 +66,14 @@ pub(super) fn request_detail(
     {
         return Ok(None);
     }
-    // The historical Surface revision frozen by this snapshot is the only
-    // conversation input. `reconstruct_model_request` hydrates that exact
-    // revision and replays the snapshot's own frozen request-only items.
+    // Resolve only this snapshot's ordered frozen input and immutable dependencies.
+    // No historical selection or content transformation runs during reconstruction.
     let reconstructed = store.reconstruct_model_request(&snapshot.request_id)?;
-    let (messages, messages_truncated) = request_messages(&reconstructed);
+    let (messages, messages_truncated) = request_messages(
+        &reconstructed,
+        store.conversation_id(),
+        &snapshot.request_id,
+    );
     let mut tools_truncated = reconstructed.tools.len() > TRACE_DETAIL_TOOLS;
     let mut tools = Vec::new();
     for definition in reconstructed.tools.iter().take(TRACE_DETAIL_TOOLS) {
@@ -122,6 +126,21 @@ pub(super) fn request_detail(
         })
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
     Ok(Some(TraceRequestDetail {
+        tool_associations: snapshot
+            .tool_associations
+            .iter()
+            .take(32)
+            .filter(|a| {
+                a.wire_id.as_ref().is_none_or(|id| identity_fits(&id.0))
+                    && identity_fits(a.source.assistant.message_id.as_str())
+            })
+            .cloned()
+            .collect(),
+        tool_associations_truncated: snapshot.tool_associations.len() > 32
+            || snapshot.tool_associations.iter().take(32).any(|a| {
+                !a.wire_id.as_ref().is_none_or(|id| identity_fits(&id.0))
+                    || !identity_fits(a.source.assistant.message_id.as_str())
+            }),
         contributions,
         predecessor: previous.identity(),
         previous_system_prompt: previous.prompt(),
@@ -156,7 +175,11 @@ pub(super) fn request_detail(
 }
 
 /// Projects the reconstructed provider-neutral request context, in wire order.
-fn request_messages(request: &ModelRequest) -> (Vec<TraceRequestMessage>, bool) {
+fn request_messages(
+    request: &ModelRequest,
+    scope: &crate::runtime::identity::ConversationId,
+    request_id: &crate::runtime::identity::RequestId,
+) -> (Vec<TraceRequestMessage>, bool) {
     // The newest items explain a request best, so an oversized context keeps
     // its tail rather than its head: the request-scoped context, the current
     // user turn and the tool results that prompted the call are all there.
@@ -164,16 +187,52 @@ fn request_messages(request: &ModelRequest) -> (Vec<TraceRequestMessage>, bool) 
     let start = request.messages.len().saturating_sub(TRACE_DETAIL_MESSAGES);
     let messages = request.messages[start..]
         .iter()
-        .map(request_message)
+        .enumerate()
+        .map(|(index, message)| {
+            let mut detail = request_message(message, scope);
+            detail.request_occurrence =
+                Some(crate::context::checkpoint::RequestMessageOccurrence {
+                    request_id: request_id.clone(),
+                    item_index: u32::try_from(start + index)
+                        .expect("bounded frozen request coordinates"),
+                });
+            detail
+        })
         .collect();
     (messages, truncated)
 }
 
-fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
+#[allow(clippy::too_many_lines)] // Exhaustive bounded Original/Derived/request-only content and provenance projection.
+pub(crate) fn request_message(
+    message: &ModelInputMessage,
+    scope: &crate::runtime::identity::ConversationId,
+) -> TraceRequestMessage {
+    use super::types::TraceInputProvenance;
+    let provenance = match message {
+        ModelInputMessage::Canonical(message) => TraceInputProvenance::Original {
+            source: crate::model::projected::CanonicalMessageRef::of(scope, message),
+        },
+        ModelInputMessage::Derived(derived) => TraceInputProvenance::Derived {
+            sources: derived.sources.iter().take(64).cloned().collect(),
+            checkpoint_sources: derived
+                .checkpoint_sources
+                .iter()
+                .take(64)
+                .cloned()
+                .collect(),
+            transformations: derived.transformations.iter().take(16).copied().collect(),
+            truncated: derived.sources.len() > 64
+                || derived.checkpoint_sources.len() > 64
+                || derived.transformations.len() > 16,
+        },
+        ModelInputMessage::RequestOnly(_) => TraceInputProvenance::RequestOnly,
+    };
     match message {
         ModelInputMessage::Canonical(MessageBlock::User(user)) => {
             let (blocks, truncated) = user_blocks(&user.content);
             TraceRequestMessage {
+                request_occurrence: None,
+                provenance,
                 role: TraceMessageRole::User,
                 message_id: identity_fits(user.id.as_str()).then(|| user.id.clone()),
                 source: Some(user_source_label(&user.source).to_owned()),
@@ -184,6 +243,8 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
         ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
             let (blocks, truncated) = assistant_blocks(&assistant.content);
             TraceRequestMessage {
+                request_occurrence: None,
+                provenance,
                 role: TraceMessageRole::Assistant,
                 message_id: identity_fits(assistant.id.as_str()).then(|| assistant.id.clone()),
                 source: None,
@@ -195,6 +256,8 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
             let block = tool_result_block(tool);
             let truncated = block.is_none() || !identity_fits(tool.id.as_str());
             TraceRequestMessage {
+                request_occurrence: None,
+                provenance,
                 role: TraceMessageRole::Tool,
                 message_id: identity_fits(tool.id.as_str()).then(|| tool.id.clone()),
                 source: None,
@@ -202,7 +265,44 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
                 truncated,
             }
         }
+        ModelInputMessage::Derived(derived) => {
+            let (role, blocks, truncated) = match &derived.message {
+                crate::model::projected::ProjectedMessage::User { content, .. } => {
+                    let (blocks, truncated) = user_blocks(content);
+                    (TraceMessageRole::User, blocks, truncated)
+                }
+                crate::model::projected::ProjectedMessage::Assistant { content } => {
+                    let (blocks, truncated) = assistant_blocks(content);
+                    (TraceMessageRole::Assistant, blocks, truncated)
+                }
+                crate::model::projected::ProjectedMessage::Tool {
+                    tool_call_id,
+                    tool_id,
+                    result,
+                } => {
+                    let block =
+                        super::content::projected_tool_result_block(tool_call_id, tool_id, result);
+                    let truncated = block.is_none();
+                    (
+                        TraceMessageRole::Tool,
+                        block.into_iter().collect(),
+                        truncated,
+                    )
+                }
+            };
+            TraceRequestMessage {
+                request_occurrence: None,
+                provenance,
+                role,
+                message_id: None,
+                source: Some(format!("derived:{:?}", derived.transformations)),
+                blocks,
+                truncated,
+            }
+        }
         ModelInputMessage::RequestOnly(context) => TraceRequestMessage {
+            request_occurrence: None,
+            provenance,
             role: TraceMessageRole::RequestOnly,
             // A request-only item deliberately has no canonical identity;
             // inventing one here would manufacture history.

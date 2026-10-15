@@ -26,9 +26,60 @@ pub enum ModelInputMessage {
     Canonical(MessageBlock),
     /// A value that exists only for this request and has no canonical identity.
     RequestOnly(RequestOnlyModelContext),
+    /// Independently materialized typed context with scoped provenance.
+    Derived(super::projected::DerivedModelMessage),
+}
+
+impl From<MessageBlock> for ModelInputMessage {
+    fn from(message: MessageBlock) -> Self {
+        Self::Canonical(message)
+    }
 }
 
 impl ModelInputMessage {
+    /// Borrow semantic content without manufacturing a canonical identity.
+    #[must_use]
+    pub fn view(&self) -> super::projected::ModelMessageView<'_> {
+        use super::projected::{ModelMessageView as V, ProjectedMessage as P};
+        match self {
+            Self::Canonical(MessageBlock::User(m)) => V::User(&m.content),
+            Self::Canonical(MessageBlock::Assistant(m)) => V::Assistant(&m.content),
+            Self::Canonical(MessageBlock::Tool(m)) => V::Tool(&m.tool_call_id, &m.result),
+            Self::Derived(m) => match &m.message {
+                P::User { content, .. } => V::User(content),
+                P::Assistant { content } => V::Assistant(content),
+                P::Tool {
+                    tool_call_id,
+                    result,
+                    ..
+                } => V::Tool(tool_call_id, result),
+            },
+            Self::RequestOnly(m) => V::RequestOnly(m),
+        }
+    }
+
+    /// Mark changed request content as Derived; the source remains immutable.
+    pub fn mark_transformed(
+        &mut self,
+        source: &MessageBlock,
+        conversation_id: &crate::runtime::identity::ConversationId,
+        transformation: super::projected::SemanticTransformation,
+    ) {
+        if let Self::Canonical(message) = self
+            && message != source
+        {
+            *self = Self::Derived(super::projected::DerivedModelMessage {
+                message: super::projected::ProjectedMessage::from(&*message),
+                sources: vec![super::projected::CanonicalMessageRef::of(
+                    conversation_id,
+                    source,
+                )],
+                checkpoint_sources: Vec::new(),
+                transformations: vec![transformation],
+            });
+        }
+    }
+
     /// Wraps one canonical message without changing its identity.
     #[must_use]
     pub fn canonical(message: MessageBlock) -> Self {
@@ -40,7 +91,7 @@ impl ModelInputMessage {
     pub fn as_canonical(&self) -> Option<&MessageBlock> {
         match self {
             Self::Canonical(message) => Some(message),
-            Self::RequestOnly(_) => None,
+            Self::RequestOnly(_) | Self::Derived(_) => None,
         }
     }
 
@@ -54,7 +105,7 @@ impl ModelInputMessage {
     #[must_use]
     pub fn request_only_text(&self) -> Option<String> {
         match self {
-            Self::Canonical(_) => None,
+            Self::Canonical(_) | Self::Derived(_) => None,
             Self::RequestOnly(context) => Some(context.render()),
         }
     }
@@ -403,11 +454,7 @@ fn json_string(value: &str) -> String {
 /// variant without giving it any request-only semantics.
 #[must_use]
 pub fn canonical_input(messages: &[MessageBlock]) -> Vec<ModelInputMessage> {
-    messages
-        .iter()
-        .cloned()
-        .map(ModelInputMessage::Canonical)
-        .collect()
+    messages.iter().cloned().map(Into::into).collect()
 }
 
 /// Assembles the one fixed request-only insertion mechanism over canonical
@@ -424,12 +471,12 @@ pub fn canonical_input(messages: &[MessageBlock]) -> Vec<ModelInputMessage> {
 /// `BeforeMessage` identity is absent from the assembled provider-neutral
 /// request.
 pub fn assemble_model_input(
-    canonical: &[MessageBlock],
+    historical: &[ModelInputMessage],
     staged: &[MessageBlock],
     carryover: Option<&RenderedUnresolvedOutputCarryover>,
     anchor: Option<&RequestOnlyInsertionAnchor>,
 ) -> Result<Vec<ModelInputMessage>, String> {
-    let mut messages = canonical_input(canonical);
+    let mut messages = historical.to_vec();
     messages.extend(canonical_input(staged));
     let Some(carryover) = carryover else {
         return Ok(messages);
@@ -445,7 +492,7 @@ pub fn assemble_model_input(
                     "request-only carryover anchor message {message_id} is absent from the request"
                 )
             })?,
-        RequestOnlyInsertionAnchor::AfterCanonical => canonical.len(),
+        RequestOnlyInsertionAnchor::AfterCanonical => historical.len(),
     };
     messages.insert(
         position,

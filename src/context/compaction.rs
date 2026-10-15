@@ -6,6 +6,11 @@
 //! validation, the atomic durable commit, and installation into the hot
 //! [`ConversationState`] therefore cannot drift between the two entry points.
 
+use crate::context::checkpoint::{CheckpointCandidate, CheckpointItem, CheckpointMessage};
+use crate::model::projected::{
+    CanonicalMessageRef, CheckpointSourceRef, DerivedModelMessage, ProjectedMessage,
+    SemanticTransformation,
+};
 use chrono::Utc;
 
 use crate::context::ContextRuntime;
@@ -22,25 +27,37 @@ const MIN_SUMMARY_INPUT_LIMIT: u64 = 4_096;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::tokens::ProviderObservedInput;
 use crate::conversation::ConversationState;
-use crate::durable::{CompactionCommitInput, ConversationStore, TranscriptCursor};
-use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::message::types::MessageBlock;
+use crate::durable::ConversationStore;
+use crate::events::types::RuntimeEventEnvelope;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AttemptId, ConversationId, TurnId};
 use crate::tools::types::ModelToolDefinition;
 
 /// Optional execution attribution persisted with the compaction completion.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
+#[allow(clippy::struct_field_names)] // These are three independent identity domains.
 pub(crate) struct CompactionAttribution {
+    pub(crate) operation_id: crate::runtime::identity::CompactionOperationId,
     pub(crate) attempt_id: Option<AttemptId>,
     pub(crate) turn_id: Option<TurnId>,
 }
 
+impl Default for CompactionAttribution {
+    fn default() -> Self {
+        Self {
+            operation_id: crate::runtime::identity::CompactionOperationId::new(
+                uuid::Uuid::now_v7().to_string(),
+            ),
+            attempt_id: None,
+            turn_id: None,
+        }
+    }
+}
+
 /// The already-committed output of one compaction execution.
+#[derive(Debug)]
 pub(crate) struct ExecutedCompaction {
-    pub(crate) summary_block: MessageBlock,
     pub(crate) persisted_event: RuntimeEventEnvelope,
-    pub(crate) transcript_cursor: TranscriptCursor,
 }
 
 /// A compaction pipeline failure, split at the durable commit boundary.
@@ -52,6 +69,11 @@ pub(crate) enum CompactionExecutionError {
     /// The durable authority rejected the atomic compaction transition, or
     /// returned a result that violated the transition contract.
     Durable(String),
+    /// Commit is confirmed; execution must reconcile or stop without a contradictory failure fact.
+    Committed {
+        completed: Box<ExecutedCompaction>,
+        error: String,
+    },
 }
 
 impl From<ContextError> for CompactionExecutionError {
@@ -63,11 +85,9 @@ impl From<ContextError> for CompactionExecutionError {
 /// Plans, summarizes, validates, durably commits, and installs one compaction.
 ///
 /// The caller exclusively owns `conversation` for the whole future. A
-/// cancellation or context error installs nothing. Success means the summary
-/// Ledger fact (structured body + deterministic metadata-derived file
-/// sections + typed `CompactionSummaryMetadata`), Surface replacement,
-/// checkpoint, and `CompactionCompleted` event were committed atomically
-/// before the hot state was updated.
+/// cancellation or context error installs nothing. Success means the typed
+/// checkpoint, activation/head, operation receipt and actual completion fact
+/// were committed atomically before the current durable head was installed.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(crate) async fn execute_compaction(
     conversation: &mut ConversationState,
@@ -84,39 +104,104 @@ pub(crate) async fn execute_compaction(
     if cancellation.is_cancelled() {
         return Err(cancelled("compaction cancelled before it began").into());
     }
-    let projection =
-        context
-            .engine
-            .build_projection(conversation, tools, observed, effective_system_prompt)?;
-    let mut budgets = context.compaction_budgets;
-    // The summary input budget is derived from a deterministic estimate, and
-    // an estimate can be wrong. When the summary model itself rejects the
-    // assembled request as too large, that rejection is the authoritative
-    // measurement: the compaction replans the same transition against a
-    // halved summary input budget instead of abandoning the conversation to
-    // the overflow that triggered it. Each shrink strictly reduces the
-    // budget, so the loop terminates.
-    let mut shrinks: u32 = 0;
-    let (plan, summary) = loop {
-        let plan = context.engine.plan_compaction(
-            conversation,
-            &projection,
+    let owner = store
+        .projection_owner(attribution.attempt_id.as_ref())
+        .map_err(resource_failure)?;
+    let history = store.projected_history().map_err(resource_failure)?;
+    let previous = store.projection_head().map_err(resource_failure)?;
+    if previous.as_ref().map(|p| &p.candidate.checkpoint_id) != history.cut.checkpoint_id.as_ref() {
+        return Err(CompactionExecutionError::Durable(
+            "projection changed during compaction capture".into(),
+        ));
+    }
+    let mut resources = crate::context::resources::CompactionResources::capture(
+        store,
+        crate::context::resources::ResourceLimits::default(),
+    )
+    .map_err(resource_failure)?;
+    let complete = crate::model::input::assemble_model_input(
+        &history.messages,
+        constraints.staged_request_context,
+        constraints.carryover,
+        constraints.carryover_anchor,
+    )
+    .map_err(|e| ContextError::new(ContextErrorKind::MalformedHistory, e))?;
+    let mut engine = context.engine.clone();
+    engine
+        .prepare_media(&history.messages, &complete, cancellation)
+        .await?;
+    let projection = engine.build_projection_input(
+        conversation.revision(),
+        history.messages.clone(),
+        tools,
+        observed,
+        effective_system_prompt,
+    );
+    let model_resources = crate::context::resources::CompactionModelResources {
+        context,
+        cancellation,
+    };
+    let mut budgets = model_resources.budgets();
+    let mut shrinks = 0;
+    let (retired_count, summary) = loop {
+        let n = super::planning::summary_prefix(
+            &engine,
+            &history.messages,
+            effective_system_prompt,
             tools,
             budgets,
             constraints,
-        )?;
-        let summary_request = plan.summary_request();
-        let summary = tokio::select! {
-            biased;
-            () = cancellation.cancelled() => {
-                return Err(cancelled("compaction cancelled while summarizing").into());
+            cancellation,
+        )
+        .await?;
+        // Inline provenance is a finite capability. Admit it before invoking
+        // the provider rather than generating a candidate we cannot commit.
+        let mut refs = std::collections::BTreeSet::new();
+        let mut retained_refs = 0usize;
+        for (index, item) in history.items.iter().enumerate() {
+            if index < n {
+                match &item.message {
+                    crate::context::checkpoint::CheckpointMessage::Original(r) => {
+                        refs.insert((r.conversation_id.clone(), r.message_id.clone()));
+                    }
+                    crate::context::checkpoint::CheckpointMessage::Derived(d)
+                        if !d.transformations.contains(&SemanticTransformation::Summary) =>
+                    {
+                        refs.extend(
+                            d.sources
+                                .iter()
+                                .map(|r| (r.conversation_id.clone(), r.message_id.clone())),
+                        );
+                    }
+                    crate::context::checkpoint::CheckpointMessage::Derived(_) => {}
+                }
+            } else {
+                retained_refs += item.call_sources.len();
+                if let crate::context::checkpoint::CheckpointMessage::Derived(d) = &item.message {
+                    retained_refs += d.sources.len() + d.checkpoint_sources.len();
+                }
             }
-            result = context
-                .summarizer
-                .summarize(summary_request, cancellation.child()) => result,
+        }
+        if refs.len() + retained_refs + usize::from(previous.is_some()) > 1024 {
+            return Err(ContextError::new(
+                ContextErrorKind::Internal,
+                "compaction provenance exceeds inline budget before summary invocation",
+            )
+            .into());
+        }
+        let request = crate::context::summarizer::SummaryRequest {
+            retired: history.messages[..n].to_vec(),
         };
-        match summary {
-            Ok(summary) => break (plan, summary),
+        let result = model_resources.summarize(request).await;
+        match result {
+            Ok(summary) if !summary.trim().is_empty() => break (n, summary),
+            Ok(_) => {
+                return Err(ContextError::new(
+                    ContextErrorKind::SummaryFailed,
+                    "summary generation produced no content",
+                )
+                .into());
+            }
             Err(error)
                 if error.kind == ContextErrorKind::SummaryInputTooLarge
                     && shrinks < MAX_SUMMARY_SHRINKS
@@ -129,81 +214,251 @@ pub(crate) async fn execute_compaction(
             Err(error) => return Err(error.into()),
         }
     };
-    if cancellation.is_cancelled() {
-        return Err(cancelled("compaction cancelled before the semantic commit").into());
+    let mut sources = std::collections::BTreeMap::new();
+    let mut checkpoint_sources = std::collections::BTreeMap::new();
+    let mut includes_previous_summary = false;
+    for message in &history.messages[..retired_count] {
+        match message {
+            crate::model::ModelInputMessage::Canonical(original) => {
+                let source = CanonicalMessageRef::of(conversation_id, original);
+                sources.insert(source.message_id.clone(), source);
+            }
+            crate::model::ModelInputMessage::Derived(derived) => {
+                if derived
+                    .transformations
+                    .contains(&SemanticTransformation::Summary)
+                {
+                    includes_previous_summary = true;
+                } else {
+                    for source in &derived.sources {
+                        sources.insert(source.message_id.clone(), source.clone());
+                    }
+                    for source in &derived.checkpoint_sources {
+                        checkpoint_sources.insert(source.checkpoint_id.clone(), source.clone());
+                    }
+                }
+            }
+            crate::model::ModelInputMessage::RequestOnly(_) => {
+                return Err(CompactionExecutionError::Durable(
+                    "core-owned input entered historical compaction".into(),
+                ));
+            }
+        }
     }
-
-    let (prepared, projection) =
-        context
-            .engine
-            .prepare_compaction(conversation, conversation_id, &plan, &summary, tools)?;
-    let summary_block = prepared.summary_block();
-    let exact_after = context.engine.estimate_with_staged_context_and_carryover(
-        &projection,
+    if let Some(previous) = &previous
+        && includes_previous_summary
+    {
+        let source = CheckpointSourceRef {
+            conversation_id: conversation_id.clone(),
+            checkpoint_id: previous.candidate.checkpoint_id.clone(),
+            content_digest: previous.fingerprint.clone(),
+        };
+        checkpoint_sources.insert(source.checkpoint_id.clone(), source);
+    }
+    let ids: Vec<_> = sources.keys().cloned().collect();
+    let mut canonical_sources = Vec::new();
+    for ids in ids.chunks(64) {
+        canonical_sources.extend(
+            resources
+                .originals(ids)
+                .map_err(resource_failure)?
+                .rows
+                .into_iter()
+                .map(|(_, m)| m),
+        );
+    }
+    let physical_metadata =
+        crate::context::compaction_metadata::retired_span_metadata(&canonical_sources);
+    let inherited_metadata = previous
+        .as_ref()
+        .filter(|_| includes_previous_summary)
+        .and_then(|p| p.candidate.summary_metadata.as_ref());
+    let metadata = crate::message::types::CompactionSummaryMetadata::accumulate(
+        inherited_metadata,
+        physical_metadata.read_files().to_vec(),
+        physical_metadata.modified_files().to_vec(),
+    );
+    let derived = DerivedModelMessage {
+        message: ProjectedMessage::User {
+            content: vec![crate::message::types::UserContentBlock::Text(
+                crate::message::content::TextBlock {
+                    text: crate::context::compaction_metadata::render_summary_text(
+                        &summary, &metadata,
+                    ),
+                },
+            )],
+            source: crate::message::types::UserSource::Runtime,
+            kind: crate::model::projected::ProjectedUserKind::CompactionContext,
+            timestamp: None,
+        },
+        sources: sources.into_values().collect(),
+        checkpoint_sources: checkpoint_sources.into_values().collect(),
+        transformations: vec![SemanticTransformation::Summary],
+    };
+    let checkpoint_id =
+        crate::runtime::identity::CheckpointId::new(uuid::Uuid::now_v7().to_string());
+    let mut items = vec![CheckpointItem {
+        message: CheckpointMessage::Derived(Box::new(derived)),
+        call_sources: Vec::new(),
+        result_call: None,
+    }];
+    for mut item in history.items.into_iter().skip(retired_count) {
+        if let Some(call) = &mut item.result_call {
+            call.message.checkpoint_id = checkpoint_id.clone();
+            call.message.item_index = call
+                .message
+                .item_index
+                .checked_sub(u32::try_from(retired_count).map_err(|_| {
+                    CompactionExecutionError::Durable("checkpoint occurrence overflow".into())
+                })?)
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| {
+                    CompactionExecutionError::Durable("retained result crosses retired call".into())
+                })?;
+        }
+        items.push(item);
+    }
+    let candidate = CheckpointCandidate {
+        checkpoint_id,
+        expected_head: history.cut.checkpoint_id,
+        read_cut: resources.cut().clone(),
+        base_frontier: history.cut.ledger,
+        items,
+        summary_metadata: Some(metadata),
+    };
+    let compiled =
+        crate::context::checkpoint::compile_checkpoint(&candidate, |source, body_required| {
+            resources
+                .dependency(source, body_required)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(|e| {
+            CompactionExecutionError::Context(ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                e,
+            ))
+        })?;
+    let after_projection = engine.build_projection_input(
+        conversation.revision(),
+        compiled.messages,
+        tools,
+        None,
+        effective_system_prompt,
+    );
+    let after = engine.estimate_with_staged_context_and_carryover(
+        &after_projection,
         constraints.staged_request_context,
         tools,
         constraints.carryover,
         constraints.carryover_anchor,
     );
-    // The exact post-compaction fit is checked against the same corrected
-    // budget the plan was built with: after a provider has proven this
-    // runtime's estimate optimistic, a plan that only fits the uncorrected
-    // limit is not a plan that fits.
-    let mut soft_limit = context
-        .engine
-        .soft_input_limit(budgets.primary_output_budget)?;
+    let mut limit = engine.soft_input_limit(budgets.primary_output_budget)?;
     if let Some(correction) = constraints.estimate_correction {
-        soft_limit = correction.apply(soft_limit);
+        limit = correction.apply(limit);
     }
-    let fits = exact_after < soft_limit;
-    if !fits {
+    if after >= limit {
         return Err(ContextError::new(
             ContextErrorKind::CannotFit,
-            "the compacted surface still exceeds the soft input limit",
+            "the compacted projection exceeds the soft input limit",
         )
         .into());
     }
-
-    let expected_revision = prepared.expected_revision();
-    let (durable_revision, durable_generation, persisted_event, transcript_cursor) = store
-        .commit_compaction(CompactionCommitInput {
-            summary: prepared.summary().clone(),
-            span: prepared.span().clone(),
-            expected_revision,
-            tokens_before: plan.estimated_before,
-            estimated_tokens_after: projection.estimated_input.input_tokens,
-            occupancy: Some(crate::context::occupancy::estimate(
-                // The validated primary request also includes staged context
-                // and any unresolved-output carryover, not only its Surface.
-                exact_after,
-                context.engine.config().context_window_tokens,
-                &context.primary_model,
-                &projection.effective_system_prompt,
-                tools,
-            )),
-            attempt_id: attribution.attempt_id,
-            turn_id: attribution.turn_id,
-            timestamp: Utc::now(),
-        })
-        .map_err(|error| CompactionExecutionError::Durable(error.to_string()))?;
-    if durable_revision != expected_revision.next() {
-        return Err(CompactionExecutionError::Durable(
-            "durable compaction returned an unexpected Surface revision".to_owned(),
-        ));
+    // Progress belongs to historical selection alone. Core-owned staged Context,
+    // carryover, prompt/tool overhead and provider observations cannot certify a
+    // growing historical projection as a successful compaction.
+    let history_before = engine.estimate_model_input(&projection.messages, "", &[]);
+    let history_after = engine.estimate_model_input(&after_projection.messages, "", &[]);
+    if history_after >= history_before {
+        return Err(ContextError::new(
+            ContextErrorKind::NoProgress,
+            "summary does not decrease historical input",
+        )
+        .into());
     }
-    let record = conversation.install_prepared_compaction(prepared);
-    debug_assert_eq!(record.generation, durable_generation);
-    debug_assert!(matches!(
-        persisted_event.event,
-        RuntimeEvent::CompactionCompleted { .. }
-    ));
-    Ok(ExecutedCompaction {
-        summary_block,
-        persisted_event,
-        transcript_cursor,
-    })
+    let grant = cancellation
+        .authorize_compaction_commit(attribution.operation_id.clone())
+        .ok_or_else(|| cancelled("compaction cancelled before commit authorization"))?;
+    let fingerprint = candidate.fingerprint();
+    let owner_for_install = owner.clone();
+    let input = crate::durable::projection::ProjectionCommitInput {
+        grant,
+        operation_id: attribution.operation_id.clone(),
+        candidate,
+        owner,
+        tokens_before: projection.estimated_input,
+        estimated_tokens_after: after_projection.estimated_input.input_tokens,
+        occupancy: Some(crate::context::occupancy::estimate(
+            after,
+            engine.config().context_window_tokens,
+            &context.primary_model,
+            effective_system_prompt,
+            tools,
+        )),
+        turn_id: attribution.turn_id,
+        timestamp: Utc::now(),
+    };
+    let receipt = match store.commit_projection(input) {
+        Ok(receipt) => receipt,
+        Err(error) => match store.projection_receipt(&attribution.operation_id, &fingerprint) {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return Err(CompactionExecutionError::Durable(error.to_string())),
+            Err(lookup) => {
+                return Err(CompactionExecutionError::Durable(format!(
+                    "uncertain checkpoint commit: {error}; lookup: {lookup}"
+                )));
+            }
+        },
+    };
+    let completed = ExecutedCompaction {
+        persisted_event: receipt.completed,
+    };
+    let reload_current = || -> Result<ConversationState, String> {
+        if store
+            .projection_owner(attribution.attempt_id.as_ref())
+            .map_err(|e| e.to_string())?
+            != owner_for_install
+        {
+            return Err("execution ownership changed before current-head installation".into());
+        }
+        let current = store.projected_history().map_err(|e| e.to_string())?;
+        let messages: Vec<_> = current
+            .messages
+            .into_iter()
+            .filter_map(|m| m.as_canonical().cloned())
+            .collect();
+        let ids = messages.iter().map(|m| m.id().clone()).collect();
+        ConversationState::from_durable_head(
+            messages,
+            ids,
+            crate::conversation::SurfaceRevision::new(current.cut.ledger.0),
+            current.cut.activation.0,
+        )
+        .map_err(|e| e.to_string())
+    };
+    // A transient hot read/install failure gets one authoritative reconciliation.
+    // Both reads fence ownership and load the current head, never the old receipt.
+    let installed = reload_current().or_else(|_| reload_current());
+    match installed {
+        Ok(current) => {
+            *conversation = current;
+            Ok(completed)
+        }
+        Err(error) => Err(CompactionExecutionError::Committed {
+            completed: Box::new(completed),
+            error,
+        }),
+    }
 }
 
 fn cancelled(message: &str) -> ContextError {
     ContextError::new(ContextErrorKind::Cancelled, message)
+}
+
+fn resource_failure(error: crate::durable::ConversationStoreError) -> CompactionExecutionError {
+    match error {
+        crate::durable::ConversationStoreError::ResourceBoundExceeded(message) => {
+            ContextError::new(ContextErrorKind::CannotFit, message).into()
+        }
+        error => CompactionExecutionError::Durable(error.to_string()),
+    }
 }

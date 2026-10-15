@@ -86,6 +86,10 @@ export const COMMANDS: readonly CommandSpec[] = [
       "Show the latest runtime-composed Agent Status in full. Runtime and client diagnostics are in /debug.",
   },
   {
+    name: "/context",
+    description: "Inspect historical model projections: history [activation] or projection <checkpoint> [offset].",
+  },
+  {
     name: "/compact",
     description: "Manually compact canonical conversation context while the runtime is idle.",
   },

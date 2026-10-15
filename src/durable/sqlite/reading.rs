@@ -161,6 +161,18 @@ pub(super) fn local_prompt_sql() -> String {
     )
 }
 
+pub(super) fn attempt_prompt(
+    connection: &Connection,
+    attempt: &AttemptId,
+    through: u64,
+) -> Result<Option<MessageId>, ConversationStoreError> {
+    let started:Option<i64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence LIMIT 1",params![attempt.as_str(),seq_to_i64(through)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+    started
+        .map(|sequence| local_prompt(connection, attempt, sequence, through))
+        .transpose()
+        .map(|prompt| prompt.flatten().map(|(id, _)| id))
+}
+
 /// The earliest eligible input adopted by this Attempt or while idle between
 /// the previous and current starts. Previous-Attempt steering keeps its owner.
 fn local_prompt(
@@ -625,7 +637,7 @@ fn turn_execution(
             | E::ToolExecutionFailed { tool_call_id, .. } => {
                 activity.tool_settled(attempt.clone(), tool_call_id, event.timestamp);
             }
-            E::CompactionStarted | E::CompactionCompleted { .. } => boundary = None,
+            E::CompactionStarted { .. } | E::CompactionCompleted { .. } => boundary = None,
             E::AssistantMessageCommitted { .. } => closing = true,
             E::AttemptCompleted {
                 finish_reason: ModelFinishReason::Stop | ModelFinishReason::Refusal,

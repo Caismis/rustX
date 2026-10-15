@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
-import { Server, snapshot } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v47';
+import { Server, snapshot, projectionHead } from './fixture';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v49';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -158,14 +158,15 @@ it('a committed checkpoint owns the completed notice even outside the loaded his
   const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
   await observe({ ...base, compaction_count: 1,
     manual_compaction: { request_id: requestId, released: true, error: null },
-    latest_compaction: { generation: '1', summary_message_id: 'checkpoint-outside-window', surface_revision: '4',
+    projection_head: { ...projectionHead(), checkpoint_id: 'checkpoint-outside-window', activation_id: '4' },
+    latest_compaction: { generation: '1', checkpoint_id: 'checkpoint-outside-window', activation_id: '4',
       tokens_before: { input_tokens: 100, source: 'provider_reported' }, estimated_tokens_after: 20 },
   });
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
-  expect(view.container.innerHTML).toBe('');
+  expect(view.container.querySelector('[data-projection-checkpoint="checkpoint-outside-window"]')).not.toBeNull();
   // A new mounting (as after navigating back to this conversation) cannot
   // turn the immutable historical checkpoint into a composer status again.
   view.unmount();
   const again = render(<ContextSeat client={server.client} sessionId="A"/>);
-  expect(again.container.innerHTML).toBe('');
+  expect(again.container.querySelector('[data-projection-checkpoint="checkpoint-outside-window"]')).not.toBeNull();
 });

@@ -354,6 +354,9 @@ fn reconstructed_request_text(model: &Arc<FakeModel>) -> String {
             ModelInputMessage::RequestOnly(context) => {
                 serde_json::to_string(context).expect("request-only context serializes")
             }
+            ModelInputMessage::Derived(context) => {
+                serde_json::to_string(context).expect("derived context serializes")
+            }
         })
         .collect()
 }

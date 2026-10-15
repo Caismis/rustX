@@ -47,7 +47,7 @@ use support::context::ScriptedEstimator;
 use support::context::{FakeContextSummarizer, FakeSummaryStep};
 use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 
-use super::compaction_metadata::{file_operation_history, metadata_of, text_of, user as md_user};
+use super::compaction_metadata::{file_operation_history, user as md_user};
 
 /// The engine used by the pipeline regressions: a large window so planning
 /// admits the full active prefix unless a test sizes it down deliberately.
@@ -169,7 +169,10 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         Arc::new(rustx::runtime::SystemMonotonicClock::new()),
     );
     let request = SummaryRequest {
-        retired: vec![user_message("u1", "hi")],
+        retired: (vec![user_message("u1", "hi")])
+            .into_iter()
+            .map(Into::into)
+            .collect(),
     };
     let text = summarizer
         .summarize(request.clone(), rustx::runtime::CancellationSignal::new())
@@ -188,10 +191,11 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
     assert!(requests[0].tools.is_empty());
     assert_eq!(requests[0].effective_system_prompt, "");
     assert_eq!(requests[0].continuation, None);
-    let Some(MessageBlock::User(user)) = requests[0].messages[0].as_canonical() else {
+    let rustx::model::projected::ModelMessageView::User(content) = requests[0].messages[0].view()
+    else {
         panic!("summary instruction must be a user message");
     };
-    let text = match &user.content[0] {
+    let text = match &content[0] {
         UserContentBlock::Text(block) => &block.text,
         _ => panic!("summary instruction must be text"),
     };
@@ -227,10 +231,7 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         text.contains("<retired-conversation>"),
         "the retired span must be delimited for the summary model"
     );
-    assert_eq!(
-        requests[0].messages,
-        rustx::model::input::canonical_input(&request.model_input().messages)
-    );
+    assert_eq!(requests[0].messages, request.model_input().messages);
 }
 
 /// A refusal, a tool request, and a model failure are compaction failures,
@@ -276,7 +277,10 @@ async fn model_backed_summarizer_rejects_invalid_streams() {
             Arc::new(rustx::runtime::SystemMonotonicClock::new()),
         );
         let request = SummaryRequest {
-            retired: vec![user_message("u1", "hi")],
+            retired: (vec![user_message("u1", "hi")])
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         };
         let error = summarizer
             .summarize(request, rustx::runtime::CancellationSignal::new())
@@ -317,7 +321,10 @@ async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output(
             Arc::new(rustx::runtime::SystemMonotonicClock::new()),
         );
         let request = SummaryRequest {
-            retired: vec![user_message("u1", "hi")],
+            retired: (vec![user_message("u1", "hi")])
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         };
         let error = summarizer
             .summarize(request, rustx::runtime::CancellationSignal::new())
@@ -362,7 +369,10 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
             Arc::new(rustx::runtime::SystemMonotonicClock::new()),
         );
         let request = SummaryRequest {
-            retired: vec![user_message("u1", "hi")],
+            retired: (vec![user_message("u1", "hi")])
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         };
         let error = summarizer
             .summarize(request, rustx::runtime::CancellationSignal::new())
@@ -383,7 +393,10 @@ async fn model_backed_summarizer_aborts_on_cancellation() {
     );
     let cancellation = rustx::runtime::CancellationSignal::new();
     let request = SummaryRequest {
-        retired: vec![user_message("u1", "hi")],
+        retired: (vec![user_message("u1", "hi")])
+            .into_iter()
+            .map(Into::into)
+            .collect(),
     };
     let mut parked = model.parked();
     let controller_cancellation = cancellation.clone();
@@ -457,19 +470,13 @@ async fn run_pipeline(
     )
     .await;
     if result.is_ok() {
-        // The hot state installed the committed summary exactly once.
-        let summaries: Vec<_> = state
-            .active_messages()
-            .expect("active")
-            .into_iter()
-            .filter(|message| {
-                matches!(
-                    message,
-                    MessageBlock::User(user) if user.kind.is_compaction_summary()
-                )
-            })
-            .collect();
-        assert_eq!(summaries.len(), 1, "one summary joins the active surface");
+        assert_eq!(
+            store.load_canonical().unwrap(),
+            history,
+            "compaction preserves canonical history without a summary insertion"
+        );
+        let compiled = store.projected_history().unwrap();
+        assert!(compiled.messages.iter().any(|m|matches!(m, rustx::model::ModelInputMessage::Derived(d) if d.transformations.contains(&rustx::model::projected::SemanticTransformation::Summary))));
     }
     result
 }
@@ -484,16 +491,13 @@ fn assert_no_transition(store: &dyn ConversationStore, history: &[MessageBlock])
         "the durable Surface revision is untouched"
     );
     assert_eq!(head.compaction_generation, 0);
+    assert_eq!(store.load_canonical().unwrap(), history);
+    assert!(store.projection_head().unwrap().is_none());
     assert!(
-        !store
-            .load_canonical()
-            .expect("canonical")
-            .iter()
-            .any(|message| matches!(
-                message,
-                MessageBlock::User(user) if user.kind.is_compaction_summary()
-            )),
-        "no canonical summary was committed"
+        store
+            .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -509,37 +513,38 @@ async fn committed_compaction_round_trips_through_the_durable_store() {
         "## Goal\n\nShip the feature.".to_owned(),
     )]));
     let context = runtime(10_000, summarizer);
-    let committed_text;
-    let committed_metadata;
+    let receipt;
     {
         let store = SqliteConversationStore::open(conversation(), &path).expect("open store");
         let executed = run_pipeline(&history, &store, &context, &CancellationSignal::new())
             .await
             .expect("compaction commits");
-        let MessageBlock::User(summary) = &executed.summary_block else {
-            panic!("a compaction commits a canonical User summary");
-        };
-        committed_text = text_of(summary).to_owned();
-        committed_metadata = metadata_of(summary).clone();
+        assert!(matches!(
+            executed.persisted_event.event,
+            rustx::events::RuntimeEvent::CompactionCompleted { .. }
+        ));
+        receipt = store.projection_head().unwrap().unwrap();
+        assert_eq!(store.load_canonical().unwrap(), history);
     }
     let reopened = SqliteConversationStore::open(conversation(), &path).expect("reopen store");
-    let canonical = reopened.load_canonical().expect("load canonical");
-    let summary = canonical
-        .iter()
-        .find_map(|message| match message {
-            MessageBlock::User(user) if user.kind.is_compaction_summary() => Some(user),
-            _ => None,
-        })
-        .expect("the summary survives restart");
-    assert_eq!(text_of(summary), committed_text);
-    assert_eq!(metadata_of(summary), &committed_metadata);
-    assert_eq!(metadata_of(summary).read_files(), &["/src/a.rs".to_owned()]);
+    assert_eq!(reopened.projection_head().unwrap().unwrap(), receipt);
+    assert_eq!(reopened.load_canonical().unwrap(), history);
+    let metadata = receipt
+        .candidate
+        .summary_metadata
+        .as_ref()
+        .expect("trusted metadata");
+    assert_eq!(metadata.read_files(), &["/src/a.rs".to_owned()]);
     assert_eq!(
-        metadata_of(summary).modified_files(),
+        metadata.modified_files(),
         &["/src/b.rs".to_owned(), "/src/c.rs".to_owned()]
     );
-    let head = reopened.load_head().expect("durable head");
-    assert_eq!(head.compaction_generation, 1);
+    let history = reopened.projected_history().unwrap();
+    assert!(history.messages[0].canonical_id().is_none());
+    assert_eq!(
+        history.cut.activation,
+        crate::context::checkpoint::ProjectionActivationId(1)
+    );
 }
 
 /// A summary-model failure installs no part of the transition.
@@ -620,13 +625,91 @@ async fn cannot_fit_after_summary_installs_nothing() {
     assert_no_transition(&store, &history);
 }
 
+/// Core-owned overlay cost cannot turn an expanding historical projection into progress.
+#[tokio::test]
+async fn staged_context_cannot_mask_historical_summary_growth() {
+    for with_staged in [false, true] {
+        let history = vec![user_message("u1", "old"), user_message("u2", "old")];
+        let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+        store.initialize(&history).unwrap();
+        let mut state = ConversationState::from_messages(history.clone()).unwrap();
+        let estimator = rustx::context::ClosureTokenEstimator::new(|messages, _, _| {
+            messages
+                .iter()
+                .map(|message| {
+                    let text = serde_json::to_string(&message.view()).unwrap();
+                    if text.contains("STAGED") {
+                        1000
+                    } else if text.contains("GROWING") {
+                        100
+                    } else {
+                        10
+                    }
+                })
+                .sum()
+        });
+        let context = ContextRuntime::with_scripted_summarizer(
+            ContextEngine::new(
+                ContextConfig {
+                    context_window_tokens: 10_000,
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                },
+                Arc::new(estimator),
+            )
+            .unwrap(),
+            Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+                "GROWING".into(),
+            )])),
+            None,
+            CompactionBudgets::new(1, 1, 1_000_000),
+        );
+        let mut staged = user_message("ctx", "STAGED");
+        let MessageBlock::User(user) = &mut staged else {
+            unreachable!()
+        };
+        user.source = UserSource::Runtime;
+        user.kind = InboundKind::Context(rustx::message::types::ContextKind::NativeEnvironment);
+        let constraints = CompactionConstraints {
+            staged_request_context: if with_staged {
+                std::slice::from_ref(&staged)
+            } else {
+                &[]
+            },
+            ..CompactionConstraints::default()
+        };
+        let result = crate::context::compaction::execute_compaction(
+            &mut state,
+            &context,
+            &conversation(),
+            &store,
+            &[],
+            None,
+            "",
+            &constraints,
+            &CancellationSignal::new(),
+            crate::context::compaction::CompactionAttribution::default(),
+        )
+        .await;
+        assert!(
+            matches!(result,
+                Err(crate::context::compaction::CompactionExecutionError::Context(error))
+                    if error.kind == ContextErrorKind::NoProgress
+            ),
+            "staged Context must never certify growth of historical input as progress"
+        );
+        assert_no_transition(&store, &history);
+        assert!(store.projection_head().unwrap().is_none());
+    }
+}
+
 /// A durable commit failure installs nothing, in either authority.
 #[tokio::test]
 async fn durable_commit_failure_installs_nothing() {
     let history = file_operation_history();
     let store = SqliteConversationStore::in_memory(conversation()).expect("store");
     store.arm_compaction_fault_script([
-        crate::durable::sqlite::CompactionFaultOperation::BeforeSummaryInsert,
+        crate::durable::sqlite::CompactionFaultOperation::BeforeContentInsert,
     ]);
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "## Goal\n\nShip the feature.".to_owned(),
@@ -638,4 +721,192 @@ async fn durable_commit_failure_installs_nothing() {
         Err(crate::context::compaction::CompactionExecutionError::Durable(_))
     ));
     assert_no_transition(&store, &history);
+}
+
+/// SQLite commit is the linearization point. O1's receipt is parked only after
+/// the Journal observer is staged and the connection released; O2 commits before
+/// O1 can install hot state. The pipeline must install O2, never its own old P1.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delayed_older_receipt_installs_current_projection_head() {
+    use rustx::runtime::identity::{CheckpointId, CompactionOperationId};
+    let store = Arc::new(SqliteConversationStore::in_memory(conversation()).unwrap());
+    let history = vec![user_message("history", "immutable fact")];
+    store.initialize(&history).unwrap();
+    let context = runtime(
+        10_000,
+        Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+            "first summary".into(),
+        )])),
+    );
+    let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    store.arm_projection_commit_return_probe(move || {
+        committed_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    let worker_store = store.clone();
+    let worker = tokio::spawn(async move {
+        let mut state = ConversationState::from_messages(history).unwrap();
+        let completed = crate::context::compaction::execute_compaction(
+            &mut state,
+            &context,
+            &conversation(),
+            worker_store.as_ref(),
+            &[],
+            None,
+            "",
+            &CompactionConstraints::default(),
+            &CancellationSignal::new(),
+            crate::context::compaction::CompactionAttribution::default(),
+        )
+        .await
+        .unwrap();
+        (state, completed)
+    });
+    committed_rx.await.unwrap();
+    let first = store.projection_head().unwrap().unwrap();
+    let mut candidate = first.candidate.clone();
+    candidate.checkpoint_id = CheckpointId::new("newer-head");
+    candidate.expected_head = Some(first.candidate.checkpoint_id.clone());
+    candidate.read_cut = store.compaction_resource_cut().unwrap();
+    let operation = CompactionOperationId::new("newer-operation");
+    let signal = CancellationSignal::new();
+    let second = store
+        .commit_projection(rustx::durable::projection::ProjectionCommitInput {
+            grant: signal
+                .authorize_compaction_commit(operation.clone())
+                .unwrap(),
+            operation_id: operation,
+            candidate,
+            owner: store.projection_owner(None).unwrap(),
+            tokens_before: rustx::runtime::types::TokenMeasurement {
+                input_tokens: 100,
+                source: rustx::runtime::types::TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 10,
+            occupancy: first.occupancy,
+            turn_id: None,
+            timestamp: chrono::Utc::now(),
+        })
+        .unwrap();
+    release_tx.send(()).unwrap();
+    let (state, completed) = worker.await.unwrap();
+    assert_eq!(
+        state.surface().compaction_generation(),
+        second.checkpoint.activation.activation.0
+    );
+    assert_eq!(store.projection_head().unwrap().unwrap(), second.checkpoint);
+    assert_ne!(
+        completed.persisted_event.event_id, second.completed.event_id,
+        "O1 retains its historical completion; hot installation selects current authority"
+    );
+}
+
+#[tokio::test]
+async fn cancellation_observed_during_planning_starts_no_summary_and_commits_nothing() {
+    let history = file_operation_history();
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "must not run".into(),
+    )]));
+    let (planning, mut entered) = tokio::sync::watch::channel(false);
+    let estimator = rustx::context::ClosureTokenEstimator::new(move |messages, _, _| {
+        if messages
+            .iter()
+            .any(|m| matches!(m, rustx::model::ModelInputMessage::Derived(_)))
+        {
+            planning.send_replace(true);
+        }
+        10
+    });
+    let e = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 10_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(estimator),
+    )
+    .unwrap();
+    let context = ContextRuntime::with_scripted_summarizer(
+        e,
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(1, 1, 10_000),
+    );
+    let cancellation = CancellationSignal::new();
+    let controller = cancellation.clone();
+    let cancel = async move {
+        entered.wait_for(|value| *value).await.unwrap();
+        // The planner yields after the first complete estimate, before the
+        // next evaluation or summary admission. The owner wins here.
+        controller.cancel();
+    };
+    let (result, ()) = tokio::join!(
+        run_pipeline(&history, &store, &context, &cancellation),
+        cancel
+    );
+    assert!(
+        matches!(result, Err(crate::context::compaction::CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::Cancelled)
+    );
+    assert!(summarizer.requests().is_empty());
+    assert_no_transition(&store, &history);
+    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+}
+
+#[tokio::test]
+async fn n1_incomplete_search_invokes_no_summary_and_leaves_no_durable_transition() {
+    let history: Vec<_> = (1..=129)
+        .map(|n| user_message(&format!("M{n}"), "history"))
+        .collect();
+    let store = SqliteConversationStore::in_memory(conversation()).unwrap();
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "must not run".into(),
+    )]));
+    let engine = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 100,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(rustx::context::ClosureTokenEstimator::new(|_, _, _| 1000)),
+    )
+    .unwrap();
+    let context = ContextRuntime::with_scripted_summarizer(
+        engine,
+        summarizer.clone(),
+        None,
+        CompactionBudgets::new(0, 1, 10),
+    );
+    store.initialize(&history).unwrap();
+    let mut state = ConversationState::from_messages(history.clone()).unwrap();
+    let operation = rustx::runtime::identity::CompactionOperationId::new("n1-incomplete");
+    let result = crate::context::compaction::execute_compaction(
+        &mut state,
+        &context,
+        &conversation(),
+        &store,
+        &[],
+        None,
+        "",
+        &CompactionConstraints::default(),
+        &CancellationSignal::new(),
+        crate::context::compaction::CompactionAttribution {
+            operation_id: operation.clone(),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        matches!(result, Err(crate::context::compaction::CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::SearchIncomplete)
+    );
+    assert!(summarizer.requests().is_empty());
+    assert_no_transition(&store, &history);
+    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    assert!(
+        store
+            .projection_receipt(&operation, "unused")
+            .unwrap()
+            .is_none()
+    );
 }

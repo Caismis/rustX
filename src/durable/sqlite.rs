@@ -28,8 +28,7 @@ use std::sync::atomic::AtomicUsize;
 
 use sha2::{Digest, Sha256};
 
-use crate::context::TokenEstimator;
-use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
+use crate::conversation::{SurfaceOp, SurfaceRevision};
 use crate::events::interaction::{
     InteractionSubject, interaction_arguments_digest, validate_interaction_settlement,
     validate_interaction_subject,
@@ -57,12 +56,12 @@ use crate::runtime::inbound::InboundSequence;
 use crate::runtime::process_death;
 
 use super::inbox::{
-    AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ContributionEmissionRecord,
-    ConversationStore, ConversationStoreError, DurableConversationHead, EventPage, InboundDraft,
-    LineageSeed, ModelTurnStartCommit, ModelTurnStartCommitDisposition, PendingBatch,
-    PendingInboundItem, RequestSnapshotPage, SurfaceUserMessageBoundary,
-    SurfaceUserMessageBoundaryPage, TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt,
-    TranscriptCursor, TranscriptEntry, TranscriptItem, TranscriptPage,
+    AcceptedInbound, CanonicalMessagePage, ContributionEmissionRecord, ConversationStore,
+    ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, LineageSeed,
+    ModelTurnStartCommit, ModelTurnStartCommitDisposition, PendingBatch, PendingInboundItem,
+    RequestSnapshotPage, SurfaceUserMessageBoundary, SurfaceUserMessageBoundaryPage,
+    TRANSCRIPT_PAGE_LIMIT_MAX, TranscriptCommitReceipt, TranscriptCursor, TranscriptEntry,
+    TranscriptItem, TranscriptPage,
 };
 
 /// Process-wide count of `ConversationStore` open-path entries
@@ -321,7 +320,11 @@ fn count_conversation_store_open() {
 /// Session workspace ownership and removes Candidate/worktree lifecycle facts.
 /// Version 57 requires the immutable inherited transcript watermark in bootstrap identity.
 /// Earlier development stores are rejected without migration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 57;
+/// Version 59 replaces canonical summary/Surface replacement ownership with
+/// independently durable typed checkpoints, historical activations, operation
+/// receipts and exact frozen request manifests. Earlier stores are refused.
+/// Version 60 normalizes immutable activation eligibility and installed prefix authority.
+pub const SQLITE_SCHEMA_VERSION: i64 = 60;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -334,21 +337,27 @@ pub(crate) enum AdmissionFaultOperation {
 }
 
 /// One scripted compaction-stage fault used by atomicity regressions.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompactionFaultOperation {
-    /// Fail before the summary Ledger insert.
-    BeforeSummaryInsert,
-    /// Fail after the summary Ledger insert has staged.
-    AfterSummaryInsert,
-    /// Fail after the immutable Surface Replace has staged.
-    AfterSurfaceRevision,
-    /// Fail after the Surface/checkpoint head metadata has staged.
-    AfterCheckpoint,
+    /// Fail before immutable checkpoint content insertion.
+    BeforeContentInsert,
+    /// Fail after immutable checkpoint content has staged.
+    AfterContentInsert,
+    /// Fail after the historical projection activation has staged.
+    AfterActivationInsert,
+    /// Fail after the Projection Head transition has staged.
+    AfterHeadTransition,
     /// Fail before the Event Journal insert.
-    BeforeEventInsert,
+    BeforeCompletionInsert,
     /// Fail after the Event Journal fact has staged.
-    AfterEventInsert,
+    AfterCompletionInsert,
+    AfterReceiptInsert,
+    #[cfg(test)]
+    AfterCommit,
+    #[cfg(test)]
+    AfterCommitOneHotReadFailure,
+    #[cfg(test)]
+    AfterCommitTwoHotReadFailures,
 }
 
 /// One scripted model-turn-start-stage fault used by atomicity regressions
@@ -363,7 +372,7 @@ pub(crate) enum RequestStartFaultOperation {
     /// Fail after the immutable Request Snapshot insert has staged.
     AfterSnapshotInsert,
     /// Fail after the `ModelRequestStarted` Event Journal fact has staged.
-    AfterEventInsert,
+    AfterCompletionInsert,
     /// Fail after the contribution emission fact has staged.
     AfterContributionEventInsert,
     /// Fail after the latest-emission head has staged.
@@ -393,9 +402,11 @@ pub struct SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fail_select_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
-    pub(crate) fail_compaction_remaining: Arc<AtomicUsize>,
-    #[cfg(test)]
     pub(crate) checkpoint_read_counts: Arc<[AtomicUsize; 3]>,
+    #[cfg(test)]
+    fail_projection_history_remaining: AtomicUsize,
+    #[cfg(test)]
+    projection_commit_return_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     pub(crate) fail_event_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -555,6 +566,26 @@ impl Drop for StoreGuard<'_> {
 }
 
 impl SqliteConversationStore {
+    /// Select projection eligibility at the message boundary inside the same read transaction.
+    pub(crate) fn read_message_lineage_cut(
+        &self,
+        revision: SurfaceRevision,
+        message: &MessageId,
+        include: bool,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        lineage::read_at(
+            &transaction,
+            &self.conversation_id,
+            revision,
+            None,
+            Some((message, include)),
+        )
+    }
+
     /// Bound a management traversal while unrelated execution may append events.
     pub(crate) fn event_high_watermark(&self) -> Result<u64, ConversationStoreError> {
         self.lock()?
@@ -619,6 +650,7 @@ impl SqliteConversationStore {
         // Refuse obsolete development state before changing journal settings.
         reject_legacy_schema(&connection)?;
         if has_table(&connection, "rustx_store")? {
+            register_integrity_function(&connection)?;
             validate_existing_schema(&connection)?;
         }
         configure_connection(&mut connection, false)?;
@@ -696,6 +728,7 @@ impl SqliteConversationStore {
                 "existing-only management requires rollback-journal storage",
             ));
         }
+        register_integrity_function(&connection)?;
         validate_existing_schema(&connection)?;
         let stored: String = connection
             .query_row(
@@ -774,9 +807,11 @@ impl SqliteConversationStore {
             #[cfg(test)]
             fail_select_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
-            fail_compaction_remaining: Arc::new(AtomicUsize::new(0)),
-            #[cfg(test)]
             checkpoint_read_counts: Arc::new(std::array::from_fn(|_| AtomicUsize::new(0))),
+            #[cfg(test)]
+            fail_projection_history_remaining: AtomicUsize::new(0),
+            #[cfg(test)]
+            projection_commit_return_probe: Mutex::new(None),
             #[cfg(test)]
             fail_event_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -890,12 +925,6 @@ impl SqliteConversationStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn arm_fail_compaction_times(&self, count: usize) {
-        self.fail_compaction_remaining
-            .fetch_add(count, Ordering::SeqCst);
-    }
-
-    #[cfg(test)]
     pub(crate) fn arm_fail_event_times(&self, count: usize) {
         self.fail_event_remaining.fetch_add(count, Ordering::SeqCst);
     }
@@ -942,6 +971,15 @@ impl SqliteConversationStore {
             .lock()
             .expect("compaction fault script lock")
             .extend(operations);
+    }
+
+    /// Park after durable commit and Journal staging, before returning the receipt.
+    #[cfg(test)]
+    pub(crate) fn arm_projection_commit_return_probe(&self, probe: impl FnOnce() + Send + 'static) {
+        *self
+            .projection_commit_return_probe
+            .lock()
+            .expect("projection return probe") = Some(Box::new(probe));
     }
 
     #[cfg(test)]
@@ -1012,6 +1050,7 @@ impl SqliteConversationStore {
     /// request-scoped canonical context, the frozen snapshot, the
     /// `ModelRequestStarted` event, and the sequence binding (Issue #12,
     /// M9b).
+    #[allow(clippy::too_many_lines)] // One atomic start transition, contribution settlement and native reference validation.
     fn insert_fresh_start_tx(
         &self,
         transaction: &rusqlite::Transaction<'_>,
@@ -1042,19 +1081,61 @@ impl SqliteConversationStore {
                 "fault injected: after request-start context append",
             ));
         }
-        validate_surface_revision(transaction, snapshot.surface_revision)?;
-        let ids = reconstruct_surface_tx(transaction, snapshot.surface_revision)?;
-        for id in ids {
-            let _: MessageBlock = load_message_tx(transaction, &id)?;
+        validate_canonical_frontier(transaction, snapshot.canonical_frontier)?;
+        validate_accepted_continuation_source(transaction, &self.conversation_id, snapshot)?;
+        projection::validate_request_selection(transaction, &self.conversation_id, snapshot)?;
+        let input = reconstruct_snapshot_input(transaction, &self.conversation_id, snapshot)?;
+        for association in &snapshot.tool_associations {
+            let source = &association.source;
+            if source.assistant.conversation_id != self.conversation_id {
+                return Err(ConversationStoreError::InvalidReference(
+                    "foreign request Tool source".into(),
+                ));
+            }
+            let original = load_message(transaction, &source.assistant.message_id)?;
+            if !source.assistant.matches(&original) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "changed request Tool source".into(),
+                ));
+            }
+            let MessageBlock::Assistant(assistant) = original else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "request Tool source is not Assistant".into(),
+                ));
+            };
+            let Some(crate::message::types::AssistantContentBlock::ToolCall(physical)) =
+                assistant.content.get(source.block.get() as usize)
+            else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "request Tool source occurrence is missing".into(),
+                ));
+            };
+            let crate::model::projected::ModelMessageView::Assistant(projected) =
+                input.messages[association.call.message.item_index as usize].view()
+            else {
+                unreachable!("frozen association validated");
+            };
+            let crate::message::types::AssistantContentBlock::ToolCall(call) =
+                &projected[association.call.block.0 as usize]
+            else {
+                unreachable!("frozen association validated");
+            };
+            if call.tool_id != physical.tool_id {
+                return Err(ConversationStoreError::InvalidReference(
+                    "request Tool source names a different physical Tool".into(),
+                ));
+            }
         }
-        let json = encode(snapshot, "request snapshot")?;
+        let json = encode_snapshot(snapshot)?;
+        let manifest_digest = format!("{:x}", Sha256::digest(json.as_bytes()));
         transaction
             .execute(
-                "INSERT INTO request_snapshots(request_id,surface_revision,snapshot_json,started_sequence) VALUES(?1,?2,?3,NULL)",
+                "INSERT INTO request_snapshots(request_id,canonical_frontier,snapshot_json,manifest_digest,started_sequence) VALUES(?1,?2,?3,?4,NULL)",
                 params![
                     snapshot.request_id.as_str(),
-                    seq_to_i64(snapshot.surface_revision.get())?,
-                    json
+                    seq_to_i64(snapshot.canonical_frontier.0)?,
+                    json,
+                    manifest_digest
                 ],
             )
             .map_err(|error| storage(format!("insert request snapshot: {error}")))?;
@@ -1085,7 +1166,7 @@ impl SqliteConversationStore {
         }
         let persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
         #[cfg(test)]
-        if self.consume_request_start_fault(RequestStartFaultOperation::AfterEventInsert) {
+        if self.consume_request_start_fault(RequestStartFaultOperation::AfterCompletionInsert) {
             return Err(storage("fault injected: after request-start event insert"));
         }
         transaction
@@ -1363,6 +1444,78 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn compaction_resource_cut(
+        &self,
+    ) -> Result<crate::context::resources::ResourceReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::cut(&transaction, &self.conversation_id)
+    }
+
+    fn compaction_message_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::LedgerFrontier,
+        ids: Option<&[MessageId]>,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::resources::ResourcePage<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::messages(&transaction, &self.conversation_id, cut, after, ids, limits)
+    }
+
+    fn compaction_dependency(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        source: &crate::model::projected::CanonicalMessageRef,
+        body_required: bool,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::checkpoint::CanonicalDependency, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::dependency(
+            &transaction,
+            &self.conversation_id,
+            cut,
+            source,
+            body_required,
+            limits,
+        )
+    }
+    fn compaction_trajectory_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::LedgerFrontier,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<
+        crate::context::resources::ResourcePage<crate::context::resources::TrajectoryMessage>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::trajectory(&transaction, &self.conversation_id, cut, after, limits)
+    }
+    fn compaction_event_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::JournalFrontier,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::resources::ResourcePage<RuntimeEventEnvelope>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::events(&transaction, &self.conversation_id, cut, after, limits)
+    }
     fn transcript_attempts(
         &self,
         messages: &[MessageId],
@@ -1414,6 +1567,24 @@ impl ConversationStore for SqliteConversationStore {
         provenance::selected_turns(&connection, messages)
     }
 
+    fn read_projection_lineage_cut(
+        &self,
+        ledger: crate::context::resources::LedgerFrontier,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        lineage::read_at(
+            &transaction,
+            &self.conversation_id,
+            SurfaceRevision::new(ledger.0),
+            Some(activation),
+            None,
+        )
+    }
+
     fn read_lineage_cut(
         &self,
         revision: SurfaceRevision,
@@ -1434,6 +1605,13 @@ impl ConversationStore for SqliteConversationStore {
         reading::cut(&transaction, &self.conversation_id)
     }
 
+    fn attempt_prompt(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+    ) -> Result<Option<MessageId>, ConversationStoreError> {
+        reading::attempt_prompt(&*self.lock()?, attempt, through)
+    }
     fn conversation_turns(
         &self,
         offset: usize,
@@ -1956,21 +2134,24 @@ impl ConversationStore for SqliteConversationStore {
             // Runtime reopening supplies canonical bootstrap bodies, not a new
             // Surface. Reconstruct the original immutable seed, never flatten it.
             let history = self.load_surface_history(SurfaceRevision::new(count))?;
-            let mut checkpoints = std::collections::BTreeMap::new();
-            for message in messages {
-                if let MessageBlock::User(user) = message
-                    && user.kind.is_compaction_summary()
-                {
-                    checkpoints.insert(
-                        user.id.clone(),
-                        self.compaction_checkpoint(&user.id, u64::MAX)?.0,
-                    );
-                }
-            }
-            LineageSeed::replayed(messages.to_vec(), history, checkpoints)?
+            LineageSeed::replayed(messages.to_vec(), history)?
         } else {
             LineageSeed::history(messages.to_vec())
         };
+        let mut inherited = Vec::new();
+        let mut after = crate::context::checkpoint::ProjectionActivationId(0);
+        loop {
+            let page = self.projection_timeline(after, 64)?;
+            if page.is_empty() {
+                break;
+            }
+            after = page.last().unwrap().activation.activation;
+            inherited.extend(
+                page.into_iter()
+                    .filter(|p| p.activation.destination_installation.is_some()),
+            );
+        }
+        let seed = seed.with_projections(inherited)?;
         self.initialize_lineage(
             &seed
                 .with_completed_responses(self.load_inherited_responses()?)?
@@ -1980,17 +2161,16 @@ impl ConversationStore for SqliteConversationStore {
 
     #[allow(clippy::too_many_lines)] // One atomic bootstrap owns Ledger, Surface and inherited facts.
     fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
-        let validated = LineageSeed::replayed(
-            seed.canonical().to_vec(),
-            seed.surface_history().to_vec(),
-            seed.checkpoints().clone(),
-        )?
-        .with_completed_responses(seed.completed_responses().to_vec())?
-        .with_turns(seed.turns().to_vec())?;
+        let validated =
+            LineageSeed::replayed(seed.canonical().to_vec(), seed.surface_history().to_vec())?
+                .with_completed_responses(seed.completed_responses().to_vec())?
+                .with_turns(seed.turns().to_vec())?
+                .with_projections(seed.projections().to_vec())?;
         let seed = &validated;
         let messages = seed.canonical();
         // Semantics belong to the Context Engine; persistence has no alternate selection rule.
-        let occupancy = crate::context::occupancy::inherit(seed.turns(), seed.surface_history());
+        let occupancy =
+            crate::context::occupancy::inherit(seed.turns(), seed.canonical(), seed.projections());
         let occupancy_json = encode(&occupancy, "bootstrap occupancy")?;
         let history_digest = initial_history_digest(messages)?;
         let occupancy_digest =
@@ -2011,23 +2191,10 @@ impl ConversationStore for SqliteConversationStore {
             .optional()
             .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
         if let Some((count, digest, retained_occupancy, retained_digest)) = bootstrap {
-            for message in messages {
-                if let MessageBlock::User(user) = message
-                    && user.kind.is_compaction_summary()
-                {
-                    let retained = load_compaction_checkpoint(&transaction, &user.id, u64::MAX)?.0;
-                    if seed
-                        .checkpoints()
-                        .get(&user.id)
-                        .is_some_and(|supplied| *supplied != retained)
-                    {
-                        return Err(ConversationStoreError::InitialHistoryMismatch);
-                    }
-                }
-            }
             let bootstrap_revision = SurfaceRevision::new(
                 u64::try_from(count).map_err(|_| storage("negative bootstrap message count"))?,
             );
+            projection::verify_lineage(&transaction, seed.projections())?;
             if replay_surface_history(&transaction, bootstrap_revision)?.1 != seed.surface_history()
             {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
@@ -2045,17 +2212,6 @@ impl ConversationStore for SqliteConversationStore {
             }
             provenance::verify_seed_membership(&transaction, seed)?;
         } else {
-            for message in messages {
-                if let MessageBlock::User(user) = message
-                    && user.kind.is_compaction_summary()
-                    && !seed.checkpoints().contains_key(&user.id)
-                {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "seeded checkpoint {} has no required statistics",
-                        user.id
-                    )));
-                }
-            }
             let existing: i64 = transaction
                 .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
                 .map_err(|error| storage(format!("bootstrap ledger probe: {error}")))?;
@@ -2089,20 +2245,6 @@ impl ConversationStore for SqliteConversationStore {
             append_terminals(None)?;
             for message in messages {
                 append_seeded_ledger_message(&transaction, message)?;
-                if let Some(statistics) = seed
-                    .checkpoints()
-                    .get(&crate::conversation::message_id_of(message))
-                {
-                    transaction
-                        .execute(
-                            "UPDATE message_ledger SET checkpoint_json=?2 WHERE message_id=?1",
-                            params![
-                                crate::conversation::message_id_of(message).as_str(),
-                                encode(statistics, "seeded checkpoint statistics")?
-                            ],
-                        )
-                        .map_err(|error| storage(format!("seed checkpoint: {error}")))?;
-                }
                 append_terminals(Some(&crate::conversation::message_id_of(message)))?;
             }
             // The seed's Surface history becomes this lineage's own retained
@@ -2113,21 +2255,15 @@ impl ConversationStore for SqliteConversationStore {
             // artefacts rather than the source's real ones.
             let mut active: Vec<MessageId> = Vec::new();
             let mut revision = SurfaceRevision::INITIAL;
-            let mut generation = 0_u64;
+            let generation = 0_u64;
             for operation in seed.surface_history() {
                 revision = revision.next();
-                if matches!(operation, SurfaceOp::Replace { .. }) {
-                    generation = generation
-                        .checked_add(1)
-                        .ok_or_else(|| storage("seeded compaction generation is exhausted"))?;
-                }
                 validate_surface_operation_references(&transaction, operation)?;
                 append_surface_op(&transaction, revision, generation, operation)?;
                 apply_surface_op(&mut active, operation)?;
             }
             if revision != SurfaceRevision::INITIAL {
                 update_surface_head(&transaction, revision, generation, &active)?;
-                update_checkpoint(&transaction, revision, generation, &active)?;
             }
             transaction
                 .execute(
@@ -2144,6 +2280,7 @@ impl ConversationStore for SqliteConversationStore {
                 )
                 .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
             provenance::persist(&transaction, seed)?;
+            projection::install_lineage(&transaction, &self.conversation_id, seed.projections())?;
             transaction
                 .execute(
                     "UPDATE rustx_store SET bootstrap_initialized=1 WHERE id=1",
@@ -2202,20 +2339,50 @@ impl ConversationStore for SqliteConversationStore {
         .collect()
     }
 
-    fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
-        let connection = self.lock()?;
-        // A second connection may append ordinary execution while management
-        // reads. Validate the head, checkpoint and operation history in one
-        // read snapshot, not across independently committed query snapshots.
-        let transaction = connection
-            .unchecked_transaction()
-            .map_err(|error| storage(format!("begin head read snapshot: {error}")))?;
-        #[cfg(test)]
-        if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
-            read_surface_head(&transaction)?;
-            probe();
+    fn unsettled_canonical_tool_calls(
+        &self,
+        limit: usize,
+    ) -> Result<
+        Vec<(crate::message::types::ToolCallOccurrenceRef, ToolCallId)>,
+        ConversationStoreError,
+    > {
+        if limit == 0 || limit > 8192 {
+            return Err(crate::context::resources::bound(
+                "canonical unsettled occurrence read limit",
+            ));
         }
-        load_head(&transaction)
+        let connection = self.lock()?;
+        let mut query = connection.prepare("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
+        let rows = query
+            .query_map([limit], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, u32>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| storage(e.to_string()))?;
+        rows.map(|row| {
+            let (id, block, wire) = row.map_err(|e| storage(e.to_string()))?;
+            Ok((
+                crate::message::types::ToolCallOccurrenceRef::new(
+                    MessageId::new(id.ok_or_else(|| {
+                        crate::context::resources::bound(
+                            "canonical occurrence identity exceeds bound",
+                        )
+                    })?),
+                    ContentBlockIndex::new(block),
+                ),
+                ToolCallId::new(wire.ok_or_else(|| {
+                    crate::context::resources::bound("canonical wire correlation exceeds bound")
+                })?),
+            ))
+        })
+        .collect()
+    }
+
+    fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
+        load_head(&*self.lock()?)
     }
 
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
@@ -2298,16 +2465,202 @@ impl ConversationStore for SqliteConversationStore {
             .transpose()
     }
 
-    fn compaction_checkpoint(
+    fn projected_history(
         &self,
-        summary_message_id: &MessageId,
-        through: u64,
-    ) -> Result<(super::inbox::CompactionCheckpointStatistics, Option<bool>), ConversationStoreError>
-    {
-        #[cfg(test)]
-        self.checkpoint_read_counts[2].fetch_add(1, Ordering::SeqCst);
+    ) -> Result<super::projection::HistoricalModelInput, ConversationStoreError> {
         let connection = self.lock()?;
-        load_compaction_checkpoint(&connection, summary_message_id, through)
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_projection_history_remaining) {
+            return Err(storage("fault injected: post-commit hot projection read"));
+        }
+        projection::history(&transaction, &self.conversation_id)
+    }
+    fn projection_at_journal_cut(
+        &self,
+        through: u64,
+    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::at_journal_cut(&transaction, through)
+    }
+    fn compaction_checkpoint_at(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        id: &crate::runtime::identity::CheckpointId,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
+        limits.validate()?;
+        if cut.conversation_id != self.conversation_id {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign checkpoint resource cut".into(),
+            ));
+        }
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::validate(&transaction, &self.conversation_id, cut, limits)?;
+        let bytes:Option<u64>=transaction.query_row(
+            "SELECT octet_length(c.candidate_json)+octet_length(a.activation_json)+coalesce(octet_length(c.occupancy_json),0) FROM projection_checkpoints c JOIN projection_activations a ON a.checkpoint_id=c.checkpoint_id WHERE c.checkpoint_id=?1 AND a.activation<=?2",
+            params![id.as_str(),seq_to_i64(cut.projection_activation.0)?],|row|row.get(0),
+        ).optional().map_err(|e|storage(e.to_string()))?;
+        let bytes = bytes.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "checkpoint is absent at Resource Read Cut".into(),
+            )
+        })?;
+        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
+            return Err(crate::context::resources::bound(
+                "checkpoint record exceeds resource materialization bound",
+            ));
+        }
+        projection::checkpoint(&transaction, id)
+    }
+    fn compaction_request(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        request: &crate::runtime::identity::RequestId,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::model::RequestSnapshot, ConversationStoreError> {
+        limits.validate()?;
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        let bytes: Option<u64> = transaction.query_row("SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),seq_to_i64(cut.journal.0)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+        if cut.conversation_id != self.conversation_id {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign frozen request Resource Read Cut".into(),
+            ));
+        }
+        let bytes = bytes.ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "request is absent at the Resource Read Cut".into(),
+            )
+        })?;
+        if bytes > limits.record_bytes as u64 || bytes > limits.page_bytes as u64 {
+            return Err(crate::context::resources::bound(
+                "historical frozen request exceeds materialization bound",
+            ));
+        }
+        load_request_snapshot(&transaction, &self.conversation_id, request)
+    }
+
+    fn projection_head(
+        &self,
+    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::head(&transaction)
+    }
+    fn projection_checkpoint(
+        &self,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
+        projection::checkpoint(&*self.lock()?, id)
+    }
+    fn projection_timeline(
+        &self,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::timeline(&transaction, after, limit)
+    }
+    fn projection_timeline_at_journal_cut(
+        &self,
+        through: u64,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<super::projection::ProjectionTimelinePage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::timeline_at_journal_cut(&transaction, through, after, limit)
+    }
+    fn projection_checkpoint_at_journal_cut(
+        &self,
+        through: u64,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::checkpoint_at_journal_cut(&transaction, through, id)
+    }
+    fn projection_owner(
+        &self,
+        attempt: Option<&crate::runtime::identity::AttemptId>,
+    ) -> Result<super::projection::ProjectionOwner, ConversationStoreError> {
+        projection::owner(&*self.lock()?, attempt)
+    }
+    fn projection_receipt(
+        &self,
+        operation: &crate::runtime::identity::CompactionOperationId,
+        fingerprint: &str,
+    ) -> Result<Option<super::projection::ProjectionCommitReceipt>, ConversationStoreError> {
+        projection::receipt(&*self.lock()?, operation, fingerprint)
+    }
+    fn commit_projection(
+        &self,
+        input: super::projection::ProjectionCommitInput,
+    ) -> Result<super::projection::ProjectionCommitReceipt, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| storage(e.to_string()))?;
+        let result = projection::commit(&transaction, &self.conversation_id, input, |stage| {
+            #[cfg(test)]
+            if self.consume_compaction_fault(stage) || Self::consume(&self.fail_event_remaining) {
+                return Err(storage("fault injected: checkpoint transaction"));
+            }
+            #[cfg(not(test))]
+            let _ = stage;
+            Ok(())
+        })?;
+        process_death::reach("before:commit_projection");
+        transaction.commit().map_err(|e| storage(e.to_string()))?;
+        process_death::reach("after:commit_projection");
+        // Stage committed Journal facts and release SQLite before returning a receipt.
+        drop(connection);
+        #[cfg(test)]
+        {
+            let probe = self
+                .projection_commit_return_probe
+                .lock()
+                .expect("projection return probe")
+                .take();
+            if let Some(probe) = probe {
+                probe();
+            }
+        }
+        #[cfg(test)]
+        for (stage, count) in [
+            (CompactionFaultOperation::AfterCommitOneHotReadFailure, 1),
+            (CompactionFaultOperation::AfterCommitTwoHotReadFailures, 2),
+        ] {
+            if self.consume_compaction_fault(stage) {
+                self.fail_projection_history_remaining
+                    .store(count, Ordering::SeqCst);
+            }
+        }
+        #[cfg(test)]
+        if self.consume_compaction_fault(CompactionFaultOperation::AfterCommit) {
+            return Err(storage("fault injected: lost checkpoint commit receipt"));
+        }
+        Ok(result)
     }
 
     fn load_surface_history(
@@ -2445,133 +2798,6 @@ impl ConversationStore for SqliteConversationStore {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn commit_compaction(
-        &self,
-        input: CompactionCommitInput,
-    ) -> Result<
-        (SurfaceRevision, u64, RuntimeEventEnvelope, TranscriptCursor),
-        ConversationStoreError,
-    > {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("compaction transaction: {error}")))?;
-        let head = load_head(&transaction)?;
-        if head.revision != input.expected_revision {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "compaction expected Surface {}, current is {}",
-                input.expected_revision, head.revision
-            )));
-        }
-        if input.summary.source != UserSource::Runtime
-            || !input.summary.kind.is_compaction_summary()
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "compaction requires a User(Runtime / CompactionSummary) Ledger message".to_owned(),
-            ));
-        }
-        let (start, end) = span_indices(&head.active_message_ids, &input.span)?;
-        if head.active_message_ids.contains(&input.summary.id) {
-            return Err(ConversationStoreError::DuplicateMessageId(input.summary.id));
-        }
-        #[cfg(test)]
-        if self.consume_compaction_fault(CompactionFaultOperation::BeforeSummaryInsert) {
-            return Err(storage("fault injected: before compaction summary insert"));
-        }
-        // Estimate the exact validated replacement span once, under the same
-        // transaction that owns its summary and Surface transition. This also
-        // enforces the contract for direct native commit callers.
-        let retired = head.active_message_ids[start..=end]
-            .iter()
-            .map(|id| load_message_tx(&transaction, id))
-            .collect::<Result<Vec<_>, _>>()?;
-        let statistics = super::inbox::CompactionCheckpointStatistics {
-            retired_messages: retired.len() as u64,
-            retired_tokens: crate::context::DefaultTokenEstimator
-                .estimate_conversation_input(&retired),
-        };
-        let summary_cursor = append_message_ledger(
-            &transaction,
-            &MessageBlock::User(input.summary.clone()),
-            None,
-        )?
-        .ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "a compaction summary must receive a transcript cursor".to_owned(),
-            )
-        })?;
-        #[cfg(test)]
-        if self.consume_compaction_fault(CompactionFaultOperation::AfterSummaryInsert) {
-            return Err(storage("fault injected: after compaction summary insert"));
-        }
-        let revision = input.expected_revision.next();
-        let generation = head
-            .compaction_generation
-            .checked_add(1)
-            .ok_or_else(|| storage("compaction generation exhausted"))?;
-        let op = SurfaceOp::Replace {
-            start: input.span.start.clone(),
-            end: input.span.end.clone(),
-            replacement: input.summary.id.clone(),
-        };
-        append_surface_op(&transaction, revision, generation, &op)?;
-        #[cfg(test)]
-        if self.consume_compaction_fault(CompactionFaultOperation::AfterSurfaceRevision) {
-            return Err(storage("fault injected: after compaction Surface revision"));
-        }
-        let active = replacement_active(&head.active_message_ids, start, end, &input.summary.id);
-        update_surface_head(&transaction, revision, generation, &active)?;
-        update_checkpoint(&transaction, revision, generation, &active)?;
-        #[cfg(test)]
-        if self.consume_compaction_fault(CompactionFaultOperation::AfterCheckpoint) {
-            return Err(storage("fault injected: after compaction checkpoint"));
-        }
-        let event = RuntimeEventEnvelope {
-            schema_version: EVENT_SCHEMA_VERSION,
-            event_id: EventId::new(""),
-            sequence: 0,
-            conversation_id: self.conversation_id.clone(),
-            attempt_id: input.attempt_id,
-            turn_id: input.turn_id,
-            timestamp: input.timestamp,
-            event: RuntimeEvent::CompactionCompleted {
-                generation,
-                summary_message_id: input.summary.id.clone(),
-                surface_revision: revision,
-                tokens_before: input.tokens_before,
-                estimated_tokens_after: input.estimated_tokens_after,
-                occupancy: input.occupancy,
-            },
-        };
-        #[cfg(test)]
-        if self.consume_compaction_fault(CompactionFaultOperation::BeforeEventInsert) {
-            return Err(storage("fault injected: before compaction event insert"));
-        }
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        transaction.execute(
-            "UPDATE message_ledger SET checkpoint_json=?2,compaction_event_sequence=?3 WHERE message_id=?1",
-            params![input.summary.id.as_str(), encode(&statistics, "checkpoint statistics")?, seq_to_i64(persisted.event.sequence)?],
-        ).map_err(|error| storage(format!("checkpoint facts: {error}")))?;
-        #[cfg(test)]
-        if self.consume_compaction_fault(CompactionFaultOperation::AfterEventInsert) {
-            return Err(storage("fault injected: after compaction event insert"));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_compaction_remaining) {
-            return Err(storage("fault injected: compaction commit"));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: compaction event journal commit"));
-        }
-        process_death::reach("before:commit_compaction");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("compaction commit: {error}")))?;
-        process_death::reach("after:commit_compaction");
-        Ok((revision, generation, persisted.event, summary_cursor))
-    }
-
     fn load_canonical(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
         let connection = self.lock()?;
         load_canonical_rows(&connection)
@@ -2771,15 +2997,25 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("request start transaction: {error}")))?;
-        let existing: Option<(String, Option<i64>)> = transaction
+        let existing: Option<(Option<String>, Option<i64>, String)> = transaction
             .query_row(
-                "SELECT snapshot_json,started_sequence FROM request_snapshots WHERE request_id = ?1",
+                "SELECT CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,manifest_digest FROM request_snapshots WHERE request_id = ?1",
                 [snapshot.request_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(|error| storage(format!("request snapshot probe: {error}")))?;
-        if let Some((json, started_sequence)) = existing {
+        if let Some((json, started_sequence, integrity)) = existing {
+            let json = json.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "frozen request record exceeds byte budget".into(),
+                )
+            })?;
+            if format!("{:x}", Sha256::digest(json.as_bytes())) != integrity {
+                return Err(ConversationStoreError::InvalidReference(
+                    "corrupt frozen request manifest".into(),
+                ));
+            }
             let verified = verify_committed_start_tx(
                 &transaction,
                 &json,
@@ -2791,6 +3027,19 @@ impl ConversationStore for SqliteConversationStore {
                 .commit()
                 .map_err(|error| storage(format!("request start retry commit: {error}")))?;
             return Ok(verified);
+        }
+        let projection = projection::head(&transaction)?;
+        if projection.as_ref().map(|p| &p.candidate.checkpoint_id)
+            != snapshot.history_cut.checkpoint_id.as_ref()
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "actual request would start from a stale Projection Head".into(),
+            ));
+        }
+        if snapshot.history_cut.base_frontier > snapshot.history_cut.ledger {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid Request History Cut".into(),
+            ));
         }
         if snapshot.identity.retry_number != 0 {
             verify_frozen_contributions_tx(&transaction, snapshot)?;
@@ -2909,13 +3158,25 @@ impl ConversationStore for SqliteConversationStore {
 
     fn reconstruct_model_request(
         &self,
-        request_id: &RequestId,
-    ) -> Result<ModelRequest, ConversationStoreError> {
-        let snapshot = self.load_request_snapshot(request_id)?;
-        let ids = self.reconstruct_surface(snapshot.surface_revision)?;
-        let messages = self.load_messages(&ids)?;
+        request_id: &crate::runtime::identity::RequestId,
+    ) -> Result<crate::model::types::ModelRequest, ConversationStoreError> {
+        let connection = self.lock()?;
+        let snapshot = load_request_snapshot(&connection, &self.conversation_id, request_id)?;
         snapshot
-            .reconstruct_from_canonical(&messages)
+            .reconstruct_with(|reference| {
+                if reference.conversation_id != self.conversation_id {
+                    return Err(
+                        crate::model::snapshot::RequestReconstructionError::Conversation(
+                            "foreign frozen Original scope".to_owned(),
+                        ),
+                    );
+                }
+                load_message(&connection, &reference.message_id).map_err(|error| {
+                    crate::model::snapshot::RequestReconstructionError::Conversation(
+                        error.to_string(),
+                    )
+                })
+            })
             .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))
     }
 
@@ -4722,11 +4983,7 @@ fn accept_inbound_tx(
     if draft.content.is_empty() {
         return Err(ConversationStoreError::EmptyContent);
     }
-    if draft.kind.is_compaction_summary() {
-        return Err(ConversationStoreError::InvalidReference(
-            "compaction summaries must use the atomic commit_compaction transition".to_owned(),
-        ));
-    }
+
     if let Some(correlation) = draft.correlation.as_deref() {
         let existing: Option<(i64, String)> = transaction
             .query_row(
@@ -5025,12 +5282,33 @@ fn verify_frozen_contributions_tx(
     transaction: &Transaction<'_>,
     snapshot: &RequestSnapshot,
 ) -> Result<(), ConversationStoreError> {
-    let active = reconstruct_surface_tx(transaction, snapshot.surface_revision)?;
+    let visible = |id: &MessageId| {
+        snapshot.input.iter().any(|item| match item {
+            crate::model::projected::FrozenModelInput::Original(reference) => {
+                &reference.message_id == id
+            }
+            crate::model::projected::FrozenModelInput::Derived(derived) => {
+                derived
+                    .sources
+                    .iter()
+                    .any(|source| &source.message_id == id)
+                    && !derived.transformations.is_empty()
+                    && derived.transformations.iter().all(|t| {
+                        matches!(
+                            t,
+                            crate::model::projected::SemanticTransformation::ImageDowngrade
+                                | crate::model::projected::SemanticTransformation::UploadRendering
+                        )
+                    })
+            }
+            crate::model::projected::FrozenModelInput::RequestOnly(_) => false,
+        })
+    };
     for contribution in &snapshot.contributions {
         contribution.validate_message(&load_message_tx(transaction, &contribution.message_id)?)?;
-        if !active.contains(&contribution.message_id) {
+        if !visible(&contribution.message_id) {
             return Err(ConversationStoreError::InvalidReference(
-                "frozen contribution is absent from request Surface".to_owned(),
+                "frozen contribution is absent from exact typed request".to_owned(),
             ));
         }
         // The original snapshot is immutable even if a newer head for this
@@ -5148,10 +5426,32 @@ fn verify_contribution_start_tx(
     Ok(events)
 }
 
+fn register_integrity_function(connection: &Connection) -> Result<(), ConversationStoreError> {
+    use rusqlite::functions::FunctionFlags;
+    connection
+        .create_scalar_function(
+            "rustx_content_digest",
+            1,
+            FunctionFlags::SQLITE_UTF8
+                | FunctionFlags::SQLITE_DETERMINISTIC
+                | FunctionFlags::SQLITE_INNOCUOUS,
+            |context| {
+                use sha2::{Digest, Sha256};
+                let bytes = context
+                    .get_raw(0)
+                    .as_str()
+                    .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                Ok(format!("{:x}", Sha256::digest(bytes.as_bytes())))
+            },
+        )
+        .map_err(|e| storage(e.to_string()))
+}
+
 fn configure_connection(
     connection: &mut Connection,
     in_memory: bool,
 ) -> Result<(), ConversationStoreError> {
+    register_integrity_function(connection)?;
     connection
         .execute_batch(
             "PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;",
@@ -5248,6 +5548,13 @@ fn presentation_statements(
     let scope = match &query.scope {
         FactScope::All => String::new(),
         FactScope::ContextReading => format!(" AND ({CONTEXT_READING_PREDICATE}) = 1"),
+        FactScope::Compaction(operation) => {
+            values.push(Value::Text(operation.to_string()));
+            format!(
+                " AND json_extract(event_json, '$.event.operation_id') = ?{}",
+                values.len()
+            )
+        }
         FactScope::Step(attempt, turn) => {
             values.push(Value::Text(attempt.to_string()));
             values.push(Value::Text(turn.to_string()));
@@ -5277,6 +5584,7 @@ fn presentation_statements(
         other => {
             let (field, value) = match other {
                 FactScope::Request(value) => ("request_id", value),
+                FactScope::Compaction(_) => unreachable!("compaction scope is handled separately"),
                 FactScope::Execution(value) => ("execution_id", value),
                 FactScope::Subagent(value) => ("subagent_id", value),
                 FactScope::Workflow(value) => ("run_id", value),
@@ -5299,6 +5607,7 @@ fn presentation_statements(
         FactScope::Attempt(..) => "events_attempt_kind_idx",
         FactScope::Step(..) => "events_step_kind_idx",
         FactScope::Request(..) => "events_request_id_kind_idx",
+        FactScope::Compaction(..) => "events_compaction_operation_kind_idx",
         FactScope::ToolCall { .. } => "events_tool_call_scope_kind_idx",
         FactScope::Execution(..) => "events_execution_id_kind_idx",
         FactScope::Subagent(..) => "events_subagent_id_kind_idx",
@@ -5346,6 +5655,10 @@ const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
         "events_step_kind_idx",
         "attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_compaction_operation_kind_idx",
+        "json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence",
     ),
     (
         "events_request_id_kind_idx",
@@ -5408,9 +5721,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE TABLE IF NOT EXISTS message_ledger (
                 position INTEGER PRIMARY KEY,
                 message_id TEXT NOT NULL UNIQUE,
-                message_json TEXT NOT NULL,
-                checkpoint_json TEXT,
-                compaction_event_sequence INTEGER REFERENCES events(sequence)
+                message_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS canonical_tool_calls (
                 assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
@@ -5421,6 +5732,8 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 PRIMARY KEY(assistant_message_id,block_index),
                 UNIQUE(assistant_message_id,call_id)
             );
+            CREATE INDEX IF NOT EXISTS canonical_tool_calls_pending
+                ON canonical_tool_calls(assistant_message_id,block_index) WHERE result_message_id IS NULL;
             CREATE TABLE IF NOT EXISTS transcript_order (
                 position INTEGER PRIMARY KEY,
                 reference_kind TEXT NOT NULL,
@@ -5436,7 +5749,9 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 turn_count INTEGER NOT NULL CHECK(turn_count>=0),
                 response_count INTEGER NOT NULL CHECK(response_count>=0),
                 provenance_digest TEXT NOT NULL,
-                inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0)
+                inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0),
+                projection_count INTEGER NOT NULL DEFAULT 0 CHECK(projection_count>=0),
+                projection_digest TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
                 ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
@@ -5468,16 +5783,40 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 compaction_generation INTEGER NOT NULL,
                 active_json TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS context_checkpoints (
+            CREATE TABLE IF NOT EXISTS projection_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                candidate_fingerprint TEXT NOT NULL,
+                candidate_json TEXT NOT NULL,
+                occupancy_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS projection_activations (
+                activation INTEGER PRIMARY KEY CHECK(activation>0),
+                checkpoint_id TEXT NOT NULL REFERENCES projection_checkpoints(checkpoint_id),
+                ledger_frontier INTEGER NOT NULL CHECK(ledger_frontier>=0),
+                visible_journal INTEGER NOT NULL CHECK(visible_journal>=0),
+                installation_id TEXT,
+                header_digest TEXT NOT NULL,
+                activation_json TEXT NOT NULL,
+                activation_digest TEXT NOT NULL,
+                CHECK((installation_id IS NULL AND visible_journal>0) OR (installation_id IS NOT NULL AND visible_journal=0))
+            );
+            CREATE INDEX IF NOT EXISTS projection_ledger_idx ON projection_activations(ledger_frontier,activation);
+            CREATE UNIQUE INDEX IF NOT EXISTS projection_checkpoint_idx ON projection_activations(checkpoint_id);
+            CREATE TABLE IF NOT EXISTS projection_head (
                 id INTEGER PRIMARY KEY CHECK(id=1),
-                revision INTEGER NOT NULL,
-                compaction_generation INTEGER NOT NULL,
-                active_json TEXT NOT NULL
+                activation INTEGER NOT NULL REFERENCES projection_activations(activation)
+            );
+            CREATE TABLE IF NOT EXISTS compaction_operations (
+                operation_id TEXT PRIMARY KEY,
+                candidate_fingerprint TEXT NOT NULL,
+                receipt_json TEXT NOT NULL,
+                receipt_digest TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS request_snapshots (
                 request_id TEXT PRIMARY KEY,
-                surface_revision INTEGER NOT NULL,
+                canonical_frontier INTEGER NOT NULL,
                 snapshot_json TEXT NOT NULL,
+                manifest_digest TEXT NOT NULL,
                 started_sequence INTEGER,
                 completed_sequence INTEGER
             );
@@ -5547,7 +5886,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
 
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
-            CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
+            CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
             CREATE INDEX IF NOT EXISTS contribution_emission_heads_lookup_idx ON contribution_emission_heads(producer, semantic_key);
             CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
             CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);",
@@ -5603,6 +5942,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "response_count",
             "provenance_digest",
             "inherited_transcript_through",
+            "projection_count",
+            "projection_digest",
         ]
     {
         return Err(ConversationStoreError::IncompatibleSchema(
@@ -5610,6 +5951,30 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ));
     }
 
+    for (name, sql) in [
+        (
+            "projection_ledger_idx",
+            "CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)",
+        ),
+        (
+            "projection_checkpoint_idx",
+            "CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)",
+        ),
+    ] {
+        let actual: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
+                [name],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| storage(e.to_string()))?;
+        if actual.as_deref() != Some(sql) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid projection index {name}"
+            )));
+        }
+    }
     for (name, expression) in PRESENTATION_INDEXES {
         let sql: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
         if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events({expression})").as_str()) {
@@ -5701,6 +6066,38 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     }
     let required = [
         (
+            "projection_checkpoints",
+            &[
+                "checkpoint_id",
+                "candidate_fingerprint",
+                "candidate_json",
+                "occupancy_json",
+            ] as &[&str],
+        ),
+        (
+            "projection_activations",
+            &[
+                "activation",
+                "checkpoint_id",
+                "ledger_frontier",
+                "visible_journal",
+                "installation_id",
+                "header_digest",
+                "activation_json",
+                "activation_digest",
+            ],
+        ),
+        ("projection_head", &["id", "activation"]),
+        (
+            "compaction_operations",
+            &[
+                "operation_id",
+                "candidate_fingerprint",
+                "receipt_json",
+                "receipt_digest",
+            ],
+        ),
+        (
             "rustx_store",
             &[
                 "schema_version",
@@ -5724,13 +6121,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "message_ledger",
-            &[
-                "position",
-                "message_id",
-                "message_json",
-                "checkpoint_json",
-                "compaction_event_sequence",
-            ],
+            &["position", "message_id", "message_json"],
         ),
         (
             "transcript_order",
@@ -5757,6 +6148,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "occupancy_json",
                 "occupancy_digest",
                 "inherited_transcript_through",
+                "projection_count",
+                "projection_digest",
             ],
         ),
         (
@@ -5785,15 +6178,12 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             &["revision", "compaction_generation", "active_json"],
         ),
         (
-            "context_checkpoints",
-            &["revision", "compaction_generation", "active_json"],
-        ),
-        (
             "request_snapshots",
             &[
                 "request_id",
-                "surface_revision",
+                "canonical_frontier",
                 "snapshot_json",
+                "manifest_digest",
                 "started_sequence",
                 "completed_sequence",
             ],
@@ -5874,6 +6264,43 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             }
         }
     }
+    for (table, column, target, target_column) in [
+        (
+            "projection_activations",
+            "checkpoint_id",
+            "projection_checkpoints",
+            "checkpoint_id",
+        ),
+        (
+            "projection_head",
+            "activation",
+            "projection_activations",
+            "activation",
+        ),
+    ] {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA foreign_key_list({table})"))
+            .map_err(|e| storage(e.to_string()))?;
+        let keys = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(|e| storage(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| storage(e.to_string()))?;
+        if !keys
+            .iter()
+            .any(|(t, c, tc)| t == target && c == column && tc == target_column)
+        {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing projection dependency constraint {table}.{column}"
+            )));
+        }
+    }
     for (table, column) in [
         ("pending_inbound", "message_id"),
         ("inbound_correlation", "message_id"),
@@ -5883,6 +6310,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ("agent_authorities", "agent_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
+        ("projection_checkpoints", "checkpoint_id"),
+        ("compaction_operations", "operation_id"),
         ("publication_streams", "stream_id"),
         ("publication_audits", "stream_id"),
     ] {
@@ -6001,52 +6430,29 @@ fn bind_identity(
 }
 
 fn ensure_surface_head(transaction: &Transaction<'_>) -> Result<(), ConversationStoreError> {
-    let head_exists: bool = transaction
+    let exists: bool = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM surface_head WHERE id=1)",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("probe Surface head: {error}")))?;
-    let checkpoint_exists: bool = transaction
+        .map_err(|e| storage(e.to_string()))?;
+    if exists {
+        return Ok(());
+    }
+    let ledger: i64 = transaction
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM context_checkpoints WHERE id=1)",
+            "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("probe context checkpoint: {error}")))?;
-    match (head_exists, checkpoint_exists) {
-        (true, true) => return Ok(()),
-        (true, false) | (false, true) => {
-            return Err(ConversationStoreError::InvalidReference(
-                "Surface head and context checkpoint are only partially present".to_owned(),
-            ));
-        }
-        (false, false) => {}
-    }
-    let ledger_count: i64 = transaction
-        .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
-        .map_err(|error| storage(format!("probe Ledger before Surface bootstrap: {error}")))?;
-    let operation_count: i64 = transaction
-        .query_row("SELECT COUNT(*) FROM surface_ops", [], |row| row.get(0))
-        .map_err(|error| storage(format!("probe Surface history before bootstrap: {error}")))?;
-    if ledger_count != 0 || operation_count != 0 {
+        .map_err(|e| storage(e.to_string()))?;
+    if ledger != 0 {
         return Err(ConversationStoreError::InvalidReference(
-            "the durable Ledger or Surface history exists without its current head".to_owned(),
+            "canonical frontier metadata missing".into(),
         ));
     }
-    transaction
-        .execute(
-            "INSERT OR IGNORE INTO surface_head(id,revision,compaction_generation,active_json) VALUES(1,0,0,?1)",
-            [encode(&Vec::<MessageId>::new(), "empty Surface")?],
-        )
-        .map_err(|error| storage(format!("ensure Surface head: {error}")))?;
-    transaction
-        .execute(
-            "INSERT OR IGNORE INTO context_checkpoints(id,revision,compaction_generation,active_json) VALUES(1,0,0,?1)",
-            [encode(&Vec::<MessageId>::new(), "empty context checkpoint")?],
-        )
-        .map_err(|error| storage(format!("ensure context checkpoint: {error}")))?;
+    transaction.execute("INSERT INTO surface_head(id,revision,compaction_generation,active_json) VALUES(1,0,0,'[]')",[]).map_err(|e|storage(e.to_string()))?;
     Ok(())
 }
 
@@ -6064,102 +6470,75 @@ fn read_surface_head(
 }
 
 fn load_head(connection: &Connection) -> Result<DurableConversationHead, ConversationStoreError> {
-    let Some((revision, generation, active_json)) = read_surface_head(connection)? else {
-        let checkpoint_exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM context_checkpoints WHERE id=1)",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(format!("probe context checkpoint: {error}")))?;
-        if checkpoint_exists {
-            return Err(ConversationStoreError::InvalidReference(
-                "context checkpoint exists without a Surface head".to_owned(),
-            ));
-        }
-        let ledger_count: i64 = connection
-            .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
-            .map_err(|error| storage(format!("probe Ledger without Surface head: {error}")))?;
-        let operation_count: i64 = connection
-            .query_row("SELECT COUNT(*) FROM surface_ops", [], |row| row.get(0))
-            .map_err(|error| storage(format!("probe Surface history without head: {error}")))?;
-        if ledger_count != 0 || operation_count != 0 {
-            return Err(ConversationStoreError::InvalidReference(
-                "the durable Ledger or Surface history exists without its current head".to_owned(),
-            ));
-        }
-        return Ok(DurableConversationHead {
-            revision: SurfaceRevision::INITIAL,
-            compaction_generation: 0,
-            active_message_ids: Vec::new(),
-        });
-    };
-    let head = DurableConversationHead {
-        revision: SurfaceRevision::new(nonnegative(revision, "Surface revision")?),
-        compaction_generation: nonnegative(generation, "compaction generation")?,
-        active_message_ids: decode(&active_json, "Surface head")?,
-    };
-    let checkpoint: Option<(i64, i64, String)> = connection
+    use crate::context::checkpoint::CheckpointMessage;
+    let ledger: i64 = connection
         .query_row(
-            "SELECT revision,compaction_generation,active_json FROM context_checkpoints WHERE id=1",
+            "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| row.get(0),
         )
-        .optional()
-        .map_err(|error| storage(format!("load context checkpoint: {error}")))?;
-    let Some((checkpoint_revision, checkpoint_generation, checkpoint_json)) = checkpoint else {
-        return Err(ConversationStoreError::InvalidReference(
-            "Surface head has no context checkpoint".to_owned(),
-        ));
-    };
-    if checkpoint_revision != revision
-        || checkpoint_generation != generation
-        || checkpoint_json != active_json
-    {
-        return Err(ConversationStoreError::InvalidReference(
-            "Surface head and context checkpoint disagree".to_owned(),
-        ));
-    }
-    let operation_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM surface_ops", [], |row| row.get(0))
-        .map_err(|error| storage(format!("count Surface operations: {error}")))?;
-    let max_operation_revision: Option<i64> = connection
-        .query_row("SELECT MAX(revision) FROM surface_ops", [], |row| {
+        .map_err(|e| storage(e.to_string()))?;
+    let revision: Option<i64> = connection
+        .query_row("SELECT revision FROM surface_head WHERE id=1", [], |row| {
             row.get(0)
         })
-        .map_err(|error| storage(format!("read latest Surface operation: {error}")))?;
-    let operation_history_matches_head = if revision == 0 {
-        operation_count == 0 && max_operation_revision.is_none()
-    } else {
-        operation_count == revision && max_operation_revision == Some(revision)
-    };
-    if !operation_history_matches_head {
+        .optional()
+        .map_err(|e| storage(e.to_string()))?;
+    if revision.is_none_or(|revision| revision != ledger) && ledger != 0 {
         return Err(ConversationStoreError::InvalidReference(
-            "Surface head does not match the complete immutable operation history".to_owned(),
+            "canonical frontier metadata is missing or inconsistent".into(),
         ));
     }
-    if head
-        .active_message_ids
-        .iter()
-        .collect::<BTreeSet<_>>()
-        .len()
-        != head.active_message_ids.len()
-    {
+    let checkpoint = projection::head(connection)?;
+    let mut ids = Vec::new();
+    let mut seen = BTreeSet::new();
+    let base = checkpoint
+        .as_ref()
+        .map_or(0, |checkpoint| checkpoint.candidate.base_frontier.0);
+    if base > nonnegative(ledger, "canonical frontier")? {
         return Err(ConversationStoreError::InvalidReference(
-            "Surface head contains duplicate active identities".to_owned(),
+            "checkpoint base exceeds canonical frontier".into(),
         ));
     }
-    let reconstructed = reconstruct_surface(connection, head.revision)?;
-    if reconstructed != head.active_message_ids {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "Surface head {} does not match its immutable operation history",
-            head.revision
-        )));
+    if let Some(checkpoint) = &checkpoint {
+        for item in &checkpoint.candidate.items {
+            if let CheckpointMessage::Original(reference) = &item.message {
+                if !ledger_message_exists(connection, &reference.message_id)? {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "missing checkpoint Original dependency".into(),
+                    ));
+                }
+                if seen.insert(reference.message_id.clone()) {
+                    ids.push(reference.message_id.clone());
+                }
+            }
+        }
     }
-    for id in &head.active_message_ids {
-        let _ = load_message(connection, id)?;
+    let mut statement=connection.prepare("SELECT CASE WHEN octet_length(message_id)<=4096 THEN message_id END FROM message_ledger WHERE position>?1 AND position<=?2 ORDER BY position LIMIT 8193").map_err(|e|storage(e.to_string()))?;
+    let rows = statement
+        .query_map(params![seq_to_i64(base)?, ledger], |row| {
+            row.get::<_, Option<String>>(0)
+        })
+        .map_err(|e| storage(e.to_string()))?;
+    for row in rows {
+        if ids.len() >= 8192 {
+            return Err(crate::context::resources::bound(
+                "canonical working set exceeds bounded projection size",
+            ));
+        }
+        let id = MessageId::new(row.map_err(|e| storage(e.to_string()))?.ok_or_else(|| {
+            crate::context::resources::bound("canonical identity record exceeds bound")
+        })?);
+        if seen.insert(id.clone()) {
+            ids.push(id);
+        }
     }
-    Ok(head)
+    Ok(DurableConversationHead {
+        revision: SurfaceRevision::new(nonnegative(ledger, "canonical frontier")?),
+        compaction_generation: checkpoint
+            .map_or(0, |checkpoint| checkpoint.activation.activation.0),
+        active_message_ids: ids,
+    })
 }
 
 fn update_surface_head(
@@ -6178,25 +6557,6 @@ fn update_surface_head(
             ],
         )
         .map_err(|error| storage(format!("update Surface head: {error}")))?;
-    Ok(())
-}
-
-fn update_checkpoint(
-    transaction: &Transaction<'_>,
-    revision: SurfaceRevision,
-    generation: u64,
-    active: &[MessageId],
-) -> Result<(), ConversationStoreError> {
-    transaction
-        .execute(
-            "UPDATE context_checkpoints SET revision=?1,compaction_generation=?2,active_json=?3 WHERE id=1",
-            params![
-                seq_to_i64(revision.get())?,
-                seq_to_i64(generation)?,
-                encode(&active, "context checkpoint")?
-            ],
-        )
-        .map_err(|error| storage(format!("update context checkpoint: {error}")))?;
     Ok(())
 }
 
@@ -6247,16 +6607,9 @@ fn append_message_and_surface(
     append_message_and_surface_internal(transaction, message, None)
 }
 
-/// Appends one seeded canonical message to the Ledger alone.
-///
-/// A lineage seed is not a sequence of live transitions being replayed: it is
-/// the destination's *bootstrap*, written inside the one initialization
-/// transaction. So the Surface is established separately from the seed's own
-/// Surface order, and a compaction summary is an ordinary canonical row here
-/// rather than a transition that must arrive through `commit_compaction` --
-/// the summary's compaction already happened, in the source lineage, and
-/// re-performing it in the destination would rewrite a Surface that does not
-/// yet exist.
+/// Appends a destination-owned immutable canonical fact during lineage bootstrap.
+/// Typed projections and historical activations are installed independently in
+/// the same bootstrap transaction, without replaying source execution events.
 fn append_seeded_ledger_message(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
@@ -6277,15 +6630,6 @@ fn append_message_and_surface_internal(
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    if matches!(
-        message,
-        MessageBlock::User(user)
-            if user.kind.is_compaction_summary()
-    ) {
-        return Err(ConversationStoreError::InvalidReference(
-            "a compaction summary must use the atomic commit_compaction transition".to_owned(),
-        ));
-    }
     let id = crate::conversation::message_id_of(message);
     let head = load_head(transaction)?;
     if head.active_message_ids.contains(&id) {
@@ -6303,7 +6647,6 @@ fn append_message_and_surface_internal(
         &SurfaceOp::Append { message_id: id },
     )?;
     update_surface_head(transaction, revision, head.compaction_generation, &active)?;
-    update_checkpoint(transaction, revision, head.compaction_generation, &active)?;
     Ok(transcript_cursor)
 }
 
@@ -6362,7 +6705,7 @@ fn append_message_ledger(
 /// Whether one canonical message is ordinary user-facing transcript content.
 ///
 /// Context messages remain durable model history but are deliberately absent
-/// from the normal transcript. User messages, including compaction summaries,
+/// from the normal transcript. Canonical conversation messages,
 /// Assistant generations, and Tool results are visible semantic content.
 fn transcript_visible_message(message: &MessageBlock) -> bool {
     !matches!(
@@ -6489,64 +6832,14 @@ fn message_exists(
 }
 
 /// Both lookups use existing unique Ledger identity and Journal sequence keys.
-fn load_compaction_checkpoint(
-    connection: &Connection,
-    id: &MessageId,
-    through: u64,
-) -> Result<(super::inbox::CompactionCheckpointStatistics, Option<bool>), ConversationStoreError> {
-    let row: Option<(Option<String>, Option<i64>)> = connection.query_row(
-        "SELECT checkpoint_json,compaction_event_sequence FROM message_ledger WHERE message_id=?1",
-        [id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
-    ).optional().map_err(|error| storage(format!("checkpoint lookup: {error}")))?;
-    let (statistics, sequence) = row.ok_or_else(|| {
-        ConversationStoreError::InvalidReference(format!("checkpoint {id} is unavailable"))
-    })?;
-    let statistics: super::inbox::CompactionCheckpointStatistics = decode(
-        &statistics.ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "checkpoint {id} has no required statistics"
-            ))
-        })?,
-        "checkpoint statistics",
-    )?;
-    if statistics.retired_messages == 0 {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "checkpoint {id} retires no messages"
-        )));
-    }
-    let manual = match sequence {
-        Some(sequence) if nonnegative(sequence, "compaction completion sequence")? <= through => {
-            let json: String = connection
-                .query_row(
-                    "SELECT event_json FROM events WHERE sequence=?1",
-                    [sequence],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(format!("checkpoint completion: {error}")))?;
-            let event: RuntimeEventEnvelope = decode(&json, "checkpoint completion")?;
-            if !matches!(&event.event, RuntimeEvent::CompactionCompleted { summary_message_id, .. } if summary_message_id == id)
-            {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "checkpoint {id} has invalid completion correlation"
-                )));
-            }
-            Some(event.attempt_id.is_none())
-        }
-        _ => None,
-    };
-    Ok((statistics, manual))
-}
-
 fn load_message(
     connection: &Connection,
     message_id: &MessageId,
 ) -> Result<MessageBlock, ConversationStoreError> {
     let json: String = connection
-        .query_row(
-            "SELECT message_json FROM message_ledger WHERE message_id=?1",
-            [message_id.as_str()],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT message_json FROM message_ledger WHERE message_id=?1")
+        .map_err(|error| storage(format!("Ledger lookup prepare: {error}")))?
+        .query_row([message_id.as_str()], |row| row.get(0))
         .optional()
         .map_err(|error| storage(format!("Ledger message lookup: {error}")))?
         .ok_or_else(|| {
@@ -6681,22 +6974,93 @@ fn load_pending_until(
         .collect())
 }
 
+fn reconstruct_snapshot_input(
+    connection: &Connection,
+    conversation: &ConversationId,
+    snapshot: &RequestSnapshot,
+) -> Result<ModelRequest, ConversationStoreError> {
+    snapshot
+        .reconstruct_with(|source| {
+            if &source.conversation_id != conversation {
+                return Err(
+                    crate::model::snapshot::RequestReconstructionError::Conversation(
+                        "frozen source scope mismatch".into(),
+                    ),
+                );
+            }
+            load_message(connection, &source.message_id).map_err(|e| {
+                crate::model::snapshot::RequestReconstructionError::Conversation(e.to_string())
+            })
+        })
+        .map_err(|e| ConversationStoreError::InvalidReference(e.to_string()))
+}
+
+fn validate_accepted_continuation_source(
+    connection: &Connection,
+    conversation: &ConversationId,
+    snapshot: &RequestSnapshot,
+) -> Result<(), ConversationStoreError> {
+    let Some(source) = &snapshot.continuation_source else {
+        return if snapshot.continuation.is_none() {
+            Ok(())
+        } else {
+            Err(ConversationStoreError::InvalidReference(
+                "continuation has no accepted-output source".into(),
+            ))
+        };
+    };
+    if snapshot.continuation.is_none()
+        || source.request_id == snapshot.request_id
+        || &source.assistant.conversation_id != conversation
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "invalid actual continuation source ownership".into(),
+        ));
+    }
+    let previous = load_request_snapshot(connection, conversation, &source.request_id)?;
+    if previous.provisional_message_id != source.assistant.message_id {
+        return Err(ConversationStoreError::InvalidReference(
+            "continuation source is not the prior request's accepted output".into(),
+        ));
+    }
+    let output = load_message(connection, &source.assistant.message_id)?;
+    let input = reconstruct_snapshot_input(connection, conversation, &previous)?;
+    let expected =
+        crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
+            previous.request_id,
+            conversation,
+            &input.messages,
+            &output,
+        )
+        .map_err(ConversationStoreError::InvalidReference)?;
+    if source != &expected {
+        return Err(ConversationStoreError::InvalidReference(
+            "continuation accepted-output or covered-input integrity mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn load_request_snapshot(
     connection: &Connection,
     conversation: &ConversationId,
     request_id: &RequestId,
 ) -> Result<RequestSnapshot, ConversationStoreError> {
-    let (stored_surface_revision, json, started_sequence): (i64, String, Option<i64>) = connection
-            .query_row(
-                "SELECT surface_revision,snapshot_json,started_sequence FROM request_snapshots WHERE request_id = ?1",
-                [request_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(|error| storage(format!("request snapshot lookup: {error}")))?
-            .ok_or_else(|| {
-                ConversationStoreError::RequestNotFound(request_id.clone())
-            })?;
+    // Reject a corrupt/oversized single record before decoding or allocating its body.
+    let (stored_canonical_frontier, json, started_sequence, digest): (i64, Option<String>, Option<i64>, String) = connection
+        .query_row("SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json ELSE NULL END,started_sequence,manifest_digest FROM request_snapshots WHERE request_id=?1", [request_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+        .optional().map_err(|error| storage(format!("request snapshot lookup: {error}")))?
+        .ok_or_else(|| ConversationStoreError::RequestNotFound(request_id.clone()))?;
+    let json = json.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "frozen request record exceeds the byte budget".into(),
+        )
+    })?;
+    if format!("{:x}", Sha256::digest(json.as_bytes())) != digest {
+        return Err(ConversationStoreError::InvalidReference(
+            "frozen request manifest integrity mismatch".into(),
+        ));
+    }
     let started_sequence = started_sequence.ok_or_else(|| {
         ConversationStoreError::InvalidReference(format!(
             "request snapshot {request_id} has no durable start sequence"
@@ -6718,7 +7082,7 @@ fn load_request_snapshot(
         })?;
     let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
     validate_snapshot_identity(&snapshot)?;
-    if stored_surface_revision != seq_to_i64(snapshot.surface_revision.get())? {
+    if stored_canonical_frontier != seq_to_i64(snapshot.canonical_frontier.0)? {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request snapshot {request_id} Surface column disagrees with its frozen snapshot"
         )));
@@ -7083,7 +7447,7 @@ fn load_user_message_boundaries_page_internal(
             "historical user-message boundary page limit must be positive",
         ));
     }
-    let Some((head_revision, _, head_active_json)) = read_surface_head(connection)? else {
+    let Some((head_revision, _, _head_active_json)) = read_surface_head(connection)? else {
         if through == SurfaceRevision::INITIAL {
             return Ok(SurfaceUserMessageBoundaryPage {
                 boundaries: Vec::new(),
@@ -7128,7 +7492,6 @@ fn load_user_message_boundaries_page_internal(
         })
         .map_err(|error| storage(format!("read Surface history query: {error}")))?;
     let mut expected_revision = 1_u64;
-    let mut expected_generation = 0_u64;
     for row in rows {
         let (stored_revision, stored_generation, json) =
             row.map_err(|error| storage(format!("Surface history row: {error}")))?;
@@ -7137,26 +7500,11 @@ fn load_user_message_boundaries_page_internal(
                 "Surface operation revisions are not contiguous from revision 1".to_owned(),
             ));
         }
-        let stored_generation = nonnegative(stored_generation, "Surface compaction generation")?;
+        let _ = nonnegative(stored_generation, "canonical append metadata")?;
         let operation: SurfaceOp = decode(&json, "Surface operation")?;
         validate_surface_operation_references_from_ledger(&ledger, &operation)?;
-        let is_replace = matches!(&operation, SurfaceOp::Replace { .. });
-        let next_generation = if is_replace {
-            expected_generation
-                .checked_add(1)
-                .ok_or_else(|| storage("Surface compaction generation is exhausted"))?
-        } else {
-            expected_generation
-        };
-        if stored_generation != next_generation {
-            return Err(ConversationStoreError::InvalidReference(
-                "Surface operation compaction generation is inconsistent".to_owned(),
-            ));
-        }
-        expected_generation = next_generation;
         let appended_message_id = match &operation {
             SurfaceOp::Append { message_id } => Some(message_id.clone()),
-            SurfaceOp::Replace { .. } => None,
         };
         apply_surface_op(&mut active, &operation)?;
         if let Some(message_id) = appended_message_id
@@ -7191,14 +7539,6 @@ fn load_user_message_boundaries_page_internal(
             "Surface revision {through} has a non-contiguous operation history"
         )));
     }
-    if through == head_revision {
-        let head_active: Vec<MessageId> = decode(&head_active_json, "Surface head")?;
-        if active != head_active {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "Surface head {head_revision} does not match its immutable operation history"
-            )));
-        }
-    }
     let next_offset = page.and_then(|(offset, _)| {
         let end = offset.saturating_add(boundaries.len());
         (end < boundary_count).then_some(end)
@@ -7222,14 +7562,8 @@ fn validate_surface_operation_references_from_ledger(
     ledger: &BTreeMap<MessageId, MessageBlock>,
     operation: &SurfaceOp,
 ) -> Result<(), ConversationStoreError> {
-    let references: [&MessageId; 3] = match operation {
-        SurfaceOp::Append { message_id } => [message_id, message_id, message_id],
-        SurfaceOp::Replace {
-            start,
-            end,
-            replacement,
-        } => [start, end, replacement],
-    };
+    let SurfaceOp::Append { message_id } = operation;
+    let references = [message_id];
     for message_id in references {
         if !ledger.contains_key(message_id) {
             return Err(ConversationStoreError::InvalidReference(format!(
@@ -7237,21 +7571,7 @@ fn validate_surface_operation_references_from_ledger(
             )));
         }
     }
-    if let SurfaceOp::Replace { replacement, .. } = operation {
-        let message = ledger
-            .get(replacement)
-            .expect("replacement was checked above");
-        if !matches!(
-            message,
-            MessageBlock::User(user)
-                if user.source == UserSource::Runtime
-                    && user.kind.is_compaction_summary()
-        ) {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "Surface Replace replacement {replacement} is not a User(Runtime / CompactionSummary) message"
-            )));
-        }
-    }
+
     Ok(())
 }
 
@@ -7311,7 +7631,6 @@ fn replay_surface_history(
         })
         .map_err(|error| storage(format!("read Surface history query: {error}")))?;
     let mut expected_revision = 1_u64;
-    let mut expected_generation = 0_u64;
     for row in rows {
         let (stored_revision, stored_generation, json) =
             row.map_err(|error| storage(format!("Surface history row: {error}")))?;
@@ -7320,23 +7639,9 @@ fn replay_surface_history(
                 "Surface operation revisions are not contiguous from revision 1".to_owned(),
             ));
         }
-        let stored_generation = nonnegative(stored_generation, "Surface compaction generation")?;
+        let _ = nonnegative(stored_generation, "canonical append metadata")?;
         let operation: SurfaceOp = decode(&json, "Surface operation")?;
         validate_surface_operation_references(connection, &operation)?;
-        let is_replace = matches!(&operation, SurfaceOp::Replace { .. });
-        let next_generation = if is_replace {
-            expected_generation
-                .checked_add(1)
-                .ok_or_else(|| storage("Surface compaction generation is exhausted"))?
-        } else {
-            expected_generation
-        };
-        if stored_generation != next_generation {
-            return Err(ConversationStoreError::InvalidReference(
-                "Surface operation compaction generation is inconsistent".to_owned(),
-            ));
-        }
-        expected_generation = next_generation;
         apply_surface_op(&mut active, &operation)?;
         history.push(operation);
         expected_revision = expected_revision
@@ -7366,14 +7671,8 @@ fn validate_surface_operation_references(
     connection: &Connection,
     operation: &SurfaceOp,
 ) -> Result<(), ConversationStoreError> {
-    let references: [&MessageId; 3] = match operation {
-        SurfaceOp::Append { message_id } => [message_id, message_id, message_id],
-        SurfaceOp::Replace {
-            start,
-            end,
-            replacement,
-        } => [start, end, replacement],
-    };
+    let SurfaceOp::Append { message_id } = operation;
+    let references = [message_id];
     for message_id in references {
         if !ledger_message_exists(connection, message_id)? {
             return Err(ConversationStoreError::InvalidReference(format!(
@@ -7381,34 +7680,26 @@ fn validate_surface_operation_references(
             )));
         }
     }
-    if let SurfaceOp::Replace { replacement, .. } = operation {
-        let message = load_message(connection, replacement)?;
-        if !matches!(
-            message,
-            MessageBlock::User(user)
-                if user.source == UserSource::Runtime
-                    && user.kind.is_compaction_summary()
-        ) {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "Surface Replace replacement {replacement} is not a User(Runtime / CompactionSummary) message"
-            )));
-        }
-    }
+
     Ok(())
 }
 
-fn reconstruct_surface_tx(
-    transaction: &Transaction<'_>,
-    revision: SurfaceRevision,
-) -> Result<Vec<MessageId>, ConversationStoreError> {
-    reconstruct_surface(transaction, revision)
-}
-
-fn validate_surface_revision(
-    transaction: &Transaction<'_>,
-    revision: SurfaceRevision,
+fn validate_canonical_frontier(
+    connection: &Connection,
+    frontier: crate::context::resources::LedgerFrontier,
 ) -> Result<(), ConversationStoreError> {
-    let _ = reconstruct_surface_tx(transaction, revision)?;
+    let head: i64 = connection
+        .query_row(
+            "SELECT coalesce(max(position),0) FROM message_ledger",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| storage(e.to_string()))?;
+    if frontier.0 > nonnegative(head, "canonical frontier")? {
+        return Err(ConversationStoreError::InvalidReference(
+            "snapshot canonical frontier is beyond durable history".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -7424,48 +7715,6 @@ fn apply_surface_op(
         .map_err(ConversationStoreError::InvalidReference)
 }
 
-fn span_indices(
-    active: &[MessageId],
-    span: &SurfaceSpan,
-) -> Result<(usize, usize), ConversationStoreError> {
-    let start = active
-        .iter()
-        .position(|id| id == &span.start)
-        .ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "compaction start {} is not active",
-                span.start
-            ))
-        })?;
-    let end = active
-        .iter()
-        .position(|id| id == &span.end)
-        .ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "compaction end {} is not active",
-                span.end
-            ))
-        })?;
-    if end < start {
-        return Err(ConversationStoreError::InvalidReference(
-            "compaction span is reversed".to_owned(),
-        ));
-    }
-    Ok((start, end))
-}
-
-fn replacement_active(
-    active: &[MessageId],
-    start: usize,
-    end: usize,
-    replacement: &MessageId,
-) -> Vec<MessageId> {
-    let mut next = active.to_vec();
-    next.splice(start..=end, [replacement.clone()]);
-    next
-}
-
-#[derive(Debug)]
 struct PersistedEvent {
     event: RuntimeEventEnvelope,
     transcript_cursor: Option<TranscriptCursor>,
@@ -7776,23 +8025,35 @@ fn find_request_start_event(
 /// checked against the frozen JSON so publication cannot trust a mismatched
 /// tuple assembled by a caller.
 type RequestSnapshotRow = (RequestSnapshot, Option<u64>, Option<u64>);
+type StoredSnapshotRow = (i64, Option<String>, Option<i64>, Option<i64>, String);
 
 fn read_request_snapshot_tx(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
 ) -> Result<Option<RequestSnapshotRow>, ConversationStoreError> {
-    let row: Option<(i64, String, Option<i64>, Option<i64>)> = transaction
+    let row: Option<StoredSnapshotRow> = transaction
         .query_row(
-            "SELECT surface_revision,snapshot_json,started_sequence,completed_sequence
+            "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,completed_sequence,manifest_digest
              FROM request_snapshots WHERE request_id=?1",
             [request_id.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .optional()
         .map_err(|error| storage(format!("request snapshot transaction lookup: {error}")))?;
-    let Some((stored_surface_revision, json, started_sequence, completed_sequence)) = row else {
+    let Some((stored_canonical_frontier, json, started_sequence, completed_sequence, digest)) = row
+    else {
         return Ok(None);
     };
+    let json = json.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "frozen request record exceeds the byte budget".into(),
+        )
+    })?;
+    if format!("{:x}", Sha256::digest(json.as_bytes())) != digest {
+        return Err(ConversationStoreError::InvalidReference(
+            "frozen request manifest integrity mismatch".into(),
+        ));
+    }
     let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
     validate_snapshot_identity(&snapshot)?;
     if snapshot.request_id != *request_id {
@@ -7800,7 +8061,7 @@ fn read_request_snapshot_tx(
             "request snapshot row {request_id} contains a different RequestId"
         )));
     }
-    if stored_surface_revision != seq_to_i64(snapshot.surface_revision.get())? {
+    if stored_canonical_frontier != seq_to_i64(snapshot.canonical_frontier.0)? {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request snapshot {request_id} Surface column disagrees with its frozen snapshot"
         )));
@@ -8907,58 +9168,16 @@ fn validate_event_reference(
             )?;
         }
         RuntimeEvent::CompactionCompleted {
+            checkpoint_id,
+            activation_id,
             generation,
-            summary_message_id,
-            surface_revision,
             ..
         } => {
-            if !ledger_message_exists(transaction, summary_message_id)? {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "compaction event references missing summary {summary_message_id}"
-                )));
-            }
-            let active = reconstruct_surface_tx(transaction, *surface_revision)?;
-            if !active.contains(summary_message_id) {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "compaction event references Surface revision {surface_revision} without its summary"
-                )));
-            }
-            let surface_op: Option<(i64, String)> = transaction
-                .query_row(
-                    "SELECT compaction_generation,op_json FROM surface_ops WHERE revision=?1",
-                    [seq_to_i64(surface_revision.get())?],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(|error| {
-                    storage(format!("compaction Surface operation lookup: {error}"))
-                })?;
-            let Some((stored_generation, op_json)) = surface_op else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "compaction event references missing Surface operation {surface_revision}"
-                )));
-            };
-            let operation: SurfaceOp = decode(&op_json, "compaction Surface operation")?;
-            if u64::try_from(stored_generation).ok() != Some(*generation)
-                || !matches!(
-                    operation,
-                    SurfaceOp::Replace { replacement, .. } if replacement == *summary_message_id
-                )
-            {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "compaction event does not match Surface revision {surface_revision}"
-                )));
-            }
-            let summary = load_message_tx(transaction, summary_message_id)?;
-            if !matches!(
-                summary,
-                MessageBlock::User(user)
-                    if user.source == UserSource::Runtime
-                        && user.kind.is_compaction_summary()
-            ) {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "compaction event references a non-summary message {summary_message_id}"
-                )));
+            let activation = projection::completion_activation(transaction, checkpoint_id)?;
+            if activation.activation != *activation_id || *generation != activation_id.0 {
+                return Err(ConversationStoreError::InvalidReference(
+                    "compaction completion differs from atomic projection activation".into(),
+                ));
             }
         }
         RuntimeEvent::ModelRequestStarted { request_id, .. } => {
@@ -8983,9 +9202,7 @@ fn validate_event_reference(
                 )));
             }
             validate_request_start_metadata(&snapshot, envelope)?;
-            for message_id in reconstruct_surface_tx(transaction, snapshot.surface_revision)? {
-                let _ = load_message_tx(transaction, &message_id)?;
-            }
+            let _ = reconstruct_snapshot_input(transaction, &envelope.conversation_id, &snapshot)?;
         }
         RuntimeEvent::BackgroundTerminalPublished { message_id, .. } => {
             let notification = load_user_notification_tx(transaction, message_id, "background")?;
@@ -9500,6 +9717,16 @@ fn ledger_message_exists(
 
 #[allow(clippy::too_many_lines)] // Closed mapping from durable facts to exact terminal domains.
 fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
+    match &event.event {
+        RuntimeEvent::CompactionStarted { operation_id } => {
+            return vec![(format!("compaction:{operation_id}"), false)];
+        }
+        RuntimeEvent::CompactionCompleted { operation_id, .. }
+        | RuntimeEvent::CompactionFailed { operation_id, .. } => {
+            return vec![(format!("compaction:{operation_id}"), true)];
+        }
+        _ => {}
+    }
     // The detached-execution lifecycle is opened by the ownership commit and
     // closed exactly once by the terminal publication. Recording the open
     // state durably is what lets a restart tell "owned and unsettled" from
@@ -9668,12 +9895,6 @@ pub(crate) fn append_assistant_history_fixture(
         head.compaction_generation,
         &head.active_message_ids,
     )?;
-    update_checkpoint(
-        &transaction,
-        head.revision,
-        head.compaction_generation,
-        &head.active_message_ids,
-    )?;
     // Verify the same final durable invariants as ordinary appends, once.
     load_head(&transaction)?;
     transaction
@@ -9760,6 +9981,33 @@ fn initial_history_digest(messages: &[MessageBlock]) -> Result<String, Conversat
     Ok(digest)
 }
 
+fn encode_snapshot(snapshot: &RequestSnapshot) -> Result<String, ConversationStoreError> {
+    struct SnapshotBytes(Vec<u8>);
+    impl std::io::Write for SnapshotBytes {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self
+                .0
+                .len()
+                .checked_add(bytes.len())
+                .is_none_or(|size| size > 64 * 1024 * 1024)
+            {
+                return Err(std::io::Error::other(
+                    "frozen request exceeds storage byte budget",
+                ));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = SnapshotBytes(Vec::new());
+    serde_json::to_writer(&mut writer, snapshot)
+        .map_err(|error| storage(format!("request snapshot encoding: {error}")))?;
+    String::from_utf8(writer.0).map_err(|error| storage(error.to_string()))
+}
+
 fn encode<T: Serialize>(value: &T, name: &str) -> Result<String, ConversationStoreError> {
     serde_json::to_string(value).map_err(|error| storage(format!("serialize {name}: {error}")))
 }
@@ -9823,15 +10071,15 @@ mod tests {
         include!("sqlite/indexed_fact_tests.rs");
     }
     use super::*;
+
     use crate::context::assembly::ContextGeneration;
     use crate::conversation::ConversationState;
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
-        AssistantMessageBlock, CompactionSummaryMetadata, ContextKind, ContributionEmission,
-        InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
-        UserSource,
+        AssistantMessageBlock, ContextKind, ContributionEmission, InboundKind, MessageBlock,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::catalog::ModelCapabilities;
     use crate::model::catalog::ModelCompat;
@@ -9840,7 +10088,7 @@ mod tests {
     use crate::model::snapshot::{ContributionStart, RequestIdentity, RequestSnapshot};
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::identity::{AttemptId, EventId, TurnId};
-    use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
+    use crate::runtime::types::CancellationReason;
     use crate::tools::types::{
         ToolCall, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
     };
@@ -9864,6 +10112,231 @@ mod tests {
             "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn compaction_resource_paging_never_observes_future_lifecycle_or_ledger_growth() {
+        use crate::context::resources::{
+            CompactionResources, JournalFrontier, LedgerFrontier, ResourceLimits,
+        };
+        let store = store();
+        let conversation = store.conversation_id().clone();
+        let attempt = AttemptId::new("resource-attempt");
+        store
+            .append_event(envelope(
+                &conversation,
+                "resource-start",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        store
+            .append_canonical(&user_message("before", "immutable before cut"))
+            .unwrap();
+        let mut resources = CompactionResources::capture(
+            &store,
+            ResourceLimits {
+                page_items: 1,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        let frozen = resources.cut().clone();
+        // The first append commits before capture; the terminal and next message
+        // commit after capture, before the delayed page query. SQL's <= cut is
+        // the read linearization boundary, not query time or hot lifecycle state.
+        store
+            .append_event(envelope(
+                &conversation,
+                "resource-terminal",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptCompleted {
+                    attempt_id: attempt,
+                    finish_reason: ModelFinishReason::Stop,
+                },
+            ))
+            .unwrap();
+        store
+            .append_canonical(&user_message("after", "future ledger material"))
+            .unwrap();
+        let events = resources.events(JournalFrontier(0)).unwrap();
+        assert_eq!(events.rows.len(), 1);
+        assert!(matches!(
+            events.rows[0].1.event,
+            RuntimeEvent::AttemptStarted { .. }
+        ));
+        assert!(resources.events(frozen.journal).unwrap().rows.is_empty());
+        let originals = resources.messages(LedgerFrontier(0)).unwrap();
+        assert_eq!(originals.rows[0].1.id(), &MessageId::new("before"));
+        assert!(resources.messages(frozen.ledger).unwrap().rows.is_empty());
+        assert!(resources.originals(&[MessageId::new("after")]).is_err());
+    }
+
+    #[test]
+    fn compaction_resource_memory_bounds_include_all_pages_and_oversized_single_records() {
+        use crate::context::resources::{CompactionResources, LedgerFrontier, ResourceLimits};
+        let store = store();
+        store
+            .append_canonical(&user_message("one", "first"))
+            .unwrap();
+        store
+            .append_canonical(&user_message("two", "second"))
+            .unwrap();
+        let mut resources = CompactionResources::capture(
+            &store,
+            ResourceLimits {
+                page_items: 1,
+                total_items: 1,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        let first = resources.messages(LedgerFrontier(0)).unwrap();
+        assert!(
+            resources
+                .messages(LedgerFrontier(first.rows[0].0))
+                .unwrap_err()
+                .to_string()
+                .contains("cumulative")
+        );
+        let mut tiny = CompactionResources::capture(
+            &store,
+            ResourceLimits {
+                record_bytes: 8,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            tiny.messages(LedgerFrontier(0))
+                .unwrap_err()
+                .to_string()
+                .contains("byte bound")
+        );
+        let mut repeated = CompactionResources::capture(
+            &store,
+            ResourceLimits {
+                total_bytes: 256,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        repeated.originals(&[MessageId::new("one")]).unwrap();
+        assert!(
+            repeated
+                .originals(&[MessageId::new("one")])
+                .unwrap_err()
+                .to_string()
+                .contains("byte bound")
+        );
+    }
+
+    #[test]
+    fn compaction_byte_pages_resume_without_decoding_the_next_record() {
+        use crate::context::resources::{CompactionResources, LedgerFrontier, ResourceLimits};
+        let store = store();
+        let rows = (1..=3)
+            .map(|i| user_message(&format!("M{i}"), &"x".repeat(128)))
+            .collect::<Vec<_>>();
+        let bytes = serde_json::to_vec(&rows[0]).unwrap().len();
+        store.initialize(&rows).unwrap();
+        let mut resources = CompactionResources::capture(
+            &store,
+            ResourceLimits {
+                record_bytes: bytes + 16,
+                page_bytes: bytes + 16,
+                total_bytes: bytes * 3 + 64,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        compaction_resources::take_body_decodes();
+        let mut after = LedgerFrontier(0);
+        for expected in &rows {
+            let page = resources.messages(after).unwrap();
+            assert_eq!(page.rows.len(), 1);
+            assert_eq!(&page.rows[0].1, expected);
+            after = LedgerFrontier(page.rows[0].0);
+            assert_eq!(
+                compaction_resources::take_body_decodes(),
+                1,
+                "byte lookahead never hydrates the next page's record"
+            );
+        }
+        assert!(resources.messages(after).unwrap().rows.is_empty());
+    }
+
+    #[test]
+    fn compaction_tool_lifecycle_at_cut_never_reads_later_completion() {
+        use crate::context::resources::{CompactionResources, JournalFrontier, ResourceLimits};
+        let store = store();
+        let call_id = ToolCallId::new("cut-tool-call");
+        let tool_id = ToolId::new("cut-tool");
+        store
+            .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("cut-owner"),
+                content: vec![AssistantContentBlock::ToolCall(ToolCall {
+                    id: call_id.clone(),
+                    tool_id: tool_id.clone(),
+                    name: "read".into(),
+                    arguments: serde_json::json!({"path":"file.rs"}),
+                })],
+            }))
+            .unwrap();
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                "cut-tool-started",
+                None,
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: call_id.clone(),
+                    tool_id: tool_id.clone(),
+                },
+            ))
+            .unwrap();
+        let mut resources = CompactionResources::capture(
+            &store,
+            ResourceLimits {
+                page_items: 1,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        let frozen = resources.cut().clone();
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                "cut-tool-completed",
+                None,
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: call_id,
+                    tool_id,
+                    result: crate::tools::types::ToolExecutionResult {
+                        workflow: None,
+                        status: ToolExecutionStatus::Success,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        deliveries: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    },
+                },
+            ))
+            .unwrap();
+        let page = resources.events(JournalFrontier(0)).unwrap();
+        assert!(matches!(
+            page.rows[0].1.event,
+            RuntimeEvent::ToolExecutionStarted { .. }
+        ));
+        assert!(resources.events(frozen.journal).unwrap().rows.is_empty());
+        assert!(matches!(
+            store.read_events(Some(frozen.journal.0), 1).unwrap().events[0].event,
+            RuntimeEvent::ToolExecutionCompleted { .. }
+        ));
     }
 
     fn user_message(id: &str, text: &str) -> MessageBlock {
@@ -9907,26 +10380,6 @@ mod tests {
             )),
             timestamp: None,
         })
-    }
-
-    fn summary_message(id: &str, text: &str) -> UserMessageBlock {
-        UserMessageBlock {
-            id: MessageId::new(id),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: text.to_owned(),
-            })],
-            source: UserSource::Runtime,
-            // Non-empty Issue #140 metadata so every durable compaction
-            // round trip exercises the typed canonical encoding.
-            kind: InboundKind::CompactionSummary(
-                CompactionSummaryMetadata::new(
-                    vec!["/read/retired.rs".to_owned()],
-                    vec!["/modified/retired.rs".to_owned()],
-                )
-                .expect("valid metadata"),
-            ),
-            timestamp: None,
-        }
     }
 
     fn assistant_message(id: &str, text: &str) -> MessageBlock {
@@ -10188,40 +10641,24 @@ mod tests {
                 },
             })
         };
-        let canonical = vec![
-            assistant("a"),
-            result("ra", "a", "old-result"),
-            MessageBlock::User(summary_message("summary", "retired A")),
-            assistant("b"),
-        ];
-        let history = vec![
-            SurfaceOp::Append {
-                message_id: MessageId::new("a"),
-            },
-            SurfaceOp::Append {
-                message_id: MessageId::new("ra"),
-            },
-            SurfaceOp::Replace {
-                start: MessageId::new("a"),
-                end: MessageId::new("ra"),
-                replacement: MessageId::new("summary"),
-            },
-            SurfaceOp::Append {
-                message_id: MessageId::new("b"),
-            },
-        ];
-        let checkpoints = BTreeMap::from([(
-            MessageId::new("summary"),
-            crate::durable::inbox::CompactionCheckpointStatistics {
-                retired_messages: 2,
-                retired_tokens: crate::context::DefaultTokenEstimator
-                    .estimate_conversation_input(&canonical[..2]),
-            },
-        )]);
+        let canonical = vec![assistant("a"), result("ra", "a", "old-result")];
         let store = store();
+        store.initialize(&canonical).unwrap();
         store
-            .initialize_lineage(&LineageSeed::replayed(canonical, history, checkpoints).unwrap())
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &store,
+                        "P1",
+                        2,
+                        "retired A",
+                    ),
+                    None,
+                ),
+            )
             .unwrap();
+        store.append_canonical(&assistant("b")).unwrap();
         let unresolved = crate::runtime_client::snapshot::transcript_page_view(
             store.load_transcript_page(None, 1).unwrap(),
         )
@@ -10586,313 +11023,133 @@ mod tests {
     }
 
     #[test]
-    fn raw_compaction_summary_append_cannot_bypass_atomic_transition() {
+    fn canonical_summary_payload_is_not_a_canonical_message() {
         let store = store();
-        let original = user_message("a", "A");
-        store.initialize(&[original]).unwrap();
-        let before = store.load_head().unwrap();
-        let result = store.append_canonical(&MessageBlock::User(summary_message(
-            "summary-raw",
-            "summary",
-        )));
-        assert!(matches!(
-            result,
-            Err(ConversationStoreError::InvalidReference(_))
-        ));
-        assert_eq!(store.load_head().unwrap(), before);
-        assert_eq!(store.load_canonical().unwrap().len(), 1);
-        assert!(store.read_events(None, 10).unwrap().events.is_empty());
+        store.initialize(&[user_message("a", "A")]).unwrap();
+        let input = serde_json::json!({"role":"user","id":"summary","source":"runtime","kind":{"compaction_summary":{}},"content":[]});
+        assert!(serde_json::from_value::<MessageBlock>(input).is_err());
+        assert_eq!(store.load_canonical().unwrap(), [user_message("a", "A")]);
+        assert!(store.read_events(None, 64).unwrap().events.is_empty());
     }
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn immutable_surface_revisions_survive_compactions_and_restart() {
+    fn immutable_projection_activations_survive_compactions_growth_and_restart() {
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let conversation_id = ConversationId::new("conv_3756ff3c-c24d-7348-8827-12caf1896498");
-        let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
-        let a = user_message("a", "A");
-        let b = user_message("b", "B");
-        let c = user_message("c", "C");
-        let d = user_message("d", "D");
-        store.initialize(&[a, b, c]).unwrap();
-        let s1 = store.load_head().unwrap().revision;
-
-        let summary1 = summary_message("summary-1", "Summary 1");
-        let first_compaction = |expected_revision| CompactionCommitInput {
-            summary: summary1.clone(),
-            span: SurfaceSpan::new(MessageId::new("a"), MessageId::new("a")),
-            expected_revision,
-            tokens_before: TokenMeasurement {
-                input_tokens: 30,
-                source: TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: 20,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-            occupancy: None,
-        };
-        store.arm_fail_compaction_times(1);
-        assert!(store.commit_compaction(first_compaction(s1)).is_err());
-        assert_eq!(store.load_head().unwrap().revision, s1);
-        assert!(
-            !store
-                .load_canonical()
-                .unwrap()
-                .iter()
-                .any(|message| crate::conversation::message_id_of(message)
-                    == MessageId::new("summary-1"))
-        );
-
-        let (s2, _, _, _) = store.commit_compaction(first_compaction(s1)).unwrap();
+        let conversation = ConversationId::generate();
+        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        let history = vec![
+            user_message("a", "A"),
+            user_message("b", "B"),
+            user_message("c", "C"),
+        ];
+        store.initialize(&history).unwrap();
+        let first =
+            checkpoint_commit_fixture(&store, checkpoint_fixture(&store, "P1", 1, "first"), None);
+        let receipt1 = store.commit_projection(first.clone()).unwrap();
+        store.append_canonical(&user_message("d", "D")).unwrap();
+        let second =
+            checkpoint_commit_fixture(&store, checkpoint_fixture(&store, "P2", 2, "second"), None);
+        let receipt2 = store.commit_projection(second).unwrap();
+        assert_eq!(store.commit_projection(first).unwrap(), receipt1);
         assert_eq!(
-            store.reconstruct_surface(s2).unwrap(),
-            vec![
-                MessageId::new("summary-1"),
-                MessageId::new("b"),
-                MessageId::new("c")
-            ]
+            store.projection_head().unwrap().unwrap(),
+            receipt2.checkpoint
         );
-        store.append_canonical(&d).unwrap();
-        let s3 = store.load_head().unwrap().revision;
-        assert_eq!(
-            store.reconstruct_surface(s3).unwrap(),
-            vec![
-                MessageId::new("summary-1"),
-                MessageId::new("b"),
-                MessageId::new("c"),
-                MessageId::new("d")
-            ]
-        );
-
-        let summary2 = summary_message("summary-2", "Summary 2");
-        store.arm_fail_event_times(1);
-        assert!(
-            store
-                .commit_compaction(CompactionCommitInput {
-                    summary: summary2.clone(),
-                    span: SurfaceSpan::new(MessageId::new("summary-1"), MessageId::new("b")),
-                    expected_revision: s3,
-                    tokens_before: TokenMeasurement {
-                        input_tokens: 20,
-                        source: TokenMeasurementSource::Estimated,
-                    },
-                    estimated_tokens_after: 12,
-                    attempt_id: None,
-                    turn_id: None,
-                    timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-                    occupancy: None,
-                })
-                .is_err()
-        );
-        assert_eq!(store.load_head().unwrap().revision, s3);
-        let (s4, _, _, _) = store
-            .commit_compaction(CompactionCommitInput {
-                summary: summary2,
-                span: SurfaceSpan::new(MessageId::new("summary-1"), MessageId::new("b")),
-                expected_revision: s3,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 20,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 12,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-                occupancy: None,
-            })
-            .unwrap();
-        assert_eq!(
-            store.reconstruct_surface(s4).unwrap(),
-            vec![
-                MessageId::new("summary-2"),
-                MessageId::new("c"),
-                MessageId::new("d")
-            ]
-        );
+        assert_eq!(store.load_canonical().unwrap().len(), 4);
         drop(store);
-
-        let reopened = SqliteConversationStore::open(conversation_id, &path).unwrap();
+        let reopened = SqliteConversationStore::open(conversation, &path).unwrap();
+        let timeline = reopened
+            .projection_timeline(crate::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap();
+        assert_eq!(timeline.len(), 2);
+        assert_eq!(timeline[0], receipt1.checkpoint);
+        assert_eq!(timeline[1], receipt2.checkpoint);
+        let active = reopened.projected_history().unwrap();
         assert_eq!(
-            reopened.reconstruct_surface(s1).unwrap(),
-            vec![
-                MessageId::new("a"),
-                MessageId::new("b"),
-                MessageId::new("c")
-            ]
-        );
-        assert_eq!(
-            reopened.reconstruct_surface(s2).unwrap(),
-            vec![
-                MessageId::new("summary-1"),
-                MessageId::new("b"),
-                MessageId::new("c")
-            ]
-        );
-        assert_eq!(
-            reopened.reconstruct_surface(s3).unwrap(),
-            vec![
-                MessageId::new("summary-1"),
-                MessageId::new("b"),
-                MessageId::new("c"),
-                MessageId::new("d")
-            ]
-        );
-        assert_eq!(
-            reopened.reconstruct_surface(s4).unwrap(),
-            vec![
-                MessageId::new("summary-2"),
-                MessageId::new("c"),
-                MessageId::new("d")
-            ]
-        );
-        assert!(
-            reopened
-                .load_canonical()
-                .unwrap()
+            active
+                .messages
                 .iter()
-                .any(|message| crate::conversation::message_id_of(message) == MessageId::new("a"))
-        );
-        assert!(
-            reopened
-                .load_canonical()
-                .unwrap()
-                .iter()
-                .any(|message| message
-                    == &MessageBlock::User(summary_message("summary-2", "Summary 2"))),
-            "a reopen recovers the summary's text and typed metadata exactly"
+                .filter_map(|m| m.canonical_id())
+                .cloned()
+                .collect::<Vec<_>>(),
+            [MessageId::new("c"), MessageId::new("d")]
         );
     }
 
     #[test]
-    fn malformed_checkpoint_facts_fail_explicitly_without_history_recovery() {
+    fn corrupted_checkpoint_content_manifest_fails_closed() {
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
         let store = store();
         store.initialize(&[user_message("a", "A")]).unwrap();
-        let input = CompactionCommitInput {
-            summary: summary_message("summary", "summary"),
-            span: SurfaceSpan::new(MessageId::new("a"), MessageId::new("a")),
-            expected_revision: store.load_head().unwrap().revision,
-            tokens_before: TokenMeasurement {
-                input_tokens: 10,
-                source: TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: 2,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc::now(),
-            occupancy: None,
-        };
-        store.commit_compaction(input).unwrap();
-        for value in [
-            None,
-            Some("{}"),
-            Some("{\"retired_messages\":0,\"retired_tokens\":1}"),
-            Some("{\"retired_messages\":1,\"retired_tokens\":-1}"),
-        ] {
-            store
-                .conn
-                .lock()
-                .unwrap()
-                .execute(
-                    "UPDATE message_ledger SET checkpoint_json=?1 WHERE message_id='summary'",
-                    [value],
-                )
-                .unwrap();
-            assert!(
-                store
-                    .compaction_checkpoint(&MessageId::new("summary"), u64::MAX)
-                    .is_err()
-            );
-        }
+        store
+            .commit_projection(checkpoint_commit_fixture(
+                &store,
+                checkpoint_fixture(&store, "P1", 1, "summary"),
+                None,
+            ))
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute("UPDATE projection_checkpoints SET candidate_json='{}'", [])
+            .unwrap();
+        assert!(store.projection_head().is_err());
+        assert!(store.projected_history().is_err());
     }
 
     #[test]
-    fn every_compaction_stage_fault_exposes_only_the_old_complete_state() {
-        let faults = [
-            CompactionFaultOperation::BeforeSummaryInsert,
-            CompactionFaultOperation::AfterSummaryInsert,
-            CompactionFaultOperation::AfterSurfaceRevision,
-            CompactionFaultOperation::AfterCheckpoint,
-            CompactionFaultOperation::BeforeEventInsert,
-            CompactionFaultOperation::AfterEventInsert,
-        ];
-        for (index, fault) in faults.into_iter().enumerate() {
-            let store = SqliteConversationStore::in_memory(ConversationId::new(format!(
-                "conv_00000000-0000-7000-8000-{index:012x}"
-            )))
-            .unwrap();
-            let a = user_message("a", "A");
-            let b = user_message("b", "B");
-            store.initialize(&[a, b]).unwrap();
-            let old_revision = store.load_head().unwrap().revision;
-            let summary_id = MessageId::new(format!("summary-{index}"));
-            let input = || CompactionCommitInput {
-                summary: summary_message(summary_id.as_str(), "summary"),
-                span: SurfaceSpan::new(MessageId::new("a"), MessageId::new("b")),
-                expected_revision: old_revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 10,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 2,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-                occupancy: None,
-            };
+    fn every_checkpoint_transaction_stage_fault_exposes_only_the_old_complete_state() {
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
+        for fault in [
+            CompactionFaultOperation::BeforeContentInsert,
+            CompactionFaultOperation::AfterContentInsert,
+            CompactionFaultOperation::AfterActivationInsert,
+            CompactionFaultOperation::AfterHeadTransition,
+            CompactionFaultOperation::BeforeCompletionInsert,
+            CompactionFaultOperation::AfterCompletionInsert,
+            CompactionFaultOperation::AfterReceiptInsert,
+        ] {
+            let store = store();
+            let history = vec![user_message("a", "A"), user_message("b", "B")];
+            store.initialize(&history).unwrap();
+            let input = checkpoint_commit_fixture(
+                &store,
+                checkpoint_fixture(&store, "P1", 2, "summary"),
+                None,
+            );
+            let fingerprint = input.candidate.fingerprint();
             store.arm_compaction_fault_script([fault]);
-            assert!(store.commit_compaction(input()).is_err());
-            assert_eq!(store.load_head().unwrap().revision, old_revision);
-            assert_eq!(
-                store.reconstruct_surface(old_revision).unwrap(),
-                vec![MessageId::new("a"), MessageId::new("b")]
+            assert!(store.commit_projection(input.clone()).is_err());
+            assert_eq!(store.load_canonical().unwrap(), history);
+            assert!(store.projection_head().unwrap().is_none());
+            assert!(
+                store
+                    .projection_timeline(crate::context::checkpoint::ProjectionActivationId(0), 64)
+                    .unwrap()
+                    .is_empty()
             );
             assert!(
-                !store
-                    .load_canonical()
-                    .unwrap()
-                    .iter()
-                    .any(|message| crate::conversation::message_id_of(message) == summary_id)
-            );
-            assert!(store.read_events(None, 20).unwrap().events.is_empty());
-            assert!(store.compaction_checkpoint(&summary_id, u64::MAX).is_err());
-            assert_eq!(
                 store
-                    .conn
-                    .lock()
+                    .projection_receipt(&input.operation_id, &fingerprint)
                     .unwrap()
-                    .query_row(
-                        "SELECT count(*) FROM message_ledger WHERE checkpoint_json IS NOT NULL",
-                        [],
-                        |row| row.get::<_, i64>(0)
-                    )
-                    .unwrap(),
-                0
+                    .is_none()
             );
-
-            let (new_revision, _, event, _) = store.commit_compaction(input()).unwrap();
+            assert!(store.read_events(None, 64).unwrap().events.is_empty());
+            let receipt = store.commit_projection(input).unwrap();
             assert_eq!(
-                store
-                    .compaction_checkpoint(&summary_id, u64::MAX)
-                    .unwrap()
-                    .0
-                    .retired_messages,
-                2
+                store.projection_head().unwrap().unwrap(),
+                receipt.checkpoint
             );
-            assert_eq!(new_revision, old_revision.next());
-            assert!(matches!(
-                event.event,
-                RuntimeEvent::CompactionCompleted {
-                    summary_message_id,
-                    surface_revision,
-                    ..
-                } if summary_message_id == summary_id && surface_revision == new_revision
-            ));
-            assert_eq!(
-                store.reconstruct_surface(new_revision).unwrap(),
-                vec![summary_id]
-            );
+            assert_eq!(store.read_events(None, 64).unwrap().events.len(), 1);
         }
     }
 
@@ -10962,21 +11219,229 @@ mod tests {
                 [active.clone()],
             )
             .unwrap();
-        connection
-            .execute(
-                "UPDATE context_checkpoints SET revision=2,active_json=?1 WHERE id=1",
-                [active],
-            )
-            .unwrap();
         drop(connection);
         assert!(matches!(
             store.load_head(),
             Err(ConversationStoreError::InvalidReference(detail))
-                if detail.contains("missing Ledger message")
+                if detail.contains("canonical frontier metadata")
         ));
     }
 
+    /// Freeze once before a test starts a request. Receipt replay uses this exact value.
+    fn freeze_test_input(
+        store: &SqliteConversationStore,
+        snapshot: &mut RequestSnapshot,
+        context: &[MessageBlock],
+    ) {
+        let history = store.projected_history().unwrap();
+        let mut messages = history.messages;
+        messages.extend(crate::model::input::canonical_input(context));
+        snapshot.history_cut = history.cut;
+        snapshot
+            .freeze_input(
+                store.conversation_id(),
+                &ModelRequest {
+                    continuation_source: None,
+                    images: crate::model::images::ResolvedImages::new(),
+                    invocation: snapshot.invocation.clone(),
+                    messages,
+                    tools: snapshot.tool_definitions.clone(),
+                    effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                    continuation: snapshot.continuation.clone(),
+                },
+            )
+            .unwrap();
+    }
+
     /// The frozen request snapshot used by the request-start tests.
+    #[test]
+    #[allow(clippy::too_many_lines)] // One native checkpoint/start/recovery proof for all four typed pairings.
+    fn all_four_projection_tool_pairings_start_exact_requests_without_recovery_execution() {
+        use crate::context::checkpoint::{
+            CheckpointBlockIndex, CheckpointCallCoordinate, CheckpointItem, CheckpointMessage,
+            CheckpointMessageOccurrence, ProjectedCallSource,
+        };
+        use crate::model::projected::{
+            CanonicalMessageRef, DerivedModelMessage, ProjectedMessage, SemanticTransformation,
+        };
+        let call = crate::tools::types::ToolCall {
+            id: ToolCallId::new("wire-call"),
+            tool_id: ToolId::new("tool-alpha"),
+            name: "alpha".into(),
+            arguments: serde_json::json!({}),
+        };
+        let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("physical-assistant"),
+            content: vec![AssistantContentBlock::ToolCall(call.clone())],
+        });
+        let result = MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("physical-result"),
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                assistant.id().clone(),
+                ContentBlockIndex::new(0),
+            ),
+            tool_call_id: call.id,
+            tool_id: call.tool_id,
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![crate::tools::types::ToolResultContent::Image(
+                    crate::message::content::ImageReference {
+                        artifact_id: crate::runtime::identity::ArtifactId::new("frozen-image"),
+                        alt: Some("source image".into()),
+                    },
+                )],
+                duration_ms: 1,
+                exit_code: None,
+                artifacts: vec![],
+                deliveries: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+        });
+        for derived_call in [false, true] {
+            for derived_result in [false, true] {
+                let store = store();
+                store
+                    .initialize(&[assistant.clone(), result.clone()])
+                    .unwrap();
+                let canonical = store.load_canonical().unwrap();
+                let mut candidate = crate::scripted_suites::support::context::checkpoint_fixture(
+                    &store,
+                    "typed-pair",
+                    2,
+                    "unused",
+                );
+                candidate.summary_metadata = None;
+                candidate.items = [&assistant, &result]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, message)| {
+                        let derived = if index == 0 {
+                            derived_call
+                        } else {
+                            derived_result
+                        };
+                        CheckpointItem {
+                            message: if derived {
+                                CheckpointMessage::Derived(Box::new(DerivedModelMessage {
+                                    message: ProjectedMessage::from(message),
+                                    sources: vec![CanonicalMessageRef::of(
+                                        store.conversation_id(),
+                                        message,
+                                    )],
+                                    checkpoint_sources: vec![],
+                                    transformations: vec![SemanticTransformation::Summary],
+                                }))
+                            } else {
+                                CheckpointMessage::Original(CanonicalMessageRef::of(
+                                    store.conversation_id(),
+                                    message,
+                                ))
+                            },
+                            call_sources: if index == 0 && derived {
+                                vec![ProjectedCallSource {
+                                    block: CheckpointBlockIndex(0),
+                                    assistant: CanonicalMessageRef::of(
+                                        store.conversation_id(),
+                                        &assistant,
+                                    ),
+                                    canonical_block: ContentBlockIndex::new(0),
+                                }]
+                            } else {
+                                vec![]
+                            },
+                            result_call: (index == 1 && derived).then(|| {
+                                CheckpointCallCoordinate {
+                                    message: CheckpointMessageOccurrence {
+                                        checkpoint_id: candidate.checkpoint_id.clone(),
+                                        item_index: 0,
+                                    },
+                                    block: CheckpointBlockIndex(0),
+                                }
+                            }),
+                        }
+                    })
+                    .collect();
+                store
+                    .commit_projection(
+                        crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                            &store, candidate, None,
+                        ),
+                    )
+                    .unwrap();
+                crate::runtime::recovery::recover(&store, &crate::runtime::types::SystemClock)
+                    .unwrap();
+                assert_eq!(
+                    store.load_canonical().unwrap(),
+                    canonical,
+                    "projection never fabricates recovery results"
+                );
+                assert!(store.unsettled_canonical_tool_calls(1).unwrap().is_empty());
+                let history = store.projected_history().unwrap();
+                let mut snapshot =
+                    test_request_snapshot(store.load_head().unwrap().revision, invocation());
+                snapshot.history_cut = history.cut.clone();
+                let mut request = ModelRequest {
+                    messages: history.messages.clone(),
+                    images: crate::model::images::ResolvedImages::new(),
+                    invocation: snapshot.invocation.clone(),
+                    tools: snapshot.tool_definitions.clone(),
+                    effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                    continuation: None,
+                    continuation_source: None,
+                };
+                crate::model::images::omit_images(&mut request.messages);
+                for (before, after) in history.messages.iter().zip(&mut request.messages) {
+                    if before != after
+                        && let Some(source) = before.as_canonical()
+                    {
+                        after.mark_transformed(
+                            source,
+                            store.conversation_id(),
+                            SemanticTransformation::ImageDowngrade,
+                        );
+                    }
+                }
+                assert!(
+                    request.messages[1].canonical_id().is_none(),
+                    "media changes acquire request-local Derived identity"
+                );
+                snapshot
+                    .freeze_input(store.conversation_id(), &request)
+                    .unwrap();
+                snapshot.tool_associations = crate::model::occurrence::freeze_associations(
+                    &history,
+                    &snapshot.request_id,
+                    &request,
+                    None,
+                )
+                .unwrap();
+                store
+                    .commit_model_turn_start(&[], &snapshot, Utc::now())
+                    .unwrap();
+                assert_eq!(
+                    store
+                        .reconstruct_model_request(&snapshot.request_id)
+                        .unwrap(),
+                    request
+                );
+                assert!(
+                    store
+                        .read_events(None, 64)
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|e| !matches!(
+                            e.event,
+                            RuntimeEvent::ToolExecutionStarted { .. }
+                                | RuntimeEvent::ToolExecutionCompleted { .. }
+                        ))
+                );
+            }
+        }
+    }
+
     fn test_request_snapshot(
         revision: crate::conversation::SurfaceRevision,
         invocation: ModelInvocationConfig,
@@ -10987,7 +11452,7 @@ mod tests {
                 turn: TurnId::new("1"),
                 retry_number: 0,
             },
-            revision,
+            crate::context::resources::LedgerFrontier((revision).get()),
             "system frozen before restart".to_owned(),
             Vec::new(),
             crate::runtime::RuntimeResourceRevision::new(1),
@@ -11023,7 +11488,7 @@ mod tests {
                 turn: TurnId::new(turn),
                 retry_number,
             },
-            revision,
+            crate::context::resources::LedgerFrontier((revision).get()),
             "frozen".to_owned(),
             Vec::new(),
             crate::runtime::RuntimeResourceRevision::new(1),
@@ -11168,7 +11633,17 @@ mod tests {
         store.initialize(&[a.clone(), b.clone()]).unwrap();
         let revision = store.load_head().unwrap().revision;
         let invocation = invocation();
-        let snapshot = test_request_snapshot(revision, invocation.clone());
+        let mut snapshot = test_request_snapshot(revision, invocation.clone());
+        let expected = ModelRequest {
+            continuation_source: None,
+            images: crate::model::images::ResolvedImages::new(),
+            invocation: invocation.clone(),
+            messages: crate::model::input::canonical_input(&[a.clone(), b.clone()]),
+            tools: vec![],
+            effective_system_prompt: snapshot.effective_system_prompt.clone(),
+            continuation: None,
+        };
+        snapshot.freeze_input(&conversation_id, &expected).unwrap();
         store.arm_request_start_fault_script([RequestStartFaultOperation::BeforeContextAppend]);
         assert!(
             store
@@ -11205,14 +11680,6 @@ mod tests {
             started.started.event,
             RuntimeEvent::ModelRequestStarted { ref request_id, .. } if request_id == &snapshot.request_id
         ));
-        let expected = ModelRequest {
-            images: std::collections::BTreeMap::new(),
-            invocation,
-            messages: crate::model::input::canonical_input(&[a.clone(), b.clone()]),
-            tools: Vec::new(),
-            effective_system_prompt: "system frozen before restart".to_owned(),
-            continuation: None,
-        };
         assert_eq!(
             store
                 .reconstruct_model_request(&snapshot.request_id)
@@ -11272,8 +11739,10 @@ mod tests {
             key: "active_actionable".to_owned(),
             fingerprint: "todo-fingerprint-1".to_owned(),
         };
-        let snapshot = status_start_snapshot(revision, message_id.clone(), vec![emission.clone()]);
+        let mut snapshot =
+            status_start_snapshot(revision, message_id.clone(), vec![emission.clone()]);
         let timestamp = Utc.with_ymd_and_hms(2026, 8, 27, 6, 1, 0).unwrap();
+        freeze_test_input(&store, &mut snapshot, std::slice::from_ref(&context));
 
         let started = store
             .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, timestamp)
@@ -11397,13 +11866,18 @@ mod tests {
             key: "active_actionable".to_owned(),
             fingerprint: "origin-fingerprint".to_owned(),
         };
-        let snapshot = status_start_snapshot_for(
+        let mut snapshot = status_start_snapshot_for(
             "origin-attempt",
             "1",
             base_revision.next().next(),
             status_message_id.clone(),
             vec![emission.clone()],
             vec![runtime_context.id().clone(), status_message_id.clone()],
+        );
+        freeze_test_input(
+            &store,
+            &mut snapshot,
+            &[runtime_context.clone(), status.clone()],
         );
 
         let started = store
@@ -11484,7 +11958,7 @@ mod tests {
             key: "active_actionable".to_owned(),
             fingerprint: "progress-fingerprint".to_owned(),
         };
-        let first = status_start_snapshot(
+        let mut first = status_start_snapshot(
             store.load_head().unwrap().revision.next(),
             status_message_id.clone(),
             vec![emission],
@@ -11494,6 +11968,7 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
             &[AgentStatusModuleId::Todo],
         );
+        freeze_test_input(&store, &mut first, std::slice::from_ref(&status));
         store
             .commit_model_turn_start(
                 std::slice::from_ref(&status),
@@ -11517,8 +11992,9 @@ mod tests {
         // step. It is a real start snapshot, but it cannot consume cooldown
         // progress or move the emission origin.
         let retry_revision = store.load_head().unwrap().revision;
-        let overflow_retry =
+        let mut overflow_retry =
             progress_request_snapshot("attempt-1", "1", 1, retry_revision, Vec::new());
+        freeze_test_input(&store, &mut overflow_retry, &[]);
         store
             .commit_model_turn_start(&[], &overflow_retry, Utc::now())
             .expect("overflow retry start");
@@ -11526,13 +12002,14 @@ mod tests {
 
         for index in 0..3 {
             let revision = store.load_head().unwrap().revision;
-            let snapshot = progress_request_snapshot(
+            let mut snapshot = progress_request_snapshot(
                 &format!("later-attempt-{index}"),
                 "1",
                 0,
                 revision,
                 Vec::new(),
             );
+            freeze_test_input(&store, &mut snapshot, &[]);
             store
                 .commit_model_turn_start(&[], &snapshot, Utc::now())
                 .expect("later fresh primary start");
@@ -11557,8 +12034,9 @@ mod tests {
         );
 
         let fourth_revision = store.load_head().unwrap().revision;
-        let fourth =
+        let mut fourth =
             progress_request_snapshot("later-attempt-3", "1", 0, fourth_revision, Vec::new());
+        freeze_test_input(&store, &mut fourth, &[]);
         store
             .commit_model_turn_start(&[], &fourth, Utc::now())
             .expect("fourth later fresh primary start");
@@ -11578,7 +12056,7 @@ mod tests {
         );
     }
 
-    /// Surface compaction retires model-visible history, but it is not Todo
+    /// Typed projection compaction retires model-visible history, but it is not Todo
     /// progress. In particular, retiring the Agent Status message does not
     /// reset or consume the durable reminder window.
     #[test]
@@ -11596,11 +12074,12 @@ mod tests {
             key: "active_actionable".to_owned(),
             fingerprint: "compaction-fingerprint".to_owned(),
         };
-        let snapshot = status_start_snapshot(
+        let mut snapshot = status_start_snapshot(
             store.load_head().unwrap().revision.next(),
             status_id.clone(),
             vec![emission],
         );
+        freeze_test_input(&store, &mut snapshot, std::slice::from_ref(&status));
         store
             .commit_model_turn_start(
                 std::slice::from_ref(&status),
@@ -11618,25 +12097,21 @@ mod tests {
             .unwrap()
             .expect("Todo head")
             .logical_step_origin;
-        let before = store.load_head().unwrap();
         assert_eq!(origin, 1);
 
-        let summary = summary_message("summary-after-status", "summary");
         store
-            .commit_compaction(CompactionCommitInput {
-                summary,
-                span: SurfaceSpan::new(base.id().clone(), status_id),
-                expected_revision: before.revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 20,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 2,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc.with_ymd_and_hms(2026, 8, 27, 6, 2, 0).unwrap(),
-                occupancy: None,
-            })
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &store,
+                        "summary-after-status",
+                        2,
+                        "summary",
+                    ),
+                    None,
+                ),
+            )
             .expect("compaction commits");
 
         assert_eq!(store.current_logical_step_progress().unwrap(), origin);
@@ -11687,6 +12162,11 @@ mod tests {
         );
         snapshot.contributions.last_mut().unwrap().metadata =
             ContextKind::AgentStatus(status.agent_status_metadata().unwrap().clone());
+        freeze_test_input(
+            &store,
+            &mut snapshot,
+            &[runtime_context.clone(), status.clone()],
+        );
         store
             .commit_model_turn_start(
                 &[runtime_context, status],
@@ -11833,11 +12313,12 @@ mod tests {
                 Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
                 &[AgentStatusModuleId::Todo],
             );
-            let snapshot = status_start_snapshot(
+            let mut snapshot = status_start_snapshot(
                 store.load_head().unwrap().revision.next(),
                 message_id,
                 vec![emission.clone()],
             );
+            freeze_test_input(&store, &mut snapshot, std::slice::from_ref(&context));
             store
                 .commit_model_turn_start(
                     std::slice::from_ref(&context),
@@ -11905,6 +12386,102 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stale_projection_head_rejects_request_start_without_snapshot_or_context_admission() {
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let store = SqliteConversationStore::open(
+            ConversationId::generate(),
+            &root.path().join("start.sqlite"),
+        )
+        .unwrap();
+        store.initialize(&[user_message("a", "original")]).unwrap();
+        store
+            .commit_projection(checkpoint_commit_fixture(
+                &store,
+                checkpoint_fixture(&store, "P1", 1, "first"),
+                None,
+            ))
+            .unwrap();
+        let context = request_context_message("ctx-1", "request-scoped context");
+        let mut snapshot = context_start_snapshot(
+            store.load_head().unwrap().revision.next(),
+            vec![MessageId::new("ctx-1")],
+        );
+        freeze_test_input(&store, &mut snapshot, std::slice::from_ref(&context));
+        store
+            .commit_projection(checkpoint_commit_fixture(
+                &store,
+                checkpoint_fixture(&store, "P2", 1, "second"),
+                None,
+            ))
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute("UPDATE projection_head SET activation=1", [])
+            .unwrap();
+        let before = store.load_canonical().unwrap();
+        let events = store.read_events(None, 64).unwrap().events;
+        let error = store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+            .unwrap_err();
+        assert!(error.to_string().contains("Projection Head"), "{error}");
+        assert_eq!(store.load_canonical().unwrap(), before);
+        let after = store.read_events(None, 64).unwrap().events;
+        assert_eq!(after, events);
+        assert_eq!(
+            after
+                .iter()
+                .filter(|e| matches!(e.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .count(),
+            0
+        );
+        let snapshots: u64 = store
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM request_snapshots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(snapshots, 0);
+        // Correcting only the injected damage proves the snapshot/context fixture
+        // is otherwise valid: the obsolete input is rejected, while freezing
+        // current history lets this actual-request identity start exactly once.
+        store
+            .lock()
+            .unwrap()
+            .execute("UPDATE projection_head SET activation=2", [])
+            .unwrap();
+        store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+            .unwrap_err();
+        let mut current = snapshot;
+        freeze_test_input(&store, &mut current, std::slice::from_ref(&context));
+        store
+            .commit_model_turn_start(std::slice::from_ref(&context), &current, Utc::now())
+            .unwrap();
+        assert_eq!(
+            store
+                .read_events(None, 64)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|e| matches!(e.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM request_snapshots", [], |r| r
+                    .get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
     /// Issue #12 (M9b): the request-scoped context, the Request Snapshot,
     /// and the `ModelRequestStarted` fact commit in one transaction; the
     /// snapshot's Surface revision is the head the context appends created.
@@ -11915,7 +12492,22 @@ mod tests {
         store.initialize(std::slice::from_ref(&a)).unwrap();
         let base_revision = store.load_head().unwrap().revision;
         let context = request_context_message("ctx-1", "request-scoped context");
-        let snapshot = context_start_snapshot(base_revision.next(), vec![MessageId::new("ctx-1")]);
+        let mut snapshot =
+            context_start_snapshot(base_revision.next(), vec![MessageId::new("ctx-1")]);
+        snapshot
+            .freeze_input(
+                &store.conversation_id,
+                &ModelRequest {
+                    continuation_source: None,
+                    images: crate::model::images::ResolvedImages::new(),
+                    invocation: snapshot.invocation.clone(),
+                    messages: crate::model::input::canonical_input(&[a.clone(), context.clone()]),
+                    tools: snapshot.tool_definitions.clone(),
+                    effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                    continuation: snapshot.continuation.clone(),
+                },
+            )
+            .unwrap();
         let started = store
             .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
             .expect("start commits");
@@ -11968,10 +12560,11 @@ mod tests {
         let base_revision = store.load_head().unwrap().revision;
         let ctx1 = request_context_message("ctx-1", "first context");
         let ctx2 = request_context_message("ctx-2", "second context");
-        let snapshot = context_start_snapshot(
+        let mut snapshot = context_start_snapshot(
             base_revision.next().next(),
             vec![MessageId::new("ctx-1"), MessageId::new("ctx-2")],
         );
+        freeze_test_input(&store, &mut snapshot, &[ctx1.clone(), ctx2.clone()]);
         let started = store
             .commit_model_turn_start(&[ctx1.clone(), ctx2.clone()], &snapshot, Utc::now())
             .expect("start commits");
@@ -12043,10 +12636,11 @@ mod tests {
         let committed = store();
         committed.initialize(std::slice::from_ref(&a)).unwrap();
         let base_revision = committed.load_head().unwrap().revision;
-        let exact = context_start_snapshot(
+        let mut exact = context_start_snapshot(
             base_revision.next().next(),
             vec![MessageId::new("ctx-1"), MessageId::new("ctx-2")],
         );
+        freeze_test_input(&committed, &mut exact, &[ctx1.clone(), ctx2.clone()]);
         committed
             .commit_model_turn_start(&[ctx1.clone(), ctx2.clone()], &exact, Utc::now())
             .expect("the exact ordered fresh start commits");
@@ -12119,16 +12713,17 @@ mod tests {
             RequestStartFaultOperation::BeforeContextAppend,
             RequestStartFaultOperation::AfterContextAppend,
             RequestStartFaultOperation::AfterSnapshotInsert,
-            RequestStartFaultOperation::AfterEventInsert,
+            RequestStartFaultOperation::AfterCompletionInsert,
         ] {
             let store = store();
             let a = user_message("a", "A");
             store.initialize(std::slice::from_ref(&a)).unwrap();
             let base_revision = store.load_head().unwrap().revision;
             let context = request_context_message("ctx-1", "request-scoped context");
-            let snapshot =
+            let mut snapshot =
                 context_start_snapshot(base_revision.next(), vec![MessageId::new("ctx-1")]);
             store.arm_request_start_fault_script([fault]);
+            freeze_test_input(&store, &mut snapshot, std::slice::from_ref(&context));
             assert!(
                 store
                     .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
@@ -12172,13 +12767,13 @@ mod tests {
         let revision = store.load_head().unwrap().revision;
 
         for index in 0..7_u64 {
-            let snapshot = RequestSnapshot::new(
+            let mut snapshot = RequestSnapshot::new(
                 RequestIdentity {
                     attempt_id: AttemptId::new(format!("request-page-attempt-{index}")),
                     turn: TurnId::new("1"),
                     retry_number: 0,
                 },
-                revision,
+                crate::context::resources::LedgerFrontier((revision).get()),
                 "frozen".to_owned(),
                 Vec::new(),
                 crate::runtime::RuntimeResourceRevision::new(1),
@@ -12195,6 +12790,7 @@ mod tests {
                 None,
                 Vec::new(),
             );
+            freeze_test_input(&store, &mut snapshot, &[]);
             store
                 .commit_model_turn_start(&[], &snapshot, Utc::now())
                 .expect("persist request snapshot");
@@ -12557,7 +13153,29 @@ mod tests {
             })
         };
         store
-            .initialize(&[call_message("creation", "create-call", "subagent")])
+            .initialize(&[
+                call_message("creation", "create-call", "subagent"),
+                MessageBlock::Tool(ToolMessageBlock {
+                    id: MessageId::new("creation-result"),
+                    occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                        MessageId::new("creation"),
+                        ContentBlockIndex::new(0),
+                    ),
+                    tool_call_id: ToolCallId::new("create-call"),
+                    tool_id: ToolId::new("subagent"),
+                    result: ToolExecutionResult {
+                        deliveries: vec![],
+                        status: ToolExecutionStatus::Success,
+                        content: vec![],
+                        duration_ms: 1,
+                        exit_code: None,
+                        artifacts: vec![],
+                        truncation: None,
+                        workflow: None,
+                        managed_output: None,
+                    },
+                }),
+            ])
             .unwrap();
         let admission = |sequence, origin| {
             let activation = SubagentId::for_conversation(&conversation, sequence);
@@ -12601,20 +13219,18 @@ mod tests {
         };
         settle(1);
         store
-            .commit_compaction(CompactionCommitInput {
-                summary: summary_message("summary", "creation retired"),
-                span: SurfaceSpan::new(MessageId::new("creation"), MessageId::new("creation")),
-                expected_revision: store.load_head().unwrap().revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 20,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 2,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc::now(),
-                occupancy: None,
-            })
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &store,
+                        "creation-checkpoint",
+                        2,
+                        "creation retired",
+                    ),
+                    None,
+                ),
+            )
             .unwrap();
         assert!(
             !store
@@ -14070,7 +14686,11 @@ mod tests {
                     &conversation_id,
                     "standalone-event",
                     None,
-                    RuntimeEvent::CompactionStarted,
+                    RuntimeEvent::CompactionStarted {
+                        operation_id: crate::runtime::identity::CompactionOperationId::new(
+                            "fixture-compaction"
+                        )
+                    },
                 ))
                 .is_err()
         );
@@ -14079,7 +14699,11 @@ mod tests {
                 &conversation_id,
                 "standalone-event",
                 None,
-                RuntimeEvent::CompactionStarted,
+                RuntimeEvent::CompactionStarted {
+                    operation_id: crate::runtime::identity::CompactionOperationId::new(
+                        "fixture-compaction",
+                    ),
+                },
             ))
             .unwrap();
         assert_eq!(standalone.sequence, 6);
@@ -14089,7 +14713,11 @@ mod tests {
                     &conversation_id,
                     "standalone-event",
                     None,
-                    RuntimeEvent::CompactionStarted,
+                    RuntimeEvent::CompactionStarted {
+                        operation_id: crate::runtime::identity::CompactionOperationId::new(
+                            "fixture-compaction"
+                        )
+                    },
                 ))
                 .is_err()
         );
@@ -14117,34 +14745,36 @@ mod tests {
             .collect();
         store.initialize(&messages).unwrap();
         let revision = store.load_head().unwrap().revision;
-        let summary = summary_message("summary", "bounded");
-        let (revision, _, _, _) = store
-            .commit_compaction(CompactionCommitInput {
-                summary,
-                span: SurfaceSpan::new(MessageId::new("m0"), MessageId::new("m98")),
-                expected_revision: revision,
-                tokens_before: TokenMeasurement {
-                    input_tokens: 100,
-                    source: TokenMeasurementSource::Estimated,
-                },
-                estimated_tokens_after: 2,
-                attempt_id: None,
-                turn_id: None,
-                timestamp: Utc::now(),
-                occupancy: None,
-            })
+        let receipt = store
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &store,
+                        "bootstrap-checkpoint",
+                        99,
+                        "bounded",
+                    ),
+                    None,
+                ),
+            )
             .unwrap();
-        let head = store.load_head().unwrap();
-        let active = store.load_messages(&head.active_message_ids).unwrap();
+        let history = store.projected_history().unwrap();
+        let active = history
+            .messages
+            .into_iter()
+            .filter_map(|m| m.as_canonical().cloned())
+            .collect::<Vec<_>>();
+        let active_ids = active.iter().map(|m| m.id().clone()).collect();
         let state = ConversationState::from_durable_head(
             active,
-            head.active_message_ids,
+            active_ids,
             revision,
-            head.compaction_generation,
+            receipt.checkpoint.activation.activation.0,
         )
         .unwrap();
-        assert_eq!(state.ledger().len(), 2);
-        assert_eq!(state.surface().len(), 2);
+        assert_eq!(state.ledger().len(), 1);
+        assert_eq!(state.surface().len(), 1);
         assert_eq!(state.surface_access().history_enumerations(), 0);
         assert_eq!(state.ledger().access().enumerations(), 0);
         assert_eq!(
@@ -14169,19 +14799,21 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_request_surface_or_ledger_references_fail_closed() {
+    fn corrupt_frozen_request_revision_metadata_fails_closed() {
         let request_store = store();
         let message = user_message("request-message", "request body");
         request_store
             .initialize(std::slice::from_ref(&message))
             .unwrap();
-        let snapshot = RequestSnapshot::new(
+        let mut snapshot = RequestSnapshot::new(
             RequestIdentity {
                 attempt_id: AttemptId::new("request-corruption-attempt"),
                 turn: TurnId::new("1"),
                 retry_number: 0,
             },
-            request_store.load_head().unwrap().revision,
+            crate::context::resources::LedgerFrontier(
+                (request_store.load_head().unwrap().revision).get(),
+            ),
             "frozen".to_owned(),
             Vec::new(),
             crate::runtime::RuntimeResourceRevision::new(1),
@@ -14198,6 +14830,7 @@ mod tests {
             None,
             Vec::new(),
         );
+        freeze_test_input(&request_store, &mut snapshot, &[]);
         request_store
             .commit_model_turn_start(&[], &snapshot, Utc::now())
             .unwrap();
@@ -14211,10 +14844,10 @@ mod tests {
                 )
                 .unwrap();
             let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-            value["surface_revision"] = serde_json::json!(999_u64);
+            value["canonical_frontier"] = serde_json::json!(999_u64);
             connection
                 .execute(
-                    "UPDATE request_snapshots SET surface_revision=999,snapshot_json=?1 WHERE request_id=?2",
+                    "UPDATE request_snapshots SET canonical_frontier=999,snapshot_json=?1 WHERE request_id=?2",
                     params![value.to_string(), snapshot.request_id.as_str()],
                 )
                 .unwrap();
@@ -14222,21 +14855,134 @@ mod tests {
         assert!(matches!(
             request_store.reconstruct_model_request(&snapshot.request_id),
             Err(ConversationStoreError::InvalidReference(detail))
-                if detail.contains("newer than head")
+                if detail.contains("manifest integrity mismatch")
         ));
+    }
 
+    #[test]
+    #[allow(clippy::too_many_lines)] // One retained-input loss, independent current execution and real SQLite restart proof.
+    fn incomplete_historical_snapshot_does_not_block_independently_complete_current_checkpoint_or_restart()
+     {
+        use crate::context::resources::LedgerFrontier;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("snapshot-closure.sqlite");
+        let id = ConversationId::generate();
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let reasoning = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("old-native"),
+            content: vec![AssistantContentBlock::Reasoning(
+                crate::message::types::ReasoningBlock {
+                    text: None,
+                    provider_state: Some(
+                        crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
+                            crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {
+                                items: vec![
+                                    serde_json::json!({"type":"reasoning","id":"rs-old","encrypted_content":"retained-native-bytes"}),
+                                ],
+                            },
+                        ),
+                    ),
+                },
+            )],
+        });
+        store
+            .initialize(&[user_message("old-user", "historical input"), reasoning])
+            .unwrap();
+        let mut first = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+        first.invocation.protocol = ModelProtocol::OpenAiResponses;
+        first.invocation.compat.responses_storage =
+            crate::model::catalog::ResponsesStorageMode::Stateless;
+        freeze_test_input(&store, &mut first, &[]);
+        store
+            .commit_model_turn_start(&[], &first, Utc::now())
+            .unwrap();
+        let mut completed = envelope(
+            store.conversation_id(),
+            "old-request-completed",
+            Some(first.identity.attempt_id.clone()),
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: first.request_id.clone(),
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+                generation: None,
+            },
+        );
+        completed.turn_id = Some(first.identity.turn.clone());
+        store.append_event(completed).unwrap();
+        let exact_first = store.reconstruct_model_request(&first.request_id).unwrap();
+        assert_eq!(
+            exact_first.semantic_input_fingerprint(),
+            first.semantic_input_fingerprint
+        );
+        store
+            .commit_projection(
+                crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                    &store,
+                    crate::scripted_suites::support::context::checkpoint_fixture(
+                        &store,
+                        "current-checkpoint",
+                        2,
+                        "independently complete current summary",
+                    ),
+                    None,
+                ),
+            )
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM request_snapshots WHERE request_id=?1",
+                [first.request_id.as_str()],
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                store.reconstruct_model_request(&first.request_id),
+                Err(ConversationStoreError::RequestNotFound(_))
+            ),
+            "missing retained input never claims exact reconstruction"
+        );
+        store
+            .append_canonical(&user_message("new-user", "fresh current input"))
+            .unwrap();
+        let mut next = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+        next.identity.turn = TurnId::new("next");
+        next.request_id = next.identity.request_id();
+        next.provisional_message_id = next.identity.provisional_message_id();
+        freeze_test_input(&store, &mut next, &[]);
+        assert_eq!(next.history_cut.base_frontier, LedgerFrontier(2));
+        store
+            .commit_model_turn_start(&[], &next, Utc::now())
+            .unwrap();
+        let before_restart = store.reconstruct_model_request(&next.request_id).unwrap();
+        drop(store);
+        let reopened = SqliteConversationStore::open_existing(id, &path).unwrap();
+        assert_eq!(
+            reopened
+                .reconstruct_model_request(&next.request_id)
+                .unwrap(),
+            before_restart
+        );
+        assert!(reopened.projected_history().is_ok());
+    }
+
+    #[test]
+    fn missing_frozen_original_ledger_dependency_fails_closed() {
         let missing_message_store = store();
         let missing_message = user_message("missing-request-message", "request body");
         missing_message_store
             .initialize(std::slice::from_ref(&missing_message))
             .unwrap();
-        let missing_snapshot = RequestSnapshot::new(
+        let mut missing_snapshot = RequestSnapshot::new(
             RequestIdentity {
                 attempt_id: AttemptId::new("missing-message-attempt"),
                 turn: TurnId::new("1"),
                 retry_number: 0,
             },
-            missing_message_store.load_head().unwrap().revision,
+            crate::context::resources::LedgerFrontier(
+                (missing_message_store.load_head().unwrap().revision).get(),
+            ),
             "frozen".to_owned(),
             Vec::new(),
             crate::runtime::RuntimeResourceRevision::new(1),
@@ -14253,6 +14999,22 @@ mod tests {
             None,
             Vec::new(),
         );
+        missing_snapshot
+            .freeze_input(
+                &missing_message_store.conversation_id,
+                &ModelRequest {
+                    continuation_source: None,
+                    images: crate::model::images::ResolvedImages::new(),
+                    invocation: missing_snapshot.invocation.clone(),
+                    messages: crate::model::input::canonical_input(std::slice::from_ref(
+                        &missing_message,
+                    )),
+                    tools: vec![],
+                    effective_system_prompt: missing_snapshot.effective_system_prompt.clone(),
+                    continuation: None,
+                },
+            )
+            .unwrap();
         missing_message_store
             .commit_model_turn_start(&[], &missing_snapshot, Utc::now())
             .unwrap();
@@ -14269,8 +15031,70 @@ mod tests {
         assert!(matches!(
             missing_message_store.reconstruct_model_request(&missing_snapshot.request_id),
             Err(ConversationStoreError::InvalidReference(detail))
-                if detail.contains("missing Ledger message")
+                if detail.contains("message missing-request-message is unavailable")
         ));
+    }
+
+    #[test]
+    fn exact_frozen_request_needs_no_surface_history_replay() {
+        let store = store();
+        let seed = user_message("seed", "retained exact input");
+        store.initialize(std::slice::from_ref(&seed)).unwrap();
+        let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+        let request = ModelRequest {
+            continuation_source: None,
+            images: crate::model::images::ResolvedImages::new(),
+            invocation: snapshot.invocation.clone(),
+            messages: crate::model::input::canonical_input(&[seed]),
+            tools: vec![],
+            effective_system_prompt: snapshot.effective_system_prompt.clone(),
+            continuation: None,
+        };
+        snapshot
+            .freeze_input(&store.conversation_id, &request)
+            .unwrap();
+        store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM surface_ops", [])
+            .unwrap();
+        assert!(
+            store
+                .reconstruct_surface(crate::conversation::SurfaceRevision::new(
+                    snapshot.canonical_frontier.0
+                ))
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .reconstruct_model_request(&snapshot.request_id)
+                .unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn oversized_frozen_record_is_rejected_before_body_decode() {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+        store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE request_snapshots SET snapshot_json=CAST(zeroblob(67108865) AS TEXT)",
+                [],
+            )
+            .unwrap();
+        assert!(
+            matches!(store.load_request_snapshot(&snapshot.request_id), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("record exceeds the byte budget"))
+        );
     }
 
     #[test]
@@ -14409,7 +15233,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 60);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14478,7 +15302,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 60);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -15188,6 +16012,7 @@ mod tests {
 
 // Finite archive readers share the concrete durable schema, never transport DTOs.
 pub(crate) mod archive;
+mod compaction_resources;
 mod lineage;
 mod provenance;
 mod reading;
@@ -15258,3 +16083,5 @@ mod presentation_cancellation_tests {
         drop(writer); // The writer never needed to release for reader termination.
     }
 }
+
+mod projection;

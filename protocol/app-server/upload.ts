@@ -1,4 +1,4 @@
-import type { UploadDescriptor, UploadPolicy } from './v47.ts';
+import type { UploadDescriptor, UploadPolicy } from './v49.ts';
 
 export function uploadOperationId(): string { return crypto.randomUUID().replaceAll('-', ''); }
 

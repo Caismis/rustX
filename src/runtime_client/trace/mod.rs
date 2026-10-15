@@ -68,7 +68,7 @@ mod lifecycle;
 mod live;
 mod locate;
 mod record;
-mod request;
+pub(crate) mod request;
 mod summary;
 mod tool;
 mod types;

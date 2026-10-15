@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../../protocol/app-server/v47';
+import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../../protocol/app-server/v49';
 import type { PresentRowView } from '../presentation/agent/PresentRow';
 
 /** Raw arguments can be partial while a call streams; then they show verbatim. */

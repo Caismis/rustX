@@ -71,9 +71,80 @@ pub struct ModelRequest {
     /// Provider continuation state, when continuing an earlier generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<ProviderContinuationState>,
+    /// Actual accepted output and covered input that authorize native continuation.
+    pub continuation_source: Option<crate::runtime::continuation::AcceptedOutputContinuationSource>,
 }
 
 impl ModelRequest {
+    /// Map the actual accepted output into this input and prove remote coverage.
+    /// # Errors
+    /// Missing/ambiguous output or reordered/omitted covered input fails explicitly.
+    pub fn continuation_boundary(&self) -> Result<Option<usize>, String> {
+        let Some((boundary, source)) = self.accepted_output_boundary()? else {
+            return Ok(None);
+        };
+        if semantic_messages_fingerprint(&self.messages[..boundary])
+            != source.covered_input_fingerprint
+        {
+            return Err("continuation does not cover the compiled historical input".into());
+        }
+        Ok(Some(boundary))
+    }
+
+    /// Reconcile coverage after request-local semantic materialization. The adapter
+    /// must independently validate complete native replay before snapshot freeze.
+    pub(crate) fn reconcile_continuation(&mut self) -> Result<bool, String> {
+        let Some((boundary, source)) = self.accepted_output_boundary()? else {
+            return Ok(false);
+        };
+        if semantic_messages_fingerprint(&self.messages[..boundary])
+            == source.covered_input_fingerprint
+        {
+            return Ok(false);
+        }
+        self.continuation = None;
+        self.continuation_source = None;
+        Ok(true)
+    }
+
+    fn accepted_output_boundary(
+        &self,
+    ) -> Result<
+        Option<(
+            usize,
+            &crate::runtime::continuation::AcceptedOutputContinuationSource,
+        )>,
+        String,
+    > {
+        let (Some(state), Some(source)) = (&self.continuation, &self.continuation_source) else {
+            return if self.continuation.is_none() && self.continuation_source.is_none() {
+                Ok(None)
+            } else {
+                Err("native continuation has no actual accepted output source".into())
+            };
+        };
+        if state != &source.native_state {
+            return Err("continuation state differs from the actual accepted native output".into());
+        }
+        let mut boundary = None;
+        for (index, message) in self.messages.iter().enumerate() {
+            let scoped = match message {
+                ModelInputMessage::Canonical(message) => source.assistant.matches(message),
+                ModelInputMessage::Derived(message) => message.sources.contains(&source.assistant),
+                ModelInputMessage::RequestOnly(_) => false,
+            };
+            if scoped
+                && semantic_messages_fingerprint(std::slice::from_ref(message))
+                    == source.accepted_output_fingerprint
+                && boundary.replace(index).is_some()
+            {
+                return Err("ambiguous accepted-output continuation mapping".into());
+            }
+        }
+        let boundary =
+            boundary.ok_or("continuation accepted output is absent or semantically changed")?;
+        Ok(Some((boundary, source)))
+    }
     /// The provider-facing model identifier of this request.
     #[must_use]
     pub fn model(&self) -> &str {
@@ -136,6 +207,67 @@ pub struct UsageDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub cached_input_tokens: Option<u64>,
+}
+
+impl ModelRequest {
+    /// SHA-256 of provider-visible semantic content, excluding execution identities.
+    /// # Panics
+    /// Panics only if the runtime-owned semantic fields cannot serialize.
+    #[must_use]
+    pub fn semantic_input_fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(&(
+            semantic_messages_fingerprint(&self.messages),
+            &self.images,
+            &self.effective_system_prompt,
+            &self.tools,
+            &self.invocation,
+            &self.continuation,
+        ))
+        .expect("semantic input serializes");
+        format!("{:x}", Sha256::digest(bytes))
+    }
+}
+
+/// Ordered semantic content identity, independent of canonical/projected/request occurrence IDs.
+/// # Panics
+/// Runtime-owned semantic content must serialize.
+#[must_use]
+pub fn semantic_messages_fingerprint(messages: &[ModelInputMessage]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for message in messages {
+        let value = match message.view() {
+            crate::model::projected::ModelMessageView::User(content) => {
+                serde_json::json!({"role":"user", "content":content})
+            }
+            crate::model::projected::ModelMessageView::Assistant(content) => {
+                serde_json::json!({"role":"assistant", "content":content})
+            }
+            crate::model::projected::ModelMessageView::Tool(call_id, result) => {
+                match result.model_visible_content() {
+                    Ok(crate::tools::types::ModelToolResultContent::Parts(parts)) => {
+                        serde_json::json!({"role":"tool", "call_id":call_id, "parts":parts})
+                    }
+                    Ok(crate::tools::types::ModelToolResultContent::Text(text)) => {
+                        // Text-only identities remain unchanged; both consumers
+                        // use the same normalized bounded Tool semantic content.
+                        serde_json::json!({"role":"tool", "call_id":call_id, "text":text, "media":[]})
+                    }
+                    Err(_) => {
+                        serde_json::json!({"role":"tool", "call_id":call_id, "unsupported_content":true})
+                    }
+                }
+            }
+            crate::model::projected::ModelMessageView::RequestOnly(context) => {
+                serde_json::json!({"role":"user", "text":context.render()})
+            }
+        };
+        serde_json::to_writer(crate::model::projected::DigestWriter(&mut digest), &value)
+            .expect("semantic input serializes");
+        digest.update([0]);
+    }
+    format!("{:x}", digest.finalize())
 }
 
 #[cfg(test)]

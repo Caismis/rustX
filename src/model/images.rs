@@ -96,13 +96,27 @@ pub fn project(messages: &mut [crate::model::input::ModelInputMessage], image_in
     };
     use crate::tools::types::ToolResultContent;
     let text = |id: &ArtifactId| TextBlock {
-        text: format!("[Image artifact {id}; image omitted from this request]"),
+        text: omission_text(id),
     };
     let mut remaining = if image_input { 16 } else { 0 };
     for message in messages.iter_mut().rev() {
         let Some(message) = (match message {
             crate::model::input::ModelInputMessage::Canonical(message) => Some(message),
             crate::model::input::ModelInputMessage::RequestOnly(_) => None,
+            crate::model::input::ModelInputMessage::Derived(derived) => {
+                let before = derived.message.clone();
+                project_derived_images(&mut derived.message, image_input, &mut remaining);
+                if before != derived.message
+                    && !derived
+                        .transformations
+                        .contains(&crate::model::projected::SemanticTransformation::ImageDowngrade)
+                {
+                    derived
+                        .transformations
+                        .push(crate::model::projected::SemanticTransformation::ImageDowngrade);
+                }
+                None
+            }
         }) else {
             continue;
         };
@@ -142,20 +156,68 @@ pub fn project(messages: &mut [crate::model::input::ModelInputMessage], image_in
     }
 }
 
+fn project_derived_images(
+    message: &mut crate::model::projected::ProjectedMessage,
+    enabled: bool,
+    remaining: &mut usize,
+) {
+    use crate::message::{
+        content::TextBlock,
+        types::{AssistantContentBlock, UserContentBlock},
+    };
+    use crate::model::projected::ProjectedMessage;
+    use crate::tools::types::ToolResultContent;
+    let text = |id: &ArtifactId| TextBlock {
+        text: omission_text(id),
+    };
+    match message {
+        ProjectedMessage::User { content, .. } => {
+            for block in content.iter_mut().rev() {
+                if let UserContentBlock::Image(image) = block {
+                    if *remaining > 0 {
+                        *remaining -= 1;
+                    } else {
+                        *block = UserContentBlock::Text(text(&image.artifact_id));
+                    }
+                }
+            }
+        }
+        ProjectedMessage::Tool { result, .. } => {
+            for block in result.content.iter_mut().rev() {
+                if let ToolResultContent::Image(image) = block {
+                    if *remaining > 0 {
+                        *remaining -= 1;
+                    } else {
+                        *block = ToolResultContent::Text(text(&image.artifact_id));
+                    }
+                }
+            }
+        }
+        ProjectedMessage::Assistant { content } => {
+            for block in content {
+                if let AssistantContentBlock::Image(image) = block
+                    && !enabled
+                {
+                    *block = AssistantContentBlock::Text(text(&image.artifact_id));
+                }
+            }
+        }
+    }
+}
+
 /// Number of provider-visible User/Tool image blocks, including repeated identities.
 pub(crate) fn image_count(messages: &[crate::model::input::ModelInputMessage]) -> usize {
-    use crate::message::types::{MessageBlock, UserContentBlock};
+    use crate::message::types::UserContentBlock;
+    use crate::model::projected::ModelMessageView;
     use crate::tools::types::ToolResultContent;
     messages
         .iter()
-        .map(|message| match message.as_canonical() {
-            Some(MessageBlock::User(user)) => user
-                .content
+        .map(|message| match message.view() {
+            ModelMessageView::User(user) => user
                 .iter()
                 .filter(|block| matches!(block, UserContentBlock::Image(_)))
                 .count(),
-            Some(MessageBlock::Tool(tool)) => tool
-                .result
+            ModelMessageView::Tool(_, result) => result
                 .content
                 .iter()
                 .filter(|block| matches!(block, ToolResultContent::Image(_)))
@@ -172,27 +234,23 @@ pub fn resolve(
     messages: &[crate::model::input::ModelInputMessage],
     mut read: impl FnMut(&ArtifactId) -> Result<Vec<u8>, String>,
 ) -> Result<ResolvedImages, String> {
-    use crate::message::types::{MessageBlock, UserContentBlock};
+    use crate::message::types::UserContentBlock;
+    use crate::model::projected::ModelMessageView;
     use crate::tools::types::ToolResultContent;
     if image_count(messages) > 16 {
         return Err("request exceeds the 16-image limit".into());
     }
     let mut images = ResolvedImages::new();
     for message in messages {
-        let Some(message) = message.as_canonical() else {
-            continue;
-        };
-        let references: Vec<_> = match message {
-            MessageBlock::User(user) => user
-                .content
+        let references: Vec<_> = match message.view() {
+            ModelMessageView::User(user) => user
                 .iter()
                 .filter_map(|block| match block {
                     UserContentBlock::Image(image) => Some(image),
                     _ => None,
                 })
                 .collect(),
-            MessageBlock::Tool(tool) => tool
-                .result
+            ModelMessageView::Tool(_, result) => result
                 .content
                 .iter()
                 .filter_map(|block| match block {
@@ -200,7 +258,7 @@ pub fn resolve(
                     _ => None,
                 })
                 .collect(),
-            MessageBlock::Assistant(_) => Vec::new(),
+            _ => Vec::new(),
         };
         for image in references {
             if images.contains_key(&image.artifact_id) {
@@ -215,6 +273,11 @@ pub fn resolve(
         }
     }
     Ok(images)
+}
+
+/// The exact semantic omission value shared with frozen-input validation.
+pub(crate) fn omission_text(id: &ArtifactId) -> String {
+    format!("[Image artifact {id}; image omitted from this request]")
 }
 
 #[cfg(test)]
@@ -333,19 +396,15 @@ mod tests {
         )];
         let canonical = messages.clone();
         let summary = crate::context::summarizer::SummaryRequest {
-            retired: canonical
-                .iter()
-                .filter_map(crate::model::input::ModelInputMessage::as_canonical)
-                .cloned()
-                .collect(),
+            retired: canonical.clone(),
         }
         .model_input();
-        let MessageBlock::User(summary_user) = &summary.messages[0] else {
+        let crate::model::projected::ModelMessageView::User(content) = summary.messages[0].view()
+        else {
             panic!("summary input")
         };
         assert!(
-            summary_user
-                .content
+            content
                 .iter()
                 .all(|block| matches!(block, UserContentBlock::Text(_)))
         );

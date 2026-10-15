@@ -302,22 +302,17 @@ impl TraceProjection<'_> {
                 facts.tool = Some(summary);
                 end
             }
-            E::CompactionStarted => {
+            E::CompactionStarted { operation_id } => {
                 facts.kind = TraceKind::Compaction;
                 // Detail exists throughout the lifecycle. A loaded running row
                 // must remain inspectable when refresh supplies its summary ID.
                 facts.has_detail = true;
-                // Compaction has no native operation identity. Its boundary
-                // is the next compaction start or terminal in durable order.
+                // The operation identity owns correlation even when unrelated lifecycle facts interleave.
                 let end = self
                     .store
                     .read_presentation_events(&crate::durable::presentation::FactQuery {
-                        scope: FactScope::All,
-                        kinds: vec![
-                            "compaction_started",
-                            "compaction_completed",
-                            "compaction_failed",
-                        ],
+                        scope: FactScope::Compaction(operation_id.clone()),
+                        kinds: vec!["compaction_completed", "compaction_failed"],
                         before: None,
                         after: anchor.sequence,
                         ascending: true,
@@ -325,16 +320,11 @@ impl TraceProjection<'_> {
                         limit: 1,
                     })?
                     .pop()
-                    .filter(|event| !matches!(event.event, E::CompactionStarted));
+                    .filter(|event| !matches!(event.event, E::CompactionStarted { .. }));
                 if let Some(event) = end.as_ref()
-                    && let E::CompactionCompleted {
-                        summary_message_id, ..
-                    } = &event.event
+                    && let E::CompactionCompleted { checkpoint_id, .. } = &event.event
                 {
-                    // The summary's identity is in the terminal fact itself.
-                    // Its preview needs a Ledger read, so it is left to the
-                    // summary projection.
-                    facts.message_id = Some(summary_message_id.clone());
+                    facts.native_id = Some(checkpoint_id.to_string());
                 }
                 end
             }

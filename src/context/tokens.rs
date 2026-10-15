@@ -209,7 +209,9 @@ fn input_identity(message: &ModelInputMessage) -> ObservedInputIdentity {
         ModelInputMessage::Canonical(message) => {
             ObservedInputIdentity::Canonical(message.id().clone(), hash)
         }
-        ModelInputMessage::RequestOnly(_) => ObservedInputIdentity::RequestOnly(hash),
+        ModelInputMessage::RequestOnly(_) | ModelInputMessage::Derived(_) => {
+            ObservedInputIdentity::RequestOnly(hash)
+        }
     }
 }
 
@@ -334,6 +336,26 @@ pub trait TokenEstimator: Send + Sync {
         tool_definitions: &[ModelToolDefinition],
     ) -> u64;
 
+    /// Whether compaction's whole-request prices are monotone for this input.
+    ///
+    /// Returning true promises that growing the rendered summary prefix cannot
+    /// reduce its estimate, and deleting a historical prefix from a request
+    /// with fixed core inputs cannot increase either primary or recent prices.
+    /// The promise must hold for all complete boundaries, without resource
+    /// resampling. Arbitrary estimators conservatively return false.
+    fn supports_monotone_compaction(&self, _messages: &[ModelInputMessage]) -> bool {
+        false
+    }
+
+    /// Price final materialized input without selecting runtime resources again.
+    fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
+        self.estimate_input(
+            &request.messages,
+            &request.effective_system_prompt,
+            &request.tools,
+        )
+    }
+
     /// The deterministic estimated input tokens of the conversation content
     /// only, excluding non-conversation contributors such as tool definitions
     /// and the Effective System Prompt.
@@ -386,12 +408,16 @@ impl DefaultTokenEstimator {
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        let items = serde_json::to_vec(messages)
-            .expect("provider-neutral model input serializes")
-            .len();
-        let tools = serde_json::to_vec(tool_definitions)
-            .expect("canonical tool definitions serialize")
-            .len();
+        let Ok(visible) = messages
+            .iter()
+            .map(|m| m.view().model_visible())
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            // Unsupported Tool content must never be priced as an empty input.
+            return u64::MAX;
+        };
+        let items = encoded_bytes(&visible);
+        let tools = encoded_bytes(tool_definitions);
         // An empty prompt means that no request-time prompt section exists;
         // do not charge the JSON representation's two quote bytes as model
         // input. Non-empty prompts remain part of the frozen deterministic
@@ -399,11 +425,9 @@ impl DefaultTokenEstimator {
         let system_prompt = if effective_system_prompt.is_empty() {
             0
         } else {
-            serde_json::to_vec(effective_system_prompt)
-                .expect("effective system prompt serializes")
-                .len()
+            encoded_bytes(effective_system_prompt)
         };
-        (items + tools + system_prompt) as u64
+        items + tools + system_prompt
     }
 
     /// The deterministic serialized bytes of the canonical messages only,
@@ -415,19 +439,67 @@ impl DefaultTokenEstimator {
     /// unreachable for the canonical runtime-owned types.
     #[must_use]
     pub fn conversation_bytes(messages: &[MessageBlock]) -> u64 {
-        serde_json::to_vec(messages)
-            .expect("canonical messages serialize")
-            .len() as u64
+        let Ok(visible) = messages
+            .iter()
+            .map(|m| crate::model::projected::ModelMessageView::from(m).model_visible())
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return u64::MAX;
+        };
+        encoded_bytes(&visible)
     }
 }
 
+/// Price semantic role/content directly into a counting sink. Message IDs,
+/// source digests and projection provenance never enter model token accounting.
+fn encoded_bytes(value: &(impl serde::Serialize + ?Sized)) -> u64 {
+    struct Count(u64);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len() as u64);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, value).expect("semantic model content serializes");
+    #[cfg(test)]
+    ACCOUNTED_BYTES.with(|total| total.set(total.get().saturating_add(count.0)));
+    count.0
+}
+#[cfg(test)]
+thread_local! {
+    static ACCOUNTED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static ESTIMATOR_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn take_accounted_bytes() -> u64 {
+    ACCOUNTED_BYTES.with(|total| total.replace(0))
+}
+
+#[cfg(test)]
+pub(crate) fn take_estimator_calls() -> u64 {
+    ESTIMATOR_CALLS.with(|total| total.replace(0))
+}
+
 impl TokenEstimator for DefaultTokenEstimator {
+    fn supports_monotone_compaction(&self, _messages: &[ModelInputMessage]) -> bool {
+        // JSON arrays contribute brackets plus independent item bytes and
+        // separators. Prefix deletion only removes nonnegative bytes. Summary
+        // text appends only escaped UTF-8 bytes; ceil(bytes/4) is monotone.
+        true
+    }
+
     fn estimate_input(
         &self,
         messages: &[ModelInputMessage],
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
+        #[cfg(test)]
+        ESTIMATOR_CALLS.with(|total| total.set(total.get() + 1));
         bytes_to_tokens(Self::serialized_bytes(
             messages,
             effective_system_prompt,
@@ -498,9 +570,118 @@ mod tests {
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
+    use crate::model::ModelInputMessage;
     use crate::model::input::canonical_input;
     use crate::runtime::identity::{MessageId, ToolId};
     use crate::tools::types::ModelToolDefinition;
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // All hidden metadata variants share the same bounded visible fixture.
+    fn tool_accounting_ignores_runtime_metadata_and_truncated_tail() {
+        use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef, ToolMessageBlock};
+        use crate::runtime::identity::ToolCallId;
+        let body = |result| {
+            ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("result"),
+                tool_call_id: ToolCallId::new("call"),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new("assistant"),
+                    ContentBlockIndex::new(0),
+                ),
+                tool_id: ToolId::new("tool"),
+                result,
+            }))
+        };
+        let original = crate::scripted_suites::support::fake::success_result(&"x".repeat(100_000));
+        let input = body(original.clone());
+        let expected =
+            DefaultTokenEstimator::serialized_bytes(std::slice::from_ref(&input), "", &[]);
+        for index in 0..7 {
+            let mut result = original.clone();
+            match index {
+                0 => result.duration_ms = 9_000_000,
+                1 => result.exit_code = Some(-999),
+                2 => {
+                    result.truncation = Some(crate::tools::types::TruncationState {
+                        truncated: true,
+                        original_bytes: Some(900_000),
+                    });
+                }
+                3 => {
+                    result.workflow =
+                        Some(Box::new(crate::runtime::workflow::WorkflowToolIdentity {
+                            workflow_id: crate::runtime::workflow::WorkflowId::parse("workflow")
+                                .unwrap(),
+                            program_digest: "runtime-only".repeat(1000),
+                        }));
+                }
+                4 => result
+                    .artifacts
+                    .push(crate::message::content::FileReference {
+                        artifact_id: crate::runtime::identity::ArtifactId::new("artifact-meta"),
+                        name: Some("hidden".repeat(1000)),
+                        mime_type: None,
+                        description: None,
+                    }),
+                5 => result
+                    .deliveries
+                    .push(crate::tools::session_files::SessionFileReference {
+                        scope: crate::tools::session_files::SessionFileScope {
+                            conversation_id: crate::runtime::identity::ConversationId::generate(),
+                            device: "1".into(),
+                            inode: "2".into(),
+                        },
+                        path: "file.txt".into(),
+                        name: "hidden".repeat(1000),
+                        description: None,
+                        mime_type: "text/plain".into(),
+                    }),
+                _ => result
+                    .content
+                    .push(crate::tools::types::ToolResultContent::Text(TextBlock {
+                        text: "invisible tail".repeat(1000),
+                    })),
+            }
+            assert_eq!(
+                original.model_facing_projection(),
+                result.model_facing_projection()
+            );
+            let other = body(result);
+            assert_eq!(
+                expected,
+                DefaultTokenEstimator::serialized_bytes(std::slice::from_ref(&other), "", &[])
+            );
+            assert_eq!(
+                crate::model::types::semantic_messages_fingerprint(std::slice::from_ref(&input)),
+                crate::model::types::semantic_messages_fingerprint(&[other])
+            );
+        }
+        let mut diagnostic = original.clone();
+        diagnostic.status = crate::tools::types::ToolExecutionStatus::Failed {
+            error: "diagnostic".repeat(100_000),
+        };
+        let mut changed_diagnostic = diagnostic.clone();
+        if let crate::tools::types::ToolExecutionStatus::Failed { error } =
+            &mut changed_diagnostic.status
+        {
+            error.push_str("hidden diagnostic tail");
+        }
+        assert_eq!(
+            diagnostic.model_facing_projection(),
+            changed_diagnostic.model_facing_projection()
+        );
+        assert_eq!(
+            DefaultTokenEstimator::serialized_bytes(&[body(diagnostic)], "", &[]),
+            DefaultTokenEstimator::serialized_bytes(&[body(changed_diagnostic)], "", &[])
+        );
+        let changed = body(crate::scripted_suites::support::fake::success_result(
+            "different visible text",
+        ));
+        assert_ne!(
+            expected,
+            DefaultTokenEstimator::serialized_bytes(&[changed], "", &[])
+        );
+    }
 
     fn user_message(id: &str, text: &str) -> MessageBlock {
         MessageBlock::User(UserMessageBlock {
@@ -521,6 +702,28 @@ mod tests {
             description: "Run a shell command".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
         }
+    }
+
+    #[test]
+    fn original_and_derived_equivalent_content_have_equal_token_cost_without_provenance() {
+        let original = user_message("physical", "same semantic body");
+        let input = ModelInputMessage::Canonical(original.clone());
+        let derived = ModelInputMessage::Derived(crate::model::projected::DerivedModelMessage {
+            message: crate::model::projected::ProjectedMessage::from(&original),
+            sources: vec![
+                crate::model::projected::CanonicalMessageRef::of(
+                    &crate::runtime::identity::ConversationId::generate(),
+                    &original
+                );
+                1024
+            ],
+            checkpoint_sources: Vec::new(),
+            transformations: vec![crate::model::projected::SemanticTransformation::Summary],
+        });
+        assert_eq!(
+            DefaultTokenEstimator::serialized_bytes(&[input], "", &[]),
+            DefaultTokenEstimator::serialized_bytes(&[derived], "", &[])
+        );
     }
 
     /// The frozen estimator formula: `ceil(bytes / 4)`.

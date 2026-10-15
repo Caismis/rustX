@@ -316,7 +316,7 @@ impl SubagentObservationProjector {
             | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
                 self.settle_tool_execution(tool_call_id)
             }
-            RuntimeEvent::CompactionStarted => {
+            RuntimeEvent::CompactionStarted { .. } => {
                 self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Compacting;
                 true
@@ -948,11 +948,21 @@ mod tests {
     #[test]
     fn compaction_cycle_projects_and_resets() {
         let mut projector = SubagentObservationProjector::default();
-        assert_folded(&mut projector, &event(RuntimeEvent::CompactionStarted));
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::CompactionStarted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
+            }),
+        );
         assert_eq!(projector.observation.activity, SubagentActivity::Compacting);
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::CompactionFailed {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
                 error: "no budget".to_owned(),
             }),
         );

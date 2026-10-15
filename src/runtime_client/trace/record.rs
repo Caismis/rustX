@@ -39,6 +39,7 @@ impl TraceProjection<'_> {
     /// # Errors
     ///
     /// Propagates the failed durable read of any authority this row joins.
+    #[allow(clippy::too_many_lines)] // One exhaustive native execution record projection.
     pub(super) fn record(
         &self,
         anchor: &RuntimeEventEnvelope,
@@ -113,11 +114,33 @@ impl TraceProjection<'_> {
                     preview = messages.iter().find_map(message_preview);
                 }
             }
-            E::CompactionStarted => {
-                if let Some(id) = message_id.as_ref() {
-                    for message in self.store.load_messages(std::slice::from_ref(id))? {
-                        preview = message_preview(&message);
-                    }
+            E::CompactionStarted { .. } => {
+                if let Some(id) = native_id.as_ref() {
+                    let checkpoint = self
+                        .store
+                        .projection_checkpoint(&crate::runtime::identity::CheckpointId::new(id))?;
+                    preview =
+                        checkpoint
+                            .candidate
+                            .items
+                            .iter()
+                            .find_map(|item| match &item.message {
+                                crate::context::checkpoint::CheckpointMessage::Derived(message) => {
+                                    match &message.message {
+                                        crate::model::projected::ProjectedMessage::User {
+                                            content,
+                                            ..
+                                        } => content.iter().find_map(|block| match block {
+                                            crate::message::types::UserContentBlock::Text(text) => {
+                                                Some(TracePreview::of(&text.text))
+                                            }
+                                            _ => None,
+                                        }),
+                                        _ => None,
+                                    }
+                                }
+                                crate::context::checkpoint::CheckpointMessage::Original(_) => None,
+                            });
                 }
             }
             E::ToolExecutionStarted {

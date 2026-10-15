@@ -13,7 +13,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::{SurfaceOp, SurfaceRevision, SurfaceSpan};
+use crate::conversation::{SurfaceOp, SurfaceRevision};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -27,7 +27,6 @@ use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId,
 };
 use crate::runtime::inbound::InboundSequence;
-use crate::runtime::types::TokenMeasurement;
 
 /// The default bounded page used when a Runtime Client first attaches.
 pub const TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT: usize = 64;
@@ -268,16 +267,6 @@ pub(crate) fn inbound_adoption_event(
     }
 }
 
-/// Immutable history-only facts owned by one canonical compaction checkpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompactionCheckpointStatistics {
-    /// Number of canonical messages replaced, including prior summaries.
-    pub retired_messages: u64,
-    /// Deterministic history estimate, excluding prompt and tool definitions.
-    pub retired_tokens: u64,
-}
-
 /// The canonical lineage seed of one new conversation lineage.
 ///
 /// A lineage is seeded with two distinguishable parts, because what a
@@ -319,10 +308,10 @@ pub struct CompactionCheckpointStatistics {
 /// no pending carryover.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageSeed {
+    projections: Vec<super::projection::ProjectionCheckpoint>,
     canonical: Vec<MessageBlock>,
     surface_history: Vec<SurfaceOp>,
     surface: Vec<MessageId>,
-    checkpoints: std::collections::BTreeMap<MessageId, CompactionCheckpointStatistics>,
     completed_responses: Vec<super::response::CompletedResponseProvenance>,
     turns: Vec<super::reading::TurnReadingProvenance>,
 }
@@ -344,10 +333,10 @@ impl LineageSeed {
             })
             .collect();
         Self {
+            projections: Vec::new(),
             canonical,
             surface_history,
             surface,
-            checkpoints: std::collections::BTreeMap::new(),
             completed_responses: Vec::new(),
             turns: Vec::new(),
         }
@@ -380,8 +369,7 @@ impl LineageSeed {
     ///
     /// Returns [`ConversationStoreError::InvalidReference`] when the history
     /// names an identity `canonical` does not carry, does not replay against
-    /// an initially empty Surface, replaces a span with a message that is not
-    /// a `User(Runtime / CompactionSummary)`, or introduces identities that
+    /// an initially empty canonical append view, or introduces identities that
     /// are not the seeded Ledger in its own order. None is a state any
     /// sequence of durable transitions could reach, and a store that accepted
     /// one would hold a Surface history it could never reconstruct.
@@ -389,7 +377,6 @@ impl LineageSeed {
     pub fn replayed(
         canonical: Vec<MessageBlock>,
         surface_history: Vec<SurfaceOp>,
-        checkpoints: std::collections::BTreeMap<MessageId, CompactionCheckpointStatistics>,
     ) -> Result<Self, ConversationStoreError> {
         let known: std::collections::BTreeMap<MessageId, &MessageBlock> = canonical
             .iter()
@@ -402,39 +389,6 @@ impl LineageSeed {
                     return Err(ConversationStoreError::InvalidReference(format!(
                         "the seeded Surface history names {id}, which the seeded Ledger does \
                          not carry"
-                    )));
-                }
-            }
-            if let SurfaceOp::Replace { replacement, .. } = operation {
-                let is_summary = matches!(
-                    known.get(replacement),
-                    Some(MessageBlock::User(user))
-                        if user.source == UserSource::Runtime
-                            && user.kind.is_compaction_summary()
-                );
-                if !is_summary {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "the seeded Surface Replace replacement {replacement} is not a \
-                         User(Runtime / CompactionSummary) message"
-                    )));
-                }
-            }
-            if let SurfaceOp::Replace {
-                start,
-                end,
-                replacement,
-            } = operation
-            {
-                let first = surface.iter().position(|id| id == start);
-                let last = surface.iter().position(|id| id == end);
-                if let (Some(first), Some(last)) = (first, last)
-                    && first <= last
-                    && checkpoints
-                        .get(replacement)
-                        .is_none_or(|stats| stats.retired_messages != (last - first + 1) as u64)
-                {
-                    return Err(ConversationStoreError::InvalidReference(format!(
-                        "seeded checkpoint {replacement} has missing or inconsistent statistics"
                     )));
                 }
             }
@@ -470,44 +424,45 @@ impl LineageSeed {
                 render(&committed.iter().collect::<Vec<_>>())
             )));
         }
-        let summaries: std::collections::BTreeSet<_> = canonical
-            .iter()
-            .filter_map(|message| match message {
-                MessageBlock::User(user) if user.kind.is_compaction_summary() => {
-                    Some(user.id.clone())
-                }
-                _ => None,
-            })
-            .collect();
-        if checkpoints
-            .keys()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            != summaries
-            || checkpoints
-                .values()
-                .any(|stats| stats.retired_messages == 0)
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "lineage requires exactly one immutable statistics fact per checkpoint".into(),
-            ));
-        }
         Ok(Self {
+            projections: Vec::new(),
             canonical,
             surface_history,
             surface,
-            checkpoints,
             completed_responses: Vec::new(),
             turns: Vec::new(),
         })
     }
 
-    /// Retained immutable checkpoint facts, keyed by the copied summary identity.
+    /// Immutable destination-owned checkpoint timeline for future forks of this seed.
+    /// # Errors
+    /// Rejects incompatible source boundaries, scopes, ordering or checkpoint integrity.
+    pub fn with_projections(
+        mut self,
+        projections: Vec<super::projection::ProjectionCheckpoint>,
+    ) -> Result<Self, ConversationStoreError> {
+        let mut previous = crate::context::checkpoint::ProjectionActivationId(0);
+        for checkpoint in &projections {
+            checkpoint
+                .candidate
+                .validate_budget()
+                .map_err(ConversationStoreError::InvalidReference)?;
+            if checkpoint.fingerprint != checkpoint.candidate.fingerprint()
+                || checkpoint.activation.activation <= previous
+                || checkpoint.activation.destination_installation.is_none()
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid inherited projection timeline".into(),
+                ));
+            }
+            previous = checkpoint.activation.activation;
+        }
+        self.projections = projections;
+        Ok(self)
+    }
     #[must_use]
-    pub fn checkpoints(
-        &self,
-    ) -> &std::collections::BTreeMap<MessageId, CompactionCheckpointStatistics> {
-        &self.checkpoints
+    pub fn projections(&self) -> &[super::projection::ProjectionCheckpoint] {
+        &self.projections
     }
 
     /// Attach immutable response provenance to this seed's exact canonical identities.
@@ -675,29 +630,6 @@ pub struct SurfaceUserMessageBoundaryPage {
     pub boundaries: Vec<SurfaceUserMessageBoundary>,
     /// Offset for the next page, when more rows exist.
     pub next_offset: Option<usize>,
-}
-
-/// The semantic input to one atomic canonical compaction transition.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompactionCommitInput {
-    /// The canonical runtime summary to append to the Ledger.
-    pub summary: UserMessageBlock,
-    /// The inclusive active span to replace.
-    pub span: SurfaceSpan,
-    /// The Surface revision validated by the caller.
-    pub expected_revision: SurfaceRevision,
-    /// The pre-compaction token measurement for the completion fact.
-    pub tokens_before: TokenMeasurement,
-    /// The deterministic estimate after rebuilding the request context.
-    pub estimated_tokens_after: u64,
-    /// Native estimated occupancy at the atomic compaction commit.
-    pub occupancy: Option<crate::context::occupancy::ContextOccupancy>,
-    /// The owning attempt, when the transition is executing in an attempt.
-    pub attempt_id: Option<crate::runtime::identity::AttemptId>,
-    /// The owning turn, when the transition is executing in a turn.
-    pub turn_id: Option<crate::runtime::identity::TurnId>,
-    /// The persisted UTC event timestamp.
-    pub timestamp: DateTime<Utc>,
 }
 
 /// A page of durable canonical messages.
@@ -960,6 +892,8 @@ pub enum ConversationStoreError {
     IncompatibleSchema(String),
     /// A durable reference points at a fact that is not present.
     InvalidReference(String),
+    /// A finite source or snapshot exceeds an explicit logical materialization budget.
+    ResourceBoundExceeded(String),
     /// A requested immutable Request Snapshot does not exist.
     RequestNotFound(RequestId),
     /// A lifecycle event violates terminal uniqueness or terminal ordering.
@@ -1004,6 +938,9 @@ impl core::fmt::Display for ConversationStoreError {
                 write!(f, "incompatible durable schema shape: {detail}")
             }
             Self::InvalidReference(message) => write!(f, "invalid durable reference: {message}"),
+            Self::ResourceBoundExceeded(message) => {
+                write!(f, "resource materialization bound: {message}")
+            }
             Self::RequestNotFound(request_id) => {
                 write!(f, "request snapshot {request_id} is not present")
             }
@@ -1479,11 +1416,54 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 ///   been durably accepted the answer stays `true` forever.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationStore: Send + Sync + 'static {
+    /// Freeze the immutable compaction source domains in one short read transaction.
+    fn compaction_resource_cut(
+        &self,
+    ) -> Result<crate::context::resources::ResourceReadCut, ConversationStoreError>;
+    /// Bounded detached canonical reads, through the Resource Read Cut.
+    fn compaction_message_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::LedgerFrontier,
+        ids: Option<&[MessageId]>,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::resources::ResourcePage<MessageBlock>, ConversationStoreError>;
+    /// Keyed immutable provenance integrity, with body only when explicitly required.
+    fn compaction_dependency(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        source: &crate::model::projected::CanonicalMessageRef,
+        body_required: bool,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::checkpoint::CanonicalDependency, ConversationStoreError>;
+    /// Detached typed trajectory metadata and exact physical tool occurrences.
+    fn compaction_trajectory_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::LedgerFrontier,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<
+        crate::context::resources::ResourcePage<crate::context::resources::TrajectoryMessage>,
+        ConversationStoreError,
+    >;
+    /// Bounded real Journal facts, through the Resource Read Cut.
+    fn compaction_event_page(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        after: crate::context::resources::JournalFrontier,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::context::resources::ResourcePage<RuntimeEventEnvelope>, ConversationStoreError>;
     /// One exact snapshot of native reading authority.
     fn conversation_read_cut(
         &self,
     ) -> Result<super::reading::ConversationReadCut, ConversationStoreError>;
     /// Bounded native Attempt outline, including immutable copied origins.
+    /// Native opening-input ownership for one actual Attempt at a Journal cut.
+    fn attempt_prompt(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+    ) -> Result<Option<MessageId>, ConversationStoreError>;
     fn conversation_turns(
         &self,
         offset: usize,
@@ -1509,6 +1489,12 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Captures lineage authority (R, C) in one native snapshot: revision R owns
     /// structure, invocation-time read cut C owns temporal provenance. The same
     /// R at a newer C may observe newer outcomes; captured (R, C) is immutable.
+    /// Select a historical activation independently of its canonical Ledger frontier.
+    fn read_projection_lineage_cut(
+        &self,
+        ledger: crate::context::resources::LedgerFrontier,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    ) -> Result<super::reading::LineageReadCut, ConversationStoreError>;
     fn read_lineage_cut(
         &self,
         revision: SurfaceRevision,
@@ -1801,14 +1787,6 @@ pub trait ConversationStore: Send + Sync + 'static {
         message_id: &MessageId,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError>;
 
-    /// Reads required immutable checkpoint statistics and local Journal attribution
-    /// through keyed Ledger/Journal lookups. No retired history is hydrated.
-    fn compaction_checkpoint(
-        &self,
-        summary_message_id: &MessageId,
-        through: u64,
-    ) -> Result<(CompactionCheckpointStatistics, Option<bool>), ConversationStoreError>;
-
     /// Reconstructs one exact historical Surface revision from immutable
     /// Surface operations.
     fn reconstruct_surface(
@@ -1862,9 +1840,8 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// its canonical message to the start-owned emission settlement; this
     /// method is not that generation path. Inbound adoption appends its
     /// selected User messages through [`ConversationStore::adopt_pending_batch`]
-    /// and compaction summaries use [`ConversationStore::commit_compaction`];
-    /// neither structurally special transition can be split through this
-    /// method. The store remains the historical Ledger authority; hot runtime
+    /// through its own atomic transition. Compaction uses `commit_projection`
+    /// and creates no canonical Ledger message. The store remains the historical Ledger authority; hot runtime
     /// state is only a bounded current read model.
     ///
     /// # Errors
@@ -1911,15 +1888,78 @@ pub trait ConversationStore: Send + Sync + 'static {
         events: &[RuntimeEventEnvelope],
     ) -> Result<(Vec<RuntimeEventEnvelope>, Vec<TranscriptCommitReceipt>), ConversationStoreError>;
 
-    /// Commits the summary Ledger row, immutable Surface Replace revision,
-    /// checkpoint metadata, and `CompactionCompleted` fact atomically.
-    fn commit_compaction(
+    /// Canonical physical Tool occurrences still lacking a committed result.
+    /// Projection selection cannot settle or reopen these execution obligations.
+    /// Returns at most `limit` rows (1..=8192) from the existing occurrence index.
+    fn unsettled_canonical_tool_calls(
         &self,
-        input: CompactionCommitInput,
+        limit: usize,
     ) -> Result<
-        (SurfaceRevision, u64, RuntimeEventEnvelope, TranscriptCursor),
+        Vec<(
+            crate::message::types::ToolCallOccurrenceRef,
+            crate::runtime::identity::ToolCallId,
+        )>,
         ConversationStoreError,
     >;
+
+    /// Read the current independent projection head; a dangling head fails closed.
+    fn projected_history(
+        &self,
+    ) -> Result<super::projection::HistoricalModelInput, ConversationStoreError>;
+    fn projection_at_journal_cut(
+        &self,
+        through: u64,
+    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError>;
+    /// Read one immutable checkpoint at the frozen resource cut with early byte admission.
+    fn compaction_checkpoint_at(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        id: &crate::runtime::identity::CheckpointId,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError>;
+    fn compaction_request(
+        &self,
+        cut: &crate::context::resources::ResourceReadCut,
+        request: &crate::runtime::identity::RequestId,
+        limits: crate::context::resources::ResourceLimits,
+    ) -> Result<crate::model::RequestSnapshot, ConversationStoreError>;
+    fn projection_head(
+        &self,
+    ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError>;
+    fn projection_checkpoint(
+        &self,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError>;
+    fn projection_timeline(
+        &self,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError>;
+    /// Decide published-cut eligibility before immutable checkpoint hydration.
+    fn projection_timeline_at_journal_cut(
+        &self,
+        through: u64,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<super::projection::ProjectionTimelinePage, ConversationStoreError>;
+    fn projection_checkpoint_at_journal_cut(
+        &self,
+        through: u64,
+        id: &crate::runtime::identity::CheckpointId,
+    ) -> Result<super::projection::ProjectionCheckpoint, ConversationStoreError>;
+    fn projection_owner(
+        &self,
+        attempt: Option<&crate::runtime::identity::AttemptId>,
+    ) -> Result<super::projection::ProjectionOwner, ConversationStoreError>;
+    fn projection_receipt(
+        &self,
+        operation: &crate::runtime::identity::CompactionOperationId,
+        fingerprint: &str,
+    ) -> Result<Option<super::projection::ProjectionCommitReceipt>, ConversationStoreError>;
+    fn commit_projection(
+        &self,
+        input: super::projection::ProjectionCommitInput,
+    ) -> Result<super::projection::ProjectionCommitReceipt, ConversationStoreError>;
 
     /// Loads the durable canonical Message Ledger in commit order (the
     /// complete crash-recoverable prefix of the Message Ledger).

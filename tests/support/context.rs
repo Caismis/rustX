@@ -178,6 +178,29 @@ impl ScriptedEstimator {
             .iter()
             .map(|message| match message {
                 ModelInputMessage::Canonical(message) => self.message_estimate(message),
+                ModelInputMessage::Derived(derived) => match &derived.message {
+                    rustx::model::projected::ProjectedMessage::User { content, .. }
+                        if derived.transformations.contains(
+                            &rustx::model::projected::SemanticTransformation::Summary,
+                        ) =>
+                    {
+                        content
+                            .iter()
+                            .filter_map(|b| match b {
+                                rustx::message::types::UserContentBlock::Text(t) => {
+                                    Some(t.text.len() as u64)
+                                }
+                                _ => None,
+                            })
+                            .sum::<u64>()
+                            .div_ceil(4)
+                    }
+                    rustx::model::projected::ProjectedMessage::User { .. }
+                    | rustx::model::projected::ProjectedMessage::Tool { .. } => self.per_message,
+                    rustx::model::projected::ProjectedMessage::Assistant { content } => {
+                        content.len() as u64 * self.per_block
+                    }
+                },
                 ModelInputMessage::RequestOnly(context) => {
                     (context.render().len() as u64).div_ceil(4)
                 }
@@ -190,8 +213,6 @@ impl ScriptedEstimator {
     pub fn message_estimate(&self, message: &MessageBlock) -> u64 {
         if let Some(weight) = self.overrides.get(message_id(message).as_str()) {
             *weight
-        } else if is_summary(message) {
-            (summary_text(message).len() as u64).div_ceil(4)
         } else if let MessageBlock::Assistant(assistant) = message {
             assistant.content.len() as u64 * self.per_block
         } else {
@@ -208,30 +229,124 @@ fn message_id(message: &MessageBlock) -> rustx::runtime::identity::MessageId {
     }
 }
 
-fn is_summary(message: &MessageBlock) -> bool {
-    matches!(
-        message,
-        MessageBlock::User(user) if user.kind.is_compaction_summary()
-    )
-}
-
-fn summary_text(message: &MessageBlock) -> String {
-    let MessageBlock::User(user) = message else {
-        return String::new();
-    };
-    user.content
-        .iter()
-        .filter_map(|block| match block {
-            rustx::message::types::UserContentBlock::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// A shared fake summarizer handle for tests that need to observe and
 /// release it across an execution.
 #[must_use]
 pub fn shared_summarizer(summarizer: FakeContextSummarizer) -> Arc<FakeContextSummarizer> {
     Arc::new(summarizer)
+}
+
+/// Native durable checkpoint fixture. Selection is explicit in model-input indices;
+/// the fixture never inserts a summary into the canonical Ledger.
+pub(crate) fn checkpoint_fixture(
+    store: &dyn rustx::durable::ConversationStore,
+    id: &str,
+    retired: usize,
+    text: &str,
+) -> rustx::context::checkpoint::CheckpointCandidate {
+    use rustx::context::checkpoint::{CheckpointCandidate, CheckpointItem, CheckpointMessage};
+    use rustx::model::projected::{
+        CanonicalMessageRef, CheckpointSourceRef, DerivedModelMessage, ProjectedMessage,
+        SemanticTransformation,
+    };
+    let history = store.projected_history().expect("fixture historical input");
+    assert!(retired > 0 && retired <= history.messages.len());
+    let parent = store.projection_head().unwrap();
+    let originals: Vec<_> = history.messages[..retired]
+        .iter()
+        .filter_map(|m| m.as_canonical().cloned())
+        .collect();
+    let physical = crate::context::compaction_metadata::retired_span_metadata(&originals);
+    let uses_parent=history.messages[..retired].iter().any(|m|matches!(m,ModelInputMessage::Derived(d) if d.transformations.contains(&SemanticTransformation::Summary)));
+    let metadata = rustx::message::types::CompactionSummaryMetadata::accumulate(
+        parent
+            .as_ref()
+            .filter(|_| uses_parent)
+            .and_then(|p| p.candidate.summary_metadata.as_ref()),
+        physical.read_files().to_vec(),
+        physical.modified_files().to_vec(),
+    );
+    let checkpoint_id = rustx::runtime::identity::CheckpointId::new(id);
+    let mut items = vec![CheckpointItem {
+        message: CheckpointMessage::Derived(Box::new(DerivedModelMessage {
+            message: ProjectedMessage::User {
+                content: vec![rustx::message::types::UserContentBlock::Text(
+                    rustx::message::TextBlock {
+                        text: crate::context::compaction_metadata::render_summary_text(
+                            text, &metadata,
+                        ),
+                    },
+                )],
+                source: rustx::message::types::UserSource::Runtime,
+                kind: rustx::model::projected::ProjectedUserKind::Message,
+                timestamp: None,
+            },
+            sources: originals
+                .iter()
+                .map(|m| CanonicalMessageRef::of(store.conversation_id(), m))
+                .collect(),
+            checkpoint_sources: parent
+                .as_ref()
+                .filter(|_| uses_parent)
+                .map(|p| CheckpointSourceRef {
+                    conversation_id: store.conversation_id().clone(),
+                    checkpoint_id: p.candidate.checkpoint_id.clone(),
+                    content_digest: p.fingerprint.clone(),
+                })
+                .into_iter()
+                .collect(),
+            transformations: vec![SemanticTransformation::Summary],
+        })),
+        call_sources: vec![],
+        result_call: None,
+    }];
+    for mut item in history.items.into_iter().skip(retired) {
+        if let Some(call) = &mut item.result_call {
+            call.message.checkpoint_id = checkpoint_id.clone();
+            call.message.item_index = call
+                .message
+                .item_index
+                .checked_sub(u32::try_from(retired).expect("bounded fixture prefix"))
+                .unwrap()
+                + 1;
+        }
+        items.push(item);
+    }
+    CheckpointCandidate {
+        checkpoint_id,
+        expected_head: history.cut.checkpoint_id,
+        read_cut: store.compaction_resource_cut().unwrap(),
+        base_frontier: history.cut.ledger,
+        items,
+        summary_metadata: Some(metadata),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)] // Fixture constructs an owned commit receipt input.
+pub(crate) fn checkpoint_commit_fixture(
+    store: &dyn rustx::durable::ConversationStore,
+    candidate: rustx::context::checkpoint::CheckpointCandidate,
+    attempt: Option<rustx::runtime::identity::AttemptId>,
+) -> rustx::durable::projection::ProjectionCommitInput {
+    let operation_id = rustx::runtime::identity::CompactionOperationId::new(format!(
+        "operation:{}",
+        candidate.checkpoint_id
+    ));
+    let signal = rustx::runtime::CancellationSignal::new();
+    rustx::durable::projection::ProjectionCommitInput {
+        grant: signal
+            .authorize_compaction_commit(operation_id.clone())
+            .unwrap(),
+        operation_id,
+        candidate,
+        owner: store.projection_owner(attempt.as_ref()).unwrap(),
+        tokens_before: rustx::runtime::types::TokenMeasurement {
+            input_tokens: 100,
+            source: rustx::runtime::types::TokenMeasurementSource::Estimated,
+        },
+        estimated_tokens_after: 10,
+        occupancy: None,
+        turn_id: None,
+        timestamp: chrono::Utc::now(),
+    }
 }

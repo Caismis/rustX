@@ -194,16 +194,13 @@ impl From<InheritedTurnOutcome> for TurnProcessOutcome {
 /// may retain a newer outcome; later source activity cannot change captured (R, C).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageReadCut {
+    pub projections: Vec<super::projection::ProjectionCheckpoint>,
     pub read_cut: ConversationReadCut,
     pub conversation_id: ConversationId,
     pub surface_revision: crate::conversation::SurfaceRevision,
     pub messages: Vec<crate::message::types::MessageBlock>,
     pub canonical: Vec<crate::message::types::MessageBlock>,
     pub surface_history: Vec<crate::conversation::SurfaceOp>,
-    pub checkpoints: std::collections::BTreeMap<
-        crate::runtime::identity::MessageId,
-        super::inbox::CompactionCheckpointStatistics,
-    >,
     pub completed_responses: Vec<super::response::CompletedResponseProvenance>,
     pub turns: Vec<TurnReadingProvenance>,
 }

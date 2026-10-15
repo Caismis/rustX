@@ -1,4 +1,4 @@
-import type { TraceToolLocator } from '../../../protocol/app-server/v47';
+import type { TraceToolLocator } from '../../../protocol/app-server/v49';
 import type { AppServerClient } from './app-server';
 import type { Observation } from './session-lifecycle/port';
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';

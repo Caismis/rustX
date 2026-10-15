@@ -16,8 +16,8 @@ use async_openai::config::OpenAIConfig;
 use async_openai::error::OpenAIError;
 use futures_util::StreamExt;
 
+use crate::message::types::AssistantContentBlock;
 use crate::message::types::ContentBlockIndex;
-use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
@@ -33,6 +33,7 @@ use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
 use crate::model::invocation::finalize_provider_request;
+use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
@@ -1325,6 +1326,24 @@ pub(crate) fn translate_request(
     let _ = tools;
     // The effective opaque request parameters are overlaid last, after every
     // runtime-owned continuation/input/tool/output field is present.
+    let wire_calls = request_value["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["type"] == "function_call")
+        .filter_map(|item| item["call_id"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    if !native_correlations_preserved(
+        &request.messages,
+        request.continuation.is_some(),
+        &wire_calls,
+    ) {
+        return Err(invalid_request(
+            "repeated correlation IDs would edit a complete encrypted native output unit",
+        ));
+    }
+    crate::model::adapter::correlation::encode(&mut request_value, ModelProtocol::OpenAiResponses)
+        .map_err(invalid_request)?;
     finalize_provider_request(
         request_value,
         request.request_params(),
@@ -1360,6 +1379,20 @@ fn translate_inputs(
             tail_after_boundary(request)?
         }
         Some(OpenAiResponsesContinuation::Stateless { items }) => {
+            let boundary = request
+                .continuation_boundary()
+                .map_err(|error| invalid_request(&error))?
+                .ok_or_else(|| invalid_request("stateless continuation lacks accepted output"))?;
+            let ModelMessageView::Assistant(assistant) = request.messages[boundary].view() else {
+                return Err(invalid_request(
+                    "native continuation boundary is not Assistant output",
+                ));
+            };
+            if retained_stateless_output(assistant)?.as_ref() != Some(items) {
+                return Err(invalid_request(
+                    "stateless continuation lacks its complete accepted output unit",
+                ));
+            }
             // The preserved provider-native output items are replayed first,
             // then the canonical context after the continuation boundary.
             // Opaque items (including encrypted reasoning) pass through
@@ -1369,17 +1402,21 @@ fn translate_inputs(
         }
     };
     for block in blocks {
-        match block {
-            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
+        match block.view() {
+            ModelMessageView::User(user) => {
                 input_items.push(translate_user_input(user, &request.images)?);
             }
-            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
+            ModelMessageView::Assistant(assistant) => {
                 input_items.extend(translate_assistant_inputs(assistant)?);
             }
-            ModelInputMessage::Canonical(MessageBlock::Tool(tool)) => {
-                input_items.push(translate_tool_result(tool, &request.images)?);
+            ModelMessageView::Tool(tool_call_id, result) => {
+                input_items.push(translate_tool_result(
+                    tool_call_id,
+                    result,
+                    &request.images,
+                )?);
             }
-            ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+            ModelMessageView::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
             )) => {
                 input_items.push(serde_json::json!({
@@ -1396,35 +1433,21 @@ fn translate_inputs(
     Ok((input_items, instructions, previous_response_id))
 }
 
-/// The canonical context occurring after the continuation boundary: the
-/// latest preceding `AssistantMessageBlock` is the boundary, and everything after
-/// it is the tail. Requests with continuation state but no preceding Assistant
-/// boundary fail explicitly rather than guessing.
+/// Input after the actual accepted output explicitly bound to native continuation.
 fn tail_after_boundary(request: &ModelRequest) -> Result<&[ModelInputMessage], ModelError> {
     let boundary = request
-        .messages
-        .iter()
-        .rposition(|block| {
-            matches!(
-                block,
-                ModelInputMessage::Canonical(MessageBlock::Assistant(_))
-            )
-        })
-        .ok_or_else(|| {
-            invalid_request(
-                "continuation request has no preceding Assistant message to use as the \
-                 continuation boundary",
-            )
-        })?;
+        .continuation_boundary()
+        .map_err(|error| invalid_request(&error))?
+        .ok_or_else(|| invalid_request("Responses continuation lacks accepted-output boundary"))?;
     Ok(&request.messages[boundary + 1..])
 }
 
 fn translate_user_input(
-    user: &crate::message::types::UserMessageBlock,
+    user: &[crate::message::types::UserContentBlock],
     images: &crate::model::images::ResolvedImages,
 ) -> Result<serde_json::Value, ModelError> {
     let mut content = Vec::new();
-    for block in &user.content {
+    for block in user {
         match block {
             crate::message::types::UserContentBlock::Text(text) => {
                 content.push(serde_json::json!({
@@ -1454,12 +1477,17 @@ fn translate_user_input(
 }
 
 fn translate_assistant_inputs(
-    assistant: &crate::message::types::AssistantMessageBlock,
+    assistant: &[crate::message::types::AssistantContentBlock],
 ) -> Result<Vec<serde_json::Value>, ModelError> {
+    if let Some(items) = retained_stateless_output(assistant)? {
+        // The native bundle already contains the accepted text/calls. Replaying
+        // those typed views again would duplicate the prior generation.
+        return Ok(items);
+    }
     let mut items = Vec::new();
     let mut message_content = Vec::new();
     let mut tool_calls = Vec::new();
-    for content in &assistant.content {
+    for content in assistant {
         match content {
             AssistantContentBlock::Text(text) => {
                 message_content.push(serde_json::json!({
@@ -1533,6 +1561,87 @@ fn translate_assistant_inputs(
     Ok(items)
 }
 
+fn retained_stateless_output(
+    assistant: &[AssistantContentBlock],
+) -> Result<Option<Vec<serde_json::Value>>, ModelError> {
+    let units = assistant
+        .iter()
+        .filter_map(|block| match block {
+            AssistantContentBlock::Reasoning(reasoning) => match &reasoning.provider_state {
+                Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stateless { items },
+                )) => Some(items),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if units.is_empty() {
+        return Ok(None);
+    }
+    if units.len() != 1 {
+        return Err(unsupported(
+            "Assistant carries multiple ambiguous stateless output bundles",
+        ));
+    }
+    let mut native_visible = Vec::new();
+    for item in units[0] {
+        match item["type"].as_str() {
+            Some("reasoning")
+                if item["encrypted_content"]
+                    .as_str()
+                    .is_some_and(|state| !state.is_empty()) => {}
+            Some("message") if item["role"] == "assistant" => {
+                let content = item["content"]
+                    .as_array()
+                    .ok_or_else(|| unsupported("native output message lacks complete content"))?;
+                for part in content {
+                    match part["type"].as_str() {
+                        Some("output_text") if part["text"].is_string() => native_visible
+                            .push(serde_json::json!({"type":"text", "text":part["text"]})),
+                        Some("refusal") if part["refusal"].is_string() => native_visible
+                            .push(serde_json::json!({"type":"refusal", "text":part["refusal"]})),
+                        _ => {
+                            return Err(unsupported(
+                                "native output contains unsupported or incomplete readable content",
+                            ));
+                        }
+                    }
+                }
+            }
+            Some("function_call") if item["call_id"].is_string() && item["name"].is_string() => {
+                let arguments = item["arguments"].as_str().ok_or_else(|| {
+                    unsupported("native function output lacks original arguments")
+                })?;
+                let arguments: serde_json::Value = serde_json::from_str(arguments)
+                    .map_err(|_| unsupported("native function output has invalid arguments"))?;
+                native_visible.push(serde_json::json!({"type":"call", "id":item["call_id"], "name":item["name"], "arguments":arguments}));
+            }
+            _ => {
+                return Err(unsupported(
+                    "stateless output lacks a complete supported native replay unit",
+                ));
+            }
+        }
+    }
+    let mut visible = Vec::new();
+    for block in assistant {
+        match block {
+            AssistantContentBlock::Text(text) => visible.push(serde_json::json!({"type":"text", "text":text.text})),
+            AssistantContentBlock::Refusal(refusal) => visible.push(serde_json::json!({"type":"refusal", "text":refusal.text})),
+            AssistantContentBlock::ToolCall(call) => visible.push(serde_json::json!({"type":"call", "id":call.id, "name":call.name, "arguments":call.arguments})),
+            AssistantContentBlock::Reasoning(_) => {},
+            AssistantContentBlock::Image(_) => return Err(unsupported("native replay cannot absorb a changed image representation")),
+        }
+    }
+    if visible != native_visible {
+        return Err(unsupported(
+            "typed Assistant content disagrees with preserved native output bundle",
+        ));
+    }
+    Ok(Some(units[0].clone()))
+}
+
 /// Encode one request-owned PNG using the SDK input image representation.
 fn responses_image_part(
     image: &crate::message::content::ImageReference,
@@ -1549,13 +1658,14 @@ fn responses_image_part(
 /// Responses function-call-output shape. Projection policy, status rendering,
 /// and aggregate bounding are owned by the Tool Plane.
 fn translate_tool_result(
-    tool: &crate::message::types::ToolMessageBlock,
+    tool_call_id: &crate::runtime::identity::ToolCallId,
+    result: &crate::tools::types::ToolExecutionResult,
     images: &crate::model::images::ResolvedImages,
 ) -> Result<serde_json::Value, ModelError> {
     use async_openai::types::responses::{
         FunctionCallOutput, FunctionCallOutputItemParam, InputContent, InputTextContent,
     };
-    let parts = tool.result.image_projection().map_err(unsupported)?;
+    let parts = result.image_projection().map_err(unsupported)?;
     let output = if parts
         .iter()
         .any(|part| matches!(part, crate::tools::types::ModelToolResultPart::Image(_)))
@@ -1574,10 +1684,10 @@ fn translate_tool_result(
                 .collect::<Result<Vec<_>, ModelError>>()?,
         )
     } else {
-        FunctionCallOutput::Text(tool.result.model_facing_projection().as_text())
+        FunctionCallOutput::Text(result.model_facing_projection().as_text())
     };
     let item = FunctionCallOutputItemParam {
-        call_id: tool.tool_call_id.as_str().to_owned(),
+        call_id: tool_call_id.as_str().to_owned(),
         output,
         id: None,
         status: None,
@@ -1756,8 +1866,83 @@ fn unsupported(message: impl Into<String>) -> ModelError {
     }
 }
 
+/// Native encrypted output units cannot inherit newly invented call labels.
+/// Generic older batches may be relabeled, while native units stay exact.
+fn native_correlations_preserved(
+    messages: &[ModelInputMessage],
+    continuation: bool,
+    wire_calls: &[String],
+) -> bool {
+    let labels = crate::model::occurrence::wire_labels(wire_calls);
+    if labels == wire_calls {
+        return true;
+    }
+    // A continuation replays one accepted native output unit, not arbitrary
+    // repeated historical occurrences. Duplicate IDs in that unit are invalid.
+    if continuation {
+        return false;
+    }
+    let mut ordinal = 0;
+    for message in messages {
+        if let ModelMessageView::Assistant(content) = message.view() {
+            let native=content.iter().any(|block|matches!(block,AssistantContentBlock::Reasoning(reasoning) if matches!(reasoning.provider_state,Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {..})))));
+            for block in content {
+                if matches!(block, AssistantContentBlock::ToolCall(_)) {
+                    if native && labels.get(ordinal) != wire_calls.get(ordinal) {
+                        return false;
+                    }
+                    ordinal += 1;
+                }
+            }
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_output_unit_never_receives_invented_wire_correlation_ids() {
+        use super::native_correlations_preserved;
+        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, ReasoningBlock};
+        use crate::model::ModelInputMessage;
+        use crate::runtime::continuation::OpenAiResponsesContinuation;
+        let call = crate::tools::types::ToolCall {
+            id: crate::runtime::identity::ToolCallId::new("repeat"),
+            tool_id: crate::runtime::identity::ToolId::new("tool"),
+            name: "tool".into(),
+            arguments: serde_json::json!({}),
+        };
+        let native = ModelInputMessage::Canonical(crate::message::types::MessageBlock::Assistant(AssistantMessageBlock {
+            id:crate::runtime::identity::MessageId::new("native"),content:vec![AssistantContentBlock::Reasoning(ReasoningBlock {text:None,provider_state:Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless { items:vec![serde_json::json!({"type":"reasoning","id":"rs-native","encrypted_content":"opaque-native"}),serde_json::json!({"type":"function_call","id":"fc-native","call_id":"repeat","name":"tool","arguments":"{}"})] }))}),AssistantContentBlock::ToolCall(call.clone())],
+        }));
+        let generic = ModelInputMessage::Canonical(crate::message::types::MessageBlock::Assistant(
+            AssistantMessageBlock {
+                id: crate::runtime::identity::MessageId::new("generic"),
+                content: vec![AssistantContentBlock::ToolCall(call)],
+            },
+        ));
+        let ids = vec!["repeat".to_owned(), "repeat".to_owned()];
+        assert!(!native_correlations_preserved(
+            &[native.clone(), generic.clone()],
+            false,
+            &ids
+        ));
+        assert!(
+            native_correlations_preserved(&[generic, native.clone()], false, &ids),
+            "only an older generic batch is renamed; the native unit remains exact"
+        );
+        assert!(!native_correlations_preserved(
+            &[native.clone(), native],
+            false,
+            &ids
+        ));
+        assert!(
+            !native_correlations_preserved(&[], true, &ids),
+            "a continuation cannot arbitrarily replay repeated native occurrences"
+        );
+    }
+
     use super::{translate_tool_result, translate_tools};
     use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;
@@ -1844,8 +2029,12 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message, &crate::model::images::ResolvedImages::new())
-            .expect("translate cancelled result");
+        let encoded = translate_tool_result(
+            &message.tool_call_id,
+            &message.result,
+            &crate::model::images::ResolvedImages::new(),
+        )
+        .expect("translate cancelled result");
         assert_eq!(
             encoded["output"].as_str().expect("text output"),
             "Tool call was cancelled (reason: user_requested). Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
@@ -1890,9 +2079,12 @@ mod tests {
                     managed_output: None,
                 },
             };
-            let encoded =
-                translate_tool_result(&message, &crate::model::images::ResolvedImages::new())
-                    .expect("translate status result");
+            let encoded = translate_tool_result(
+                &message.tool_call_id,
+                &message.result,
+                &crate::model::images::ResolvedImages::new(),
+            )
+            .expect("translate status result");
             let output = encoded["output"].as_str().expect("text output");
             assert_eq!(
                 output,
@@ -1932,8 +2124,12 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message, &crate::model::images::ResolvedImages::new())
-            .expect("translate failed tool result");
+        let encoded = translate_tool_result(
+            &message.tool_call_id,
+            &message.result,
+            &crate::model::images::ResolvedImages::new(),
+        )
+        .expect("translate failed tool result");
         let projection = message.result.model_facing_projection();
         assert_eq!(encoded["call_id"], "call-failed");
         assert_eq!(

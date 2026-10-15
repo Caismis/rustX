@@ -453,6 +453,8 @@ pub struct TraceToolOutcomeUpdate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceDetail {
+    /// Historical projection content, distinct from committed execution messages.
+    pub projected_messages: Vec<TraceRequestMessage>,
     /// Echoes the requested identity so a late reply can be fenced.
     pub id: String,
     pub kind: TraceKind,
@@ -472,7 +474,11 @@ pub struct TraceDetail {
 /// still shows what was actually sent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)] // Orthogonal inspection truncation flags and frozen reasoning policy, not lifecycle state.
 pub struct TraceRequestDetail {
+    /// Frozen physical/request coordinates and provider correlation labels.
+    pub tool_associations: Vec<crate::model::occurrence::ActualRequestToolAssociation>,
+    pub tool_associations_truncated: bool,
     /// Typed historical context, never the current domain projection.
     pub contributions: Vec<TraceContributionMetadata>,
     pub request_id: RequestId,
@@ -549,14 +555,33 @@ pub enum TraceMessageRole {
     RequestOnly,
 }
 
+/// Input provenance is not execution ownership. Derived bodies have no canonical identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TraceInputProvenance {
+    Original {
+        source: crate::model::projected::CanonicalMessageRef,
+    },
+    Derived {
+        sources: Vec<crate::model::projected::CanonicalMessageRef>,
+        checkpoint_sources: Vec<crate::model::projected::CheckpointSourceRef>,
+        transformations: Vec<crate::model::projected::SemanticTransformation>,
+        truncated: bool,
+    },
+    RequestOnly,
+}
+
 /// One reconstructed provider-neutral request item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceRequestMessage {
+    /// Present only for one actual frozen request; projection detail has its own coordinate.
+    pub request_occurrence: Option<crate::context::checkpoint::RequestMessageOccurrence>,
+    pub provenance: TraceInputProvenance,
     pub role: TraceMessageRole,
-    /// Canonical Ledger identity; absent exactly for a request-only item.
+    /// Canonical Ledger identity; absent for Derived and request-only input.
     pub message_id: Option<MessageId>,
-    /// Provenance of a canonical User item.
+    /// User provenance or the request-local Derived transformation label.
     pub source: Option<String>,
     pub blocks: Vec<TraceContentBlock>,
     pub truncated: bool,

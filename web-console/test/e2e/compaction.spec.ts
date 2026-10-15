@@ -103,12 +103,12 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await expect(message).toHaveValue(draft);
       const marker = page.locator('[data-compaction-marker]').getByRole('button');
       await expect(marker).toHaveCount(1);
-      await expect(marker).toContainText(copy(/compact.*Compacted \d+ history items \(~\d+ tokens\)/, /compact.*已压缩 \d+ 条历史记录（约 \d+ 词元）/));
+      await expect(marker).toContainText(copy(/Compacted model context.*Projection \d+.*canonical frontier \d+/, /已压缩的模型上下文.*投影 \d+.*规范历史边界 \d+/));
       await expect(marker).toContainText('The user supplied compaction-evidence-435. Preserve that fact.');
       await expect(page.locator('[data-compaction-body]')).toHaveCount(0);
       await marker.focus(); await marker.press('Enter');
       await expect(page.locator('[data-compaction-body]').getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
-      await expect(page.locator('[data-compaction-body]').getByText(copy('A condensed record of earlier context used to continue this conversation.', '先前上下文的精简记录，用于继续当前对话。'), { exact: true })).toBeVisible();
+      await expect(page.locator('[data-compaction-body]').getByText(copy('This projection supplies model context. Canonical conversation facts retain their original execution ownership.', '此投影提供模型上下文。规范会话事实保留其原始执行归属。'), { exact: true })).toBeVisible();
       await expect(marker).toHaveAttribute('aria-expanded', 'true');
       await marker.press('Space');
       await expect(marker).toHaveAttribute('aria-expanded', 'false');
@@ -158,9 +158,21 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       const latest = page.locator('[data-chat-latest]');
       if (await latest.isVisible()) await latest.click();
       await expect(page.getByText('Question answered after compaction.', { exact: true })).toBeInViewport();
-      await expect(marker).toHaveCount(2);
+      await expect(marker).toHaveCount(1);
+      await expect(marker).toContainText(copy(/Projection 2/, /投影 2/));
       await marker.last().click();
       await expect(page.locator('[data-compaction-body]').getByText("Preserve compaction-evidence-435 and the user's instruction to continue.", { exact: true })).toBeVisible();
+      const historical = page.locator('[data-projection-history]');
+      await historical.locator('summary').first().click();
+      await expect(historical.locator('[data-projection-origin="local"]')).toHaveCount(2);
+      await expect(historical.locator('[data-projection-origin="inherited"]')).toHaveCount(0);
+      await historical.getByRole('button', { name: copy('Inspect projected messages', '查看投影消息'), exact: true }).first().click();
+      await expect(historical.locator('[data-projection-detail]')).toContainText('The user supplied compaction-evidence-435. Preserve that fact.');
+      await historical.getByRole('button', { name: copy('Inspect projected messages', '查看投影消息'), exact: true }).nth(1).click();
+      await expect(historical.locator('[data-projection-detail]')).toContainText("Preserve compaction-evidence-435 and the user's instruction to continue.");
+      await expect(historical.locator('[data-projection-origin="local"]')).toHaveCount(2);
+      await page.screenshot({ path: `/tmp/rustx-projection-history-${locale}-${theme}.png` });
+      await historical.locator('summary').first().click();
       await page.screenshot({ path: `/tmp/rustx-compaction-${locale}-${theme}.png` });
       await page.getByRole('tab', { name: copy('Trajectory', '轨迹'), exact: true }).click();
       await compactionRow.click();
@@ -185,10 +197,20 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       if (await latest.isVisible()) await latest.click();
       await page.screenshot({ path: `/tmp/rustx-stopped-${locale}-${theme}.png` });
       await message.fill('Continue after stopping'); await message.press('Enter');
+      // The provider's eighth response is the actual continuation producer.
+      // Wait for its terminal fact before asserting the independently rendered text.
+      await fixture.control('observations/await?kind=response_completed&count=8&timeoutMs=30000');
       await expect(page.getByText('Conversation continued after stopping.', { exact: true })).toBeVisible();
       await expect(page.getByText('This must not appear after stopping.', { exact: true })).toHaveCount(0);
       expect(errors).toEqual([]);
       passed = true;
+    } catch (error) {
+      let report: unknown;
+      try { report = await fixture.control('report'); } catch (failure) { report = String(failure); }
+      await test.info().attach('native-compaction-failure', {
+        body: JSON.stringify({ ...fixture.diagnostics(), report }), contentType: 'application/json',
+      });
+      throw error;
     } finally { await fixture.stop(passed); }
   });
 }

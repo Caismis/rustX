@@ -50,7 +50,6 @@ fn shapes(messages: &[MessageBlock]) -> Vec<&'static str> {
         .iter()
         .map(|message| match message {
             MessageBlock::User(user) => match user.kind {
-                InboundKind::CompactionSummary(_) => "summary",
                 InboundKind::Context(_) => "context",
                 InboundKind::Message => "user",
                 InboundKind::GoalContinuation(_) => "goal_continuation",
@@ -1626,17 +1625,17 @@ fn kill_during_the_compaction_summary_keeps_the_old_surface() {
 }
 
 /// Killed inside the Surface Replace transaction, the compaction is entirely
-/// absent; killed just after it, the exact planned span is replaced, the
-/// Ledger is intact, and the retained Surface order is correct.
+/// absent; killed just after it, checkpoint content, activation, receipt and
+/// local completion are present together, while canonical history is intact.
 #[test]
-fn compaction_surface_replace_is_atomic() {
+fn compaction_checkpoint_receipt_and_activation_are_atomic() {
     let before = Lab::new();
-    let mut process = before.spawn(child::COMPACTION, Some("before:commit_compaction"));
+    let mut process = before.spawn(child::COMPACTION, Some("before:commit_projection"));
     process.wait_note("settled");
     process.resume();
     process.wait_note("summary-in-flight");
     process.resume();
-    process.wait_reached("before:commit_compaction");
+    process.wait_reached("before:commit_projection");
     process.sigkill();
     let durable = before.durable();
     assert!(!durable.has_event(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })));
@@ -1647,12 +1646,12 @@ fn compaction_surface_replace_is_atomic() {
     let ledger_before = shapes(&durable.canonical());
 
     let after = Lab::new();
-    let mut process = after.spawn(child::COMPACTION, Some("after:commit_compaction"));
+    let mut process = after.spawn(child::COMPACTION, Some("after:commit_projection"));
     process.wait_note("settled");
     process.resume();
     process.wait_note("summary-in-flight");
     process.resume();
-    process.wait_reached("after:commit_compaction");
+    process.wait_reached("after:commit_projection");
     process.sigkill();
     let durable = after.durable();
     assert_eq!(
@@ -1661,20 +1660,32 @@ fn compaction_surface_replace_is_atomic() {
         "exactly one compaction fact"
     );
     assert_eq!(
-        shapes(&durable.surface()),
-        vec!["summary"],
-        "the planned span is replaced by its summary"
+        durable.store().projected_history().unwrap().messages.len(),
+        1,
+        "the model sees one independently durable Derived summary"
     );
     let ledger_after = shapes(&durable.canonical());
     assert_eq!(
         &ledger_after[..ledger_before.len()],
         &ledger_before[..],
-        "the historical Ledger prefix is untouched by Surface replacement"
+        "the historical Ledger prefix is untouched by checkpoint commit"
     );
     assert_eq!(
-        ledger_after.last(),
-        Some(&"summary"),
-        "the summary is appended, never substituted in place"
+        ledger_after, ledger_before,
+        "compaction adds no canonical message"
+    );
+    let head = durable.store().projection_head().unwrap().unwrap();
+    assert!(matches!(
+        &head.candidate.items[0].message,
+        rustx::context::checkpoint::CheckpointMessage::Derived(_)
+    ));
+    assert_eq!(
+        durable
+            .store()
+            .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap()
+            .len(),
+        1
     );
 }
 
@@ -2952,15 +2963,19 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
 
     // History retired from the current Surface by compaction.
     let compacted = Lab::new();
-    let mut process = compacted.spawn(child::COMPACTION, Some("after:commit_compaction"));
+    let mut process = compacted.spawn(child::COMPACTION, Some("after:commit_projection"));
     process.wait_note("settled");
     process.resume();
     process.wait_note("summary-in-flight");
     process.resume();
-    process.wait_reached("after:commit_compaction");
+    process.wait_reached("after:commit_projection");
     process.sigkill();
     let durable = compacted.durable();
-    assert_eq!(shapes(&durable.surface()), vec!["summary"]);
+    assert_eq!(
+        durable.store().projected_history().unwrap().messages.len(),
+        1
+    );
+    assert!(durable.store().projection_head().unwrap().is_some());
     assert!(
         durable.transcript().len() > 1,
         "retired history still pages"

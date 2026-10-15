@@ -120,13 +120,13 @@ fn attempt() -> AttemptId {
 /// the started request identity.
 fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
     let head = store.load_head().expect("head");
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new(turn),
             retry_number: 0,
         },
-        head.revision,
+        rustx::context::resources::LedgerFrontier((head.revision).get()),
         "the frozen effective system prompt".to_owned(),
         Vec::new(),
         rustx::runtime::RuntimeResourceRevision::new(1),
@@ -144,6 +144,7 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
         Vec::new(),
     );
     let request_id = snapshot.request_id.clone();
+    crate::freeze_request(store, &mut snapshot);
     store
         .commit_model_turn_start(&[], &snapshot, fixed_time())
         .expect("request start");

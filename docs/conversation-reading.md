@@ -155,7 +155,7 @@ A read cut C is `(ConversationId, journal, transcript, mutation_revision)`, the
 inclusive upper bounds one read was captured at. `mutation_revision` is the
 native monotonic epoch of successful pending-body edits/removals. Pending
 adoption preserves its accepted body and position; new admissions and ordinary
-execution append facts. Surface compaction preserves immutable Ledger/Journal
+execution append facts. Projection activation preserves immutable Ledger/Journal
 meaning. Latest reads capture a fresh C. Anchor and continuation reads name C and reject
 foreign, future or mutated cuts; append-only growth remains reconstructible.
 
@@ -305,7 +305,7 @@ request; ChatViewport preserves the reading anchor through the resulting reflow.
 
 ## Exact fork source message windows
 
-App Server v47 adds the Message window selector over canonical MessageId. The
+App Server v48 adds the Message window selector over canonical MessageId. The
 store resolves its existing indexed transcript position inside the same read
 transaction, then returns at most 64 entries forward from that exact position.
 It never scans intervening transcript pages or substitutes a nearby Turn. A

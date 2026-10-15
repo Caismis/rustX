@@ -2,14 +2,11 @@
 //!
 //! The Ledger is append-only. Once committed, a record's body is never
 //! edited, replaced, or deleted, and its [`MessageId`] stays addressable
-//! forever. Compaction appends another canonical message (a runtime
-//! compaction summary) and rewrites the *Surface*; it never rewrites the
-//! Ledger.
+//! forever. Compaction selects typed projected context independently and never
+//! inserts a summary into the Ledger.
 //!
-//! The Ledger carries **no** visibility state: there is no `active`,
-//! `visible`, or `shadowed` flag anywhere in this module. Visibility belongs
-//! to the [`ConversationSurface`](crate::conversation::surface::ConversationSurface)
-//! alone.
+//! The Ledger has no visibility flags. Durable checkpoints own historical
+//! model-visible selection; the hot append view only caches retained real facts.
 //!
 //! Reads are instrumented so the finite-read invariant is provable: keyed
 //! lookups and the explicit audit enumeration are counted separately, and a

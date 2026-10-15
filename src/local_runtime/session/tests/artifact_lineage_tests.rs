@@ -26,18 +26,13 @@ fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId,
         timestamp,
         event: kind,
     };
-    store
-        .append_event(event(RuntimeEvent::AttemptStarted {
-            attempt_id: attempt.clone(),
-        }))
-        .unwrap();
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt.clone(),
             turn: TurnId::new(format!("native-step-{index}")),
             retry_number: 0,
         },
-        store.load_head().unwrap().revision,
+        crate::context::resources::LedgerFrontier((store.load_head().unwrap().revision).get()),
         "frozen lineage context".into(),
         Vec::new(),
         crate::runtime::RuntimeResourceRevision::new(1),
@@ -61,6 +56,7 @@ fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId,
         None,
         Vec::new(),
     );
+    freeze_session_test_input(store, &mut snapshot, &[]);
     store
         .commit_model_turn_start(&[], &snapshot, timestamp)
         .unwrap();
@@ -126,29 +122,37 @@ fn source(catalog: &SessionCatalog, artifact: bool) -> (SqliteConversationStore,
             correlation: None,
         })
         .unwrap();
-    store.adopt_pending_batch(accepted.sequence, None).unwrap();
+    store
+        .append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new("start-1"),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(AttemptId::new("native-attempt-1")),
+            turn_id: None,
+            timestamp: Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 1).unwrap(),
+            event: RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("native-attempt-1"),
+            },
+        })
+        .unwrap();
+    store
+        .adopt_pending_batch(accepted.sequence, Some(AttemptId::new("native-attempt-1")))
+        .unwrap();
     complete_turn(&store, &conversation, 1);
     store
-        .commit_compaction(CompactionCommitInput {
-            summary: UserMessageBlock {
-                id: MessageId::new("checkpoint"),
-                content: vec![text("First turn summarized")],
-                source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-                timestamp: None,
-            },
-            span: SurfaceSpan::new(MessageId::new("prompt-1"), MessageId::new("answer-1")),
-            expected_revision: store.load_head().unwrap().revision,
-            tokens_before: TokenMeasurement {
-                input_tokens: 64,
-                source: TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: 32,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 2).unwrap(),
-            occupancy: None,
-        })
+        .commit_projection(
+            crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                &store,
+                crate::scripted_suites::support::context::checkpoint_fixture(
+                    &store,
+                    "checkpoint",
+                    2,
+                    "First turn summarized",
+                ),
+                None,
+            ),
+        )
         .unwrap();
     let accepted = store
         .accept_inbound(InboundDraft {
@@ -160,7 +164,23 @@ fn source(catalog: &SessionCatalog, artifact: bool) -> (SqliteConversationStore,
             correlation: None,
         })
         .unwrap();
-    store.adopt_pending_batch(accepted.sequence, None).unwrap();
+    store
+        .append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new("start-2"),
+            sequence: 0,
+            conversation_id: conversation.clone(),
+            attempt_id: Some(AttemptId::new("native-attempt-2")),
+            turn_id: None,
+            timestamp: Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 4).unwrap(),
+            event: RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("native-attempt-2"),
+            },
+        })
+        .unwrap();
+    store
+        .adopt_pending_batch(accepted.sequence, Some(AttemptId::new("native-attempt-2")))
+        .unwrap();
     complete_turn(&store, &conversation, 2);
     let cut = store
         .read_lineage_cut(store.load_head().unwrap().revision)
@@ -192,7 +212,22 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
             expected.completed_responses()
         );
         assert_eq!(inherited.surface_history, expected.surface_history());
-        assert_eq!(inherited.checkpoints, *expected.checkpoints());
+        assert_eq!(inherited.projections.len(), expected.projections().len());
+        for (actual, expected) in inherited.projections.iter().zip(expected.projections()) {
+            assert_eq!(actual.activation.activation, expected.activation.activation);
+            assert_eq!(actual.activation.ledger, expected.activation.ledger);
+            assert_eq!(actual.activation.origin, expected.activation.origin);
+            assert!(actual.activation.destination_installation.is_some());
+            assert_eq!(
+                actual.candidate.base_frontier,
+                expected.candidate.base_frontier
+            );
+            assert_eq!(
+                actual.candidate.summary_metadata,
+                expected.candidate.summary_metadata
+            );
+        }
+        store.projected_history().unwrap();
         let mut canonical = expected.canonical().to_vec();
         if artifact {
             let MessageBlock::User(prompt) = &mut canonical[0] else {
@@ -232,14 +267,6 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
                 .load_surface_snapshot(store.load_head().unwrap().revision)
                 .unwrap()
         );
-        for (id, statistics) in expected.checkpoints() {
-            assert_eq!(statistics.retired_messages, 2);
-            assert!(statistics.retired_tokens > 0);
-            assert_eq!(
-                store.compaction_checkpoint(id, u64::MAX).unwrap().0,
-                *statistics
-            );
-        }
         assert!(store.read_events(None, 64).unwrap().events.is_empty());
         assert!(
             store
@@ -251,7 +278,11 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
         assert_eq!(store.presentation_frontier().unwrap(), 0);
         assert_eq!(
             crate::context::occupancy::read(&store, 0).unwrap(),
-            crate::context::occupancy::inherit(expected.turns(), expected.surface_history()),
+            crate::context::occupancy::inherit(
+                expected.turns(),
+                expected.canonical(),
+                expected.projections()
+            ),
             "Artifact remapping must preserve the selected inherited occupancy"
         );
         let directory = store.conversation_turns(0, 64).unwrap();
@@ -326,13 +357,11 @@ fn copy_history(fork: bool) {
         };
         let count = if fork { 1 } else { 2 };
         assert_eq!(selected.turns.len(), count);
-        let expected = super::super::remap_seed(
+        let expected = super::super::lineage_cut(
             &copy.conversation_id,
-            &selected.canonical,
-            &selected.surface_history,
-            &selected.checkpoints,
-            &selected.completed_responses,
-            &selected.turns,
+            &selected,
+            None,
+            super::super::LineageSide::After,
         )
         .unwrap();
         for (original, copied) in selected.turns.iter().zip(expected.turns()) {
@@ -359,9 +388,9 @@ fn copy_history(fork: bool) {
                 })
                 .collect::<Vec<_>>(),
             expected
-                .checkpoints()
-                .values()
-                .map(|stats| stats.retired_messages)
+                .projections()
+                .iter()
+                .map(|checkpoint| checkpoint.candidate.base_frontier.0)
                 .collect::<Vec<_>>(),
         ));
         catalog
@@ -396,7 +425,12 @@ fn artifact_tree_preserves_selected_occupancy_and_native_history_after_restart()
         // Selecting source latest occupancy would give 64 instead of 32 tokens.
         for count in [1, 2] {
             let selected = if count == 1 {
-                store.read_lineage_cut(SurfaceRevision::new(2)).unwrap()
+                store
+                    .read_projection_lineage_cut(
+                        crate::context::resources::LedgerFrontier(2),
+                        crate::context::checkpoint::ProjectionActivationId(0),
+                    )
+                    .unwrap()
             } else {
                 store.read_lineage_cut(cut.surface_revision).unwrap()
             };
@@ -410,19 +444,21 @@ fn artifact_tree_preserves_selected_occupancy_and_native_history_after_restart()
                 )
                 .unwrap();
             assert!(draft.is_empty());
-            let expected = super::super::remap_seed(
+            let expected = super::super::lineage_cut(
                 &copy.conversation_id,
-                &selected.canonical,
-                &selected.surface_history,
-                &selected.checkpoints,
-                &selected.completed_responses,
-                &selected.turns,
+                &selected,
+                None,
+                super::super::LineageSide::After,
             )
             .unwrap();
             assert_eq!(
-                crate::context::occupancy::inherit(expected.turns(), expected.surface_history())
-                    .unwrap()
-                    .input_tokens,
+                crate::context::occupancy::inherit(
+                    expected.turns(),
+                    expected.canonical(),
+                    expected.projections()
+                )
+                .unwrap()
+                .input_tokens,
                 count as u64 * 32
             );
             verify_copy(&copy, &expected, artifact, count);

@@ -205,20 +205,18 @@ separate:
 | --- | --- |
 | Pending Inbound Inbox | Accepted, not-yet-adopted deliveries, one shared `InboundSequence`, and correlation/idempotency state. |
 | Message Ledger | Append-only canonical `MessageBlock` bodies, stable `MessageId`, and commit order. |
-| Conversation Surface | Immutable `SurfaceOp` history plus current `SurfaceRevision`, active identity order, and compaction generation. |
-| Request Snapshot | Immutable non-history inputs for one actual request, bound to one historical Surface revision and one `RequestId`. |
+| Canonical working cache | Append-only canonical identity bookkeeping and bounded hot facts; no compaction selection authority. |
+| Request Snapshot | Exact frozen provider-neutral input, Original dependencies, request-local Derived bodies, images and invocation for one actual `RequestId`. |
 | Event Journal | Append-only typed execution facts with `EventId`, per-conversation `EventSequence`, schema version, reference checks, and terminal constraints. |
-| Checkpoint/index metadata | Current Surface head and structural/context checkpoint copies used for bounded bootstrap validation; never a transcript. |
+| Projection checkpoint/timeline | Immutable typed historical context, complete base-frontier decisions, local activation or inherited origin/installation, head CAS and operation receipts. |
 | `ConversationInboundMailbox` | Process-local acceptance coordination and wakeup only; it is not durable authority. |
 | Runtime Client | Projection, cursor, and control adapter only; reconnect never supplies recovery facts. |
 
 There is no `ConversationRecord`, full transcript table, request-message
 copy, generic repository, or second durable history. Canonical message bodies
-are stored once in the Ledger. A Surface revision stores identity/order
-transitions, and a historical request combines that revision with its frozen
-snapshot on demand.
+are stored once in the Ledger. A historical request reconstructs its exact frozen input and immutable dependencies. Checkpoint items select context independently of canonical append bookkeeping.
 
-The current SQLite development schema is defined by `SQLITE_SCHEMA_VERSION`.
+The current SQLite development schema is 60, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Older schemas are refused without migration.
 Version 51 (Issue #462) binds every Agent and Workflow to the shared Session
 workspace: ownership facts carry one absolute workspace path, and Agent
 worktree disposal, Workflow workspace ownership, Candidate invocation and
@@ -309,8 +307,11 @@ The physical tables are deliberately semantic rather than generic:
 | `inbound_correlation` | Exactly-once correlation mapping to the accepted sequence and unique `MessageId`. |
 | `message_ledger` | Append-only canonical bodies keyed by commit `position` and unique `MessageId`. |
 | `bootstrap_identity` | Immutable initial-history count and digest, including an explicit empty bootstrap. |
-| `surface_ops` | One immutable `Append` or `Replace` operation per `SurfaceRevision`, with compaction generation. |
-| `surface_head` | Current Surface revision, active identity order, and compaction generation. |
+| `surface_ops` | Canonical `Append` bookkeeping only. No replacement operation exists. |
+| `surface_head` | Ordinary canonical cache metadata; historical context is compiled from the projection head and bounded post-base Tail. |
+| `projection_checkpoints` | Immutable typed candidate bodies, candidate fingerprints and independently validated trusted summary metadata. |
+| `projection_activations` / `projection_head` | Ordered historical installations, separate source origins/destination installations, and current head. |
+| `compaction_operations` | Stable OperationId + candidate fingerprint and immutable commit receipt. |
 | `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
 | `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, committed start sequence, and optional request-only carryover source/representation/anchor. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
@@ -345,9 +346,7 @@ correlation state together. Adoption commits the selected finite pending
 watermark, canonical User Ledger rows, Surface Append revisions, checkpoint
 metadata, and pending deletion together. Ordinary canonical appends and
 ToolResult sibling batches append Ledger bodies and Surface revisions in one
-transaction; committed-message events share that transaction. Compaction
-commits the summary body, Surface Replace revision, generation/checkpoint
-metadata, and `CompactionCompleted` reference together. Request start commits
+transaction; committed-message events share that transaction. Compaction atomically commits typed checkpoint content, activation/head, actual local completion and the idempotent operation receipt. It adds no canonical summary message. Request start commits
 the immutable Request Snapshot and `ModelRequestStarted` fact together before
 the provider adapter is called. When that snapshot carries unresolved-output
 carryover, the same start transaction clears its pending source pointer.
@@ -1690,8 +1689,8 @@ holds a competing copy.
 
 A committed-message event is inserted in the same `ConversationStore`
 transaction as the Ledger body it references. The same rule applies to
-`CompactionCompleted` (summary plus exact Surface revision) and
-`ModelRequestStarted` (snapshot plus referenced Surface revision). This makes
+`CompactionCompleted` (typed checkpoint and activation) and
+`ModelRequestStarted` (exact frozen snapshot and dependency cut). This makes
 an orphan reference structurally impossible in the SQLite backend; a failed
 transaction exposes neither side. Persist-before-publish then appends the
 committed event before any observer or external projection sees it.
@@ -1706,7 +1705,9 @@ Pending Inbound Inbox     = accepted / not-yet-adopted inbound durability
                             allocator; the acceptance linearization point)
 ConversationInboundMailbox = process-local coordination / wakeup only
 Message Ledger            = adopted canonical conversational facts
-Conversation Surface      = current model-visible ordering/projection
+Conversation Surface      = bounded canonical working-set cache
+Projection Checkpoints    = durable historical model selection
+Context compiler          = typed model-visible ordering/projection
 ConversationRuntime       = admission + safe-boundary adoption owner
 Event Journal             = execution facts
 ```
@@ -1766,9 +1767,7 @@ truth of committed message facts; normal live runtime resumption additionally
 requires a structurally complete current Surface boundary. The conversation
 domain's `recovery_safety` predicate answers that question fail-closed for an
 incomplete tool turn (an `Assistant` tool call without its committed
-`ToolResult` sibling). A compaction summary can no longer be durable without
-its exact Surface Replace and checkpoint because M8 commits those facts in
-one transaction.
+`ToolResult` sibling). A compaction checkpoint becomes visible atomically with its activation, head, actual local completion and receipt. Canonical tool facts remain immutable.
 
 M9a supersedes the M8 restart *gate* with a restart *contract*: an incomplete
 tool turn is now repaired from durable evidence rather than refused, and
@@ -1937,238 +1936,53 @@ description.
 
 ### Layer 2: Context engine
 
-Issue #54 fixes the conversation boundary used by the context engine:
+[Immutable history and typed context projections](context-engine.md) is the
+current contract (#466). Canonical History records committed facts. The Context
+Engine compiles independently durable Original/Derived checkpoints plus eligible
+Tail strictly after the checkpoint base frontier. Surface replacement and
+canonical Summary User messages have been removed.
 
-```text
-System / User / Assistant / Tool
-        ↓ canonical roles
-Message Ledger
-  append-only immutable facts
-        ↓ current active MessageIds only
-Conversation Surface @ SurfaceRevision
-  sole authority for active identity, order, and visibility
-        ↓ keyed reads of the finite current Surface
-Context Engine
-  projection, token pressure, retention, and compaction planning
-```
+Four boundaries remain distinct: a finite Resource Read Cut; the complete
+checkpoint inclusion/exclusion frontier B; its durable activation (including the
+commit-time Ledger frontier); and one request's pre-start history cut. Bounded
+read-only CompactionResources expose detached messages, native trajectory and
+lifecycle facts as of the cut, checkpoints, frozen requests and explicitly
+authorized settled Artifacts. Model resources retain admitted token budgets,
+summary supervision and cancellation. No summary wait retains a SQLite read
+transaction. Ordinary request preparation never enumerates retired Ledger bodies.
 
-The Context Engine owns only the finite projection of canonical conversation
-and its token/retention/compaction behavior. Context Assembly, request
-admission, RequestSnapshot creation, and provider translation are owned by
-the Agent Loop and model plane respectively.
+Typed message and block occurrences have separate canonical, checkpoint,
+actual-request and wire domains. The compiler validates all Original/Derived Tool
+pairings, whole batches, reordered blocks, native reasoning and provenance.
+Projected ToolCalls/results create no execution events or statistics. Provider
+encoders disambiguate repeated historical correlation labels without editing
+semantic input or opaque native reasoning. Continuation refers to actual accepted
+previous output. Default Summary changes always clear active continuation.
 
-Compaction appends one canonical `User` message with
-`UserSource::Runtime` and `InboundKind::CompactionSummary`, then applies one
-complete-message Surface `Replace`. It never deletes or mutates Ledger facts.
+The default policy retains threshold/keep-recent behavior, structured Markdown
+and trusted cumulative file metadata extracted from actual canonical tool facts.
+Manual, proactive and overflow compaction share one transaction/install pipeline.
+A stable OperationId precedes lifecycle facts; identical candidate replay returns
+the same historical receipt. Head CAS, existing execution fencing and immutable
+dependencies are checked atomically. Cancellation grants and actual-request start
+arbitration are separate. Confirmed commits reload the current durable head;
+failed reconciliation stops before another provider request.
 
-#### Current context implementation
+The Agent Loop retains the latest frozen semantic input version of its logical
+generation. Authorized corrections and overflow compaction advance it; transient
+retries reuse it. New actual requests have distinct snapshot/publication/output
+identities and independently recorded usage. Context is visible on later retries
+and introduced only by its original start; exact lost-receipt replay preserves
+that start's introduced set. Image downgrade and upload rendering are frozen
+request-local Derived content, with pure structural validation before start.
 
-The Issue #55 implementation freezes the boundaries in src/context and
-src/agent/execution.rs:
-
-```text
-claimed inbound
-    ↓ finite ContributorInputSnapshot
-ContextAssembly (native + certified extension proposals)
-    ↓ validated AcceptedContext
-Agent Loop staging (scratch validation, prepared canonical commits;
-                    no durable effect)
-    ↓
-cancellation-vs-start arbitration (attempt start gate held; M9b)
-    ↓ commit_model_turn_start: one transaction
-canonical request-scoped User context + Surface state/reference +
-RequestSnapshot (including the frozen Effective System Prompt) +
-ModelRequestStarted
-    ↓
-ModelAdapter → provider
-```
-
-The engine is a deterministic pure function of the current Surface, keyed
-Ledger results, tool definitions, the exact Effective System Prompt, and
-observed provider usage: the same inputs always produce the same projection,
-plan, and estimate. It owns no provider knowledge — token estimation is
-pluggable (`TokenEstimator`, with a default
-`ceil(bytes / 4)` formula), and the engine holds no model catalog.
-
-Its configuration is split by ownership. The session owns the static
-`SessionContextPolicy`; the *window* comes from the attempt's immutable model
-snapshot. `ContextRuntime::for_attempt` derives one engine per attempt from
-those two inputs, so a session model change between attempts changes the next
-attempt's compaction arithmetic and never the running one's.
-
-Key contracts:
-
-- `ContextProjection` contains only complete canonical messages in current
-  Surface order; it never creates a partial Assistant projection.
-- Canonical history has only conversational User, Assistant, and Tool roles.
-  `Assistant` owns `ToolCall` identity and arguments; `Tool` owns the result
-  and references `ToolCallOccurrenceRef` (Assistant MessageId + block index),
-  retaining `ToolCallId` only for provider correlation. A runtime compaction summary remains a `User`
-  message with `UserSource::Runtime` and
-  `InboundKind::CompactionSummary`.
-  System authority is request-time state and therefore cannot be retired or
-  resurrected by Surface replacement.
-- Token measurements carry explicit provenance
-  (`ProviderReported`/`ProviderAnchored`/`Estimated`), and estimates never
-  become provider usage. A provider-reported `input_tokens` applies as
-  `ProviderReported` only to the exact measured projection (deterministic
-  fingerprint). It additionally applies as `ProviderAnchored` to any request
-  context the measured one is an ordered **prefix** of, under unchanged
-  non-conversation input (Effective System Prompt and tool definitions):
-  the measured prefix keeps the provider's number and only the canonical
-  messages appended since are estimated. A whole-conversation estimate
-  compounds estimator error over every message ever sent, so anchoring is
-  what keeps the soft-limit decision trustworthy on a long conversation; a
-  compaction Surface rewrite destroys the prefix and the measurement is
-  refused outright rather than patched with a guessed delta.
-- `TokenMeasurement` and `TokenMeasurementSource` are Layer 0 value contracts
-  owned by `runtime/types.rs`. The Context Engine owns the estimator,
-  provider-observation validity, provenance application, and compaction
-  accounting behavior in `context/tokens.rs`; it does not own the shared
-  measurement data type.
-- Cut selection is structural: a deterministic index of tool-call/result
-  edges rejects orphan tool messages and never separates a call from its
-  result. A candidate is always a whole-message span.
-- `SurfaceRevision` is a stable reconstruction reference within one live
-  conversation lineage. Historical Surface operations are retained for exact
-  replay; later Appends and Replaces never change an earlier revision.
-- Normal projection, planning, and compaction read only current Surface
-  identities and keyed Ledger bodies. They do not enumerate the Ledger or
-  scan the historical Surface operation log; current replacement generation
-  is O(1) head metadata.
-- The `ContextSummarizer` service is provider-neutral; the production
-  `ModelBackedSummarizer` issues a canonical one-off `ModelRequest` (no
-  tools, no Agent Status, no Skill catalog, no continuation) through the
-  `SummaryRequest::model_input()` assembly shared with the planner. That
-  assembly renders the retired span as a bounded plain-text transcript —
-  truncating tool results, replayed reasoning, and tool-call arguments with an
-  explicit notice — rather than embedding the canonical JSON encoding, so the
-  summary request is always smaller than the history it replaces. The summary
-  input limit covers the fixed instruction, the rendered transcript, and the
-  canonical User wrapper, and is derived as the summary invocation's own
-  effective context window minus the session reserve minus its output budget,
-  never the primary model's window, through the
-  existing `ModelAdapter` boundary. A summary model rejecting that request as
-  oversized replans the compaction against a halved summary input budget
-  (bounded and strictly decreasing) instead of failing, and a compaction
-  recovering from a primary context overflow scales the soft input limit — and
-  only that limit — by the measured `EstimateCorrection` for the rejected
-  request. The correction never crosses into the summary input limit, same
-  summary model or not: it measures one primary request, whose deviation can
-  come from the continuation, the tool schemas, or the effective system
-  prompt, none of which this request carries. The summary budget is bounded
-  by the summary model's own rejection. It is constructed from the attempt's
-  *frozen summary policy*, never from an independently injected summarizer:
-  in `session` mode that is the attempt's own primary invocation, in
-  `explicit` mode a separately resolved catalog model. The context plane's
-  summary output safety cap is applied through the runtime-owned protected
-  max-output field and never by mutating a Model Profile or a
-  request-parameter object.
-- Primary model requests retain the attempt-pinned Runtime Resource Snapshot,
-  CapabilitySnapshot, Effective System Prompt, active Surface, Tools, and
-  compatible primary continuation. The compaction summary is a separate
-  one-off side request containing only runtime-owned summary guidance and the
-  exact planned retired messages. It does not inherit primary System/project/
-  Skill/extension guidance, Tools, continuation, prompt-prefix/cache
-  continuity, or Agent Loop execution. The guidance requires one fixed
-  structured Markdown contract (Goal, Constraints & Preferences, Progress,
-  Key Decisions, Next Steps, Critical Context), and the committed summary
-  carries typed cumulative file-operation metadata extracted from the retired
-  span's canonical native Read/Edit/Write calls (Issue #140).
-  Runtime/Agent Status observations remain historical evidence and are never
-  reconstructed as live state from summary text.
-- The mandatory progress rule (coverage advances and projected estimate
-  strictly decreases) is the anti-loop invariant; successful compaction
-  invalidates the pending provider continuation, and
-  `ContextWindowExceeded` is recovered through exactly one bounded
-  compact-and-retry
-  (`MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN = 1`).
-- Automatic overflow recovery and idle manual compaction call one canonical
-  pipeline for planning, summary generation, exact fit validation, durable
-  commit, and hot-state installation. Manual compaction freezes the current
-  model/context/capability inputs at admission, including tool definitions and
-  capability-derived Skill guidance and project instructions in the
-  non-retirable Effective System Prompt used for fit accounting. These values
-  come from the attempt's pinned Runtime Resource Snapshot; compaction never
-  rediscovers them. It checks out the sole `ConversationState`;
-  manual completion is client-visible only after that state is restored and
-  the maintenance slot is clear. Pending inbound admits after restoration. It
-  owns no attempt identity and is rejected while an attempt or another manual
-  compaction is active.
-- The Ledger remains immutable historical facts, the Surface is the active
-  model working set, and RequestSnapshot is the exact historical request-time
-  authority for System bytes and Tool definitions. Runtime Resource Snapshot
-  is process-local executable authority, not durable compaction state;
-  compaction never changes it. Native application and explicit adoption remain
-  separate lifecycle boundaries.
-- Agent Status is an optional delivery opportunity, not an automatic emission
-  rule. One logical primary step owns one finite
-  `ContributionOpportunities`; its independent FreshInbound and PostToolBatch
-  members may coexist. Runtime preparation freezes finite execution facts and
-  a pre-contribution Surface. The registered Status contributor captures its
-  clock and read-only Background/Todo projections. Its section contract
-  evaluates each interested section once against that set, then admits any contributing sections as one
-  canonical `UserSource::Runtime` context message with
-  `InboundKind::Context(ContextKind::AgentStatus(metadata))`. The metadata is
-  the durable typed membership/timestamp descriptor tied to that canonical
-  message; neither the engine nor a projection parses renderer text. A
-  complete tool batch marks PostToolBatch only after its canonical ToolResult
-  batch commits; the marker is attempt-local and never creates or prolongs a
-  model turn. RuntimeToolObservation remains a separate producer and precedes
-  AgentStatus in Context Assembly. If no module contributes, no empty status
-  message is emitted. Overflow compact-and-retry reuses the accepted
-  generation without a second Surface scan, clock sample, authoritative
-  capture, or trigger evaluation.
-- Todo status reads only the bounded presentation `ConversationTodoList`
-  derives from its own `committed()` snapshot, and only when the Todo
-  extension is composed at all. The derivation happens at the runtime capture
-  boundary through the composition-bound read closure calling
-  `ConversationTodoList::committed().status_presentation()` — so the strongest Todo value the Agent Status engine can receive is
-  `Option<TodoStatusPresentation>`: a finite immutable value carrying its own
-  Todo-owned fingerprint. Production `context/status.rs` names no
-  `ConversationTodoList`, `TodoSnapshot`, or `TodoWriter` at all, so Agent
-  Status cannot read, derive, or influence Todo state; it decides only whether
-  and how often to show what Todo already decided. It shows a
-  bounded deterministic view of actionable tasks and uses semantic key
-  `active_actionable` plus a SHA-256 fingerprint of that bounded view. A
-  durable latest-emission head suppresses an identical fingerprint while
-  fewer than four later newly committed first requests of logical primary
-  model steps follow the reminder's store-assigned origin, then permits it
-  again at exactly four. Changed state is eligible at the next opportunity.
-  The head is updated atomically with the canonical status message and its
-  `ContextContributionEmitted` fact at model-turn start. The bounded
-  `logical_step_sequence` advances once for each successful
-  `retry_number == 0` start; same-start context/status, Time, Background,
-  RuntimeToolObservation, compaction, and overflow retries do not advance or
-  reset it.
-- The initial-turn trigger is an explicit execution mode, never an `Option`
-  used as a status switch: `AgentExecutionRequest` carries one
-  `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation and
-  fresh-inbound compaction protection mandatory and offers the optional Agent
-  Status opportunity; `Continuation` expresses an intentional pure
-  continuation with no new inbound turn and therefore no Agent Status on the
-  first request. There is no legacy no-context execution path. A settled tool
-  batch adds the independent attempt-local PostToolBatch member to the next
-  already-existing continuation step; one logical primary step owns at most
-  one generation.
-- A `FreshInboundTurn` is ordered according to canonical history/inbound
-  sequence: `validate_against` requires the referenced messages to occur in
-  strictly increasing canonical position in `message_ids` order
-  (`OutOfCanonicalOrder` otherwise); the runtime never sorts or reinterprets
-  a caller-supplied turn order.
-- There is no provider registration seam. The engine validates the
-  rustX-owned `Time <-> Temporal`, `Background <-> BackgroundExecution`, and
-  `Todo <-> Todo` mapping, and a capture, evaluation, or validation failure
-  quarantines only that module for the rest of the attempt. Surviving modules continue;
-  quarantine is not persisted and a new attempt retries the module. These
-  optional failures never become a context-preparation failure or alter model
-  request count.
-  An overflow whose recovery compaction fails still preserves the normalized
-  `ContextWindowExceeded` as the final model failure with the compaction
-  diagnostic carried by `CompactionFailed`.
-- A fresh inbound turn that has not been observed may never be compacted
-  away; when preserving it makes the projection impossible, planning fails
-  with `CannotFit` rather than summarizing the unobserved instruction.
+Canonical execution and historical projection timelines have separate native
+client contracts. Inherited activations preserve source origin and destination
+installation, even at the same Ledger frontier and through repeated clone/fork
+operations. Exact retained snapshots reconstruct through immutable dependencies
+without rerunning contributors or media discovery. The deliberate inspection
+archive marks missing input bytes as non-reconstructible; this does not change an
+independently complete active checkpoint's run eligibility.
 
 #### CFG3 generations, Skills and external sources
 
@@ -3494,7 +3308,7 @@ the agent loop's bounded compact-and-retry path owns recovery consistently.
 Ambiguous request-size codes (`request_too_large`, `string_too_long`) do not
 establish context pressure by themselves: only a message with independent
 token/context evidence upgrades them. A generic HTTP byte-size failure remains
-`InvalidRequest`/`ProviderError` and never authorizes Surface compaction.
+`InvalidRequest`/`ProviderError` and never authorizes context compaction.
 
 #### Anthropic Messages (direct HTTP/SSE)
 
@@ -5902,20 +5716,18 @@ authority into `ModelRequest.effective_system_prompt`.
 
 Identity and provenance are metadata. Message role does not encode real-world identity.
 
-The Message Ledger is append-only immutable canonical fact storage. The
-Conversation Surface is the sole authority for active identity, order, and
-visibility. `SurfaceRevision` is a stable reconstruction reference within
-the single conversation lineage; later mutations never alter an earlier
-revision. Normal projection uses current Surface identities and keyed Ledger
-reads only, never full Ledger or Surface-history scans.
+The Message Ledger owns append-only immutable canonical facts. Durable typed
+Projection Checkpoints own historical model-visible inclusion and ordering;
+Surface bookkeeping retains ordinary canonical append coordinates only. Each
+checkpoint makes the complete inclusion decision through its base frontier.
+Ordinary preparation hydrates retained Original dependencies and eligible Tail
+strictly after that base, without replaying retired bodies.
 
-Provenance is implemented as typed runtime-owned metadata: `UserSource`
-distinguishes human, agent, fleet, external-system, and runtime sources. A
-runtime compaction summary is represented as a
-`UserMessageBlock` with runtime provenance and `InboundKind::CompactionSummary`;
-no fifth message role exists. Ordinary inbound messages carry their
-persisted UTC instant on `UserMessageBlock.timestamp` (supplied by the
-producer, never fabricated); derived compaction summaries carry `None`.
+Provenance is typed runtime metadata. Canonical User messages use `UserSource`
+and persisted producer timestamps. Summary context is an identity-free Derived
+projected User with `ProjectedUserKind::CompactionContext`, scoped checkpoint
+provenance, and independently validated cumulative file metadata. It receives
+neither a canonical MessageId nor an execution ownership inferred from position.
 
 Agent-to-agent communication uses a durable mailbox model. A `send_message` tool result reports only whether delivery was durably accepted or rejected. The recipient later receives the content as a `UserMessageBlock`.
 
@@ -6856,7 +6668,7 @@ facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v47).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v49).
 
 ## Image Tool and Bash presentation (#412)
 

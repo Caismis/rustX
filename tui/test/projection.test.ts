@@ -447,8 +447,8 @@ describe("presentation projection", () => {
           compaction_count: 2,
           latest_compaction: {
             generation: "2",
-            summary_message_id: "conv_be682c07-c8cf-7a0f-9f06-17a4288267dd",
-            surface_revision: "7",
+            checkpoint_id: "conv_be682c07-c8cf-7a0f-9f06-17a4288267dd",
+            activation_id: "7",
             tokens_before: { input_tokens: 4_700, source: "estimated" },
             estimated_tokens_after: 1_800,
           },

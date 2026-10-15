@@ -368,21 +368,14 @@ describe("inbound provenance", () => {
     assert.equal(runtime?.background, "user");
   });
 
-  it("marks a compaction summary as one", () => {
-    const state = stateOf({
-      messages: [
-        {
-          role: "user",
-          id: "m1",
-          content: [{ type: "text", text: "summary body" }],
-          source: "runtime",
-          kind: {
-            compaction_summary: { read_files: [], modified_files: [] },
-          },
-        },
-      ],
-    });
-    assert.match(transcriptString(state), /compaction summary/);
+  for (const inherited of [false,true]) it(`presents ${inherited ? "inherited" : "local"} projection provenance separately from canonical facts`, () => {
+    const state=stateOf({messages:[userMessage("real","canonical fact")],context:{compaction_count:0,compaction_in_progress:false,projection_head:{checkpoint_id:"checkpoint",activation_id:"2",base_frontier:"100",activation_ledger:"101",origin:{conversation_id:"source",activation:"7",completed_journal:"200"},destination_installation:inherited ? "installation" : null,original_items:1,derived_items:1,summary_preview:{text:"summary body",truncated:false}}}});
+    const blocks=renderTranscript(state,prefs());
+    assert.match(transcriptString(state),inherited ? /Inherited model projection/ : /Local model projection/);
+    assert.match(transcriptString(state),/summary body/);
+    assert.equal(state.transcript.filter(entry=>entry.kind==="committed").length,1,"projection adds no canonical User row");
+    assert.equal(blocks.filter(block=>block.background==="user").length,1);
+    assert.match(transcriptString(state),/origin source\/7/);
   });
 
   it("does not render a semantic user echo before durable acceptance", () => {
