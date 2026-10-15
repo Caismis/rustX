@@ -21,7 +21,8 @@ use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
-    AttemptId, CapabilityRevision, MessageId, PublicationStreamId, RequestId, TurnId,
+    AttemptId, AuxiliaryCallId, CapabilityRevision, MessageId, PublicationStreamId, RequestId,
+    TurnId,
 };
 use crate::tools::types::ModelToolDefinition;
 
@@ -36,6 +37,20 @@ pub struct RequestIdentity {
     /// logical model step. Zero is the initial request; transient and
     /// context-overflow recovery requests share the same sequence.
     pub retry_number: u32,
+}
+
+/// Ownership of one actual model request; identity grants no execution permission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelRequestOwner {
+    /// A primary request owned by an Agent attempt.
+    Agent { identity: RequestIdentity },
+    /// One physical request within a logical auxiliary call.
+    Auxiliary {
+        call_id: AuxiliaryCallId,
+        /// Zero is the initial request. Physical retries have distinct request
+        /// identities and advance this ordinal within the same auxiliary call.
+        ordinal: u32,
+    },
 }
 
 impl RequestIdentity {

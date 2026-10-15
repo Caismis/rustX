@@ -76,7 +76,8 @@ pub use session::{
     SessionModelState, SessionModelView, SummaryModelPolicy, SummaryModelView,
 };
 pub use snapshot::{
-    ContributionStart, RequestIdentity, RequestReconstructionError, RequestSnapshot,
+    ContributionStart, ModelRequestOwner, RequestIdentity, RequestReconstructionError,
+    RequestSnapshot,
 };
 pub use types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 
