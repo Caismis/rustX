@@ -1,4 +1,4 @@
-import type { Request, TraceDetail, TracePage, TraceRecord } from '../../protocol/app-server/v48';
+import type { Request, TraceDetail, TracePage, TraceRecord } from '../../protocol/app-server/v50';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
@@ -60,6 +60,7 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
   id: `trace:${n}`,
   kind: 'request',
   request: {
+    tool_associations: [], tool_associations_truncated: false,
     contributions: [],
     request_id: `request-${n}`,
     attempt_id: 'attempt-a',
@@ -81,6 +82,8 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
       {
         role: 'user',
         message_id: 'user-1',
+        provenance_source: null,
+        provenance: {type:'original',conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',content_digest:'fixture-digest',locator:null,message_id_source:null,source:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',message_id:'user-1',content_digest:'fixture-digest'}},
         source: 'human',
         blocks: [{ type: 'text', text: { text: 'Inspect the trajectory.', truncated: false } }],
         truncated: false,
@@ -102,6 +105,7 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
   },
   tool: null,
   messages: [],
+  projected_messages: [],
   truncated: false,
   ...overrides,
 });
@@ -112,6 +116,7 @@ export const toolDetail = (n: number, overrides: Partial<TraceDetail> = {}): Tra
   kind: 'tool',
   request: null,
   messages: [],
+  projected_messages: [],
   tool: {
     call_id: `call-${n}`,
     tool_id: 'tool-bash',

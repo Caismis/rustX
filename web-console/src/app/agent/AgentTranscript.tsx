@@ -15,7 +15,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v48';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v50';
 import { conversation, json } from '../../bindings/projection';
 import { agentStatusPlacement, isAgentStatusContext, statusesAt } from '../../bindings/agent-status';
 import { Button } from '../../presentation/primitives/Button';
@@ -49,12 +49,12 @@ function askUserAudits(entries: readonly RuntimeClientTranscriptEntry[]) {
   const asked = new Set(entries.flatMap(entry => entry.item.type === 'interaction_requested' && entry.item.subject.type === 'questionnaire' && entry.item.subject.requester.tool_id === 'tool-ask-user' ? [entry.item.interaction_id] : []));
   return (entry: RuntimeClientTranscriptEntry) => (entry.item.type === 'interaction_requested' || entry.item.type === 'interaction_settled') && asked.has(entry.item.interaction_id);
 }
-function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bodyHidden, message, compaction, tools, actions, blocks, streaming, reasoningHidden, other }: {
+function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bodyHidden, message, tools, actions, blocks, streaming, reasoningHidden, other }: {
   id: string; hidden?: boolean; owner?: string; turnOwner?: string; reveal?: string; prefix?: ReactNode; suffix?: ReactNode; bodyHidden?: boolean;
-  compaction?: RuntimeClientTranscriptEntry['compaction']; message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
+  message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
 }) {
   return <div className={css.flow} hidden={hidden} data-chat-anchor-key={id} data-chat-turn-owner={turnOwner} data-turn-process-owner={owner} data-response-reveal={reveal}>
-    {prefix}<div className={css.flow} hidden={bodyHidden}>{message ? <Message message={message} compaction={compaction} tools={tools} actions={actions} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
+    {prefix}<div className={css.flow} hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
   </div>;
 }
 export interface RequestFeedback {
@@ -246,7 +246,7 @@ export function AgentTranscript({ snapshot, history, loadEarlier, loadLater, onH
         {entry.turn_process && processIdentitySeats.get(attemptOwnerKey(entry.turn_process))===entry.cursor && <AttemptIdentityValue field={entry.turn_process.attempt_id_source}/>}
         {entry.turn_process && process.finalMetadataSeats.get(attemptOwnerKey(entry.turn_process))===entry.cursor && <TurnFinalMessageValue reference={entry.turn_process.final_message_id_source}/>}
         </>} bodyHidden={!final && !processOpen}
-        compaction={entry.compaction} message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
+        message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
         actions={entry.item.type === 'message' && isHumanMessage(entry.item.message) && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className={tailCss.actions} aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={entry.item.message.timestamp}/><CopyMessage text={entry.item.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>}
         tools={toolsOf(entry)}
         other={stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry))}

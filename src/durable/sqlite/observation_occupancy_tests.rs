@@ -23,7 +23,7 @@ fn t08_t14_t19_occupancy_reads_fixed_original_request_scalars_and_model_ranges()
     store
         .initialize(&[user_message("occupancy-input", "original")])
         .unwrap();
-    let snapshot = occupancy_original_snapshot(&store);
+    let mut snapshot = occupancy_original_snapshot(&store);
     let usage = crate::model::types::ModelUsage {
         input_tokens: 3_000_000,
         output_tokens: 1,
@@ -33,6 +33,7 @@ fn t08_t14_t19_occupancy_reads_fixed_original_request_scalars_and_model_ranges()
     let expected = crate::context::occupancy::measure(&usage, &snapshot)
         .unwrap()
         .unwrap();
+    freeze_test_input(&store, &mut snapshot, &[]);
     let start = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();
@@ -192,13 +193,14 @@ fn t10_t14_occupancy_derived_header_failure_preserves_original_provider_terminal
     store
         .initialize(&[user_message("occupancy-fault-input", "original")])
         .unwrap();
-    let snapshot = progress_request_snapshot(
+    let mut snapshot = progress_request_snapshot(
         "occupancy-fault",
         "1",
         0,
         store.load_head().unwrap().revision,
         Vec::new(),
     );
+    freeze_test_input(&store, &mut snapshot, &[]);
     store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();

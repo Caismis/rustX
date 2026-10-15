@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import type {CheckpointPage,TraceInspectionHead} from '../../../../protocol/app-server/v48';
+import type {CheckpointPage,TraceInspectionHead} from '../../../../protocol/app-server/v50';
 import {traceFields} from '../../../../protocol/app-server/trace-identity';
 import type {TraceFieldReader} from '../../client/trace';
 import {useTranslation} from '../../locale/react';

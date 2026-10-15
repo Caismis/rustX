@@ -104,7 +104,6 @@ mod agent_trace;
 pub mod attachment;
 pub(crate) mod capability_source;
 pub mod checkpoint;
-mod compaction;
 pub mod content;
 pub(crate) mod domain;
 pub mod endpoint;
@@ -113,6 +112,7 @@ pub mod goal;
 pub mod host;
 pub mod occupancy;
 pub mod projection;
+pub mod projection_history;
 pub(crate) mod resource_source;
 pub mod response;
 pub mod settings;
@@ -127,7 +127,6 @@ pub mod types;
 pub(crate) mod test_sync;
 
 pub use attachment::RuntimeAttachment;
-pub use compaction::CompactionMarker;
 pub use endpoint::RuntimeClientEndpoint;
 pub use event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 pub use host::{

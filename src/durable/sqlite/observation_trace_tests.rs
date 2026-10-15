@@ -143,25 +143,27 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
     use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
     let store = store();
     store.initialize(&[]).unwrap();
-    let snapshot = progress_request_snapshot(
+    let mut snapshot = progress_request_snapshot(
         &"a".repeat(70_000),
         &"s".repeat(70_000),
         0,
         store.load_head().unwrap().revision,
         Vec::new(),
     );
+    freeze_test_input(&store, &mut snapshot, &[]);
     let first = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
         .started
         .sequence;
-    let next = progress_request_snapshot(
+    let mut next = progress_request_snapshot(
         snapshot.identity.attempt_id.as_str(),
         snapshot.identity.turn.as_str(),
         1,
-        snapshot.surface_revision,
+        crate::conversation::SurfaceRevision::new(snapshot.canonical_frontier.0),
         Vec::new(),
     );
+    freeze_test_input(&store, &mut next, &[]);
     let second = store
         .commit_model_turn_start(&[], &next, Utc::now())
         .unwrap()
@@ -248,13 +250,14 @@ fn trace_commit_raw_publication(
     store: &SqliteConversationStore,
 ) -> (MessageBlock, Vec<u8>, RuntimeEventEnvelope) {
     store.initialize(&[]).unwrap();
-    let snapshot = progress_request_snapshot(
+    let mut snapshot = progress_request_snapshot(
         "trace-publication-owner",
         "1",
         0,
         store.load_head().unwrap().revision,
         Vec::new(),
     );
+    freeze_test_input(store, &mut snapshot, &[]);
     store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();
@@ -517,10 +520,12 @@ fn deny_trace_original_columns(
     }
 }
 fn trace_large_request(store: &SqliteConversationStore) -> (RequestSnapshot, u64, u64) {
+    // RequestStart requires each Original model input record <=1 MiB.
+    // Keep it hundreds of KiB, independently larger than every display header.
     store
         .initialize(&[user_message(
             "trace-original-input",
-            &"canonical🙂水".repeat(100_000),
+            &"canonical🙂水".repeat(30_000),
         )])
         .unwrap();
     let mut snapshot = progress_request_snapshot(
@@ -538,6 +543,7 @@ fn trace_large_request(store: &SqliteConversationStore) -> (RequestSnapshot, u64
         description: "original schema".repeat(100_000),
         input_schema: serde_json::json!({"opaque":"水".repeat(400_000),"integer":u64::MAX,"zero":-0.0}),
     }];
+    freeze_test_input(store, &mut snapshot, &[]);
     let start = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
@@ -794,6 +800,7 @@ fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sou
         Vec::new(),
     );
     snapshot.invocation.model = "\u{feff}model🙂水".repeat(80_000);
+    freeze_test_input(&store, &mut snapshot, &[]);
     let request = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
@@ -958,6 +965,7 @@ fn trace_acceptance_request(store: &SqliteConversationStore) -> (RequestSnapshot
         Vec::new(),
     );
     snapshot.effective_system_prompt = "unrelated original prompt🙂水".repeat(90_000);
+    freeze_test_input(store, &mut snapshot, &[]);
     let start = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
@@ -1069,7 +1077,9 @@ fn t08_t12_t19_pending_adoption_expires_full_cut_but_preserves_indexed_original_
             },
         ))
         .unwrap();
-    let accepted = writer.accept_inbound(draft("original adopted input")).unwrap();
+    let accepted = writer
+        .accept_inbound(draft("original adopted input"))
+        .unwrap();
     let reader = SqliteConversationStore::open_existing(conversation.clone(), &path).unwrap();
     let captured = reader.observation_read_cut().unwrap();
     let trace_query = TraceFactQuery {
@@ -1080,7 +1090,9 @@ fn t08_t12_t19_pending_adoption_expires_full_cut_but_preserves_indexed_original_
         ascending: true,
         limit: 1,
     };
-    let first = reader.observation_trace_facts(&captured, &trace_query).unwrap();
+    let first = reader
+        .observation_trace_facts(&captured, &trace_query)
+        .unwrap();
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].sequence, original.sequence);
     assert_eq!(first[0].location.attempt_id.as_ref(), Some(&owner));
@@ -1102,7 +1114,10 @@ fn t08_t12_t19_pending_adoption_expires_full_cut_but_preserves_indexed_original_
     assert_eq!(adopted.items.len(), 1);
     assert!(adopted.adoption.unwrap().sequence > captured.read.journal);
     let fresh = reader.observation_read_cut().unwrap();
-    assert_eq!(fresh.read.mutation_revision, captured.read.mutation_revision + 1);
+    assert_eq!(
+        fresh.read.mutation_revision,
+        captured.read.mutation_revision + 1
+    );
     assert_eq!(fresh.read.pending_total, 0);
     assert_eq!(fresh.ledger_through, captured.ledger_through + 1);
     assert!(matches!(
@@ -1111,13 +1126,170 @@ fn t08_t12_t19_pending_adoption_expires_full_cut_but_preserves_indexed_original_
     ));
     let after = reader.read_presentation_events(&original_query).unwrap();
     assert_eq!(after.len(), 1);
-    assert_eq!(serde_json::to_value(&before).unwrap(), serde_json::to_value(&after).unwrap());
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(&after).unwrap()
+    );
     assert_eq!(after[0].sequence, original.sequence);
     assert_eq!(after[0].conversation_id, conversation);
     assert_eq!(after[0].attempt_id.as_ref(), Some(&owner));
-    assert!(matches!(&after[0].event, RuntimeEvent::AttemptStarted {attempt_id} if attempt_id == &owner));
-    let retained = reader.observation_trace_facts(&fresh, &trace_query).unwrap();
+    assert!(
+        matches!(&after[0].event, RuntimeEvent::AttemptStarted {attempt_id} if attempt_id == &owner)
+    );
+    let retained = reader
+        .observation_trace_facts(&fresh, &trace_query)
+        .unwrap();
     assert_eq!(retained.len(), 1);
     assert_eq!(retained[0].sequence, original.sequence);
     assert_eq!(retained[0].location.attempt_id.as_ref(), Some(&owner));
+}
+
+#[test]
+fn t08_t12_t19_frozen_derived_request_fields_keep_original_bytes_without_canonical_summary() {
+    let store = store();
+    let original = user_message("projection-original", "immutable native input");
+    store.initialize(std::slice::from_ref(&original)).unwrap();
+    let body = "\u{feff}derived🙂水\n".repeat(35_000);
+    let candidate = crate::scripted_suites::support::context::checkpoint_fixture(
+        &store,
+        "frozen-source-checkpoint",
+        1,
+        &body,
+    );
+    let receipt = store
+        .commit_projection(
+            crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                &store, candidate, None,
+            ),
+        )
+        .unwrap();
+    assert!(receipt.newly_committed);
+    let history = store.projected_history().unwrap();
+    let crate::model::ModelInputMessage::Derived(derived) = &history.messages[0] else {
+        panic!("actual checkpoint must expose Derived input");
+    };
+    let crate::model::projected::ProjectedMessage::User { content, .. } = &derived.message else {
+        panic!("typed summary User body");
+    };
+    let crate::message::types::UserContentBlock::Text(text) = &content[0] else {
+        panic!("actual original summary text");
+    };
+    let expected = text.text.clone();
+    let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+    freeze_test_input(&store, &mut snapshot, &[]);
+    let started = store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap()
+        .started;
+    let path = vec![
+        "messages".into(),
+        "0".into(),
+        "blocks".into(),
+        "0".into(),
+        "text".into(),
+        "text".into(),
+    ];
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let chunk = store
+            .request_value_read_at(started.sequence, started.sequence, &path, offset, 65_536)
+            .unwrap();
+        assert!(chunk.bytes.len() <= 65_536);
+        bytes.extend(chunk.bytes);
+        let Some(next) = chunk.next_offset else { break };
+        assert!(next > offset);
+        offset = next;
+    }
+    assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), expected);
+    let row = store
+        .request_value_read_at(
+            started.sequence,
+            started.sequence,
+            &[
+                "messages".into(),
+                "0".into(),
+                "provenance".into(),
+                "type".into(),
+            ],
+            0,
+            64,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<String>(&row.bytes).unwrap(),
+        "derived"
+    );
+    assert_eq!(store.load_canonical().unwrap(), vec![original]);
+    let replay = store
+        .projection_receipt(&receipt.operation_id, &receipt.candidate_fingerprint)
+        .unwrap()
+        .unwrap();
+    assert!(!replay.newly_committed);
+    assert_eq!(replay.completed.event, receipt.completed.event);
+    assert_eq!(replay.completed.sequence, receipt.completed.sequence);
+}
+
+#[test]
+fn t08_t12_t19_native_request_summary_survives_large_original_canonical_input() {
+    let store = store();
+    let original = user_message(
+        "large-request-original",
+        &format!("hello from the tui\n{}", "水🙂".repeat(12_000)),
+    );
+    store.initialize(std::slice::from_ref(&original)).unwrap();
+    let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+    freeze_test_input(&store, &mut snapshot, &[]);
+    let started = store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap()
+        .started;
+    if store
+        .observation_request_summary_at(started.sequence, started.sequence)
+        .is_err()
+    {
+        // Reveal a concrete optional-producer error, not only its downstream hole.
+        let native = store
+            .reconstruct_model_request(&snapshot.request_id)
+            .unwrap();
+        observation_request::index(
+            &store.lock().unwrap(),
+            started.sequence,
+            store.conversation_id(),
+            &native.messages,
+            &snapshot,
+        )
+        .expect("original canonical request layout capture");
+        panic!("native start must have retained its request summary before any explicit recapture");
+    }
+    let summary = store
+        .observation_request_summary_at(started.sequence, started.sequence)
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary.request_id, Some(snapshot.request_id.clone()));
+    let page = store
+        .request_field_page_at(
+            started.sequence,
+            started.sequence,
+            &["messages".into()],
+            0,
+            1,
+        )
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.fields.len(), 1);
+    assert!(!page.fields[0].content.is_empty());
+    assert_eq!(page.fields[0].collections[0].loaded, 0);
+    assert_eq!(page.fields[0].collections[0].next_offset, Some(0));
+    assert!(page.fields[0].deferred);
+    assert_eq!(page.fields[0].value["deferred"], true);
+    let header = store
+        .request_field_header_at(
+            started.sequence,
+            started.sequence,
+            &["messages".into(), "0".into()],
+        )
+        .unwrap();
+    assert!(header.deferred);
+    assert_eq!(store.load_canonical().unwrap(), vec![original]);
 }

@@ -57,7 +57,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v48.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v50.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -177,6 +177,7 @@ describe("command registry", () => {
         "/skills",
         "/todos",
         "/status",
+        "/context",
         "/compact",
         "/debug",
         "/show-reasoning",
@@ -1221,8 +1222,8 @@ describe("CommandDispatcher", () => {
         compaction_count: 1,
         latest_compaction: {
           generation: "1",
-          summary_message_id: "conv_8498648a-66ba-716f-8243-8cf147533e52", summary_message_locator:{type:'by_message_id' as const,message_id:"conv_8498648a-66ba-716f-8243-8cf147533e52"}, summary_message_id_deferred:false, summary_message_id_source:null,
-          surface_revision: "4",
+          checkpoint_id: "conv_8498648a-66ba-716f-8243-8cf147533e52",
+          activation_id: "4",
           tokens_before: { input_tokens: "8400", source: "estimated" as const },
           estimated_tokens_after: "1900",
         },

@@ -1172,7 +1172,10 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
             Duration::from_secs(2),
             summarizer.summarize(
                 SummaryRequest {
-                    retired: vec![user("retired", "old")],
+                    retired: (vec![user("retired", "old")])
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                 },
                 rustx::runtime::CancellationSignal::new(),
             ),
@@ -1229,7 +1232,10 @@ async fn model_backed_summarizer_discards_a_degenerate_or_truncated_summary() {
             Duration::from_secs(2),
             summarizer.summarize(
                 SummaryRequest {
-                    retired: vec![user("retired", "old")],
+                    retired: (vec![user("retired", "old")])
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                 },
                 rustx::runtime::CancellationSignal::new(),
             ),

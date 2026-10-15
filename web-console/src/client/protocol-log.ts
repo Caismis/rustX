@@ -1,4 +1,4 @@
-import type { Request1 } from '../../../protocol/app-server/v48';
+import type { Request1 } from '../../../protocol/app-server/v50';
 
 export interface WireContext { method?: Request1['method']; sessionId?: string }
 export interface WireEntry {

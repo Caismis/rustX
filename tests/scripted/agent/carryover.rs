@@ -217,7 +217,7 @@ fn carryover_from(request: &rustx::model::ModelRequest) -> &RenderedUnresolvedOu
             ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
             )) => Some(carryover),
-            ModelInputMessage::Canonical(_) => None,
+            ModelInputMessage::Canonical(_) | ModelInputMessage::Derived(_) => None,
         })
         .expect("request contains carryover")
 }
@@ -1176,7 +1176,7 @@ fn request_only_anchors_and_degradation_are_deterministic() {
         })],
         omitted_blocks: CarryoverOmissionCounts::default(),
     };
-    let canonical = vec![user("history", "old")];
+    let canonical = rustx::model::input::canonical_input(&[user("history", "old")]);
     let fresh = vec![user("fresh-1", "new"), user("fresh-2", "also new")];
     let before_fresh = rustx::model::input::assemble_model_input(
         &canonical,
@@ -1293,7 +1293,7 @@ async fn carryover_degrades_and_is_omitted_before_cannot_fit_or_compaction() {
         second.event_history.iter().all(|event| {
             !matches!(
                 event,
-                RuntimeEvent::CompactionStarted | RuntimeEvent::CompactionCompleted { .. }
+                RuntimeEvent::CompactionStarted { .. } | RuntimeEvent::CompactionCompleted { .. }
             )
         }),
         "carryover alone never triggers compaction"

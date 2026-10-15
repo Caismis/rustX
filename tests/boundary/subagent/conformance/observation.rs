@@ -65,7 +65,7 @@ fn stage_resume(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_identity() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = inspection_tempdir().unwrap();
     let (parent, host) = parent_runtime_host_plane(
         &directory,
         "conv_01900000-0000-7000-8000-000000000467",
@@ -97,12 +97,13 @@ async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_id
     await_model_parks(&child.model, 1).await;
     let agent = wired.accepted.child_agent_id.clone();
     let socket = parent.plane.registry.agent_inspection_path(&agent).unwrap();
-    let inspection = crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
-        socket.clone(),
-        child.host.clone(),
-        wired.accepted.subagent_id.clone(),
-    )
-    .unwrap();
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            socket.clone(),
+            child.host.clone(),
+            wired.accepted.subagent_id.clone(),
+        )
+        .unwrap();
     let (attachment, _) = host
         .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .unwrap();
@@ -129,7 +130,7 @@ async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_id
         .wait_until_settled(&wired.accepted.subagent_id)
         .await
         .unwrap();
-    inspection.shutdown().await;
+    inspection.shutdown().await.unwrap();
     child.runtime.shutdown().await.unwrap();
 
     let durable = observe(&attachment, &agent, None).await;
@@ -339,16 +340,17 @@ async fn assert_reactivation(
         Err(crate::runtime_client::RuntimeClientError::ReadCutExpired)
     ));
     await_model_parks(&resumed.model, 1).await;
-    let inspection = crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
-        parent
-            .plane
-            .registry
-            .agent_inspection_path(&old.agent_id)
-            .unwrap(),
-        resumed.host.clone(),
-        accepted.activation_id.clone(),
-    )
-    .unwrap();
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            parent
+                .plane
+                .registry
+                .agent_inspection_path(&old.agent_id)
+                .unwrap(),
+            resumed.host.clone(),
+            accepted.activation_id.clone(),
+        )
+        .unwrap();
     assert!(matches!(
         observe(attachment, &old.agent_id, Some(old.clone())).await,
         AgentObservation::ResyncRequired {
@@ -381,13 +383,13 @@ async fn assert_reactivation(
         .wait_until_settled(&accepted.activation_id)
         .await
         .unwrap();
-    inspection.shutdown().await;
+    inspection.shutdown().await.unwrap();
     resumed.runtime.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t20_real_unix_listener_bounds_and_reaps_its_physical_workset() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = inspection_tempdir().unwrap();
     let child = child_fixture_with_activation(
         &directory,
         &ConversationId::new("conv_01900000-0000-7000-8000-000000000469"),
@@ -398,12 +400,13 @@ async fn t20_real_unix_listener_bounds_and_reaps_its_physical_workset() {
     )
     .await;
     let path = directory.path().join("workset.sock");
-    let inspection = crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
-        path.clone(),
-        child.host.clone(),
-        SubagentId::new("inspection-workset"),
-    )
-    .unwrap();
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            path.clone(),
+            child.host.clone(),
+            SubagentId::new("inspection-workset"),
+        )
+        .unwrap();
     let mut workset = inspection.physical_workset();
     let mut clients = Vec::new();
     for index in 0..8 {
@@ -463,7 +466,7 @@ async fn t20_real_unix_listener_bounds_and_reaps_its_physical_workset() {
         clients.push((reader, writer));
     }
     assert!(child.model.requests().is_empty());
-    inspection.shutdown().await;
+    inspection.shutdown().await.unwrap();
     assert_eq!(*workset.borrow(), 0);
     for (mut reader, writer) in clients {
         drop(writer);
@@ -477,7 +480,7 @@ async fn t20_real_unix_listener_bounds_and_reaps_its_physical_workset() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_cut() {
     use base64::Engine as _;
-    let directory = tempfile::tempdir().unwrap();
+    let directory = inspection_tempdir().unwrap();
     let (parent, host) = parent_runtime_host_plane(
         &directory,
         "conv_01900000-0000-7000-8000-000000000481",
@@ -520,12 +523,13 @@ async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_
         .registry
         .agent_inspection_path(&wired.accepted.child_agent_id)
         .unwrap();
-    let inspection = crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
-        socket,
-        child.host.clone(),
-        wired.accepted.subagent_id.clone(),
-    )
-    .unwrap();
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            socket,
+            child.host.clone(),
+            wired.accepted.subagent_id.clone(),
+        )
+        .unwrap();
     if parent
         .plane
         .registry
@@ -667,7 +671,7 @@ async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_
         .await
         .unwrap();
     await_serve(wired.serve).await;
-    inspection.shutdown().await;
+    inspection.shutdown().await.unwrap();
     attachment.detach();
     child.runtime.shutdown().await.unwrap();
     parent.runtime.shutdown().await.unwrap();
@@ -686,9 +690,9 @@ async fn t18_stopping_real_unix_source_is_unavailable_without_a_false_execution_
 #[allow(clippy::too_many_lines)] // One real three-Runtime fixture holds the same source through its seal boundary.
 async fn nested_pending_fixture(stop_at_seal: bool) {
     use base64::Engine as _;
-    let root_dir = tempfile::tempdir().unwrap();
-    let middle_dir = tempfile::tempdir().unwrap();
-    let leaf_dir = tempfile::tempdir().unwrap();
+    let root_dir = inspection_tempdir().unwrap();
+    let middle_dir = inspection_tempdir().unwrap();
+    let leaf_dir = inspection_tempdir().unwrap();
     let (root, root_host) = parent_runtime_host_plane(
         &root_dir,
         "conv_01900000-0000-7000-8000-000000000491",
@@ -762,7 +766,7 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
     tokio::pin!(published);
     published.as_mut().enable();
     let nested = launch_wired_child(&middle.plane, &leaf, "request nested approval").await;
-    let leaf_inspection =
+    let mut leaf_inspection =
         crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
             middle
                 .plane
@@ -915,7 +919,8 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
         assert!(!stopping.is_settled());
         // The disposable inspection carrier closes independently while the
         // real control driver remains gated at its native Stopping boundary.
-        middle_inspection.take().unwrap().shutdown().await;
+        let mut closing_inspection = middle_inspection.take().unwrap();
+        closing_inspection.shutdown().await.unwrap();
         let read = root_host
             .inner
             .checkpoint_page_async(&checkpoint.read_cut, &domain, 0, 32)
@@ -969,13 +974,13 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
         .wait_until_settled(&nested.accepted.subagent_id)
         .await
         .unwrap();
-    leaf_inspection.shutdown().await;
+    leaf_inspection.shutdown().await.unwrap();
     leaf.runtime.shutdown().await.unwrap();
     let _ = root_child.stop_serve.send(());
     await_serve(root_child.serve).await;
     let _ = release.send(true);
-    if let Some(inspection) = middle_inspection {
-        inspection.shutdown().await;
+    if let Some(mut inspection) = middle_inspection {
+        inspection.shutdown().await.unwrap();
     }
     middle.runtime.shutdown().await.unwrap();
     root.runtime.shutdown().await.unwrap();
@@ -983,7 +988,7 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t20_real_unix_shutdown_joins_admitted_physical_source_worker() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = inspection_tempdir().unwrap();
     let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000474");
     let child = child_fixture_with_activation(
         &directory,
@@ -995,12 +1000,13 @@ async fn t20_real_unix_shutdown_joins_admitted_physical_source_worker() {
     )
     .await;
     let path = directory.path().join("physical-shutdown.sock");
-    let inspection = crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
-        path.clone(),
-        child.host.clone(),
-        SubagentId::new("inspection-physical-shutdown"),
-    )
-    .unwrap();
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            path.clone(),
+            child.host.clone(),
+            SubagentId::new("inspection-physical-shutdown"),
+        )
+        .unwrap();
     let workset = inspection.physical_workset();
     let (mut reader, mut writer) = connect_live_inspection(&path).await;
     let initialized = live_inspection_call(
@@ -1039,17 +1045,327 @@ async fn t20_real_unix_shutdown_joins_admitted_physical_source_worker() {
     let record = format!("{}\n", serde_json::to_string(&request).unwrap());
     writer.write_all(record.as_bytes()).await.unwrap();
     entered_rx.await.unwrap();
+    {
+        let mut shutdown = Box::pin(inspection.shutdown());
+        assert!(futures_util::poll!(shutdown.as_mut()).is_pending());
+        assert_eq!(
+            *workset.borrow(),
+            1,
+            "a cancelled shutdown waiter does not release actual source work"
+        );
+    }
+    // A cancelled waiter retains the listener's original JoinHandle in place.
     let mut shutdown = Box::pin(inspection.shutdown());
     assert!(futures_util::poll!(shutdown.as_mut()).is_pending());
-    assert_eq!(
-        *workset.borrow(),
-        1,
-        "a cancelled socket does not release actual source work"
-    );
+    assert_eq!(*workset.borrow(), 1);
     release.send(()).unwrap();
-    shutdown.await;
+    shutdown.await.unwrap();
     assert_eq!(*workset.borrow(), 0);
     assert!(reader.next_line().await.unwrap().is_none());
     assert!(child.model.requests().is_empty());
+    child.runtime.shutdown().await.unwrap();
+}
+
+struct ChildOccupancySourceFault {
+    connection: rusqlite::Connection,
+    original: Option<Vec<u8>>,
+}
+impl ChildOccupancySourceFault {
+    fn new(path: &std::path::Path) -> Self {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        let original: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT occupancy_observation FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            original.is_some(),
+            "the original finite occupancy Source is present"
+        );
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE bootstrap_identity SET occupancy_observation=NULL WHERE id=1",
+                    []
+                )
+                .unwrap(),
+            1
+        );
+        Self {
+            connection,
+            original,
+        }
+    }
+    fn repair(&mut self) {
+        assert_eq!(
+            self.connection
+                .execute(
+                    "UPDATE bootstrap_identity SET occupancy_observation=?1 WHERE id=1",
+                    [self.original.as_deref()]
+                )
+                .unwrap(),
+            1
+        );
+    }
+}
+impl Drop for ChildOccupancySourceFault {
+    fn drop(&mut self) {
+        self.repair();
+    }
+}
+
+async fn assert_child_source_unavailable(
+    attachment: &crate::runtime_client::RuntimeAttachment,
+    agent: &AgentId,
+    after: Option<crate::runtime_client::agent_observation::AgentObservationCursor>,
+    expected: &str,
+) {
+    let response = attachment
+        .handle_request_async(RuntimeClientRequest::AgentObserve {
+            id: crate::runtime_client::RequestId::new(478),
+            agent_id: agent.clone(),
+            after,
+        })
+        .await;
+    assert!(response.result.is_none(), "no Live resync or cold fallback");
+    assert!(
+        matches!(
+            response.error.as_ref(),
+            Some(crate::runtime_client::RuntimeClientError::ObservationUnavailable { message })
+                if message.contains(expected)
+        ),
+        "expected typed Child Source failure containing {expected:?}: {response:?}"
+    );
+}
+
+async fn assert_child_source_failure_and_repair(
+    attachment: &crate::runtime_client::RuntimeAttachment,
+    child: &ChildFixture,
+    agent: &AgentId,
+    activation: &SubagentId,
+    store_path: &std::path::Path,
+) {
+    struct Unpark<'a>(&'a crate::runtime_client::RuntimeClientHost);
+    impl Drop for Unpark<'_> {
+        fn drop(&mut self) {
+            self.0.inner.unpark_projection_worker();
+        }
+    }
+    child.host.inner.park_projection_worker();
+    let _unpark = Unpark(&child.host);
+    let AgentObservation::Checkpoint {
+        source: ObservationSource::Live,
+        cursor: Some(before),
+        checkpoint,
+        ..
+    } = observe(attachment, agent, None).await
+    else {
+        panic!("actual live Child checkpoint")
+    };
+    let native = child.store.observation_read_cut().unwrap();
+    let mut fault = ChildOccupancySourceFault::new(store_path);
+    child
+        .host
+        .fail_projection_read_for_test("held Child Source fault");
+    assert_child_source_unavailable(
+        attachment,
+        agent,
+        Some(before.clone()),
+        "held Child Source fault",
+    )
+    .await;
+    child.host.inner.unpark_projection_worker();
+    assert_child_source_unavailable(attachment, agent, None, "occupancy").await;
+    assert_eq!(child.store.observation_read_cut().unwrap(), native);
+    assert_eq!(child.model.requests().len(), 1);
+    fault.repair();
+    let AgentObservation::Checkpoint {
+        checkpoint: repaired,
+        cursor: Some(repaired_cursor),
+        ..
+    } = observe(attachment, agent, None).await
+    else {
+        panic!("public Child checkpoint repairs the same native Source")
+    };
+    assert_eq!(repaired_cursor.activation_id, before.activation_id);
+    assert_eq!(repaired_cursor.cursor.get(), before.cursor.get() + 1);
+    assert_eq!(repaired.read_cut.source_cut, checkpoint.read_cut.source_cut);
+    assert_eq!(repaired.read_cut.activation_id.as_ref(), Some(activation));
+    let AgentObservation::Events {
+        after,
+        cursor,
+        events,
+    } = observe(attachment, agent, Some(before.clone())).await
+    else {
+        panic!("same activation resumes retained native events")
+    };
+    assert_eq!(after, before);
+    assert_eq!(cursor.activation_id, before.activation_id);
+    assert_eq!(cursor.conversation_id, before.conversation_id);
+    assert_eq!(cursor.cursor.get(), before.cursor.get() + 1);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].cursor, cursor.cursor);
+    assert!(events[0].event.facts().iter().any(|fact| matches!(
+        fact,
+        crate::runtime_client::event::RuntimeClientEvent::ReadDomainsUpdated { .. }
+    )));
+    assert_eq!(child.store.observation_read_cut().unwrap(), native);
+    assert_eq!(child.model.requests().len(), 1);
+    assert_eq!(checkpoint.read_cut.activation_id.as_ref(), Some(activation));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t18_child_source_failure_recovers_over_unix_at_the_same_activation_without_native_work() {
+    let directory = inspection_tempdir().unwrap();
+    let (parent, host) = parent_runtime_host_plane(
+        &directory,
+        "conv_01900000-0000-7000-8000-000000000478",
+        Vec::new(),
+    )
+    .await;
+    let conversation = ConversationId::new("conv_01900000-0000-7000-8000-000000000479");
+    let store_path = crate::runtime::subagent::child_conversation_store_path(
+        &parent.plane.runtime_root,
+        &crate::runtime::identity::SessionId::new("ses_01900000-0000-7000-8000-000000000001"),
+        &conversation,
+    );
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture_scoped_at(
+        &directory,
+        &conversation,
+        vec![parking_answer_script(
+            "Source repair preserves execution",
+            released,
+        )],
+        ToolRegistry::new(),
+        Vec::new(),
+        store_path.parent().unwrap().to_path_buf(),
+        Some(SubagentId::for_conversation(
+            parent.runtime.conversation_id(),
+            1,
+        )),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "held source").await;
+    await_model_parks(&child.model, 1).await;
+    let agent = &wired.accepted.child_agent_id;
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            parent.plane.registry.agent_inspection_path(agent).unwrap(),
+            child.host.clone(),
+            wired.accepted.subagent_id.clone(),
+        )
+        .unwrap();
+    let (attachment, _) = host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    assert_child_source_failure_and_repair(
+        &attachment,
+        &child,
+        agent,
+        &wired.accepted.subagent_id,
+        &store_path,
+    )
+    .await;
+    release.send(true).unwrap();
+    await_serve(wired.serve).await;
+    parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .unwrap();
+    inspection.shutdown().await.unwrap();
+    child.runtime.shutdown().await.unwrap();
+    parent.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t20_real_unix_shutdown_retires_the_exact_pending_observe_before_its_deadline() {
+    struct Unpark<'a>(&'a crate::runtime_client::host::ClientInner);
+    impl Drop for Unpark<'_> {
+        fn drop(&mut self) {
+            self.0.unpark_projection_worker();
+        }
+    }
+    let directory = inspection_tempdir().unwrap();
+    let child = child_fixture_with_activation(
+        &directory,
+        &ConversationId::new("conv_01900000-0000-7000-8000-000000000104"),
+        Vec::new(),
+        ToolRegistry::new(),
+        Vec::new(),
+        SubagentId::new("inspection-observe-retirement"),
+    )
+    .await;
+    child.host.inner.park_projection_worker();
+    let unpark = Unpark(&child.host.inner);
+    let before = child.host.inner.checkpoint().unwrap();
+    let native = child.store.observation_read_cut().unwrap();
+    let path = directory.path().join("observe-retirement.sock");
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            path.clone(),
+            child.host.clone(),
+            SubagentId::new("inspection-observe-retirement"),
+        )
+        .unwrap();
+    let workset = inspection.physical_workset();
+    let (mut reader, mut writer) = connect_live_inspection(&path).await;
+    let initialized = live_inspection_call(
+        &mut reader,
+        &mut writer,
+        RuntimeClientRequest::Initialize {
+            id: crate::runtime_client::RequestId::new(1),
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+        },
+    )
+    .await;
+    let Some(RuntimeClientResult::Initialized { attachment_id, .. }) = initialized.result else {
+        panic!("the exact read-only endpoint was admitted");
+    };
+    let request = RuntimeClientRequest::ObserveEvents {
+        id: crate::runtime_client::RequestId::new(2),
+        after_cursor: before.cursor,
+    };
+    writer
+        .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
+        .await
+        .unwrap();
+    // Native subscription state establishes admission of this actual socket's
+    // empty wait. The guard does not create the interleaving or retry a read.
+    tokio::time::timeout(LIVENESS, async {
+        while child
+            .host
+            .inner
+            .inspection_subscriber_for_test(&attachment_id)
+            .is_none()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the actual ObserveEvents subscription is installed");
+    assert_eq!(*workset.borrow(), 1);
+    tokio::time::timeout(std::time::Duration::from_secs(5), inspection.shutdown())
+        .await
+        .expect("server retirement does not wait for the ten-second observation deadline")
+        .expect("the original listener joins successfully");
+    assert_eq!(*workset.borrow(), 0);
+    assert!(reader.next_line().await.unwrap().is_none());
+    assert!(!path.exists());
+    assert!(
+        child
+            .host
+            .inner
+            .inspection_subscriber_for_test(&attachment_id)
+            .is_none()
+    );
+    assert_eq!(child.host.inner.checkpoint().unwrap(), before);
+    assert_eq!(child.store.observation_read_cut().unwrap(), native);
+    assert!(child.model.requests().is_empty());
+    drop(unpark);
     child.runtime.shutdown().await.unwrap();
 }

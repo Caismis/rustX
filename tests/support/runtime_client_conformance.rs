@@ -412,10 +412,15 @@ pub fn scripted_call(
 /// Unwraps the successful result of a response, or panics with the error.
 #[must_use]
 pub fn result(response: RuntimeClientResponse) -> RuntimeClientResult {
+    let id = response.id;
     match (response.result, response.error) {
         (Some(result), None) => result,
-        (None, Some(error)) => panic!("expected a successful result, got error {error:?}"),
-        other => panic!("a response carries exactly one of result/error, got {other:?}"),
+        (None, Some(error)) => {
+            panic!("expected a successful result for request {id:?}, got error {error:?}");
+        }
+        other => panic!(
+            "a response for request {id:?} carries exactly one of result/error, got {other:?}"
+        ),
     }
 }
 
@@ -1850,6 +1855,20 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
         "tool-bg"
     );
     let mut last = events.last().expect("dispatch").cursor;
+
+    // Dispatch acceptance can precede executor startup. Read status after this
+    // parked Job's actual Running publication, when its registry cut is stable.
+    let running = |event: &RuntimeClientProtocolEvent| {
+        event.event.facts().iter().any(|fact| {
+            matches!(fact, RuntimeClientEvent::JobUpdated { job, .. }
+                if job.job_id == execution_id
+                    && job.state == rustx::tools::background::BackgroundLifecycle::Running)
+        })
+    };
+    if !events.iter().any(running) {
+        let started = receive_until(&mut *driver, last, running).await;
+        last = started.last().expect("the same Job reached Running").cursor;
+    }
 
     // The registry is inspectable by identity, and an unknown identity is
     // the typed semantic error.

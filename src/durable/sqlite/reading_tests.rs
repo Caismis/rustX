@@ -1,6 +1,4 @@
 use super::seq_to_i64;
-use crate::conversation::SurfaceSpan;
-use crate::durable::CompactionCommitInput;
 use crate::durable::reading::*;
 use crate::durable::{ConversationStore, LineageSeed, SqliteConversationStore};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
@@ -10,7 +8,6 @@ use crate::message::types::{
     UserMessageBlock, UserSource,
 };
 use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId};
-use crate::runtime::{TokenMeasurement, TokenMeasurementSource};
 use chrono::Utc;
 use rusqlite::params;
 include!("observation_turn_tests.rs");
@@ -85,27 +82,19 @@ fn inherited_boundary_includes_terminal_only_turns_and_survives_local_appends() 
         )
         .unwrap();
     assert_eq!(older.page.inherited_through, seeded.inherited_through);
-    let MessageBlock::User(mut summary) = human("summary", "compacted") else {
-        unreachable!()
-    };
-    summary.source = UserSource::Runtime;
-    summary.kind =
-        InboundKind::CompactionSummary(crate::message::types::CompactionSummaryMetadata::empty());
     store
-        .commit_compaction(CompactionCommitInput {
-            summary,
-            span: SurfaceSpan::new(MessageId::new("seeded"), MessageId::new("seeded")),
-            expected_revision: store.load_head().unwrap().revision,
-            tokens_before: TokenMeasurement {
-                input_tokens: 10,
-                source: TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: 1,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc::now(),
-            occupancy: None,
-        })
+        .commit_projection(
+            crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                &store,
+                crate::scripted_suites::support::context::checkpoint_fixture(
+                    &store,
+                    "inherited-boundary",
+                    1,
+                    "compacted",
+                ),
+                None,
+            ),
+        )
         .unwrap();
     assert_eq!(
         store
@@ -327,7 +316,6 @@ fn delegated_tasks_open_turn_previews_without_reclassifying_the_source() {
         destination.conversation_id(),
         &frozen.canonical,
         &frozen.surface_history,
-        &frozen.checkpoints,
         &frozen.completed_responses,
         &frozen.turns,
         &frozen.raw_tool_arguments,
@@ -1158,7 +1146,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(super::SQLITE_SCHEMA_VERSION, 58);
+        assert_eq!(super::SQLITE_SCHEMA_VERSION, 64);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(
@@ -1166,7 +1154,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 56,
-                expected: super::SQLITE_SCHEMA_VERSION
+                expected: 64
             }
         )
     ));
@@ -1175,7 +1163,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 56,
-                expected: super::SQLITE_SCHEMA_VERSION
+                expected: 64
             }
         )
     ));

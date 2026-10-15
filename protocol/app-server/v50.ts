@@ -108,6 +108,23 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/projections';
+      params: {
+        target: AttachmentTarget;
+        after: ProjectionActivationId;
+        limit: number;
+      };
+    }
+  | {
+      method: 'session/projectionDetail';
+      params: {
+        target: AttachmentTarget;
+        checkpoint_id: CheckpointId;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/trace';
       params: {
         target: AttachmentTarget;
@@ -581,6 +598,15 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/forkProjection';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        ledger: LedgerFrontier;
+        activation: ProjectionActivationId;
+      };
+    }
+  | {
       method: 'session/fork';
       params: {
         session_id: SessionId;
@@ -965,6 +991,20 @@ export type MessageId = string;
  */
 export type SessionNodeId = string;
 /**
+ * Checkpoint activation order, independent of the Ledger and Journal domains.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ProjectionActivationId".
+ */
+export type ProjectionActivationId = string;
+/**
+ * Immutable historical context content, independent of canonical message identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CheckpointId".
+ */
+export type CheckpointId = string;
+/**
  * Opaque Trace-only exclusive boundary, valid only in its conversation.
  *
  * It is not a live cursor, a transcript cursor, an Event Journal sequence,
@@ -1281,6 +1321,13 @@ export type ContentRepresentation =
  * via the `definition` "SessionNodeValueField".
  */
 export type SessionNodeValueField = 'origin_source_message';
+/**
+ * Inclusive canonical commit position, independent of Journal and activation order.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "LedgerFrontier".
+ */
+export type LedgerFrontier = string;
 /**
  * Which history prefix a lineage operation retains.
  *
@@ -1858,6 +1905,14 @@ export type MethodResult =
       type: 'context_compacted';
     }
   | {
+      page: ProjectionPage;
+      type: 'projections';
+    }
+  | {
+      detail: ProjectionDetail;
+      type: 'projection_detail';
+    }
+  | {
       page: TracePage;
       type: 'trace';
     }
@@ -2175,6 +2230,50 @@ export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
  */
 export type ResidencyState = 'Unloaded' | 'Loading' | 'Loaded' | 'Unloading';
 /**
+ * Inclusive source Journal position, never an activation or Ledger position.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "JournalFrontier".
+ */
+export type JournalFrontier = string;
+/**
+ * Immutable destination bootstrap installation, distinct from source activations.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "LineageInstallationId".
+ */
+export type LineageInstallationId = string;
+/**
+ * Input provenance is not execution ownership. Derived bodies have no canonical identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceInputProvenance".
+ */
+export type TraceInputProvenance =
+  | {
+      source?: CanonicalMessageRef | null;
+      conversation_id: ConversationId;
+      content_digest: string;
+      locator?: CanonicalContentLocator | null;
+      message_id_source?: ContentBinding | null;
+      type: 'original';
+    }
+  | {
+      sources: CanonicalMessageRef[];
+      checkpoint_sources: CheckpointSourceRef[];
+      transformations: SemanticTransformation[];
+      truncated: boolean;
+      type: 'derived';
+    }
+  | {
+      type: 'request_only';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SemanticTransformation".
+ */
+export type SemanticTransformation = 'summary' | 'image_downgrade' | 'upload_rendering';
+/**
  * The original bounded reader that owns one deferred Trace field.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2201,6 +2300,7 @@ export type TraceFieldSource =
 export type TraceFieldKind =
   | 'request_id'
   | 'provisional_message_id'
+  | 'provenance'
   | 'model'
   | 'step_id'
   | 'call_id'
@@ -2212,6 +2312,76 @@ export type TraceFieldKind =
   | 'message_id'
   | 'result'
   | 'failure';
+/**
+ * The role of one reconstructed request item.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceMessageRole".
+ */
+export type TraceMessageRole = ('user' | 'assistant' | 'tool') | 'request_only';
+/**
+ * The closed projected content vocabulary.
+ *
+ * Each variant is a semantic the browser can render with the matching
+ * presentation primitive: prose as Markdown, structure as a JSON reader,
+ * source as code, artifacts through the existing durable carrier.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceContentBlock".
+ */
+export type TraceContentBlock =
+  | {
+      text: TraceText;
+      type: 'text';
+    }
+  | {
+      text: TraceText;
+      type: 'reasoning';
+    }
+  | {
+      text: TraceText;
+      type: 'refusal';
+    }
+  | {
+      value: TraceJson;
+      type: 'json';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      name: string;
+      arguments: TraceJson;
+      type: 'tool_call';
+    }
+  | {
+      call_id: ToolCallId;
+      tool_id: ToolId;
+      outcome: TraceToolOutcome;
+      blocks: TraceContentBlock[];
+      truncated: boolean;
+      type: 'tool_result';
+    }
+  | {
+      artifact: TraceArtifact;
+      alt?: string | null;
+      type: 'image';
+    }
+  | {
+      artifact: TraceArtifact;
+      type: 'file';
+    }
+  | {
+      name: string;
+      type: 'upload';
+    };
+/**
+ * The closed canonical Tool outcome vocabulary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceToolOutcome".
+ */
+export type TraceToolOutcome =
+  'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
 /**
  * Immutable original field selection; caller source cut supplies read authority.
  *
@@ -2281,14 +2451,6 @@ export type ModelErrorKind =
   | 'malformed_tool_proposal'
   | 'generation_degenerated'
   | 'generation_budget_exceeded';
-/**
- * The closed canonical Tool outcome vocabulary.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TraceToolOutcome".
- */
-export type TraceToolOutcome =
-  'success' | 'failed' | 'denied' | 'cancelled' | 'timed_out' | 'outcome_unknown';
 /**
  * The closed record vocabulary of the ledger.
  *
@@ -3973,6 +4135,7 @@ export type RuntimeClientEvent =
       type: 'block_content_advanced';
     }
   | {
+      projection_head?: RuntimeClientProjectionHeadView | null;
       transcript: RuntimeClientTranscriptPage;
       trace: TracePage;
       occupancy?: RuntimeClientContextOccupancy | null;
@@ -5229,6 +5392,14 @@ export type Notification1 =
       };
     }
   | {
+      method: 'session/observationUnavailable';
+      params: {
+        registration_id: string;
+        target: AttachmentTarget;
+        message: string;
+      };
+    }
+  | {
       method: 'session/resyncRequired';
       params: {
         registration_id: string;
@@ -5286,68 +5457,6 @@ export type ContextContributorIdentity =
 export type TraceContributionPresentation = {
   AgentStatus: AgentStatusView;
 };
-/**
- * The role of one reconstructed request item.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TraceMessageRole".
- */
-export type TraceMessageRole = ('user' | 'assistant' | 'tool') | 'request_only';
-/**
- * The closed projected content vocabulary.
- *
- * Each variant is a semantic the browser can render with the matching
- * presentation primitive: prose as Markdown, structure as a JSON reader,
- * source as code, artifacts through the existing durable carrier.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TraceContentBlock".
- */
-export type TraceContentBlock =
-  | {
-      text: TraceText;
-      type: 'text';
-    }
-  | {
-      text: TraceText;
-      type: 'reasoning';
-    }
-  | {
-      text: TraceText;
-      type: 'refusal';
-    }
-  | {
-      value: TraceJson;
-      type: 'json';
-    }
-  | {
-      call_id: ToolCallId;
-      tool_id: ToolId;
-      name: string;
-      arguments: TraceJson;
-      type: 'tool_call';
-    }
-  | {
-      call_id: ToolCallId;
-      tool_id: ToolId;
-      outcome: TraceToolOutcome;
-      blocks: TraceContentBlock[];
-      truncated: boolean;
-      type: 'tool_result';
-    }
-  | {
-      artifact: TraceArtifact;
-      alt?: string | null;
-      type: 'image';
-    }
-  | {
-      artifact: TraceArtifact;
-      type: 'file';
-    }
-  | {
-      name: string;
-      type: 'upload';
-    };
 /**
  * How far one Tool call progressed, by its own native evidence.
  *
@@ -6147,9 +6256,6 @@ export type InboundKind =
       goal_continuation: GoalRef;
     }
   | 'message'
-  | {
-      compaction_summary: CompactionSummaryMetadata;
-    }
   | {
       context: ContextKind;
     };
@@ -8360,40 +8466,26 @@ export interface TransportDiagnostics {
 /**
  * Public metadata for one committed compaction.
  *
- * Every field is derived from already-committed conversation state. The
- * view names the canonical summary message by identity; its content is an
- * ordinary Ledger fact in [`RuntimeClientSnapshot::messages`].
+ * Every field is derived from an actual local checkpoint commit. The
+ * independent projection disclosure carries summary content; canonical
+ * execution rows never acquire a fabricated summary identity.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "RuntimeClientCompactionView".
  */
 export interface RuntimeClientCompactionView {
   /**
-   * The compaction generation maintained in the current Conversation
-   * Surface head.
+   * The local committed projection generation.
    */
   generation: string;
   /**
-   * The identity of the committed canonical compaction summary message.
+   * Immutable historical context content, independent of canonical message identity.
    */
-  summary_message_id?: MessageId | null;
-  summary_message_locator: CanonicalContentLocator;
-  summary_message_id_deferred: boolean;
-  summary_message_id_source?: ContentRef | null;
+  checkpoint_id: string;
   /**
-   * The identity of one exact historical Conversation Surface state.
-   *
-   * A revision is a monotonic counter in its own identity domain. The empty
-   * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
-   * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
-   * is precisely "the Surface after the first `n` accepted operations".
-   *
-   * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
-   * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
-   * or a `CapabilityRevision`: none of those identify a Surface state, and
-   * none of them may be substituted for one.
+   * Checkpoint activation order, independent of the Ledger and Journal domains.
    */
-  surface_revision: string;
+  activation_id: string;
   tokens_before: TokenMeasurement;
   /**
    * The deterministic estimate of the rebuilt request context.
@@ -8412,6 +8504,174 @@ export interface TokenMeasurement {
    * How the measurement was obtained.
    */
   source: 'provider_reported' | 'provider_anchored' | 'estimated';
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ProjectionPage".
+ */
+export interface ProjectionPage {
+  records: RuntimeClientProjectionHeadView[];
+  next_activation?: ProjectionActivationId | null;
+}
+/**
+ * Projection ownership is independent of the local execution trajectory.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientProjectionHeadView".
+ */
+export interface RuntimeClientProjectionHeadView {
+  checkpoint_id: CheckpointId;
+  activation_id: ProjectionActivationId;
+  base_frontier: LedgerFrontier;
+  activation_ledger: LedgerFrontier;
+  origin: OriginActivation;
+  destination_installation?: LineageInstallationId | null;
+  original_items: number;
+  derived_items: number;
+  summary_preview?: TraceText | null;
+}
+/**
+ * Immutable source activation. Destination installation is a different coordinate.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "OriginActivation".
+ */
+export interface OriginActivation {
+  conversation_id: ConversationId;
+  activation: ProjectionActivationId;
+  completed_journal: JournalFrontier;
+}
+/**
+ * Bounded text with an explicit completeness statement.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceText".
+ */
+export interface TraceText {
+  text: string;
+  truncated: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ProjectionDetail".
+ */
+export interface ProjectionDetail {
+  read_cut: CheckpointReadCut;
+  checkpoint: RuntimeClientProjectionHeadView;
+  items: ProjectionItemDetail[];
+  next_item?: number | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ProjectionItemDetail".
+ */
+export interface ProjectionItemDetail {
+  occurrence: CheckpointMessageOccurrence;
+  content: TraceRequestMessage;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CheckpointMessageOccurrence".
+ */
+export interface CheckpointMessageOccurrence {
+  checkpoint_id: CheckpointId;
+  item_index: number;
+}
+/**
+ * One reconstructed provider-neutral request item.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceRequestMessage".
+ */
+export interface TraceRequestMessage {
+  /**
+   * Present only for one actual frozen request; projection detail has its own coordinate.
+   */
+  request_occurrence?: RequestMessageOccurrence | null;
+  provenance: TraceInputProvenance;
+  provenance_source?: TraceFieldSource | null;
+  role: TraceMessageRole;
+  /**
+   * Canonical Ledger identity; absent for Derived and request-only input.
+   */
+  message_id?: MessageId | null;
+  /**
+   * User provenance or the request-local Derived transformation label.
+   */
+  source?: string | null;
+  blocks: TraceContentBlock[];
+  truncated: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RequestMessageOccurrence".
+ */
+export interface RequestMessageOccurrence {
+  request_id: RequestId;
+  item_index: number;
+}
+/**
+ * Immutable source scope, distinct from a projected occurrence.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CanonicalMessageRef".
+ */
+export interface CanonicalMessageRef {
+  conversation_id: ConversationId;
+  message_id: MessageId;
+  /**
+   * Integrity of the complete immutable body, independent of semantic request hashing.
+   */
+  content_digest: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ContentBinding".
+ */
+export interface ContentBinding {
+  /**
+   * Projection-owned structural selection inside `CanonicalJsonV1` bytes.
+   */
+  source_path?: string[] | null;
+  path: string[];
+  content_ref: ContentRef;
+  deferred: boolean;
+}
+/**
+ * Scoped immutable projection provenance, used when a summary consumes an earlier summary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CheckpointSourceRef".
+ */
+export interface CheckpointSourceRef {
+  conversation_id: ConversationId;
+  checkpoint_id: CheckpointId;
+  content_digest: string;
+}
+/**
+ * Bounded structured data with an explicit completeness statement.
+ *
+ * The value stays real JSON rather than a rendered string, so the browser
+ * can present it with a structured reader instead of a preformatted dump.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceJson".
+ */
+export interface TraceJson {
+  value: unknown;
+  truncated: boolean;
+}
+/**
+ * Safe reference to the existing native artifact carrier, never a path.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceArtifact".
+ */
+export interface TraceArtifact {
+  artifact_id: ArtifactId;
+  image: boolean;
+  name?: string | null;
+  mime_type?: string | null;
 }
 /**
  * One finite page of bounded summary records, oldest first.
@@ -8449,19 +8709,6 @@ export interface TraceLifecycle {
   message_id?: MessageId | null;
   attachments: TraceArtifact[];
   truncated: boolean;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ContentBinding".
- */
-export interface ContentBinding {
-  /**
-   * Projection-owned structural selection inside `CanonicalJsonV1` bytes.
-   */
-  source_path?: string[] | null;
-  path: string[];
-  content_ref: ContentRef;
-  deferred: boolean;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -8633,18 +8880,6 @@ export interface TraceToolOutcomeUpdate {
 export interface TracePreview {
   text: string;
   truncated: boolean;
-}
-/**
- * Safe reference to the existing native artifact carrier, never a path.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TraceArtifact".
- */
-export interface TraceArtifact {
-  artifact_id: ArtifactId;
-  image: boolean;
-  name?: string | null;
-  mime_type?: string | null;
 }
 /**
  * One bounded pageable ledger record.
@@ -9044,10 +9279,6 @@ export interface ConversationTiming {
  */
 export interface RuntimeClientTranscriptEntry {
   /**
-   * Native facts of a canonical compaction checkpoint, including copied lineage.
-   */
-  compaction?: CompactionMarker | null;
-  /**
    * Exact native Attempt process membership, derived by native owners.
    * Absence is not permission for a client to infer a process boundary.
    */
@@ -9229,26 +9460,6 @@ export interface RuntimeClientTranscriptEntry {
             };
         type: 'interaction_settled';
       };
-}
-/**
- * Facts of one checkpoint, not cumulative totals over the compaction lineage.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "CompactionMarker".
- */
-export interface CompactionMarker {
-  /**
-   * Exact number of canonical history messages replaced by this checkpoint.
-   */
-  retired_messages: string;
-  /**
-   * Native history-only estimate, excluding system prompt and tool schemas.
-   */
-  retired_tokens: string;
-  /**
-   * Local Journal attribution; copied lineage has no local command owner.
-   */
-  manual?: boolean | null;
 }
 /**
  * One native process owner shared by live, successful and unsuccessful Turns.
@@ -9760,8 +9971,8 @@ export interface ToolExecutionResult1 {
  *
  * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
  * canonical home for anything inbound, including messages from other agents
- * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
- * (with [`InboundKind::CompactionSummary`] kind). It
+ * (with [`UserSource::Agent`] provenance). Compaction summaries instead belong
+ * to immutable model-context checkpoints. An inbound block
  * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
  * reserved for output and actions of the current agent.
  *
@@ -9816,9 +10027,6 @@ export interface UserMessageBlock {
       }
     | 'message'
     | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
-    | {
         context: ContextKind;
       };
   /**
@@ -9828,48 +10036,12 @@ export interface UserMessageBlock {
    * An ordinary asynchronously delivered inbound message
    * ([`InboundKind::Message`]) carries the persisted instant of its
    * delivery; the producer supplies the original timestamp explicitly and
-   * no wall-clock time is fabricated. Derived M4 compaction summaries
-   * ([`InboundKind::CompactionSummary`]) never carry one. Older or
-   * derived messages without a timestamp remain representable: the field
+   * no wall-clock time is fabricated. Messages without a producer timestamp
+   * remain representable: the field
    * defaults to `None` on deserialization and is omitted from the
    * canonical encoding while absent.
    */
   timestamp?: string | null;
-}
-/**
- * The cumulative native file-operation facts of one compaction summary
- * (Issue #140).
- *
- * This is the typed canonical authority for *which files the retired history
- * read and which files it modified*. It is derived deterministically from
- * the canonical tool calls of the selected retired span — native
- * `read(path)` contributes a read, native `edit(path)` and `write(path)`
- * contribute a modification — merged with the metadata of every earlier
- * compaction summary inside that same span. It records conversation facts,
- * never current filesystem state: a path stays listed even when the file has
- * since been deleted, and the rendered `<read-files>`/`<modified-files>`
- * sections of the summary text are a model-visible projection of this value,
- * never its source.
- *
- * The fields are private so every value, including one decoded from durable
- * JSON, satisfies the canonical invariants: both lists are unique and in
- * ascending byte order, and `read_files ∩ modified_files = ∅` (modification
- * wins over read).
- *
- * ```compile_fail
- * use rustx::message::types::CompactionSummaryMetadata;
- *
- * fn mutate(metadata: &mut CompactionSummaryMetadata) {
- *     metadata.read_files = Vec::new();
- * }
- * ```
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "CompactionSummaryMetadata".
- */
-export interface CompactionSummaryMetadata {
-  read_files?: string[];
-  modified_files?: string[];
 }
 /**
  * Authoritative bounded durable record.
@@ -11562,8 +11734,8 @@ export interface InboundItemView {
  *
  * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
  * canonical home for anything inbound, including messages from other agents
- * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
- * (with [`InboundKind::CompactionSummary`] kind). It
+ * (with [`UserSource::Agent`] provenance). Compaction summaries instead belong
+ * to immutable model-context checkpoints. An inbound block
  * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
  * reserved for output and actions of the current agent.
  */
@@ -11615,9 +11787,6 @@ export interface UserMessageBlock1 {
       }
     | 'message'
     | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
-    | {
         context: ContextKind;
       };
   /**
@@ -11627,9 +11796,8 @@ export interface UserMessageBlock1 {
    * An ordinary asynchronously delivered inbound message
    * ([`InboundKind::Message`]) carries the persisted instant of its
    * delivery; the producer supplies the original timestamp explicitly and
-   * no wall-clock time is fabricated. Derived M4 compaction summaries
-   * ([`InboundKind::CompactionSummary`]) never carry one. Older or
-   * derived messages without a timestamp remain representable: the field
+   * no wall-clock time is fabricated. Messages without a producer timestamp
+   * remain representable: the field
    * defaults to `None` on deserialization and is omitted from the
    * canonical encoding while absent.
    */
@@ -12334,6 +12502,10 @@ export interface RuntimeClientTodoStatusTask {
  * `messages`, like every other canonical Ledger fact).
  */
 export interface RuntimeClientContextView {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
   /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
@@ -13062,6 +13234,7 @@ export interface RuntimeClientProtocolEvent {
         type: 'block_content_advanced';
       }
     | {
+        projection_head?: RuntimeClientProjectionHeadView | null;
         transcript: RuntimeClientTranscriptPage;
         trace: TracePage;
         occupancy?: RuntimeClientContextOccupancy | null;
@@ -14022,6 +14195,10 @@ export interface RuntimeClientTranscriptInteractionSettled {
  */
 export interface RuntimeClientContextView1 {
   /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
    */
@@ -14055,6 +14232,10 @@ export interface RuntimeClientContextView1 {
  */
 export interface RuntimeClientContextView2 {
   /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
    */
@@ -14087,6 +14268,10 @@ export interface RuntimeClientContextView2 {
  * The context diagnostics after this committed compaction.
  */
 export interface RuntimeClientContextView3 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
   /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.
@@ -14440,8 +14625,8 @@ export interface AgentStatusView1 {
  *
  * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
  * canonical home for anything inbound, including messages from other agents
- * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
- * (with [`InboundKind::CompactionSummary`] kind). It
+ * (with [`UserSource::Agent`] provenance). Compaction summaries instead belong
+ * to immutable model-context checkpoints. An inbound block
  * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
  * reserved for output and actions of the current agent.
  */
@@ -14493,9 +14678,6 @@ export interface UserMessageBlock2 {
       }
     | 'message'
     | {
-        compaction_summary: CompactionSummaryMetadata;
-      }
-    | {
         context: ContextKind;
       };
   /**
@@ -14505,9 +14687,8 @@ export interface UserMessageBlock2 {
    * An ordinary asynchronously delivered inbound message
    * ([`InboundKind::Message`]) carries the persisted instant of its
    * delivery; the producer supplies the original timestamp explicitly and
-   * no wall-clock time is fabricated. Derived M4 compaction summaries
-   * ([`InboundKind::CompactionSummary`]) never carry one. Older or
-   * derived messages without a timestamp remain representable: the field
+   * no wall-clock time is fabricated. Messages without a producer timestamp
+   * remain representable: the field
    * defaults to `None` on deserialization and is omitted from the
    * canonical encoding while absent.
    */
@@ -15892,6 +16073,10 @@ export interface RpcError {
  */
 export interface TraceDetail {
   /**
+   * Historical projection content, distinct from committed execution messages.
+   */
+  projected_messages: TraceRequestMessage[];
+  /**
    * Echoes the requested identity so a late reply can be fenced.
    */
   id: string;
@@ -15917,6 +16102,11 @@ export interface TraceDetail {
  * via the `definition` "TraceRequestDetail".
  */
 export interface TraceRequestDetail {
+  /**
+   * Frozen physical/request coordinates and provider correlation labels.
+   */
+  tool_associations: ActualRequestToolAssociation[];
+  tool_associations_truncated: boolean;
   /**
    * Typed historical context, never the current domain projection.
    */
@@ -15963,6 +16153,36 @@ export interface TraceRequestDetail {
   generation?: TraceGeneration | null;
 }
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ActualRequestToolAssociation".
+ */
+export interface ActualRequestToolAssociation {
+  call: ActualRequestCallCoordinate;
+  result: RequestMessageOccurrence;
+  source: CanonicalCallSource;
+  /**
+   * Absent only when both occurrences are covered by native continuation
+   * and no correlation field is transmitted in this actual request.
+   */
+  wire_id?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ActualRequestCallCoordinate".
+ */
+export interface ActualRequestCallCoordinate {
+  message: RequestMessageOccurrence;
+  block: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CanonicalCallSource".
+ */
+export interface CanonicalCallSource {
+  assistant: CanonicalMessageRef;
+  block: ContentBlockIndex;
+}
+/**
  * The exact producer and typed data accepted for one historical request.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -15983,48 +16203,6 @@ export interface TraceContributionMetadata {
 export interface TraceRequestOption {
   name: string;
   value: TraceJson;
-}
-/**
- * Bounded structured data with an explicit completeness statement.
- *
- * The value stays real JSON rather than a rendered string, so the browser
- * can present it with a structured reader instead of a preformatted dump.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TraceJson".
- */
-export interface TraceJson {
-  value: unknown;
-  truncated: boolean;
-}
-/**
- * Bounded text with an explicit completeness statement.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TraceText".
- */
-export interface TraceText {
-  text: string;
-  truncated: boolean;
-}
-/**
- * One reconstructed provider-neutral request item.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TraceRequestMessage".
- */
-export interface TraceRequestMessage {
-  role: TraceMessageRole;
-  /**
-   * Canonical Ledger identity; absent exactly for a request-only item.
-   */
-  message_id?: MessageId | null;
-  /**
-   * Provenance of a canonical User item.
-   */
-  source?: string | null;
-  blocks: TraceContentBlock[];
-  truncated: boolean;
 }
 /**
  * The historical model-facing Tool definition of one request.
@@ -16802,6 +16980,10 @@ export interface SubagentActivityCounters1 {
  * via the `definition` "RuntimeClientContextView".
  */
 export interface RuntimeClientContextView4 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
   /**
    * Latest manual operation admitted in this runtime incarnation. Never inferred
    * from a newer canonical checkpoint. Absence is insufficient evidence.

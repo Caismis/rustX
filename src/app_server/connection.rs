@@ -765,6 +765,7 @@ impl AppServerConnection {
                 | Method::SessionName { .. }
                 | Method::SessionDelete { .. }
                 | Method::SessionFork { .. }
+                | Method::SessionForkProjection { .. }
                 | Method::SessionBranch { .. }
                 | Method::SessionRecoverDeletion { .. }
                 | Method::SessionSwitchNode { .. }
@@ -1425,6 +1426,19 @@ impl AppServerConnection {
                     .map_err(session_error)?;
                 Ok(MethodResult::Tree { nodes, next_offset })
             }
+            Method::SessionForkProjection {
+                session_id,
+                node_id,
+                ledger,
+                activation,
+            } => {
+                let result = self
+                    .sessions
+                    .fork_projection(&session_id, node_id.as_ref(), ledger, activation)
+                    .await
+                    .map_err(session_error)?;
+                transition(result, &self.sessions).await
+            }
             Method::SessionFork {
                 session_id,
                 node_id,
@@ -1969,7 +1983,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v48 notice reaches only a connection that negotiated v48.
+        // A v50 notice reaches only a connection that negotiated v50.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -2197,6 +2211,16 @@ impl AppServerConnection {
                     event: Box::new(event.event),
                 }
             }
+            EventDelivery::Unavailable { message } => {
+                let registration_id = registration.id.clone();
+                let (recovery, _) = registration.recovery();
+                publication = Some(recovery);
+                NotificationMethod::ObservationUnavailable {
+                    registration_id,
+                    target,
+                    message: message.chars().take(512).collect(),
+                }
+            }
             EventDelivery::ResyncRequired {
                 after_cursor: _,
                 earliest_serviceable,
@@ -2264,6 +2288,8 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::SessionUploadPrepare { target, .. }
         | Method::SessionUploadStatus { target, .. }
         | Method::Trace { target, .. }
+        | Method::Projections { target, .. }
+        | Method::ProjectionDetail { target, .. }
         | Method::TraceDetail { target, .. }
         | Method::TraceLocateTool { target, .. }
         | Method::Transcript { target, .. }
@@ -2330,6 +2356,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::SessionNodeValueRead { .. }
         | Method::SessionTree { .. }
         | Method::SessionFork { .. }
+        | Method::SessionForkProjection { .. }
         | Method::SessionBranch { .. }
         | Method::SessionDeletePreview { .. }
         | Method::SessionDelete { .. }
@@ -2480,6 +2507,15 @@ async fn dispatch_runtime(
             Ok(MethodResult::ModelSet { settings_revision })
         }
         Method::Capability { target: _ } => read_domain(authority, "capabilities".into()).await,
+        Method::Projections { after, limit, .. } => {
+            native_result(authority.projection_page(after, limit))
+        }
+        Method::ProjectionDetail {
+            checkpoint_id,
+            offset,
+            limit,
+            ..
+        } => native_result(authority.projection_detail(checkpoint_id, offset, limit)),
         Method::Trace {
             target: _,
             records,
@@ -2860,6 +2896,10 @@ fn native_result(
         }
         RuntimeClientResult::ContextCompacted { compaction } => {
             MethodResult::ContextCompacted { compaction }
+        }
+        RuntimeClientResult::ProjectionPage { page } => MethodResult::Projections { page },
+        RuntimeClientResult::ProjectionDetail { detail } => {
+            MethodResult::ProjectionDetail { detail }
         }
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
         RuntimeClientResult::TraceToolLocation { location } => {

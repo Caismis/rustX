@@ -1,3 +1,4 @@
+use crate::runtime::{TokenMeasurement, TokenMeasurementSource};
 use crate::runtime_client::RuntimeClientError;
 // Exact immutable native occupancy origins, independent of newer display readings.
 fn occupancy_origin_cut(
@@ -99,23 +100,23 @@ fn occupancy_origin_compact(
     summary: &str,
     occupancy: &crate::context::occupancy::ContextOccupancy,
 ) -> RuntimeEventEnvelope {
-    store
-        .commit_compaction(CompactionCommitInput {
-            summary: summary_message(summary, "native summary"),
-            span: SurfaceSpan::new(MessageId::new(predecessor), MessageId::new(predecessor)),
-            expected_revision: store.load_head().unwrap().revision,
-            tokens_before: TokenMeasurement {
-                input_tokens: 400,
-                source: TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: occupancy.input_tokens,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc::now(),
-            occupancy: Some(occupancy.clone()),
-        })
-        .unwrap()
-        .2
+    let _ = predecessor;
+    let history = store.projected_history().unwrap();
+    let candidate = crate::scripted_suites::support::context::checkpoint_fixture(
+        store,
+        summary,
+        history.messages.len(),
+        "native summary",
+    );
+    let mut input =
+        crate::scripted_suites::support::context::checkpoint_commit_fixture(store, candidate, None);
+    input.tokens_before = TokenMeasurement {
+        input_tokens: 400,
+        source: TokenMeasurementSource::Estimated,
+    };
+    input.estimated_tokens_after = occupancy.input_tokens;
+    input.occupancy = Some(occupancy.clone());
+    store.commit_projection(input).unwrap().completed
 }
 
 fn occupancy_origin_native(
@@ -145,7 +146,7 @@ fn t08_t12_t14_t19_compaction_occupancy_model_keeps_its_original_journal_origin(
     store
         .initialize(&[user_message("origin-input", "native")])
         .unwrap();
-    let original = occupancy_origin_native(&"\u{feff}🙂水original".repeat(90_000), 200);
+    let original = occupancy_origin_native(&"\u{feff}🙂水original".repeat(20_000), 200);
     let first = occupancy_origin_compact(&store, "origin-input", "origin-summary-one", &original);
     let first_cut = occupancy_origin_cut(&store);
     let first_reading = store
@@ -161,7 +162,7 @@ fn t08_t12_t14_t19_compaction_occupancy_model_keeps_its_original_journal_origin(
         domain,
         format!("context.occupancy.{}.model", first.sequence)
     );
-    let replacement = occupancy_origin_native(&"\u{feff}水🙂replacement".repeat(90_000), 300);
+    let replacement = occupancy_origin_native(&"\u{feff}水🙂replacement".repeat(20_000), 300);
     let second = occupancy_origin_compact(
         &store,
         "origin-summary-one",
@@ -360,16 +361,12 @@ fn t10_t14_t19_compaction_capture_fault_preserves_original_canonical_and_journal
         "capture-fault-summary",
         &occupancy_origin_native("native-model", 200),
     );
-    assert_eq!(store.load_head().unwrap().revision, before.next());
+    assert_eq!(store.load_head().unwrap().revision, before);
     assert_eq!(
-        store
-            .load_messages(&[MessageId::new("capture-fault-summary")])
-            .unwrap(),
-        vec![MessageBlock::User(summary_message(
-            "capture-fault-summary",
-            "native summary"
-        ))]
+        store.load_canonical().unwrap(),
+        vec![user_message("capture-fault-input", "original")]
     );
+    assert!(store.projection_head().unwrap().is_some());
     let retained = store.read_events(Some(event.sequence - 1), 1).unwrap();
     assert_eq!(retained.events[0].event, event.event);
     let witness = store
@@ -396,16 +393,12 @@ fn t10_t14_t19_compaction_witness_write_fault_preserves_original_native_transact
         "witness-fault-summary",
         &occupancy_origin_native("native-model", 200),
     );
-    assert_eq!(store.load_head().unwrap().revision, before.next());
+    assert_eq!(store.load_head().unwrap().revision, before);
     assert_eq!(
-        store
-            .load_messages(&[MessageId::new("witness-fault-summary")])
-            .unwrap(),
-        vec![MessageBlock::User(summary_message(
-            "witness-fault-summary",
-            "native summary"
-        ))]
+        store.load_canonical().unwrap(),
+        vec![user_message("witness-fault-input", "original")]
     );
+    assert!(store.projection_head().unwrap().is_some());
     let retained = store.read_events(Some(event.sequence - 1), 1).unwrap();
     assert_eq!(retained.events[0].event, event.event);
     assert!(

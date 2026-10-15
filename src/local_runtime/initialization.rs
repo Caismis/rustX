@@ -339,7 +339,7 @@ mod tests {
                 .exists()
         );
         assert!(!launch.workspace.join("rustx.toml").exists());
-        product.runtime().shutdown().await.unwrap();
+        product.shutdown().await.unwrap();
     }
 
     #[test]

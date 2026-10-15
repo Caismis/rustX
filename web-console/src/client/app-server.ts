@@ -6,7 +6,7 @@ import { materializeFields } from '../../../protocol/app-server/field-observatio
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 import { domainValue, type DomainReader } from '../../../protocol/app-server/domain-observation';
 import { materializeSettings } from '../../../protocol/app-server/settings-observation';
-import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
+import { ObservationChain, validateObservationCut, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
 import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
 import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
@@ -21,10 +21,10 @@ import type {
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot, RuntimeClientEvent,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
   ConfigRepairReceipt, SourceTarget,
-} from '../../../protocol/app-server/v48';
+} from '../../../protocol/app-server/v50';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
 import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
-import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v48';
+import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v50';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 
@@ -77,16 +77,16 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
   snapshot?: RuntimeClientSnapshot;
-  checkpoint?: import('../../../protocol/app-server/v48').RuntimeClientCheckpoint;
+  checkpoint?: import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;
   observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
-  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v48').CheckpointReadCut;body:import('../../../protocol/app-server/v48').RoutedInteraction};
-  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v48').CheckpointPage;rows:import('../../../protocol/app-server/v48').RuntimeClientInteractionHeader[];offset:number};
+  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v50').CheckpointReadCut;body:import('../../../protocol/app-server/v50').RoutedInteraction};
+  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v50').CheckpointPage;rows:import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader[];offset:number};
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v48').CheckpointReadCut; statistics: import('../../../protocol/app-server/v48').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v48').RuntimeClientContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v50').CheckpointReadCut; statistics: import('../../../protocol/app-server/v50').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v50').RuntimeClientContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -96,7 +96,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v48').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v50').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -296,6 +296,7 @@ function goalRefusal(error: unknown) {
   return error.message;
 }
 const READS = new Set<Request1['method']>([
+  'session/projections', 'session/projectionDetail',
   'session/traceLocateTool', 'agent/traceLocateTool', 'agent/trace', 'agent/traceDetail',
   'configuration/sourceValueRead', 'configuration/sourcePage', 'session/attachmentStatus', 'session/editorRead', 'conversation/contentRead', 'conversation/checkpointPage', 'conversation/checkpointValueRead', 'agent/observeCancel', 'agent/observe', 'agent/artifactRead', 'agent/deliveryRead', 'agent/deliveryLocate', 'session/turns', 'session/uploadStatus',
   'delivery/read','delivery/locate','mcp/probe','server/diagnostics',
@@ -380,7 +381,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v48').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -538,7 +539,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v48').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v50').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -563,8 +564,9 @@ export class AppServerClient {
           if(!sameTarget(receipt.target,result.target)||!chain.acceptReceipt(receipt.registration_id,receipt.after_cursor))throw new Error('Subscription recovery required.');
         } catch(error) {
           if(!current())return;
-          chain.requireRecovery();
-          this.setSession(id,{observationState:'resyncRequired'});
+          if (error instanceof RpcFailure && error.error.data?.kind === 'observation_unavailable' || chain.phase === 'unavailable') {
+            chain.markUnavailable(); this.setSession(id, {observationState:'unavailable'});
+          } else { chain.requireRecovery(); this.setSession(id,{observationState:'resyncRequired'}); }
           if(error instanceof RpcFailure&&error.error.data?.kind==='resync_required'){
             this.resubscribe.add(id);await this.refresh(id);return;
           }
@@ -658,7 +660,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v48', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v50', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -676,12 +678,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 48, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 50, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 48 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v48 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 50 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v50 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -1128,7 +1130,7 @@ export class AppServerClient {
       if (value.params.catalog_changed) this.invalidateCatalog(generation);
       return;
     }
-    if (!['session/event', 'session/resyncRequired', 'session/closed'].includes(value.method) || !value.params?.target) {
+    if (!['session/event', 'session/resyncRequired', 'session/observationUnavailable', 'session/closed'].includes(value.method) || !value.params?.target) {
       this.lose(generation); return;
     }
     const target = value.params.target;
@@ -1144,6 +1146,17 @@ export class AppServerClient {
       const { proof } = observation;
       const chain = this.observationChains.get(target.session_id);
       if (!chain) return;
+      if (value.method === 'session/observationUnavailable') {
+        const result = chain.deliver({ registrationId: value.params.registration_id, unavailable: true },
+          (event, cursor) => this.applyObservation(target.session_id, target, event, cursor));
+        if (result === 'unavailable' && observation.current() && this.observationChains.get(target.session_id) === chain) {
+          this.invalidateReading(target.session_id); this.retireOutline(target.session_id);
+          this.resubscribe.delete(target.session_id); this.dirty.delete(target.session_id);
+          this.setSession(target.session_id, { observationState: 'unavailable', error: value.params.message.slice(0, 512) });
+          this.lifecycles.event(target.session_id, { type: 'OBSERVATION', proof, status: 'stale', error: value.params.message.slice(0, 512) });
+        }
+        return;
+      }
       const repairResync=value.method==='session/resyncRequired'&&chain.phase==='resyncRequired'&&chain.registrationId===value.params.registration_id;
       const result = chain.deliver(value.method === 'session/resyncRequired'
         ? { registrationId: value.params.registration_id, resync: true }
@@ -1198,9 +1211,9 @@ export class AppServerClient {
   }
   async modelRead(target: AttachmentTarget, current: () => boolean) {
     const {page}=await this.request({method:'session/model',params:{target}},'domain_page',undefined,current);
-    return domainValue<import('../../../protocol/app-server/v48').SessionModelView>(page,this.domainReader(target,current));
+    return domainValue<import('../../../protocol/app-server/v50').SessionModelView>(page,this.domainReader(target,current));
   }
-  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v48').CheckpointPage) {
+  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v50').CheckpointPage) {
     const reader=this.domainReader(target,current);
     const page=previous?.next_offset!=null ? await reader.page(previous,Number(previous.next_offset)) : (await this.request({method:'session/models',params:{target}},'domain_page',undefined,current)).page;
     if (!current() || page.items.length > 32) throw new Error('Model catalog observation was replaced or exceeded its bound.');
@@ -1208,7 +1221,7 @@ export class AppServerClient {
     // and profile collections remain explicitly readable through their page;
     // opening this menu never downloads every growing catalog row.
     const models = page.items.flatMap(item => {
-      const row = item.value as import('../../../protocol/app-server/v48').CatalogModelView | null;
+      const row = item.value as import('../../../protocol/app-server/v50').CatalogModelView | null;
       return row && typeof row.model === 'string' && row.model.length <= 256
         && (row.profiles?.length ?? 0) <= 32
         && (row.profiles ?? []).every(profile => typeof profile.id === 'string' && profile.id.length <= 256)
@@ -1216,15 +1229,15 @@ export class AppServerClient {
     });
     return {catalog:{models},page};
   }
-  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v48').SourceSettings, current: () => boolean, offset = 0) {
+  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v50').SourceSettings, current: () => boolean, offset = 0) {
     const cut = sourceObservation(source);
     if (!cut || !current()) throw new Error('Model source observation is unavailable.');
     const {page} = await this.request({method:'configuration/sourcePage',params:{target:cut.target,revision:cut.revision,field:'session_models',offset,limit:32}},'source_page',undefined,current);
     if (page.revision !== cut.revision || page.field !== 'session_models' || page.items.length > 32) throw new Error('Model source page cut changed.');
-    const models: import('../../../protocol/app-server/v48').CatalogModelView[] = [];
+    const models: import('../../../protocol/app-server/v50').CatalogModelView[] = [];
     for (const [index,item] of page.items.entries()) {
       if (Number(item.index) !== offset + index || !current()) throw new Error('Model source page failed to advance.');
-      const value = await materializeFields<{model:import('../../../protocol/app-server/v48').CatalogModelView},import('../../../protocol/app-server/v48').SourceFieldRef>(
+      const value = await materializeFields<{model:import('../../../protocol/app-server/v50').CatalogModelView},import('../../../protocol/app-server/v50').SourceFieldRef>(
         {revision:cut.revision,fields:[{name:'model',value:item.value,reference:item.reference}]},
         async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target:cut.target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current);
       models.push(value.model);
@@ -1236,7 +1249,7 @@ export class AppServerClient {
     const {projection}=await this.request({method:'session/effectiveConfiguration',params:{target}},'effective_configuration',undefined,current);
     return materializeEffective(projection,async(reference,offset)=>(await this.request({method:'session/effectiveConfigurationValueRead',params:{target,reference,offset,max_bytes:65536}},'configuration_value_chunk',undefined,current)).chunk,current);
   }
-  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v48').BoundedSessionApplication>();
+  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v50').BoundedSessionApplication>();
   private readonly configurationReads=new Map<string,Promise<void>>();
   private readonly configurationWeights=new Map<string,number>();
   private retainConfiguration(application:ConfigurationApplication) {
@@ -1259,14 +1272,14 @@ export class AppServerClient {
     this.publish({configuration,configurationObservation:diagnostics});
   }
 
-  private loadApplication(cut:import('../../../protocol/app-server/v48').BoundedSessionApplication,generation:number) {
+  private loadApplication(cut:import('../../../protocol/app-server/v50').BoundedSessionApplication,generation:number) {
     if(this.configurationReads.has(cut.scope))return;
     const current=()=>this.current(generation)&&this.configurationCuts.get(cut.scope)===cut;
     const load=async()=>{
       if(this.state.views[cut.scope])return materializeApplication(cut,async(reference,offset)=>(await this.request({method:'session/configurationValueRead',params:{session_id:cut.scope,reference,offset,max_bytes:65536}},'session_application_value_chunk',undefined,current)).chunk,current);
       const target=cut.sources[0];if(!target)throw new Error('Configuration source is unavailable.');
       const {projection}=await this.request({method:'configuration/sourcesRead',params:{target}},'source_settings',undefined,current);
-      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v48').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
+      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v50').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
       if(application?.version!==cut.version||application.scope!==cut.scope)throw new Error('Configuration source cut changed.');return application;
     };
     this.publish({configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'loading'}}});
@@ -1285,7 +1298,7 @@ export class AppServerClient {
     const settings = await materializeSettings(projection, async(reference,offset)=>(await this.request({method:'session/settingsValueRead',params:{session_id:id,reference,offset,max_bytes:65_536}},'settings_value_chunk',undefined,current)).chunk, current);
     return {revision:projection.revision,settings};
   }
-  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v48').ContentRef, offset: number, current: () => boolean) {
+  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v50').ContentRef, offset: number, current: () => boolean) {
     return (await this.request({ method: 'conversation/contentRead', params: { target, agent_id: agentId ?? null, content_ref, offset, max_bytes: 65_536 } }, 'content_chunk', undefined, current)).chunk;
   }
   private listEpoch = 0;
@@ -1649,7 +1662,14 @@ export class AppServerClient {
         }
       }
     } catch (error) {
-      if (current()) { this.acquiring.delete(id); this.resubscribe.add(id); this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'stale', error: String(error) }); }
+      if (current()) {
+        this.acquiring.delete(id);
+        const chain = this.observationChains.get(id);
+        if (error instanceof RpcFailure && error.error.data?.kind === 'observation_unavailable' || chain?.phase === 'unavailable') {
+          chain?.markUnavailable(); this.resubscribe.delete(id); this.dirty.delete(id); this.setSession(id, {observationState:'unavailable'});
+        } else this.resubscribe.add(id);
+        this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'stale', error: String(error) });
+      }
       throw error;
     }
   }
@@ -1661,7 +1681,7 @@ export class AppServerClient {
     if(existing&&scope?.generation===this.state.generation&&sameTarget(scope.target,target))return existing;
     const generation=this.state.generation;
     const current=()=>generation===this.state.generation&&sameTarget(this.lifecycles.observe(target.session_id)?.target,target);
-    const valid=(cut:import('../../../protocol/app-server/v48').CheckpointReadCut,owns:()=>boolean)=>{
+    const valid=(cut:import('../../../protocol/app-server/v50').CheckpointReadCut,owns:()=>boolean)=>{
       if(!current()||!owns()||cut.conversation_id!==target.conversation_id||cut.activation_id!=null)throw new Error('Trace field source was replaced.');
     };
     const reader:TraceFieldReader={
@@ -1673,7 +1693,7 @@ export class AppServerClient {
     return reader;
   }
   private coldTraceFields(id:string,node:string|null|undefined,conversation:string,current:()=>boolean):TraceFieldReader {
-    const valid=(cut:import('../../../protocol/app-server/v48').CheckpointReadCut,owns:()=>boolean)=>{
+    const valid=(cut:import('../../../protocol/app-server/v50').CheckpointReadCut,owns:()=>boolean)=>{
       if(!current()||!owns()||cut.conversation_id!==conversation||cut.activation_id!=null)throw new Error('Historical Trace field source was replaced.');
     };
     return {
@@ -2026,7 +2046,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v48').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v50').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
@@ -2085,6 +2105,21 @@ export class AppServerClient {
       if (operations[key].sessionId === id && !pending.has(key)) delete operations[key];
     }
     this.publish({ uncertain: this.state.uncertain.filter(item => !resolved.includes(item)), interactionOperations: operations });
+  }
+  async projections(id: string, after = '0') {
+    const observation = this.lifecycles.observe(id);
+    if (!observation) throw new Error('Session is not attached.');
+    return (await this.request({ method: 'session/projections', params: { target: observation.target, after, limit: 16 } }, 'projections', undefined, () => observation.current())).page;
+  }
+  private readonly projectionReaders = new WeakMap<import('../../../protocol/app-server/v50').ProjectionDetail, TraceFieldReader>();
+  projectionDetailReader(detail: import('../../../protocol/app-server/v50').ProjectionDetail) { return this.projectionReaders.get(detail); }
+  async projectionDetail(id: string, checkpointId: string, offset = 0) {
+    const observation = this.lifecycles.observe(id);
+    if (!observation) throw new Error('Session is not attached.');
+    const detail = (await this.request({ method: 'session/projectionDetail', params: { target: observation.target, checkpoint_id: checkpointId, offset, limit: 16 } }, 'projection_detail', undefined, () => observation.current())).detail;
+    validateObservationCut(detail.read_cut, observation.target.conversation_id, null, detail.read_cut.revision);
+    this.projectionReaders.set(detail, this.liveTraceFields(observation.target));
+    return detail;
   }
   target(id: string) {
     return this.lifecycles.target(id);
@@ -2268,10 +2303,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v48').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v50').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v48').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v50').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -2308,7 +2343,7 @@ export class AppServerClient {
     return work;
   }
   /** Native catalog defaults at the exact generation whose ordinals were read. */
-  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v48').CatalogModelSelection,owned:()=>boolean=()=>true) {
+  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v50').CatalogModelSelection,owned:()=>boolean=()=>true) {
     const target=this.target(id),generation=this.state.generation;
     if(this.state.views[id].modelMutation)throw new Error('Reread native model state before another mutation.');
     const current=()=>owned()&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target);
@@ -2325,7 +2360,7 @@ export class AppServerClient {
 
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v48').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v50').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -2428,7 +2463,7 @@ export class AppServerClient {
     if(loaded&&sameTarget(view.target,loaded.target)&&this.interactionCutCurrent(view,loaded.page.read_cut))return loaded.rows;
     return view?.snapshot?.pending_interactions??[];
   }
-  interactionBody(id:string,header:import('../../../protocol/app-server/v48').RuntimeClientInteractionHeader) {
+  interactionBody(id:string,header:import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader) {
     const view=this.state.views[id],detail=view?.interactionDetail;
     if(detail&&sameTarget(view.target,detail.target)&&this.interactionCutCurrent(view,detail.cut)&&interactionKey(detail.body.interaction)===interactionKey(header.interaction))return detail.body;
     return interactionBody(header);
@@ -2462,7 +2497,7 @@ export class AppServerClient {
     if(bytes.length>65536||!Number.isSafeInteger(chunk.readable_end)||offset+bytes.length>chunk.readable_end||offset<chunk.readable_end&&!bytes.length||(chunk.next_offset??null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null))throw new Error('Interaction range failed to advance exactly.');
     return {bytes,next:chunk.next_offset??undefined,readableEnd:chunk.readable_end};
   }
-  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v48').CheckpointReadCut) {
+  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v50').CheckpointReadCut) {
     const current=view.checkpoint?.read_cut;
     return !!current&&current.conversation_id===cut.conversation_id&&current.activation_id===cut.activation_id
       &&(cut.domain_revisions.pending_interactions!==undefined
@@ -2475,7 +2510,7 @@ export class AppServerClient {
     const current=()=>observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut);
     const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:32}},'checkpoint_page',undefined,current);
     if(page.items.length>32)throw new Error('Interaction page exceeds its item bound.');
-    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v48').RuntimeClientInteractionHeader;});
+    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v50').RuntimeClientInteractionHeader;});
     if(!current())throw new Error('Interaction observation was replaced.');
     this.setSession(id,{interactionPage:{target,page,rows,offset}});
   }

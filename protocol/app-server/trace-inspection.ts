@@ -1,10 +1,10 @@
-import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v48.ts';
+import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v50.ts';
 
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const userSource=(value:unknown)=>value==='human'||value==='fleet'||value==='external_system'||value==='runtime'||object(value)&&(object(value.agent)&&typeof value.agent.agent_id==='string'||object(value.extension)&&typeof value.extension.contributor==='string');
 const coordinate=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const count=(value:unknown):value is string=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;
-const contentKinds={attempt:'lifecycle',step:'lifecycle',request:'request',assistant:'messages',user:'messages',context:'messages',tool:'tool',compaction:'messages',background:'lifecycle',subagent:'lifecycle',workflow:'lifecycle',interaction:'lifecycle'} satisfies Record<TraceKind,string>;
+const contentKinds={attempt:'lifecycle',step:'lifecycle',request:'request',assistant:'messages',user:'messages',context:'messages',tool:'tool',compaction:'lifecycle',background:'lifecycle',subagent:'lifecycle',workflow:'lifecycle',interaction:'lifecycle'} satisfies Record<TraceKind,string>;
 
 /** Decode only the complete native finite head, never a partial original TraceDetail. */
 export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceInspectionHead|undefined {

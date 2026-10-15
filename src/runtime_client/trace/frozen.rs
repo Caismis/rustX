@@ -1,31 +1,14 @@
 //! Immutable allowlisted Trace request source encoding at the native request commit.
 //! Reads later use indexed byte ranges; no observation read reconstructs the Surface.
-use super::{
-    TraceMessageRole, TraceRequestDetail, TraceRequestMessage, TraceRequestPredecessor, TraceText,
-};
+use super::{TraceRequestDetail, TraceRequestMessage, TraceRequestPredecessor, TraceText};
 use crate::model::RequestSnapshot;
 use crate::model::input::ModelInputMessage;
-pub(crate) fn canonical_message(
-    header: &crate::durable::observation::MessageHeader,
+pub(crate) fn input_message(
+    scope: &crate::runtime::identity::ConversationId,
+    message: &ModelInputMessage,
+    original: Option<&crate::model::projected::CanonicalMessageRef>,
 ) -> TraceRequestMessage {
-    let mut value = match &header.display {
-        Some(value) => {
-            super::request::request_message(&ModelInputMessage::Canonical(value.clone()))
-        }
-        None => TraceRequestMessage {
-            role: match header.role.as_str() {
-                "user" => TraceMessageRole::User,
-                "tool" => TraceMessageRole::Tool,
-                _ => TraceMessageRole::Assistant,
-            },
-            message_id: header.identity.clone(),
-            source: header.source_label.clone(),
-            blocks: Vec::new(),
-            truncated: true,
-        },
-    };
-    value.truncated |= header.deferred;
-    value
+    super::request::request_message_with_original(message, scope, original)
 }
 /// This positive allowlist is shared with Trace display semantics. Provider
 /// continuation, private configuration and nonallowlisted request options

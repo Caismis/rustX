@@ -9,39 +9,71 @@ const TABLE: &str = "state_observation_fields";
 fn key(sequence: u64) -> String {
     format!("journal/{sequence}")
 }
-fn paths() -> Vec<Vec<String>> {
-    [
-        "type",
-        "tool_call_id",
-        "tool_id",
-        "progress",
-        "error",
-        "reason",
-        "finish_reason",
-        "limit",
-        "generation",
-        "summary_message_id",
-        "surface_revision",
-        "tokens_before",
-        "estimated_tokens_after",
-        "occupancy",
-        "tools_completed",
-        "result.status",
-        "result.duration_ms",
-        "result.exit_code",
-        "result.truncation",
-        "result.managed_output",
-        "result.artifacts",
-        "result.deliveries",
-        "result.content",
-    ]
-    .into_iter()
-    .map(|path| {
-        std::iter::once("event".into())
-            .chain(path.split('.').map(str::to_owned))
-            .collect()
-    })
-    .collect()
+fn paths(selected: Option<&[&str]>) -> Vec<Vec<String>> {
+    selected
+        .unwrap_or(&[
+            "type",
+            "operation_id",
+            "tool_call_id",
+            "tool_id",
+            "progress",
+            "error",
+            "reason",
+            "finish_reason",
+            "limit",
+            "generation",
+            "checkpoint_id",
+            "activation_id",
+            "tokens_before",
+            "estimated_tokens_after",
+            "occupancy",
+            "tools_completed",
+            "result.status",
+            "result.duration_ms",
+            "result.exit_code",
+            "result.truncation",
+            "result.managed_output",
+            "result.artifacts",
+            "result.deliveries",
+            "result.content",
+        ])
+        .iter()
+        .map(|path| {
+            std::iter::once("event".into())
+                .chain(path.split('.').map(str::to_owned))
+                .collect()
+        })
+        .collect()
+}
+// Only these closed native variants can use the smaller field family.
+// Other variants retain the complete existing allowlist and root-page path.
+fn selected_paths(event: &crate::events::types::RuntimeEvent) -> Option<&'static [&'static str]> {
+    use crate::events::types::RuntimeEvent as Event;
+    match event {
+        Event::AttemptStarted { .. }
+        | Event::AttemptTimedOut { .. }
+        | Event::TurnStarted
+        | Event::TurnCompleted
+        | Event::ModelRequestStarted { .. }
+        | Event::ContextContributionEmitted { .. }
+        | Event::InboundTurnAdopted { .. }
+        | Event::AssistantMessageCommitted { .. }
+        | Event::ModelRetryScheduled { .. } => Some(&["type"]),
+        Event::AttemptCompleted { .. } => Some(&["type", "finish_reason"]),
+        Event::ModelRequestCompleted { .. } => Some(&["type", "finish_reason", "generation"]),
+        Event::ModelRequestFailed { .. } => Some(&["type", "error", "generation"]),
+        Event::AttemptFailed { .. } => Some(&["type", "error"]),
+        Event::ToolExecutionProgress { .. } => {
+            Some(&["type", "tool_call_id", "tool_id", "progress"])
+        }
+        _ => None,
+    }
+}
+#[cfg(test)]
+thread_local! {static PREVIEW_WORK:std::cell::Cell<(usize,usize)>=const{std::cell::Cell::new((0,0))};}
+#[cfg(test)]
+pub(super) fn take_preview_work() -> (usize, usize) {
+    PREVIEW_WORK.with(|work| work.replace((0, 0)))
 }
 fn insert(
     value: &mut serde_json::Map<String, serde_json::Value>,
@@ -219,7 +251,7 @@ fn terminal_fields(
         Event::ToolExecutionCompleted { result, .. } => {
             value["result"] = serde_json::json!({"status":tool_status(&result.status),"duration_ms":result.duration_ms.to_string(),"exit_code":result.exit_code,"truncation":crate::runtime_client::checkpoint::structural_value(&result.truncation),"content":[],"artifacts":[],"deliveries":[]});
         }
-        Event::ToolExecutionFailed { error, .. } | Event::CompactionFailed { error } => {
+        Event::ToolExecutionFailed { error, .. } | Event::CompactionFailed { error, .. } => {
             value["error"] = serde_json::json!(prefix(error));
         }
         Event::WorkflowFailed {
@@ -246,14 +278,16 @@ fn terminal_fields(
         }
         Event::CompactionCompleted {
             generation,
-            surface_revision,
+            checkpoint_id,
+            activation_id,
             tokens_before,
             estimated_tokens_after,
             occupancy,
             ..
         } => {
             value["generation"] = serde_json::json!(generation.to_string());
-            value["surface_revision"] = serde_json::json!(surface_revision.get().to_string());
+            value["checkpoint_id"] = serde_json::json!(checkpoint_id);
+            value["activation_id"] = serde_json::json!(activation_id.0.to_string());
             value["tokens_before"] =
                 crate::runtime_client::checkpoint::structural_value(tokens_before)
                     .unwrap_or(serde_json::Value::Null);
@@ -350,32 +384,30 @@ pub(super) fn index(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
 ) -> Result<bool, ConversationStoreError> {
+    index_with_paths(connection, event, selected_paths(&event.event))
+}
+#[cfg(test)]
+pub(super) fn index_legacy(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<bool, ConversationStoreError> {
+    index_with_paths(connection, event, None)
+}
+fn index_with_paths(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    selected: Option<&[&str]>,
+) -> Result<bool, ConversationStoreError> {
     let id = key(event.sequence);
     super::observation_request::index_state(connection, KIND, &id, event)?;
     let mut value = serde_json::Map::new();
     let mut fields = Vec::new();
-    let root =
-        super::observation_request::page_from(connection, TABLE, &id, &["event".into()], 0, 32)?;
-    for field in root.fields {
-        let Some(key) = field.key.as_ref().map(|key| key.preview.as_str()) else {
-            continue;
-        };
-        let (preview, trimmed) = semantic_preview(field.value);
-        if field.deferred || trimmed {
-            fields.push(ObservationEventField {
-                path: field.path.clone(),
-                encoded_bytes: field.encoded_bytes,
-                children: field.children_total,
-            });
-        }
-        if matches!(key, "tool_call_id" | "tool_id" | "summary_message_id")
-            && (field.deferred || trimmed)
-        {
-            continue;
-        }
-        value.insert(key.into(), preview);
+    // Fixed short keys have no generated key_header; the old root loop
+    // contributes nothing for the selected closed native families.
+    if selected.is_none() {
+        indexed_root_previews(connection, &id, &mut value, &mut fields)?;
     }
-    indexed_field_previews(connection, &id, &mut value, &mut fields)?;
+    indexed_field_previews(connection, &id, &mut value, &mut fields, selected)?;
     let event_kind = value
         .get("type")
         .and_then(serde_json::Value::as_str)
@@ -631,13 +663,54 @@ fn identity_fields(
     Ok(())
 }
 
-fn indexed_field_previews(
+fn indexed_root_previews(
     connection: &Connection,
     id: &str,
     value: &mut serde_json::Map<String, serde_json::Value>,
     fields: &mut Vec<ObservationEventField>,
 ) -> Result<(), ConversationStoreError> {
-    for path in paths() {
+    #[cfg(test)]
+    PREVIEW_WORK.with(|work| {
+        let (calls, pages) = work.get();
+        work.set((calls, pages + 1));
+    });
+    let root =
+        super::observation_request::page_from(connection, TABLE, id, &["event".into()], 0, 32)?;
+    for field in root.fields {
+        let Some(key) = field.key.as_ref().map(|key| key.preview.as_str()) else {
+            continue;
+        };
+        let (preview, trimmed) = semantic_preview(field.value);
+        if field.deferred || trimmed {
+            fields.push(ObservationEventField {
+                path: field.path.clone(),
+                encoded_bytes: field.encoded_bytes,
+                children: field.children_total,
+            });
+        }
+        if matches!(key, "tool_call_id" | "tool_id" | "checkpoint_id")
+            && (field.deferred || trimmed)
+        {
+            continue;
+        }
+        value.insert(key.into(), preview);
+    }
+    Ok(())
+}
+
+fn indexed_field_previews(
+    connection: &Connection,
+    id: &str,
+    value: &mut serde_json::Map<String, serde_json::Value>,
+    fields: &mut Vec<ObservationEventField>,
+    selected: Option<&[&str]>,
+) -> Result<(), ConversationStoreError> {
+    for path in paths(selected) {
+        #[cfg(test)]
+        PREVIEW_WORK.with(|work| {
+            let (calls, pages) = work.get();
+            work.set((calls + 1, pages));
+        });
         let Ok((start, end, children, bytes)) =
             super::observation_request::field_from(connection, TABLE, id, &path)
         else {
@@ -656,10 +729,7 @@ fn indexed_field_previews(
             });
         }
         if path.last().is_some_and(|field| {
-            matches!(
-                field.as_str(),
-                "tool_call_id" | "tool_id" | "summary_message_id"
-            )
+            matches!(field.as_str(), "tool_call_id" | "tool_id" | "checkpoint_id")
         }) && (!exact || decoded.as_str().is_some_and(|id| id.len() > 256))
         {
             continue;

@@ -1569,7 +1569,7 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
         .await
         .unwrap();
     assert!(!format!("{launch:?}").contains("CFG233_PROVIDER_SENTINEL"));
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
     drop(product);
     assert!(
         compose_admitted_with_controller(&f.resolve(), &controller)
@@ -1626,7 +1626,7 @@ async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
                 .filter(|(id, _)| matches!(id, ToolSourceId::ManagedPython(_)))
                 .all(|(_, state)| *state == CapabilitySourceState::Unprepared)
         );
-        product.runtime().shutdown().await.unwrap();
+        product.shutdown().await.unwrap();
     }
 }
 
@@ -1656,7 +1656,7 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
             .any(|entry| entry.unwrap().path().join("python-tools").exists())
     );
     assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 
     assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
 }
@@ -1943,7 +1943,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     assert_eq!(launch.config.agent_id.as_str(), "rustx");
     assert!(launch.config.mcp_servers.is_empty());
     assert_eq!(launch.config.agent.skills, None);
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
     assert!(
         resolve(&f.request, &f.host).is_err(),
         "a new launch sees the edit"
@@ -1955,7 +1955,7 @@ async fn resolution_and_composition_failures_preserve_published_session_selectio
     let f = Fixture::new();
     let launch = f.resolve();
     let product = compose_admitted(&launch).await.unwrap();
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
     drop(product);
     let catalog = launch.runtime_root.join("sessions/catalog.json");
     let before = std::fs::read(&catalog).unwrap();
@@ -2181,7 +2181,7 @@ async fn selected_workspace_guidance_cannot_escape_its_resource_root() {
             .instructions(),
         "User instructions"
     );
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 /// CFG3 binds exactly the captured User home and Workspace Skill roots;
@@ -2230,7 +2230,7 @@ async fn cfg3_launch_freezes_two_skill_roots_with_whole_workspace_shadowing() {
         resources.root_profile().unwrap().skills,
         ["shared", "user-only"]
     );
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 #[cfg(unix)]
@@ -2883,7 +2883,7 @@ mod session_resolution {
             .files
             .clone();
         drop(resources_a);
-        product_a.runtime().shutdown().await.unwrap();
+        product_a.shutdown().await.unwrap();
         drop(product_a);
         let inspection_b = b.inspection.clone();
         let admitted_b = b.admit(|| f.credentials.clone()).unwrap();
@@ -3010,4 +3010,64 @@ fn offline_inspection_of_missing_and_valid_sources_is_read_only() {
         assert_eq!(tree(f.root.path()), before, "valid={valid}");
         assert_eq!(f.host.config_directory.exists(), valid);
     }
+}
+
+/// The cancellation point is the actual blocking Store read; the release gate
+/// proves that semantic settlement and logical read cancellation cannot stand
+/// in for joining the composition's physical worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn composition_shutdown_retry_joins_physical_read_before_immediate_recomposition() {
+    let fixture = Fixture::new();
+    let launch = fixture.resolve();
+    let dependencies = LocalRuntimeDependencies::default();
+    let product = LocalConversationRuntime::compose(&launch, &dependencies)
+        .await
+        .expect("original composition");
+    product.host().projection_settled().await;
+    let weak_host = product.host().weak_inner();
+    let weak_runtime = product.host().weak_runtime_inner();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    product
+        .host()
+        .gate_projection_read_for_test(entered_tx, cancelled_tx, release_rx);
+    entered_rx.await.expect("physical source read entered");
+
+    let mut first_shutdown = Box::pin(product.shutdown());
+    tokio::select! {
+        result = &mut first_shutdown => panic!("shutdown escaped a retained physical read: {result:?}"),
+        result = cancelled_rx => result.expect("shutdown logically cancels the read"),
+    }
+    assert!(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root).is_err()
+    );
+    drop(first_shutdown);
+    // Dropping this waiter does not consume/detach the original JoinHandle.
+    let mut retry = Box::pin(product.shutdown());
+    assert!(matches!(
+        futures_util::poll!(&mut retry),
+        std::task::Poll::Pending
+    ));
+    release_tx
+        .send(())
+        .expect("release the original physical read");
+    retry.await.expect("retry joins the original worker");
+    drop(product);
+    assert!(
+        weak_host.upgrade().is_none(),
+        "no surviving presentation owner"
+    );
+    assert!(
+        weak_runtime.upgrade().is_none(),
+        "no surviving runtime lease"
+    );
+
+    let replacement = LocalConversationRuntime::compose(&launch, &dependencies)
+        .await
+        .expect("immediate recomposition after physical shutdown and release");
+    replacement.shutdown().await.expect("replacement shutdown");
+    drop(replacement);
+    crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+        .expect("final owner released the physical filesystem lock");
 }

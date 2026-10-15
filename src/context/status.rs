@@ -1711,8 +1711,7 @@ mod tests {
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        CompactionSummaryMetadata, ContextKind, InboundKind, ToolMessageBlock, UserContentBlock,
-        UserMessageBlock, UserSource,
+        ContextKind, InboundKind, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{RequestId, ToolCallId, ToolExecutionId, ToolId};
     use crate::tools::background::BackgroundLifecycle;
@@ -1910,18 +1909,6 @@ mod tests {
                 )),
                 timestamp: None,
             }),
-        }
-    }
-
-    fn compaction_summary(id: &str, text: &str) -> UserMessageBlock {
-        UserMessageBlock {
-            id: MessageId::new(id),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: text.to_owned(),
-            })],
-            source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-            timestamp: None,
         }
     }
 
@@ -2651,7 +2638,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One deterministic canonical status and projection eligibility scenario.
     fn compaction_retiring_visible_status_reopens_surface_eligibility() {
+        use crate::durable::ConversationStore;
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
+
         let now = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
         let time_id = MessageId::new("time-visible");
         let background_id = MessageId::new("background-visible");
@@ -2693,22 +2686,30 @@ mod tests {
             "the visible Background generation suppresses a reminder before compaction"
         );
 
-        let command = conversation
-            .prepare_compaction(
-                compaction_summary("summary-status", "retired status generations"),
-                crate::conversation::SurfaceSpan::new(time_id, background_id),
-            )
-            .expect("prepare compaction");
-        conversation
-            .commit_compaction(command)
-            .expect("commit compaction");
-
-        let after = AgentStatusSurfaceView::from_snapshot(
-            conversation
-                .freeze_active_surface()
-                .expect("freeze after compaction"),
+        let store = crate::durable::SqliteConversationStore::in_memory(
+            crate::runtime::identity::ConversationId::generate(),
         )
-        .expect("valid post-compaction Surface view");
+        .unwrap();
+        let original = conversation.ledger().audit_records().to_vec();
+        store.initialize(&original).unwrap();
+        store
+            .commit_projection(checkpoint_commit_fixture(
+                &store,
+                checkpoint_fixture(&store, "status-checkpoint", 2, "retired status generations"),
+                None,
+            ))
+            .unwrap();
+        let active = store
+            .projected_history()
+            .unwrap()
+            .messages
+            .into_iter()
+            .filter_map(|message| message.as_canonical().cloned())
+            .collect::<Vec<_>>();
+        conversation = ConversationState::from_messages(active).unwrap();
+        let after =
+            AgentStatusSurfaceView::from_snapshot(conversation.freeze_active_surface().unwrap())
+                .unwrap();
         assert!(!after.contains_status(AgentStatusModuleId::Time));
         assert!(!after.contains_status(AgentStatusModuleId::Background));
         assert!(
@@ -2739,10 +2740,9 @@ mod tests {
             "retiring the visible Time generation reopens eligibility"
         );
         assert!(
-            conversation
-                .ledger()
-                .get(&MessageId::new("time-visible"))
-                .is_some(),
+            store
+                .load_messages(&[MessageId::new("time-visible")])
+                .is_ok(),
             "compaction retires visibility but never mutates the canonical Ledger"
         );
     }

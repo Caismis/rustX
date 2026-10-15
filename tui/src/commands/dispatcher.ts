@@ -188,11 +188,11 @@ export interface DebugDiagnostics {
 const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
 
 export class CommandDispatcher {
-  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v48.ts').CheckpointReadCut}>();
-  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v48.ts').CheckpointReadCut}>();
+  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut}>();
+  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut}>();
   #inspectionView = {};
-  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v48.ts').CheckpointPage>();
-  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v48.ts').CheckpointPage>();
+  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v50.ts').CheckpointPage>();
+  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v50.ts').CheckpointPage>();
   #context: DispatcherContext;
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
@@ -200,7 +200,7 @@ export class CommandDispatcher {
   readonly #observationReads = new WeakMap<AppServerSession,object>();
   readonly #contentDecoders = new WeakMap<AppServerSession, { identity: string; end: number; extent?:number; representation?:string;view?:object; decoder: InstanceType<typeof TextDecoder> }>();
   readonly #contentCaches = new WeakMap<AppServerSession, ContentCache>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v48.ts').AvailableConfiguration>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v50.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -438,6 +438,20 @@ export class CommandDispatcher {
           return await this.#goal(session, argument);
         case "/status":
           return inspect("Agent Status", renderStatus(state));
+        case "/context": {
+          const [action = "history", value, offset] = argument.trim().split(/\s+/);
+          if (action === "history") {
+            const page = await session.projections(value ?? "0");
+            return inspect("Historical model projections", page.records.map(head => `${head.activation_id} · ${head.checkpoint_id} · base ${head.base_frontier} · activation Ledger ${head.activation_ledger} · ${head.destination_installation == null ? "local" : "inherited"} from ${head.origin.conversation_id}/${head.origin.activation}\n${head.summary_preview?.text ?? ""}`).join("\n\n") + (page.next_activation ? `\n\n/context history ${page.next_activation}` : ""));
+          }
+          if (action === "projection" && value) {
+            const view=this.#inspectionView;
+            const detail = await session.projectionDetail(value, Number(offset ?? 0),()=>view===this.#inspectionView&&this.#context.session===session);
+            if(view!==this.#inspectionView||this.#context.session!==session)return {kind:'none'};
+            return inspect("Projected messages", detail.items.map(item => `${item.occurrence.item_index + 1} · ${item.content.role} · ${item.content.provenance.type}\n${JSON.stringify(item.content.blocks, null, 2)}`).join("\n\n") + (detail.next_item == null ? "" : `\n\n/context projection ${value} ${detail.next_item}`) + "\n/content lists advertised original provenance fields at this returned cut.");
+          }
+          return usage("/context history [activation] | projection <checkpoint> [offset]");
+        }
         case "/compact":
           return await this.#compact(session, argument);
         case "/debug":
@@ -673,7 +687,7 @@ export class CommandDispatcher {
     const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
     if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v48.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v50.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
@@ -711,10 +725,10 @@ export class CommandDispatcher {
    * retarget it, and a result from a replaced App Server is never shown.
    */
   async #repairs(
-    target: import("../../../protocol/app-server/v48.ts").SourceTarget | "current" | "current workspace",
+    target: import("../../../protocol/app-server/v50.ts").SourceTarget | "current" | "current workspace",
   ): Promise<CommandOutcome> {
     const { host, session } = this.#context;
-    let workspace: import("../../../protocol/app-server/v48.ts").SourceTarget | undefined;
+    let workspace: import("../../../protocol/app-server/v50.ts").SourceTarget | undefined;
     if (typeof target === "string") {
       if (session !== undefined) {
         const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");
@@ -1431,7 +1445,7 @@ function contextDiagnosticsLines(state: PresentationState): string[] {
     return [`- context compactions: ${context.compaction_count}`];
   }
   return [
-    `- context compactions: ${context.compaction_count} (latest generation ${latest.generation}, surface revision ${latest.surface_revision})`,
+    `- context compactions: ${context.compaction_count} (latest generation ${latest.generation}, projection activation ${latest.activation_id})`,
     `- latest context measurement: ${latest.tokens_before.input_tokens} tokens before (${latest.tokens_before.source}), ${latest.estimated_tokens_after} estimated after`,
   ];
 }

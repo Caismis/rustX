@@ -49,7 +49,7 @@ use rustx::local_runtime::session_runtime_manager::{
     ManagedRuntimeClient, RuntimeManagerError, RuntimeResidencyPolicy, SessionRuntimeManager,
 };
 use rustx::message::content::TextBlock;
-use rustx::message::types::{MessageBlock, UserContentBlock, UserSource};
+use rustx::message::types::{MessageBlock, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
 use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
@@ -1355,31 +1355,16 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             "{scenario}: one compaction generation"
         );
 
-        // The runtime compaction summary is a canonical Message Ledger fact,
-        // externally visible like any other committed message — not a
-        // private context value.
         let canonical = driver.canonical_history();
-        let summary_message = canonical
-            .iter()
-            .find_map(|message| match message {
-                MessageBlock::User(user) if user.kind.is_compaction_summary() => Some(user),
-                _ => None,
-            })
-            .expect("the canonical compaction summary is committed to the ledger");
-        assert_eq!(
-            Some(&summary_message.id),
-            latest.summary_message_id.as_ref(),
-            "{scenario}: the compaction metadata names the committed summary"
-        );
-        assert!(
-            !latest.summary_message_id_deferred,
-            "{scenario}: generated summary ID is bounded"
-        );
-        assert_eq!(
-            summary_message.source,
-            UserSource::Runtime,
-            "{scenario}: the summary carries runtime provenance"
-        );
+        let head = snapshot
+            .context
+            .projection_head
+            .as_ref()
+            .expect("durable current projection");
+        assert_eq!(head.checkpoint_id, latest.checkpoint_id);
+        assert_eq!(head.activation_id, latest.activation_id);
+        assert!(head.destination_installation.is_none());
+        assert!(head.summary_preview.is_some());
         // Compaction never rewrote the ledger: the retired original is still
         // there, byte for byte.
         assert!(
@@ -1515,29 +1500,29 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             2
         );
 
-        // Both summaries are canonical ledger facts; both retired fillers
-        // remain committed ledger bytes.
-        let canonical = driver.canonical_history();
-        let summaries: Vec<_> = canonical
-            .iter()
-            .filter(|message| {
-                matches!(
-                    message,
-                    MessageBlock::User(user) if user.kind.is_compaction_summary()
-                )
-            })
-            .collect();
-        assert_eq!(
-            summaries.len(),
-            2,
-            "{scenario}: two canonical compaction summaries"
-        );
-        let ledger = serde_json::to_string(&canonical).expect("serialize the original ledger");
+        let head = snapshot
+            .context
+            .projection_head
+            .as_ref()
+            .expect("second projection");
+        assert_eq!(head.activation_id.0, 2);
+        assert_eq!(head.derived_items, 1, "one effective Derived Summary");
+        let ledger =
+            serde_json::to_string(&driver.canonical_history()).expect("serialize the ledger");
         assert!(
             ledger.contains(FILLER_ONE_MARKER) && ledger.contains(FILLER_TWO_MARKER),
             "{scenario}: the ledger retains both retired fillers verbatim"
         );
-        assert!(ledger.contains(SUMMARY_ONE_TEXT) && ledger.contains(SUMMARY_TWO_TEXT));
+        assert!(
+            !ledger.contains(SUMMARY_ONE_TEXT) && !ledger.contains(SUMMARY_TWO_TEXT),
+            "summary context is independently durable, never a canonical execution message"
+        );
+        let projections = driver
+            .store
+            .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap();
+        let projected = serde_json::to_string(&projections).unwrap();
+        assert!(projected.contains(SUMMARY_ONE_TEXT) && projected.contains(SUMMARY_TWO_TEXT));
 
         // The wire: five requests, each exactly what the scenario asserts.
         let requests = emulator.requests().await;
@@ -2185,6 +2170,270 @@ async fn image_tool_round_trip_and_text_model_switch() {
 }
 
 #[tokio::test]
+async fn cross_turn_image_projection_reconciles_native_coverage_before_frozen_retry() {
+    for (scenario, model) in [
+        (
+            "image_coverage_growth",
+            "emulator-anthropic/anthropic-model",
+        ),
+        (
+            "image_coverage_growth_responses",
+            "emulator/responses-image",
+        ),
+    ] {
+        let Some((driver, emulator)) = image_coverage_driver(scenario, model).await else {
+            return;
+        };
+        driver.submit("Read sixteen images, then one more.");
+        let outcome = driver.settle().await.1;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{scenario}: {outcome:?}"
+        );
+        let requests = emulator.requests().await;
+        assert_eq!(
+            requests.len(),
+            4,
+            "internal validation starts no extra request"
+        );
+        assert_eq!(
+            requests[2]["body"], requests[3]["body"],
+            "transient retry retains transformed input and continuation decision"
+        );
+        assert!(
+            requests[2]["body"].get("previous_response_id").is_none(),
+            "stale stored coverage was cleared"
+        );
+        // Accepted-output uniqueness belongs to the complete original Ledger,
+        // independently of the bounded checkpoint body cache.
+        let canonical = driver.canonical_history();
+        assert_eq!(
+            canonical
+                .iter()
+                .filter(|m| matches!(m, MessageBlock::Assistant(_)))
+                .count(),
+            3,
+            "transient failure commits no duplicate accepted output"
+        );
+        assert_eq!(
+            canonical
+                .iter()
+                .filter(|m| matches!(m, MessageBlock::Tool(_)))
+                .count(),
+            17
+        );
+        for m in &canonical {
+            if let MessageBlock::Tool(t) = m {
+                assert!(
+                    t.result
+                        .content
+                        .iter()
+                        .any(|b| matches!(b, rustx::tools::types::ToolResultContent::Image(_)))
+                );
+            }
+        }
+        let history = driver.request_history();
+        let snapshots = history.page(None, 32).unwrap().snapshots;
+        assert_eq!(snapshots.len(), 4);
+        assert_eq!(
+            snapshots[2].semantic_input_fingerprint,
+            snapshots[3].semantic_input_fingerprint
+        );
+        let third = history.reconstruct(&snapshots[2].identity).unwrap();
+        let fourth = history.reconstruct(&snapshots[3].identity).unwrap();
+        assert_eq!(
+            third, fourth,
+            "reconstruction never repeats image selection"
+        );
+        emulator.finish().await;
+    }
+}
+
+async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, ProviderEmulator)> {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut bytes = Vec::new();
+    png::Encoder::new(&mut bytes, 1, 1)
+        .write_header()
+        .unwrap()
+        .write_image_data(&[128])
+        .unwrap();
+    std::fs::write(workspace.join("sample.png"), &bytes).unwrap();
+    let emulator = ProviderEmulator::start_with_workspace(scenario, Some(&workspace)).await?;
+    let mut setup = Setup::new(model);
+    setup.images = true;
+    if scenario == "image_coverage_overflow_retry" {
+        setup.keep_recent_tokens = setup.context_window;
+        setup.summary_model = Some("emulator/summary-model".into());
+    }
+    let driver = Driver::start_in(root, &emulator, &setup).await;
+    Some((driver, emulator))
+}
+
+#[tokio::test]
+async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_retry() {
+    let Some((driver, emulator)) = image_coverage_driver(
+        "image_coverage_overflow_retry",
+        "emulator-anthropic/anthropic-model",
+    )
+    .await
+    else {
+        return;
+    };
+    driver.submit("Read sixteen images, then one more.");
+    let outcome = driver.settle().await.1;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(
+        requests.len(),
+        6,
+        "five actual primary requests and one summary"
+    );
+    assert_eq!(
+        requests[4]["body"], requests[5]["body"],
+        "transient retry retains the post-compaction frozen input"
+    );
+    assert!(
+        !requests[3]["body"]
+            .to_string()
+            .contains("seventeenth-image"),
+        "summary selection did not receive the retired continuation anchor"
+    );
+    // Count immutable accepted output, not the bounded checkpoint head.
+    let canonical = driver.canonical_history();
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Assistant(_)))
+            .count(),
+        3
+    );
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Tool(_)))
+            .count(),
+        17
+    );
+    let history = driver.request_history();
+    let snapshots = history.page(None, 32).unwrap().snapshots;
+    assert_eq!(
+        snapshots.len(),
+        5,
+        "summary creates no actual primary request snapshot"
+    );
+    assert!(
+        snapshots[1].continuation.is_some(),
+        "unchanged coverage remains active"
+    );
+    assert!(
+        snapshots[2..].iter().all(|s| s.continuation.is_none()),
+        "reconciliation and Summary retire continuation ownership"
+    );
+    assert_ne!(
+        snapshots[2].semantic_input_fingerprint,
+        snapshots[3].semantic_input_fingerprint
+    );
+    assert_eq!(
+        snapshots[3].semantic_input_fingerprint,
+        snapshots[4].semantic_input_fingerprint
+    );
+    assert_ne!(snapshots[3].request_id, snapshots[4].request_id);
+    assert_ne!(
+        snapshots[3].provisional_message_id,
+        snapshots[4].provisional_message_id
+    );
+    assert_eq!(
+        history.reconstruct(&snapshots[3].identity).unwrap(),
+        history.reconstruct(&snapshots[4].identity).unwrap()
+    );
+    let introduced: Vec<_> = snapshots
+        .iter()
+        .flat_map(|s| &s.request_context_ids)
+        .collect();
+    let unique: std::collections::BTreeSet<_> = introduced.iter().copied().collect();
+    assert!(
+        !unique.is_empty(),
+        "native Agent Context participates in this flow"
+    );
+    assert_eq!(introduced.len(), unique.len(), "Context is introduced once");
+    for snapshot in &snapshots {
+        let reconstructed = history.reconstruct(&snapshot.identity).unwrap();
+        for id in &unique {
+            assert!(
+                reconstructed
+                    .messages
+                    .iter()
+                    .filter(|m| m.canonical_id() == Some(*id))
+                    .count()
+                    <= 1,
+                "Context is never duplicated through Tail and staged input"
+            );
+        }
+    }
+    assert!(
+        snapshots[3..]
+            .iter()
+            .all(|s| s.request_context_ids.is_empty())
+    );
+    emulator.finish().await;
+}
+
+#[tokio::test]
+async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request_start() {
+    let Some((driver, emulator)) =
+        image_coverage_driver("image_coverage_missing_replay", "emulator/responses-image").await
+    else {
+        return;
+    };
+    driver.submit("Read sixteen images, then one more.");
+    let outcome = driver.settle().await.1;
+    let RuntimeClientOutcome::Failed { error, .. } = outcome else {
+        panic!("missing native replay must fail")
+    };
+    assert!(
+        format!("{error:?}").contains("native model input compatibility"),
+        "{error:?}"
+    );
+    assert_eq!(
+        emulator.requests().await.len(),
+        2,
+        "failed preflight dispatches no third request"
+    );
+    assert_eq!(
+        driver
+            .request_history()
+            .page(None, 32)
+            .unwrap()
+            .snapshots
+            .len(),
+        2,
+        "failed preflight commits no third request start"
+    );
+    let canonical = driver.canonical_history();
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Tool(_)))
+            .count(),
+        17
+    );
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|m| matches!(m, MessageBlock::Assistant(_)))
+            .count(),
+        2,
+        "compatibility failure invents no Assistant output"
+    );
+    emulator.finish().await;
+}
+
+#[tokio::test]
 async fn seventeen_parallel_image_reads_leave_a_valid_provider_continuation() {
     image_budget_continuation(
         "image_budget_continuation",
@@ -2366,23 +2615,26 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
     let snapshots = crate::common::request_snapshots(&history);
-    let mut reconstructed = history
+    let reconstructed = history
         .reconstruct(&snapshots.last().unwrap().identity)
         .unwrap();
     let reconstructed_json = serde_json::to_string(&reconstructed.messages).unwrap();
     assert_eq!(reconstructed_json.matches("\"type\":\"image\"").count(), 16);
     assert!(reconstructed_json.contains("Image artifact"));
     assert!(
-        reconstructed.images.is_empty(),
-        "durable request evidence stores references only"
+        !reconstructed.images.is_empty(),
+        "exact frozen request retains the selected image bytes"
     );
-    reconstructed.images = rustx::model::images::resolve(&reconstructed.messages, |id| {
-        driver
-            .artifacts()
-            .read_bounded(id)
-            .map_err(|error| error.to_string())
-    })
-    .unwrap();
+    assert_eq!(reconstructed.images, snapshots.last().unwrap().images);
+    assert!(
+        snapshots
+            .last()
+            .unwrap()
+            .input
+            .iter()
+            .any(|item| matches!(item, rustx::model::projected::FrozenModelInput::Derived(_)))
+    );
+
     let protocol = reconstructed.protocol();
     let server = crate::common::FixtureServer::start(move |_, _| match protocol {
         rustx::model::ModelProtocol::OpenAiChatCompletions => {

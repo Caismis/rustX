@@ -1,33 +1,12 @@
-//! The deterministic context engine.
+//! Deterministic compilation, token accounting and compaction planning.
 //!
-//! Since M7.5 (Issue #54) the engine plans from the **current Conversation
-//! Surface**, never from append-origin history:
-//!
-//! ```text
-//! Surface @ revision
-//!   → finite active MessageIds
-//!   → keyed Ledger hydration
-//!   → ContextProjection (finite, complete canonical messages only)
-//!   → token pressure / retention / compaction planning
-//! ```
-//!
-//! The engine owns token pressure, the soft-limit decision, the retention
-//! target, structural compaction planning, summary planning, the fit and
-//! progress checks, and the provider-neutral projection. It does **not** own
-//! Ledger mutation, Surface authority, attempt cancellation, provider
-//! continuation storage, or Runtime Client state: the engine prepares the
-//! compaction command, while the durable `ConversationStore` owns the atomic
-//! summary Ledger + Surface Replace commit and the hot state installs the
-//! already-committed result.
-//!
-//! All decisions are deterministic pure functions of (Surface revision,
-//! hydrated active messages, tool definitions, observed provider usage, and
-//! Effective System Prompt): the same inputs always produce the same
-//! projection, plan, and estimate.
-//!
-//! The engine owns no provider knowledge: the window/reserve/recent-token
-//! configuration is runtime-owned, token estimation is pluggable, and no
-//! model name catalog exists.
+//! The engine consumes bounded typed historical input: immutable Original
+//! references and identity-free Derived messages selected by the durable
+//! Projection Head, followed by eligible canonical Tail strictly after its base.
+//! It owns structural validation, retention, token pressure and fit/progress
+//! checks. The durable store owns checkpoint/head/receipt/completion atomicity;
+//! the Agent Loop owns current core input, cancellation and actual request starts.
+//! Provider adapters alone own native wire translation and continuation rules.
 
 use std::sync::Arc;
 
@@ -35,20 +14,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
-use crate::context::summarizer::SummaryRequest;
 use crate::context::tokens::{ProviderObservedInput, TokenEstimator};
-use crate::conversation::{
-    ConversationError, ConversationState, PreparedCompactionCommit, StructuralIndex,
-    SurfaceRevision, SurfaceSpan, summary_message_id,
-};
-use crate::message::content::TextBlock;
-use crate::message::types::{
-    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
-};
-use crate::model::input::{
-    ModelInputMessage, RequestOnlyInsertionAnchor, assemble_model_input, canonical_input,
-};
-use crate::runtime::identity::{ConversationId, MessageId};
+use crate::conversation::SurfaceRevision;
+use crate::message::types::MessageBlock;
+use crate::model::input::{ModelInputMessage, RequestOnlyInsertionAnchor, assemble_model_input};
+use crate::runtime::identity::MessageId;
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use crate::tools::types::ModelToolDefinition;
@@ -216,55 +186,6 @@ impl ContextConfig {
     }
 }
 
-/// The deterministic plan of one compaction.
-///
-/// A plan is a pure function of the current Surface state; it names the
-/// exact inclusive active span to replace and carries the complete canonical
-/// messages of that span for summarization. Applying it produces the one
-/// [`PreparedCompactionCommit`] the conversation state linearizes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompactionPlan {
-    /// The Surface revision this plan was made against. A commit against a
-    /// different revision is rejected as stale.
-    pub surface_revision: SurfaceRevision,
-    /// The inclusive active span to replace with the summary.
-    pub span: SurfaceSpan,
-    /// The complete canonical messages of the span, in Surface order.
-    pub retired: Vec<MessageBlock>,
-    /// The measured input of the pre-compaction request context, with its
-    /// provenance. Preserved for diagnostics; the anti-loop progress rule
-    /// never compares measurements of different provenance.
-    pub estimated_before: TokenMeasurement,
-    /// The deterministic estimate of the pre-compaction request context,
-    /// computed with the same estimator and Effective System Prompt used on the other
-    /// side of the progress rule.
-    pub estimated_before_tokens: u64,
-    /// The planned post-compaction estimate: retained context plus the
-    /// summary reservation.
-    pub planned_estimate_after: u64,
-    /// The summary output budget reserved during planning, a conservative
-    /// bound for the not-yet-generated summary.
-    pub summary_reservation: u64,
-    /// The exact token estimate of the assembled summary-model input,
-    /// including its instruction, serialized request, and canonical User
-    /// wrapper.
-    pub summary_input_tokens: u64,
-    /// The exact Effective System Prompt of the request preparation this
-    /// plan belongs to. It is reused after compaction and is never rebuilt by
-    /// a provider adapter.
-    pub effective_system_prompt: String,
-}
-
-impl CompactionPlan {
-    /// The summary request this plan implies.
-    #[must_use]
-    pub fn summary_request(&self) -> SummaryRequest {
-        SummaryRequest {
-            retired: self.retired.clone(),
-        }
-    }
-}
-
 /// The structural constraints one compaction plan must satisfy.
 ///
 /// The two reference constraints serve opposite purposes and are kept
@@ -283,22 +204,24 @@ pub struct CompactionConstraints<'a> {
     /// The fresh-inbound retention constraint: unobserved fresh inbound
     /// material must remain active.
     pub fresh_inbound: Option<&'a FreshInboundTurn>,
+    /// Core-owned current generation Context; an algorithm cannot summarize it away.
+    pub protected_context_ids: &'a [MessageId],
     /// The **staged, not-yet-committed** request-scoped context blocks the
     /// upcoming request will carry in addition to the post-compaction
-    /// Surface (Issue #12, M9b).
+    /// historical projection (Issue #12, M9b).
     ///
     /// Request-scoped context commits only inside the durable model-turn
     /// start transaction, so a compaction decided while such context is
-    /// staged plans over a Surface that does not contain it. Every candidate
+    /// staged plans over a historical projection that does not contain it. Every candidate
     /// is therefore evaluated against the exact hypothetical post-compaction
-    /// request — the retained Surface plus this overlay plus the Effective
+    /// request — the retained projection plus this overlay plus the Effective
     /// System Prompt plus tools — through the same [`TokenEstimator`], never
     /// as a scalar token delta: the estimator has no additive or monotonic
     /// contract, so a staged-context token reservation is not a reusable
     /// quantity across different candidate projections.
     ///
     /// The staged overlay is neither canonical nor retirable: it is not on
-    /// the Surface the plan rewrites, and it exists only for exact planning
+    /// the history the planner selects, and it exists only for exact planning
     /// of the upcoming request.
     pub staged_request_context: &'a [MessageBlock],
     /// The frozen bounded request-only carryover admitted to the upcoming
@@ -378,6 +301,8 @@ impl EstimateCorrection {
 #[derive(Clone)]
 pub struct ContextEngine {
     image_input: Option<bool>,
+    artifacts: Option<crate::tools::artifacts::ArtifactStore>,
+    media: Option<Arc<crate::model::media::MediaSnapshot>>,
     uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     config: ContextConfig,
     estimator: Arc<dyn TokenEstimator>,
@@ -390,6 +315,8 @@ impl core::fmt::Debug for ContextEngine {
             .field("config", &self.config)
             .field("uploads", &self.uploads)
             .field("image_input", &self.image_input)
+            .field("artifacts", &self.artifacts)
+            .field("media", &self.media.is_some())
             .field("estimator", &"<opaque token estimator>")
             .finish()
     }
@@ -421,6 +348,8 @@ impl ContextEngine {
             estimator,
             uploads: None,
             image_input: None,
+            artifacts: None,
+            media: None,
         })
     }
 
@@ -429,36 +358,84 @@ impl ContextEngine {
         artifacts: crate::tools::artifacts::ArtifactStore,
         enabled: bool,
     ) {
-        self.estimator = Arc::new(super::images::ImageEstimator {
-            inner: self.estimator.clone(),
-            artifacts,
-            enabled,
-        });
+        self.artifacts = Some(artifacts);
         self.image_input = Some(enabled);
+        self.media = None;
     }
 
     pub(crate) fn set_upload_resolver(
         &mut self,
         owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
     ) {
-        self.estimator = Arc::new(UploadEstimator {
-            inner: self.estimator.clone(),
-            owner: owner.clone(),
-        });
         self.uploads = Some(owner);
+        self.media = None;
     }
-    pub(crate) fn project_uploads(
-        &self,
-        messages: &mut [ModelInputMessage],
-    ) -> Result<crate::model::uploads::UploadProjection, ContextError> {
-        let projection = match &self.uploads {
-            Some(owner) => owner.resolve(messages).map_err(|e| malformed(&e))?,
-            None => crate::model::uploads::UploadProjection::default(),
-        };
-        projection.apply(messages).map_err(|e| malformed(&e))?;
-        Ok(projection)
+    pub(crate) fn clear_media(&mut self) {
+        self.media = None;
     }
 
+    /// The execution owner calls this once before historical planning, then
+    /// extends it for admitted core input. Existing resources are never reread.
+    pub(crate) async fn prepare_media(
+        &mut self,
+        historical: &[ModelInputMessage],
+        complete: &[ModelInputMessage],
+        cancellation: &crate::runtime::CancellationSignal,
+    ) -> Result<(), ContextError> {
+        tokio::task::yield_now().await;
+        let captured = crate::model::media::MediaSnapshot::capture(
+            self.media.as_deref(),
+            historical,
+            complete,
+            self.artifacts.as_ref(),
+            self.image_input,
+            self.uploads.as_deref(),
+            cancellation,
+        )
+        .map_err(|e| {
+            ContextError::new(
+                if cancellation.is_cancelled() {
+                    ContextErrorKind::Cancelled
+                } else {
+                    ContextErrorKind::MalformedHistory
+                },
+                e,
+            )
+        })?;
+        self.media = Some(Arc::new(captured));
+        tokio::task::yield_now().await;
+        crate::model::media::check_cancelled(cancellation)
+            .map_err(|e| ContextError::new(ContextErrorKind::Cancelled, e))
+    }
+
+    fn media_for(
+        &self,
+        messages: &[ModelInputMessage],
+    ) -> Result<Arc<crate::model::media::MediaSnapshot>, String> {
+        if let Some(media) = &self.media {
+            return Ok(media.clone());
+        }
+        // Read-only diagnostics outside an executing generation use the same
+        // finite capture owner; they cannot advertise a frozen search proof.
+        crate::model::media::MediaSnapshot::capture(
+            None,
+            messages,
+            messages,
+            self.artifacts.as_ref(),
+            self.image_input,
+            self.uploads.as_deref(),
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .map(Arc::new)
+    }
+    pub(crate) fn materialize_media(
+        &self,
+        messages: &mut [ModelInputMessage],
+    ) -> Result<crate::model::images::ResolvedImages, ContextError> {
+        let media = self.media_for(messages).map_err(|e| malformed(&e))?;
+        media.materialize(messages).map_err(|e| malformed(&e))?;
+        media.selected_images(messages).map_err(|e| malformed(&e))
+    }
     /// The engine configuration.
     #[must_use]
     pub fn config(&self) -> &ContextConfig {
@@ -561,7 +538,7 @@ impl ContextEngine {
             carryover_anchor,
         )
         .expect("the context engine receives a valid frozen carryover anchor");
-        self.estimator.estimate_input(
+        self.estimate_model_input(
             &messages,
             &projection.effective_system_prompt,
             tool_definitions,
@@ -579,406 +556,84 @@ impl ContextEngine {
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        self.estimator
-            .estimate_input(messages, effective_system_prompt, tool_definitions)
-    }
-
-    /// Builds the current projection of one conversation state.
-    ///
-    /// The read path is finite by construction: the Surface answers *which*
-    /// identities are active, and only those bodies are hydrated by keyed
-    /// Ledger lookup. Retired Ledger history is never iterated and never
-    /// hydrated, so the cost is a function of the active Surface alone.
-    ///
-    /// The estimated input is `ProviderReported` when an observed provider
-    /// measurement applies to exactly this request context (identical
-    /// fingerprint, including the Surface revision and the exact Effective
-    /// System Prompt), and `ProviderAnchored` when the measured context is an
-    /// ordered prefix of this one under unchanged non-conversation input —
-    /// the reported number plus a deterministic estimate of only the messages
-    /// appended since. Otherwise it is a whole-projection deterministic
-    /// estimate that includes the Effective System Prompt and tool
-    /// definitions. Estimates never become provider usage.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ContextErrorKind::MalformedHistory`] for a structurally
-    /// invalid active conversation or a dangling Surface identity.
-    pub fn build_projection(
-        &self,
-        state: &ConversationState,
-        tool_definitions: &[ModelToolDefinition],
-        observed: Option<&ProviderObservedInput>,
-        effective_system_prompt: &str,
-    ) -> Result<ContextProjection, ContextError> {
+        let Ok(media) = self.media_for(messages) else {
+            return u64::MAX;
+        };
         #[cfg(test)]
-        let _profile = crate::agent::execution::attribution::Timer::new(
-            crate::agent::execution::attribution::Phase::ContextProjection,
-        );
-        let (messages, _) = state
-            .structure()
-            .map_err(|error| conversation_failed(&error))?;
-        self.project_uploads(&mut canonical_input(&messages))?;
-        Ok(self.measured_projection(
-            state.revision(),
-            messages,
-            effective_system_prompt,
-            tool_definitions,
-            observed,
-        ))
+        crate::model::media::count_copy(messages);
+        let mut rendered = messages.to_vec();
+        if media.materialize(&mut rendered).is_err() {
+            return u64::MAX;
+        }
+        self.estimator
+            .estimate_input(&rendered, effective_system_prompt, tool_definitions)
+            .saturating_add(media.image_cost(&rendered))
     }
 
-    /// Plans one compaction of the current Surface.
-    ///
-    /// The compactable region is the complete canonical active prefix.
-    /// Canonical System authority is request-time resource state, not a
-    /// message in this sequence. Candidate spans are the inclusive prefixes
-    /// of that active prefix; every candidate must contain complete messages
-    /// only,
-    /// must never separate a tool call from its result, must satisfy the
-    /// continuation and fresh-inbound constraints, and must fit the summary
-    /// model's input limit.
-    ///
-    /// The deterministic priority is frozen:
-    ///
-    /// 1. the largest candidate whose retained recent conversation content
-    ///    still meets `keep_recent_tokens`, when the resulting request fits;
-    /// 2. otherwise the most-retaining candidate that fits the hard limit.
-    ///
-    /// The recent-token target is measured over conversation content only:
-    /// tool definitions and the Effective System Prompt never count toward satisfying
-    /// `keep_recent_tokens`, though they still affect the full request
-    /// estimate, the threshold, and the hard fit. A single oversized message
-    /// never produces a half-message Surface node: if no complete-message
-    /// span fits, planning fails with [`ContextErrorKind::CannotFit`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
-    /// invalid active conversation, [`ContextErrorKind::NoProgress`] when
-    /// nothing can be retired or the continuation constraint is
-    /// unsatisfiable, and [`ContextErrorKind::CannotFit`] when no complete
-    /// message span produces a fitting request.
-    ///
-    /// # Panics
-    ///
-    /// Panics only if the chosen span indices fall outside the Surface the
-    /// candidates were derived from, which is unreachable by construction.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one candidate enumeration and one selection rule; splitting them \
-                  would hide which budget rejected which candidate"
-    )]
-    pub fn plan_compaction(
-        &self,
-        state: &ConversationState,
-        current_projection: &ContextProjection,
-        tool_definitions: &[ModelToolDefinition],
-        budgets: CompactionBudgets,
-        constraints: &CompactionConstraints<'_>,
-    ) -> Result<CompactionPlan, ContextError> {
-        let mut soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
-        let summary_input_limit = budgets.summary_input_limit;
-        if let Some(correction) = constraints.estimate_correction {
-            // The correction constrains the request it was measured on and
-            // nothing else. It came from one rejected primary request, so
-            // it bounds the next primary request; see
-            // `CompactionBudgets::summary_input_limit` for why it never
-            // travels to the summary request, same model or not.
-            soft_limit = correction.apply(soft_limit);
+    pub(crate) fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
+        // A snapshot proves prefix-deletion stability of our concrete media
+        // transforms; it never grants a property the underlying estimator lacks.
+        if self.image_input.is_some() || self.uploads.is_some() {
+            let Some(media) = &self.media else {
+                return false;
+            };
+            #[cfg(test)]
+            crate::model::media::count_copy(messages);
+            let mut rendered = messages.to_vec();
+            if media.materialize(&mut rendered).is_err() {
+                return false;
+            }
+            self.estimator.supports_monotone_compaction(&rendered)
+        } else {
+            self.estimator.supports_monotone_compaction(messages)
         }
-        let (active, index) = state
-            .structure()
-            .map_err(|error| conversation_failed(&error))?;
-        let reservation = u64::from(budgets.summary_output_budget);
-        let (first, run_end) = compactable_run(&index)?;
-        let min_end = continuation_min_end(&index, constraints.must_cover_through, first, run_end)?;
-        let Some(max_end) = fresh_retention_max_end(&index, constraints.fresh_inbound)? else {
-            return Err(no_progress(
-                "unobserved fresh inbound material must stay active, so nothing can be retired",
-            ));
-        };
+    }
 
-        let mut candidates: Vec<Candidate> = Vec::new();
-        // The smallest summary input any span produced, kept only so a
-        // `CannotFit` failure can say *why* nothing fit instead of leaving
-        // an operator to guess between the two budgets.
-        let mut smallest_summary_input: Option<u64> = None;
-        for end in first..=run_end {
-            if end < min_end || end > max_end || index.validate_span(first, end).is_err() {
-                continue;
-            }
-            let span_messages = active[first..=end].to_vec();
-            let summary_input_tokens = self.estimate_summary_input(span_messages);
-            smallest_summary_input = Some(
-                smallest_summary_input.map_or(summary_input_tokens, |seen: u64| {
-                    seen.min(summary_input_tokens)
-                }),
-            );
-            if summary_input_tokens > summary_input_limit {
-                // The selected span would not fit the summary model's own
-                // request budget: this candidate is impossible.
-                continue;
-            }
-            let retained_recent = self
-                .estimator
-                .estimate_conversation_input(&active[end + 1..]);
-            let planned_items = retained_items(&active, first, end);
-            // The exact hypothetical post-compaction request: the retained
-            // Surface plus the non-retirable staged request-scoped context,
-            // estimated as one whole projection (never as a scalar token
-            // delta, which the pluggable estimator does not support).
-            let hypothetical = assemble_model_input(
-                &planned_items,
-                constraints.staged_request_context,
-                constraints.carryover,
-                constraints.carryover_anchor,
-            )
-            .map_err(|error| malformed(&error))?;
-            let planned = self
-                .estimator
-                .estimate_input(
-                    &hypothetical,
-                    &current_projection.effective_system_prompt,
-                    tool_definitions,
-                )
-                .saturating_add(reservation);
-            candidates.push(Candidate {
-                end,
-                retained_recent,
-                planned,
-                summary_input_tokens,
-            });
-        }
-        if candidates.is_empty() {
-            if min_end > max_end || min_end > run_end {
-                return Err(no_progress(
-                    "the compaction constraints leave no retirable surface span",
-                ));
-            }
-            return Err(cannot_fit(
-                &self.config,
-                soft_limit,
-                summary_input_limit,
-                None,
-                smallest_summary_input,
-            ));
-        }
-
-        let target = self.config.keep_recent_tokens;
-        // A candidate fits only when its exact hypothetical post-compaction
-        // request estimate (retained Surface + staged request-scoped context
-        // + summary reservation) fits the soft input limit.
-        let fits = |candidate: &&Candidate| candidate.planned <= soft_limit;
-        let chosen = candidates
+    /// Price the frozen provider-neutral request after dynamic materialization.
+    #[must_use]
+    pub fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
+        let costs: std::collections::BTreeMap<_, _> = request
+            .images
             .iter()
-            .filter(|candidate| candidate.retained_recent >= target)
-            .max_by_key(|candidate| candidate.end)
-            .filter(|candidate| candidate.planned <= soft_limit)
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .filter(fits)
-                    .min_by_key(|candidate| candidate.end)
-            })
-            .ok_or_else(|| {
-                cannot_fit(
-                    &self.config,
-                    soft_limit,
-                    summary_input_limit,
-                    candidates.iter().map(|candidate| candidate.planned).min(),
-                    smallest_summary_input,
+            .map(|(id, bytes)| {
+                (
+                    id.clone(),
+                    crate::model::images::measure_png(bytes)
+                        .ok()
+                        .map(crate::model::images::ImageMeasurement::input_tokens),
                 )
-            })?;
-
-        let span = SurfaceSpan::new(
-            index
-                .id_at(first)
-                .expect("the compactable run starts inside the surface")
-                .clone(),
-            index
-                .id_at(chosen.end)
-                .expect("the chosen span end is inside the surface")
-                .clone(),
-        );
-        Ok(CompactionPlan {
-            surface_revision: state.revision(),
-            span,
-            retired: active[first..=chosen.end].to_vec(),
-            estimated_before: current_projection.estimated_input,
-            // The deterministic estimate of the pre-compaction request
-            // context, provenance-free and including the same system prompt:
-            // the anti-loop progress rule compares this to the deterministic
-            // estimate of the post-compaction context and never mixes a
-            // provider-reported measurement with an estimate.
-            estimated_before_tokens: self.estimator.estimate_input(
-                &canonical_input(&current_projection.messages),
-                &current_projection.effective_system_prompt,
-                tool_definitions,
-            ),
-            planned_estimate_after: chosen.planned,
-            summary_reservation: reservation,
-            summary_input_tokens: chosen.summary_input_tokens,
-            effective_system_prompt: current_projection.effective_system_prompt.clone(),
-        })
+            })
+            .collect();
+        self.estimator
+            .estimate_frozen_request(request)
+            .saturating_add(crate::model::media::image_cost(&request.messages, |id| {
+                costs.get(id).copied().flatten()
+            }))
     }
 
-    /// Estimates the exact provider-neutral input assembled for one summary
-    /// request. This is the planner's view of the same
-    /// [`SummaryRequest::model_input`] contract the production summarizer
-    /// sends.
-    fn estimate_summary_input(&self, retired: Vec<MessageBlock>) -> u64 {
-        let input = SummaryRequest { retired }.model_input();
-        self.estimator.estimate_conversation_input(&input.messages)
-    }
-
-    /// Prepares the semantic commit of one compaction: the canonical summary
-    /// message, the validated Surface replacement, and the projection the
-    /// commit will establish.
-    ///
-    /// The summary message pairs the model-produced structured body with the
-    /// deterministic file half of the transition (Issue #140): typed
-    /// cumulative `CompactionSummaryMetadata` is extracted from the plan's
-    /// exact retired span — including the typed metadata of earlier
-    /// compaction summaries inside it — and rendered as the derived
-    /// `<read-files>`/`<modified-files>` sections after the body.
-    ///
-    /// Nothing is mutated here. The mandatory progress rule is enforced at
-    /// this boundary: the plan must retire at least one canonical message,
-    /// the summary must carry textual content, and the deterministic
-    /// post-compaction estimate must strictly decrease below the
-    /// deterministic pre-compaction estimate. Both sides of the comparison
-    /// come from the same estimator over the actual request context —
-    /// including the plan's exact Effective System Prompt — so the decision never
-    /// depends on incomparable token provenance.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ContextErrorKind::NoProgress`] when the plan or the summary
-    /// makes no measurable progress, [`ContextErrorKind::SummaryFailed`] for
-    /// an empty/whitespace-only summary, and
-    /// [`ContextErrorKind::MalformedHistory`] when the Surface rejects the
-    /// replacement.
-    ///
-    /// # Panics
-    ///
-    /// Panics only if the compaction generation overflows `u64`, which is
-    /// unreachable for an in-process conversation.
-    pub fn prepare_compaction(
+    /// Measure an already structurally compiled historical projection and core overlay.
+    #[must_use]
+    pub fn build_projection_input(
         &self,
-        state: &ConversationState,
-        conversation_id: &ConversationId,
-        plan: &CompactionPlan,
-        summary_text: &str,
-        tool_definitions: &[ModelToolDefinition],
-    ) -> Result<(PreparedCompactionCommit, ContextProjection), ContextError> {
-        if plan.retired.is_empty() {
-            return Err(no_progress("the plan retires no canonical message"));
-        }
-        if plan.surface_revision != state.revision() {
-            return Err(no_progress(&format!(
-                "the plan was made against surface revision {} but the current revision is {}",
-                plan.surface_revision,
-                state.revision()
-            )));
-        }
-        if summary_text.trim().is_empty() {
-            return Err(ContextError::new(
-                ContextErrorKind::SummaryFailed,
-                "summary generation produced no content",
-            ));
-        }
-        // The deterministic file half of the transition (Issue #140): the
-        // typed cumulative metadata is extracted from the exact retired
-        // canonical span — including the typed metadata of earlier
-        // compaction summaries inside it — and rendered after the
-        // model-produced structured body. The summary model's prose is never
-        // parsed for paths and never contributes to the metadata.
-        let metadata = crate::context::compaction_metadata::retired_span_metadata(&plan.retired);
-        let committed_text =
-            crate::context::compaction_metadata::render_summary_text(summary_text, &metadata);
-        let generation = state
-            .surface()
-            .compaction_generation()
-            .checked_add(1)
-            .expect("the compaction generation cannot overflow");
-        let summary = UserMessageBlock {
-            id: summary_message_id(conversation_id, generation),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: committed_text,
-            })],
-            source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary(metadata),
-            timestamp: None,
-        };
-        let commit = state
-            .prepare_compaction(summary.clone(), plan.span.clone())
-            .map_err(|error| conversation_failed(&error))?;
-        let projected_messages = Self::projected_after(state, plan, &summary)?;
-        let projection = self.measured_projection(
-            state.revision().next(),
-            projected_messages,
-            &plan.effective_system_prompt,
-            tool_definitions,
-            None,
-        );
-        let estimated_after = projection.estimated_input.input_tokens;
-        if estimated_after >= plan.estimated_before_tokens {
-            return Err(no_progress(&format!(
-                "projected estimate {} does not strictly decrease from the deterministic estimate {}",
-                estimated_after, plan.estimated_before_tokens
-            )));
-        }
-        Ok((commit, projection))
-    }
-
-    /// The active messages the commit of `plan` will establish.
-    fn projected_after(
-        state: &ConversationState,
-        plan: &CompactionPlan,
-        summary: &UserMessageBlock,
-    ) -> Result<Vec<MessageBlock>, ContextError> {
-        let (active, index) = state
-            .structure()
-            .map_err(|error| conversation_failed(&error))?;
-        let start = index
-            .position_of(&plan.span.start)
-            .ok_or_else(|| malformed("the plan's span start is not active"))?;
-        let end = index
-            .position_of(&plan.span.end)
-            .ok_or_else(|| malformed("the plan's span end is not active"))?;
-        let mut messages = active[..start].to_vec();
-        messages.push(MessageBlock::User(summary.clone()));
-        messages.extend_from_slice(&active[end + 1..]);
-        Ok(messages)
-    }
-
-    /// Wraps hydrated messages into a measured projection.
-    fn measured_projection(
-        &self,
-        surface_revision: SurfaceRevision,
-        messages: Vec<MessageBlock>,
-        effective_system_prompt: &str,
-        tool_definitions: &[ModelToolDefinition],
+        revision: SurfaceRevision,
+        messages: Vec<ModelInputMessage>,
+        tools: &[ModelToolDefinition],
         observed: Option<&ProviderObservedInput>,
+        prompt: &str,
     ) -> ContextProjection {
         let mut projection = ContextProjection {
-            surface_revision,
+            surface_revision: revision,
             messages,
-            effective_system_prompt: effective_system_prompt.to_owned(),
+            effective_system_prompt: prompt.to_owned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
             },
         };
         projection.estimated_input = observed
-            .and_then(|observed| self.reuse_measurement(observed, &projection, tool_definitions))
+            .and_then(|o| self.reuse_measurement(o, &projection, tools))
             .unwrap_or_else(|| TokenMeasurement {
-                input_tokens: self.estimator.estimate_input(
-                    &canonical_input(&projection.messages),
-                    &projection.effective_system_prompt,
-                    tool_definitions,
-                ),
+                input_tokens: self.estimate_model_input(&projection.messages, prompt, tools),
                 source: TokenMeasurementSource::Estimated,
             });
         projection
@@ -1001,24 +656,20 @@ impl ContextEngine {
     /// The anchor is refused outright — never patched with a guessed delta —
     /// when the Effective System Prompt or the tool definitions changed, or
     /// when the measured identities are not an ordered prefix of this
-    /// projection (which is precisely what a compaction Surface rewrite
-    /// destroys).
+    /// projection (which a changed checkpoint can invalidate).
     fn reuse_measurement(
         &self,
         observed: &ProviderObservedInput,
         projection: &ContextProjection,
         tool_definitions: &[ModelToolDefinition],
     ) -> Option<TokenMeasurement> {
-        let mut rendered = canonical_input(&projection.messages);
-        self.project_uploads(&mut rendered).ok()?;
-        if let Some(enabled) = self.image_input {
-            crate::model::images::project(&mut rendered, enabled);
-        }
+        let mut rendered = projection.messages.clone();
+        self.media_for(&rendered)
+            .ok()?
+            .materialize(&mut rendered)
+            .ok()?;
         let mut projected = projection.clone();
-        projected.messages = rendered
-            .iter()
-            .filter_map(|m| m.as_canonical().cloned())
-            .collect();
+        projected.messages.clone_from(&rendered);
         if observed.fingerprint == projected.fingerprint()
             || observed.fingerprint
                 == crate::context::tokens::model_input_fingerprint(
@@ -1037,9 +688,7 @@ impl ContextEngine {
             &projection.effective_system_prompt,
             tool_definitions,
         )?;
-        let appended = self
-            .estimator
-            .estimate_conversation_input(&projected.messages[covered..]);
+        let appended = self.estimate_model_input(&projected.messages[covered..], "", &[]);
         Some(TokenMeasurement {
             input_tokens: observed.input_tokens.saturating_add(appended),
             source: TokenMeasurementSource::ProviderAnchored,
@@ -1047,185 +696,6 @@ impl ContextEngine {
     }
 }
 
-/// One evaluated candidate span `[first ..= end]`.
-struct Candidate {
-    end: usize,
-    retained_recent: u64,
-    planned: u64,
-    summary_input_tokens: u64,
-}
-
-/// The full canonical active prefix, as an inclusive `(first, last)` index
-/// pair. System authority is request-time state and is never stored in this
-/// conversational sequence.
-fn compactable_run(index: &StructuralIndex) -> Result<(usize, usize), ContextError> {
-    if index.is_empty() {
-        return Err(no_progress(
-            "the active surface holds no compactable message",
-        ));
-    }
-    Ok((0, index.len() - 1))
-}
-
-/// The smallest span end the continuation constraint requires.
-///
-/// A continuation can be retired only by actually covering its owning turn
-/// completely. When the continuation-owning turn lies outside the current
-/// compactable run, the constraint is unsatisfiable and planning fails
-/// explicitly rather than clearing the continuation while leaving its
-/// message active.
-fn continuation_min_end(
-    index: &StructuralIndex,
-    must_cover_through: Option<&MessageId>,
-    first: usize,
-    run_end: usize,
-) -> Result<usize, ContextError> {
-    let Some(owner) = must_cover_through else {
-        return Ok(first);
-    };
-    let Some(owner_position) = index.position_of(owner) else {
-        return Err(malformed(&format!(
-            "continuation-owning message {owner} is not active on the surface"
-        )));
-    };
-    if !index.assistant_positions().contains(&owner_position) {
-        return Err(malformed(&format!(
-            "continuation-owning message {owner} is not an Assistant message"
-        )));
-    }
-    let turn_end = index.turn_end_of(owner_position);
-    if owner_position < first || turn_end > run_end {
-        return Err(no_progress(
-            "the continuation-owning turn lies outside the compactable region \
-             and cannot be retired by compaction",
-        ));
-    }
-    Ok(turn_end)
-}
-
-/// The largest span end the fresh-inbound retention constraint permits, or
-/// `None` when nothing at all may be retired.
-///
-/// A fresh inbound turn that has not yet been observed by a successfully
-/// completed model invocation must remain active, so the span must end
-/// strictly before the earliest fresh inbound message.
-///
-/// # Errors
-///
-/// Returns [`ContextErrorKind::MalformedHistory`] when a fresh inbound
-/// message is not active; a pending fresh trigger always references active
-/// messages.
-fn fresh_retention_max_end(
-    index: &StructuralIndex,
-    fresh_inbound: Option<&FreshInboundTurn>,
-) -> Result<Option<usize>, ContextError> {
-    let Some(fresh) = fresh_inbound else {
-        return Ok(Some(index.len().saturating_sub(1)));
-    };
-    let earliest = fresh
-        .message_ids()
-        .iter()
-        .map(|id| {
-            index.position_of(id).ok_or_else(|| {
-                malformed(&format!(
-                    "fresh inbound message {id} is not active on the surface"
-                ))
-            })
-        })
-        .collect::<Result<Vec<usize>, ContextError>>()?
-        .into_iter()
-        .min()
-        .expect("a fresh inbound turn is never empty");
-    Ok(earliest.checked_sub(1))
-}
-
-/// The retained active messages of a span `[first ..= end]` replacement,
-/// excluding the not-yet-generated summary.
-fn retained_items(active: &[MessageBlock], first: usize, end: usize) -> Vec<MessageBlock> {
-    let mut items = active[..first].to_vec();
-    items.extend_from_slice(&active[end + 1..]);
-    items
-}
-
-fn no_progress(message: &str) -> ContextError {
-    ContextError::new(ContextErrorKind::NoProgress, message)
-}
-
 fn malformed(message: &str) -> ContextError {
     ContextError::new(ContextErrorKind::MalformedHistory, message)
-}
-
-/// Projects a conversation-domain failure into the context error model.
-fn conversation_failed(error: &ConversationError) -> ContextError {
-    ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
-}
-
-/// The explicit `CannotFit` diagnostic.
-///
-/// Which of the two budgets was the binding constraint is the first thing an
-/// operator needs and the hardest thing to guess, so both effective limits
-/// and the best estimate each one rejected are named here.
-fn cannot_fit(
-    config: &ContextConfig,
-    soft_limit: u64,
-    summary_input_limit: u64,
-    best_planned: Option<u64>,
-    smallest_summary_input: Option<u64>,
-) -> ContextError {
-    let planned = best_planned.map_or_else(
-        || "no candidate span survived the summary input limit".to_owned(),
-        |planned| format!("the smallest post-compaction estimate was {planned}"),
-    );
-    let summary = smallest_summary_input.map_or_else(
-        || "no span was measurable".to_owned(),
-        |smallest| format!("the smallest summary request estimate was {smallest}"),
-    );
-    ContextError::new(
-        ContextErrorKind::CannotFit,
-        format!(
-            "no complete-message surface span fits under window {} with reserve {}: \
-             soft input limit {soft_limit} ({planned}), summary input limit \
-             {summary_input_limit} ({summary})",
-            config.context_window_tokens, config.reserve_tokens
-        ),
-    )
-}
-
-struct UploadEstimator {
-    inner: Arc<dyn TokenEstimator>,
-    owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
-}
-impl TokenEstimator for UploadEstimator {
-    fn estimate_input(
-        &self,
-        messages: &[ModelInputMessage],
-        prompt: &str,
-        tools: &[ModelToolDefinition],
-    ) -> u64 {
-        let mut rendered = messages.to_vec();
-        let Ok(projection) = self.owner.resolve(messages) else {
-            return u64::MAX;
-        };
-        if projection.apply(&mut rendered).is_err() {
-            return u64::MAX;
-        }
-        self.inner.estimate_input(&rendered, prompt, tools)
-    }
-    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
-        let mut rendered = canonical_input(messages);
-        let Ok(projection) = self.owner.resolve(&rendered) else {
-            return u64::MAX;
-        };
-        if projection.apply(&mut rendered).is_err() {
-            return u64::MAX;
-        }
-        let canonical = rendered
-            .into_iter()
-            .filter_map(|m| match m {
-                ModelInputMessage::Canonical(m) => Some(m),
-                ModelInputMessage::RequestOnly(_) => None,
-            })
-            .collect::<Vec<_>>();
-        self.inner.estimate_conversation_input(&canonical)
-    }
 }

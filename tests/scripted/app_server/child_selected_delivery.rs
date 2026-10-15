@@ -129,10 +129,12 @@ async fn selected_child_delivery_with_trace_fault() {
         None,
     )
     .unwrap();
-    let (locator, original) = giant_selected_delivery(&child, file.clone());
     let mut foreign_file = file.clone();
     foreign_file.scope.conversation_id = crate::runtime::identity::ConversationId::generate();
+    // Commit the ordinary semantic negative before the Source-only giant row.
+    // Its detached Tool event authorizer intentionally uses the bounded native Surface.
     let foreign_message = commit_delivery(&child.store, "foreign-selected-scope", foreign_file);
+    let (locator, original) = giant_selected_delivery(&child, file.clone());
     let host = child
         .fixture
         .manager

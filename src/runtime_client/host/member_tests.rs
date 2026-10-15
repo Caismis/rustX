@@ -50,9 +50,14 @@ fn install_member_commit(inner: &Arc<super::super::ClientInner>, event: &Runtime
 }
 
 fn member_messages() -> [MessageBlock; 2] {
-    let intermediate = "host-intermediate🙂水".repeat(60_000);
+    // The next native append must reopen this model head (ID <=4096 bytes),
+    // while the first identity still exceeds the finite display inline bound.
+    let intermediate = "host-intermediate🙂水".repeat(125);
+    assert!(intermediate.len() > 256 && intermediate.len() <= 4096);
+    // The closing C is last: Source observation and lineage never admit this
+    // >1MiB original identity to the native model working set afterward.
     let closing = "host-closing🙂水".repeat(80_000);
-    assert!(intermediate.len() > 1_048_576 && closing.len() > 1_048_576);
+    assert!(closing.len() > 1_048_576);
     [
         MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
             id: MessageId::new(intermediate),
@@ -169,19 +174,18 @@ fn copied_member_host(
     RuntimeClientHost,
     Arc<crate::durable::SqliteConversationStore>,
 ) {
+    let source_cut = store.observation_read_cut().unwrap();
     let cut = store
-        .read_lineage_cut(store.load_head().unwrap().revision)
+        .read_lineage_cut(source_cut.read.surface_revision)
         .unwrap();
-    let seed = crate::durable::inbox::LineageSeed::replayed(
-        cut.canonical,
-        cut.surface_history,
-        cut.checkpoints,
-    )
-    .unwrap()
-    .with_turns(cut.turns)
-    .unwrap()
-    .with_completed_responses(cut.completed_responses)
-    .unwrap();
+    let seed = crate::durable::inbox::LineageSeed::replayed(cut.canonical, cut.surface_history)
+        .unwrap()
+        .with_projections(cut.projections)
+        .unwrap()
+        .with_turns(cut.turns)
+        .unwrap()
+        .with_completed_responses(cut.completed_responses)
+        .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let id = ConversationId::generate();
     let path = directory.path().join("inherited.sqlite");

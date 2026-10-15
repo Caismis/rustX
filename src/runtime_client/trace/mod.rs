@@ -61,8 +61,7 @@ pub(crate) mod frozen;
 #[cfg(test)]
 mod oracle_summary;
 pub(crate) use frozen::{
-    canonical_message as frozen_canonical_message, request_detail as frozen_request_detail,
-    request_outcome as frozen_request_outcome,
+    request_detail as frozen_request_detail, request_outcome as frozen_request_outcome,
 };
 mod inspection;
 mod lifecycle;
@@ -72,8 +71,10 @@ pub use inspection::{
 };
 mod live;
 mod locate;
+#[cfg(test)]
+mod provenance_tests;
 mod record;
-mod request;
+pub(crate) mod request;
 mod summary;
 #[cfg(test)]
 mod tool;
@@ -87,9 +88,9 @@ pub use locate::{TraceToolLocation, TraceToolLocator};
 pub use types::{
     TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation,
     TraceContextSource, TraceCursor, TraceDetail, TraceFieldKind, TraceFieldSource,
-    TraceGeneration, TraceGenerationTimeline, TraceKind, TraceLifecycle, TraceLocation,
-    TraceManagedOutput, TraceMessageDetail, TraceMessageRole, TracePage, TraceRecord,
-    TraceRequestDetail, TraceRequestFailure, TraceRequestMessage, TraceRequestOption,
+    TraceGeneration, TraceGenerationTimeline, TraceInputProvenance, TraceKind, TraceLifecycle,
+    TraceLocation, TraceManagedOutput, TraceMessageDetail, TraceMessageRole, TracePage,
+    TraceRecord, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage, TraceRequestOption,
     TraceRequestOutcome, TraceRequestPredecessor, TraceRequestSummary, TraceState,
     TraceSystemPromptPresentation, TraceSystemPromptState, TraceTiming, TraceToolCall,
     TraceToolCatalogState, TraceToolDefinition, TraceToolDetail, TraceToolLifecycle,

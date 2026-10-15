@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 pub use crate::durable::sqlite::archive::ConversationArchiveFrontiers;
 
 /// Logical archive version, independent of durable and transport schemas.
-pub const FORMAT: &str = "rustx-session-archive/v3";
+pub const FORMAT: &str = "rustx-session-archive/v4";
 /// Maximum queued byte chunks. ZIP metadata scales with entries, not bytes.
 pub const STREAM_CAPACITY: usize = 2;
 pub const CHUNK_BYTES: usize = 64 * 1024;
@@ -261,7 +261,7 @@ impl SessionArchiveCut {
             "session": self.session, "cwd": self.cwd, "nodes": self.nodes,
             "conversations": self.conversations.iter().map(|c| &c.manifest).collect::<Vec<_>>(),
             "artifacts": self.artifacts.iter().map(|a| &a.manifest).collect::<Vec<_>>(),
-            "schemas": {"journal":2,"messages":1,"surface":1,"requests":3,"generations":1,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
+            "schemas": {"journal":2,"messages":1,"surface":1,"requests":4,"projections":1,"generations":1,"publication_audits":1,"inherited_responses":1,"inherited_turns":1},
             "integrity": "ZIP CRC32 per entry",
             "excluded": ["provider-private continuation state", "infrastructure configuration and credentials", "opaque request parameters outside the inspection allowlist", "provider and runtime diagnostic prose/codes", "workflow recovery comparison guards"],
             "unavailable": ["historical workspace-upload bytes are not immutable durable artifacts; recorded references remain in history"]
@@ -324,13 +324,14 @@ impl SessionArchiveCut {
 }
 
 impl ConversationCut {
-    fn authorities(&self) -> [(Authority, &'static str, i64); 7] {
+    fn authorities(&self) -> [(Authority, &'static str, i64); 8] {
         let f = &self.manifest.frontiers;
         [
             (Authority::Journal, "journal", f.journal),
             (Authority::Messages, "messages", f.messages),
             (Authority::Surface, "surface", f.surface),
             (Authority::Requests, "requests", f.requests),
+            (Authority::Projections, "projections", f.projections),
             (
                 Authority::InheritedResponses,
                 "inherited_responses",
@@ -380,6 +381,7 @@ enum Record {
     Messages(MessageBlock),
     Surface(crate::conversation::SurfaceOp),
     Requests(Box<crate::model::snapshot::RequestSnapshot>),
+    Projection(Box<crate::durable::projection::ProjectionCheckpoint>),
     Audits(crate::publication::PublicationAudit),
     InheritedResponse(crate::durable::response::CompletedResponseProvenance),
     InheritedTurn(crate::durable::reading::TurnReadingProvenance),
@@ -390,6 +392,9 @@ impl Record {
             Authority::Journal => Self::Journal(serde_json::from_str(body).map_err(error)?),
             Authority::Messages => Self::Messages(serde_json::from_str(body).map_err(error)?),
             Authority::Surface => Self::Surface(serde_json::from_str(body).map_err(error)?),
+            Authority::Projections => {
+                Self::Projection(Box::new(serde_json::from_str(body).map_err(error)?))
+            }
             Authority::Requests => {
                 Self::Requests(Box::new(serde_json::from_str(body).map_err(error)?))
             }
@@ -410,6 +415,7 @@ impl Record {
             Self::Messages(v) => projection::message(v),
             Self::Surface(v) => json!(v),
             Self::Requests(v) => projection::request(v),
+            Self::Projection(v) => projection::checkpoint(v),
             Self::Audits(v) => json!(v),
             Self::InheritedResponse(v) => json!(v),
             Self::InheritedTurn(v) => json!(v),
@@ -435,6 +441,38 @@ fn collect_record_artifacts(record: &Record, refs: &mut BTreeMap<ArtifactId, Val
             }
         }
         Record::Messages(MessageBlock::Tool(t)) => collect_tool(&t.result, refs),
+        Record::Projection(checkpoint) => {
+            for item in &checkpoint.candidate.items {
+                if let crate::context::checkpoint::CheckpointMessage::Derived(derived) =
+                    &item.message
+                {
+                    use crate::model::projected::ProjectedMessage;
+                    match &derived.message {
+                        ProjectedMessage::User { content, .. } => {
+                            for block in content {
+                                match block {
+                                    UserContentBlock::Image(r) => {
+                                        insert_ref(refs, &r.artifact_id, json!(r));
+                                    }
+                                    UserContentBlock::File(r) => {
+                                        insert_ref(refs, &r.artifact_id, json!(r));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        ProjectedMessage::Assistant { content } => {
+                            for block in content {
+                                if let AssistantContentBlock::Image(r) = block {
+                                    insert_ref(refs, &r.artifact_id, json!(r));
+                                }
+                            }
+                        }
+                        ProjectedMessage::Tool { result, .. } => collect_tool(result, refs),
+                    }
+                }
+            }
+        }
         Record::Journal(envelope) => {
             if let RuntimeEvent::ToolExecutionCompleted { result, .. } = &envelope.event {
                 collect_tool(result, refs);

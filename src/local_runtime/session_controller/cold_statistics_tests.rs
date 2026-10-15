@@ -5,44 +5,33 @@ fn cold_statistics_compaction(
     id: &str,
     model: &str,
 ) {
-    use crate::message::types::{CompactionSummaryMetadata, InboundKind, UserSource};
-    use crate::runtime::identity::MessageId;
-    let MessageBlock::User(mut summary) = user(id) else {
-        unreachable!()
-    };
-    summary.source = UserSource::Runtime;
-    summary.kind = InboundKind::CompactionSummary(
-        CompactionSummaryMetadata::new(vec!["native.rs".into()], Vec::new()).unwrap(),
+    let _ = before;
+    let history = store.projected_history().unwrap();
+    let candidate = crate::scripted_suites::support::context::checkpoint_fixture(
+        store,
+        id,
+        history.messages.len(),
+        "native summary",
     );
-    store
-        .commit_compaction(crate::durable::CompactionCommitInput {
-            summary,
-            span: crate::conversation::SurfaceSpan::new(
-                MessageId::new(before),
-                MessageId::new(before),
-            ),
-            expected_revision: store.load_head().unwrap().revision,
-            tokens_before: crate::runtime::TokenMeasurement {
-                input_tokens: 400,
-                source: crate::runtime::TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: 200,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: chrono::Utc::now(),
-            occupancy: Some(crate::context::occupancy::ContextOccupancy {
-                estimated: true,
-                input_tokens: 200,
-                context_window_tokens: 8192,
-                model: model.into(),
-                breakdown: crate::context::occupancy::ContextBreakdown {
-                    system_tokens: 7,
-                    tool_tokens: 11,
-                    message_tokens: 182,
-                },
-            }),
-        })
-        .unwrap();
+    let mut input =
+        crate::scripted_suites::support::context::checkpoint_commit_fixture(store, candidate, None);
+    input.tokens_before = crate::runtime::TokenMeasurement {
+        input_tokens: 400,
+        source: crate::runtime::TokenMeasurementSource::Estimated,
+    };
+    input.estimated_tokens_after = 200;
+    input.occupancy = Some(crate::context::occupancy::ContextOccupancy {
+        estimated: true,
+        input_tokens: 200,
+        context_window_tokens: 8192,
+        model: model.into(),
+        breakdown: crate::context::occupancy::ContextBreakdown {
+            system_tokens: 7,
+            tool_tokens: 11,
+            message_tokens: 182,
+        },
+    });
+    store.commit_projection(input).unwrap();
 }
 
 #[tokio::test]
@@ -66,7 +55,9 @@ async fn t08_t12_t14_t19_cold_statistics_model_reads_keep_the_original_cut_witho
     .unwrap()
     .with_lifecycle(access.allocation);
     store.append_canonical(&user("cold-stats-input")).unwrap();
-    let original = "\u{feff}original🙂水".repeat(100_000);
+    // The original occupancy stays native-admissible (<1 MiB), while its
+    // selected model bytes still greatly exceed every finite display header.
+    let original = "\u{feff}original🙂水".repeat(20_000);
     cold_statistics_compaction(&store, "cold-stats-input", "cold-stats-summary", &original);
     std::fs::write(root.path().join("rustx.toml"), "malformed = [").unwrap();
     let reading = controller

@@ -714,7 +714,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
     use rustx::capabilities::AgentActivation as Selection;
     // The request projector never changes authority based on model capability
     // flags. Production adapter validation separately rejects unsupported
-    // nonempty requests; the scripted adapter captures that exact boundary.
+    // nonempty requests before start; unsupported selections cannot dispatch.
     for tool_calls in [true, false] {
         for expected in [
             vec![],
@@ -825,10 +825,34 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             .unwrap()
             .run()
             .await;
-            assert!(matches!(
-                common::durable_agent_result(result, fixture.store.as_ref()).outcome,
-                AttemptOutcome::Completed { .. }
-            ));
+            let audit = common::durable_agent_result(result, fixture.store.as_ref());
+            support::audit::assert_single_terminal(&audit.event_history);
+            assert_eq!(
+                snapshot
+                    .tool_registry()
+                    .model_definitions()
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "registry admission remains independent of model capability"
+            );
+            if !tool_calls && !expected.is_empty() {
+                assert!(matches!(audit.outcome, AttemptOutcome::Failed { .. }));
+                assert!(
+                    model.requests().is_empty(),
+                    "unsupported tools cannot reach the provider"
+                );
+                assert!(audit.snapshot_history().is_empty());
+                assert!(
+                    !audit
+                        .event_history
+                        .iter()
+                        .any(|e| matches!(e, RuntimeEvent::ModelRequestStarted { .. }))
+                );
+                continue;
+            }
+            assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
             let requests = model.requests();
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].invocation.capabilities.tool_calls, tool_calls);

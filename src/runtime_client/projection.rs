@@ -197,6 +197,8 @@ pub(crate) enum SubscriberPoll {
         /// The oldest cursor the runtime can still serve.
         earliest_serviceable: RuntimeClientCursor,
     },
+    /// The native live source failed; retained cursors have not been skipped.
+    Unavailable { message: String },
     /// The cursor space is exhausted; the observation stream is over.
     Exhausted,
 }
@@ -336,6 +338,8 @@ pub(crate) struct RuntimeClientProjection {
     exhausted: bool,
     /// The deterministic snapshot read model.
     snapshot: RuntimeClientSnapshot,
+    capability_head: super::capability_source::PreparedCapabilityHead,
+    trace_head: super::checkpoint::PreparedTraceHead,
     /// The bounded projection replay ring, oldest first.
     replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
     /// Scalar cut-to-cursor lookup, bounded by the same replay retention.
@@ -384,6 +388,8 @@ struct ForegroundResultContent {
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
     snapshot: RuntimeClientSnapshot,
+    capability_head: super::capability_source::PreparedCapabilityHead,
+    trace_head: super::checkpoint::PreparedTraceHead,
     cursor: RuntimeClientCursor,
     read_cut: super::checkpoint::CheckpointReadCut,
     exhausted: bool,
@@ -634,6 +640,7 @@ impl CheckpointSeed {
         capture: &mut super::checkpoint::Capture,
     ) -> RuntimeClientContextView {
         let mut context = RuntimeClientContextView {
+            projection_head: self.snapshot.context.projection_head.clone(),
             compaction_in_progress: self.snapshot.context.compaction_in_progress,
             compaction_count: self.snapshot.context.compaction_count,
             latest_compaction: capture
@@ -760,7 +767,7 @@ impl CheckpointSeed {
             transcript: self.capture_transcript(&mut capture),
             trace: super::trace::TracePage {
                 read_cut: source.trace.read_cut.clone(),
-                records: capture.page("trace.records", &source.trace.records),
+                records: self.trace_head.capture(&source.trace.records, &mut capture),
                 updates: capture.page("trace.updates", &source.trace.updates),
                 next_cursor: source.trace.next_cursor.clone(),
             },
@@ -815,20 +822,7 @@ impl CheckpointSeed {
         &self,
         capture: &mut super::checkpoint::Capture,
     ) -> super::snapshot::CapabilityView {
-        super::snapshot::CapabilityView {
-            revision: self.snapshot.capabilities.revision,
-            configured_tools: capture.page(
-                "capabilities.configured_tools",
-                &self.snapshot.capabilities.configured_tools,
-            ),
-            tools: capture.page("capabilities.tools", &self.snapshot.capabilities.tools),
-            available_tools: capture.page(
-                "capabilities.available_tools",
-                &self.snapshot.capabilities.available_tools,
-            ),
-            skills: capture.page("capabilities.skills", &self.snapshot.capabilities.skills),
-            sources: capture.page("capabilities.sources", &self.snapshot.capabilities.sources),
-        }
+        self.capability_head.capture(capture)
     }
 
     fn capture_message_descriptors(
@@ -1563,6 +1557,7 @@ pub(crate) struct ReadDomainCut {
 
 #[derive(Clone)]
 pub(crate) struct ReadDomainValues {
+    pub(crate) projection_head: Option<super::snapshot::RuntimeClientProjectionHeadView>,
     pub(crate) transcript: super::snapshot::RuntimeClientTranscriptPage,
     pub(crate) occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
     pub(crate) trace: super::trace::TracePage,
@@ -1570,6 +1565,70 @@ pub(crate) struct ReadDomainValues {
 }
 
 type ReadDomains = Result<ReadDomainValues, crate::durable::ConversationStoreError>;
+
+fn projection_head_view(
+    store: &dyn crate::durable::ConversationStore,
+    through: u64,
+) -> Result<
+    Option<super::snapshot::RuntimeClientProjectionHeadView>,
+    crate::durable::ConversationStoreError,
+> {
+    store.observation_projection_head(through)
+}
+
+pub(crate) fn checkpoint_view(
+    checkpoint: crate::durable::projection::ProjectionCheckpoint,
+) -> super::snapshot::RuntimeClientProjectionHeadView {
+    let original_items = checkpoint
+        .candidate
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.message,
+                crate::context::checkpoint::CheckpointMessage::Original(_)
+            )
+        })
+        .count();
+    let original_items = u32::try_from(original_items).expect("bounded checkpoint item count");
+    let summary_preview = checkpoint
+        .candidate
+        .items
+        .iter()
+        .find_map(|item| match &item.message {
+            crate::context::checkpoint::CheckpointMessage::Derived(derived)
+                if derived
+                    .transformations
+                    .contains(&crate::model::projected::SemanticTransformation::Summary) =>
+            {
+                match &derived.message {
+                    crate::model::projected::ProjectedMessage::User { content, .. } => {
+                        content.iter().find_map(|block| match block {
+                            crate::message::types::UserContentBlock::Text(text) => {
+                                Some(super::trace::TraceText::detail(&text.text))
+                            }
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        });
+    super::snapshot::RuntimeClientProjectionHeadView {
+        checkpoint_id: checkpoint.candidate.checkpoint_id,
+        activation_id: checkpoint.activation.activation,
+        base_frontier: checkpoint.candidate.base_frontier,
+        activation_ledger: checkpoint.activation.ledger,
+        origin: checkpoint.activation.origin,
+        destination_installation: checkpoint.activation.destination_installation,
+        original_items,
+        derived_items: u32::try_from(checkpoint.candidate.items.len())
+            .expect("bounded checkpoint item count")
+            - original_items,
+        summary_preview,
+    }
+}
 
 impl ReadDomainCut {
     pub(crate) fn read(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
@@ -1595,6 +1654,7 @@ impl ReadDomainCut {
         trace.read_cut = None;
         let trace_total = store.observation_trace_total(self.through)?;
         Ok(ReadDomainValues {
+            projection_head: projection_head_view(store, self.through)?,
             transcript: page,
             occupancy,
             trace,
@@ -1633,6 +1693,7 @@ impl SnapshotCandidate {
             })?;
         self.snapshot.transcript = domains.transcript;
         self.snapshot.context.occupancy = domains.occupancy;
+        self.snapshot.context.projection_head = domains.projection_head;
         self.snapshot.trace = domains.trace;
         Ok(self)
     }
@@ -1861,7 +1922,7 @@ fn invalidates_event(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ModelRequestFailed { .. }
             | RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. }
-            | RuntimeEvent::CompactionStarted
+            | RuntimeEvent::CompactionStarted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
     )
 }
@@ -1981,6 +2042,11 @@ impl RuntimeClientProjection {
             tool_occurrence: None,
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
+            trace_head: super::checkpoint::PreparedTraceHead::default(),
+            capability_head: super::capability_source::PreparedCapabilityHead::new(
+                &initial_capabilities,
+                Vec::new(),
+            ),
             snapshot: initial_client_snapshot(
                 conversation_id,
                 initial_messages,
@@ -2418,36 +2484,11 @@ impl RuntimeClientProjection {
         if invalidates_read_domains(observation) {
             self.read_through = self.journal_through;
             self.read_domains_dirty = true;
-            self.read_failure = None;
             let Some(revision) = self.read_revision.checked_add(1) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);
                 return false;
             };
             self.read_revision = revision;
-        }
-        let compaction_surface = match observation {
-            #[cfg(test)]
-            ConversationObservation::Event {
-                event:
-                    RuntimeEvent::CompactionCompleted {
-                        surface_revision, ..
-                    },
-                ..
-            } => Some(*surface_revision),
-            #[cfg(test)]
-            ConversationObservation::ManualCompactionEvent {
-                event:
-                    RuntimeEvent::CompactionCompleted {
-                        surface_revision, ..
-                    },
-                ..
-            } => Some(*surface_revision),
-            _ => None,
-        };
-        if let Some(surface_revision) = compaction_surface
-            && let Some(cut) = &mut self.source_cut
-        {
-            cut.surface_revision = surface_revision;
         }
         self.advance_domain_revisions(observation);
         #[cfg(test)]
@@ -2752,14 +2793,14 @@ impl RuntimeClientProjection {
                 self.snapshot.context.manual_compaction =
                     Some(super::snapshot::RuntimeClientManualCompaction {
                         request_id,
-                        released: !matches!(event, RuntimeEvent::CompactionStarted),
-                        error: if let RuntimeEvent::CompactionFailed { error } = &event {
+                        released: !matches!(event, RuntimeEvent::CompactionStarted { .. }),
+                        error: if let RuntimeEvent::CompactionFailed { error, .. } = &event {
                             Some(error.clone())
                         } else {
                             None
                         },
                     });
-                self.fold_compaction_event(None, &event, None)
+                self.fold_compaction_event(None, &event)
             }
             ConversationObservation::CanonicalCommitted {
                 attempt_id,
@@ -3348,6 +3389,7 @@ impl RuntimeClientProjection {
             }
             ConversationObservation::Capability { source } => {
                 let capabilities = source.header();
+                self.capability_head = source.prepared_head();
                 self.install_source_frontiers(source.frontiers());
                 self.snapshot.capabilities.clone_from(&capabilities);
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
@@ -3381,6 +3423,7 @@ impl RuntimeClientProjection {
                     next_offset: (model.catalog_source().model_count() > 0).then_some(0),
                 }]);
                 let capabilities = capability.header();
+                self.capability_head = capability.prepared_head();
                 self.install_source_frontiers(capability.frontiers());
                 let model_status = model.status();
                 let model = model.inline().map(Box::new);
@@ -3485,6 +3528,7 @@ impl RuntimeClientProjection {
                 let capability =
                     capability.expect("model observation capability prepared outside Projection");
                 self.snapshot.capabilities = capability.header();
+                self.capability_head = capability.prepared_head();
                 self.install_source_frontiers(capability.frontiers());
                 let model_status = model.status();
                 let model = model.inline().map(Box::new);
@@ -4264,12 +4308,12 @@ impl RuntimeClientProjection {
             if let Ok(event) = super::structural_json::decode::<RuntimeEvent>(witness.value)
                 && matches!(
                     event,
-                    RuntimeEvent::CompactionStarted
+                    RuntimeEvent::CompactionStarted { .. }
                         | RuntimeEvent::CompactionCompleted { .. }
                         | RuntimeEvent::CompactionFailed { .. }
                 )
             {
-                return self.fold_compaction_event(None, &event, Some(witness.sequence));
+                return self.fold_compaction_event(None, &event);
             }
             return Vec::new();
         };
@@ -4295,11 +4339,11 @@ impl RuntimeClientProjection {
         if let Ok(event) = super::structural_json::decode::<RuntimeEvent>(witness.value) {
             if matches!(
                 event,
-                RuntimeEvent::CompactionStarted
+                RuntimeEvent::CompactionStarted { .. }
                     | RuntimeEvent::CompactionCompleted { .. }
                     | RuntimeEvent::CompactionFailed { .. }
             ) {
-                return self.fold_compaction_event(Some(attempt), &event, Some(witness.sequence));
+                return self.fold_compaction_event(Some(attempt), &event);
             }
             if let RuntimeEvent::AttemptCompleted { finish_reason, .. } = event {
                 return self.settle_attempt(
@@ -4693,10 +4737,10 @@ impl RuntimeClientProjection {
                     result,
                 }]
             }
-            RuntimeEvent::CompactionStarted
+            RuntimeEvent::CompactionStarted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::CompactionFailed { .. } => {
-                self.fold_compaction_event(Some(attempt_id), event, None)
+                self.fold_compaction_event(Some(attempt_id), event)
             }
             // The background/subagent ownership/terminal publication facts
             // are durable execution facts; the client projection learns the
@@ -4773,10 +4817,9 @@ impl RuntimeClientProjection {
         &mut self,
         attempt_id: Option<&AttemptId>,
         event: &RuntimeEvent,
-        completion_sequence: Option<u64>,
     ) -> Vec<RuntimeClientEvent> {
         match event {
-            RuntimeEvent::CompactionStarted => {
+            RuntimeEvent::CompactionStarted { .. } => {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
@@ -4784,7 +4827,7 @@ impl RuntimeClientProjection {
                     attempt_id: attempt_id.cloned(),
                 }]
             }
-            RuntimeEvent::CompactionFailed { error } => {
+            RuntimeEvent::CompactionFailed { error, .. } => {
                 self.snapshot.context.compaction_error = Some(error.clone());
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionFailed {
@@ -4793,46 +4836,31 @@ impl RuntimeClientProjection {
                     error: error.clone(),
                 }]
             }
+            #[cfg(test)]
             RuntimeEvent::CompactionCompleted {
                 generation,
-                summary_message_id,
-                surface_revision,
+                checkpoint_id,
+                activation_id,
                 tokens_before,
                 estimated_tokens_after,
                 occupancy,
-            } => {
-                if summary_message_id.as_str().len() > 256 {
-                    self.mark_observation_unavailable(
-                        "native compaction requires its finite source receipt".into(),
-                    );
-                    return Vec::new();
-                }
-                self.fold_compaction_reading(
-                    attempt_id,
-                    &crate::durable::observation::OccupancyObservation {
-                        value: occupancy.as_ref().map(|value| {
-                            super::occupancy::RuntimeClientContextOccupancy::from_native(
-                                value,
-                                completion_sequence
-                                    .map(|sequence| format!("context.occupancy.{sequence}.model")),
-                            )
-                        }),
-                        compaction: RuntimeClientCompactionView {
-                            generation: *generation,
-                            summary_message_id: Some(summary_message_id.clone()),
-                            summary_message_locator:
-                                super::content::CanonicalContentLocator::ByMessageId {
-                                    message_id: summary_message_id.clone(),
-                                },
-                            summary_message_id_deferred: false,
-                            summary_message_id_source: None,
-                            surface_revision: *surface_revision,
-                            tokens_before: *tokens_before,
-                            estimated_tokens_after: *estimated_tokens_after,
-                        },
-                    },
-                )
-            }
+                ..
+            } => self.fold_compaction_completed(
+                attempt_id,
+                &RuntimeClientCompactionView {
+                    generation: *generation,
+                    checkpoint_id: checkpoint_id.clone(),
+                    activation_id: *activation_id,
+                    tokens_before: *tokens_before,
+                    estimated_tokens_after: *estimated_tokens_after,
+                },
+                occupancy
+                    .as_ref()
+                    .map(|value| {
+                        super::occupancy::RuntimeClientContextOccupancy::from_native(value, None)
+                    })
+                    .as_ref(),
+            ),
             _ => unreachable!("only compaction events enter the compaction fold"),
         }
     }
@@ -4842,15 +4870,28 @@ impl RuntimeClientProjection {
         attempt_id: Option<&AttemptId>,
         reading: &crate::durable::observation::OccupancyObservation,
     ) -> Vec<RuntimeClientEvent> {
+        // The original completion owns both the generation and its eligible
+        // projection head. A later asynchronous read may refine other domains,
+        // but cannot be required to make this published completion coherent.
+        self.snapshot.context.projection_head = Some(reading.projection_head.clone());
+        self.fold_compaction_completed(attempt_id, &reading.compaction, reading.value.as_ref())
+    }
+
+    fn fold_compaction_completed(
+        &mut self,
+        attempt_id: Option<&AttemptId>,
+        compaction: &RuntimeClientCompactionView,
+        occupancy: Option<&super::occupancy::RuntimeClientContextOccupancy>,
+    ) -> Vec<RuntimeClientEvent> {
         self.snapshot.context.compaction_in_progress = false;
-        self.snapshot.context.occupancy.clone_from(&reading.value);
+        self.snapshot.context.occupancy = occupancy.cloned();
         self.snapshot.context.compaction_count = self
             .snapshot
             .context
             .compaction_count
             .checked_add(1)
             .expect("Runtime Client compaction count cannot overflow");
-        self.snapshot.context.latest_compaction = Some(reading.compaction.clone());
+        self.snapshot.context.latest_compaction = Some(compaction.clone());
         vec![RuntimeClientEvent::ContextCompacted {
             attempt_id: attempt_id.cloned(),
             context: self.snapshot.context.clone(),
@@ -5015,6 +5056,7 @@ impl RuntimeClientProjection {
         {
             self.install_todo_head(todos);
             events.push(RuntimeClientEvent::ReadDomainsUpdated {
+                projection_head: self.snapshot.context.projection_head.clone(),
                 transcript: self.snapshot.transcript.clone(),
                 trace: self.snapshot.trace.clone(),
                 occupancy: self.snapshot.context.occupancy.clone(),
@@ -6058,6 +6100,8 @@ impl RuntimeClientProjection {
     fn capture_working_seed(&self) -> CheckpointSeed {
         CheckpointSeed {
             snapshot: self.snapshot.clone(),
+            capability_head: self.capability_head.clone(),
+            trace_head: self.trace_head.clone(),
             cursor: self.cursor,
             read_cut: self.working_read_cut(),
             exhausted: self.exhausted,
@@ -6470,6 +6514,11 @@ impl RuntimeClientProjection {
     }
 
     pub(crate) fn validate_published_source(&self) -> Result<(), RuntimeClientError> {
+        if let Some(message) = &self.read_failure {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: message.clone(),
+            });
+        }
         if let Some(seed) = &self.published_seed {
             if seed.read_cut.source_cut.is_some() && !seed.journal_failure {
                 return Ok(());
@@ -6890,6 +6939,22 @@ impl RuntimeClientProjection {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn request_read_domains_for_test(&mut self) {
+        self.read_domains_dirty = true;
+    }
+
+    /// An explicit checkpoint may request one retry of a failed derived read.
+    /// Native prefix/layout failures require their own original receipt repair.
+    pub(crate) fn request_failed_read_repair(&mut self) -> Option<(ReadDomainCut, bool)> {
+        if self.exhausted || self.read_failure.is_none() || self.validate_source_prefix().is_err() {
+            return None;
+        }
+        let newly_requested = !self.read_domains_dirty;
+        self.read_domains_dirty = true;
+        self.read_domain_cut().map(|cut| (cut, newly_requested))
+    }
+
     pub(crate) fn read_domain_cut(&self) -> Option<ReadDomainCut> {
         (self.read_domains_dirty && !self.exhausted && !self.native_source_pending())
             .then(|| self.read_domain_fence())
@@ -6910,6 +6975,7 @@ impl RuntimeClientProjection {
             return false;
         }
         let ReadDomainValues {
+            projection_head,
             transcript,
             occupancy,
             mut trace,
@@ -6918,7 +6984,15 @@ impl RuntimeClientProjection {
             Ok(value) => value,
             Err(error) => {
                 self.read_domains_dirty = false;
-                self.read_failure = Some(error.to_string());
+                let mut message = error.to_string();
+                if message.len() > 1024 {
+                    let mut end = 1024;
+                    while !message.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    message.truncate(end);
+                }
+                self.read_failure = Some(message);
                 self.wake_subscribers();
                 return true;
             }
@@ -6943,14 +7017,23 @@ impl RuntimeClientProjection {
         if recovered_failure
             || self.snapshot.transcript != transcript
             || self.snapshot.context.occupancy != occupancy
+            || self.snapshot.context.projection_head != projection_head
             || self.snapshot.trace != trace
         {
             trace.read_cut = None;
             self.snapshot.transcript.clone_from(&transcript);
+            if self.snapshot.trace.records != trace.records {
+                self.trace_head = super::checkpoint::PreparedTraceHead::default();
+            }
             self.snapshot.trace.clone_from(&trace);
             self.snapshot.context.occupancy.clone_from(&occupancy);
+            self.snapshot
+                .context
+                .projection_head
+                .clone_from(&projection_head);
             if publish {
                 self.publish(RuntimeClientEvent::ReadDomainsUpdated {
+                    projection_head,
                     transcript,
                     trace,
                     occupancy,
@@ -6989,7 +7072,7 @@ impl RuntimeClientProjection {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
         if let Some(message) = &self.read_failure {
-            return Err(RuntimeClientError::RuntimeFailure {
+            return Err(RuntimeClientError::ObservationUnavailable {
                 message: message.clone(),
             });
         }
@@ -7040,6 +7123,11 @@ impl RuntimeClientProjection {
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
+        if let Some(message) = &self.read_failure {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: message.clone(),
+            });
+        }
         let earliest = self.earliest_serviceable();
         if after_cursor > self.cursor || after_cursor < earliest {
             return Err(RuntimeClientError::ResyncRequired {
@@ -7089,10 +7177,9 @@ impl RuntimeClientProjection {
             return SubscriberPoll::Closed;
         };
         let consumed = subscriber.consumed;
-        if self.read_failure.is_some() {
-            return SubscriberPoll::Lagged {
-                after_cursor: consumed,
-                earliest_serviceable: self.cursor,
+        if let Some(message) = &self.read_failure {
+            return SubscriberPoll::Unavailable {
+                message: message.clone(),
             };
         }
         if consumed >= self.cursor {
@@ -7164,7 +7251,7 @@ impl RuntimeClientProjection {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
         if let Some(message) = &self.read_failure {
-            return Err(RuntimeClientError::RuntimeFailure {
+            return Err(RuntimeClientError::ObservationUnavailable {
                 message: message.clone(),
             });
         }
@@ -7923,7 +8010,7 @@ fn retain_tool_execution(source: &mut ForegroundToolExecution, current: &Foregro
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeClientProjection, SubscriberPoll};
+    use super::{RuntimeClientError, RuntimeClientProjection, SubscriberPoll};
     use crate::agent::{
         AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
     };
@@ -9368,9 +9455,7 @@ mod tests {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum CompactionOrderFact {
-        /// The canonical runtime compaction summary joined the Message
-        /// Ledger (observed at its commit linearization point).
-        SummaryLedgerCommitted,
+        /// The typed checkpoint and local completion fact committed atomically.
         RuntimeCompactionCompleted,
         ClientContextCompacted,
         ClientAttemptSettled,
@@ -9518,18 +9603,9 @@ mod tests {
         fn observe_committed(
             &self,
             attempt_id: &AttemptId,
-            block: &MessageBlock,
+            _block: &MessageBlock,
             receipt: &crate::durable::inbox::TranscriptCommitReceipt,
         ) {
-            if matches!(
-                block,
-                MessageBlock::User(user) if user.kind.is_compaction_summary()
-            ) {
-                self.facts
-                    .lock()
-                    .expect("order facts lock")
-                    .push(CompactionOrderFact::SummaryLedgerCommitted);
-            }
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(ConversationObservation::CanonicalCommitted {
                 attempt_id: Some(attempt_id.clone()),
@@ -9702,19 +9778,17 @@ mod tests {
     }
 
     /// A successful committed compaction has one ordered fact path: the
-    /// canonical summary Ledger commit, the canonical completion event, the
+    /// immutable checkpoint activation/receipt, the actual local completion event, the
     /// Runtime Client event, and terminal settlement.
     ///
     /// The ordering is the client-visible invariant: no `ContextCompacted`
-    /// may imply success before the summary Ledger record and the new
-    /// Surface revision exist.
+    /// may imply success before immutable content and the durable Projection Head exist.
     #[tokio::test]
     async fn committed_compaction_order_is_canonical_and_terminal_last() {
         let (result, observer, facts) = run_compaction_order_case(false).await;
         assert_eq!(
             *facts.lock().expect("order facts lock"),
             vec![
-                CompactionOrderFact::SummaryLedgerCommitted,
                 CompactionOrderFact::RuntimeCompactionCompleted,
                 CompactionOrderFact::ClientContextCompacted,
                 CompactionOrderFact::ClientAttemptSettled,
@@ -9733,32 +9807,21 @@ mod tests {
             .expect("latest compaction");
         assert_eq!(latest.generation, 1);
         assert_eq!(
-            latest.surface_revision,
+            latest.activation_id,
             result
                 .event_history
                 .iter()
                 .find_map(|event| match event {
-                    RuntimeEvent::CompactionCompleted {
-                        surface_revision, ..
-                    } => Some(*surface_revision),
+                    RuntimeEvent::CompactionCompleted { activation_id, .. } => Some(*activation_id),
                     _ => None,
                 })
                 .expect("one compaction completion"),
             "the client view carries the revision the rewrite established"
         );
-        let summary_id = latest
-            .summary_message_id
-            .as_ref()
-            .expect("generated native compaction summary identity remains exact");
-        assert!(!latest.summary_message_id_deferred);
-        assert!(
-            snapshot.messages.iter().any(|message| matches!(
-                message,
-                MessageBlock::User(user)
-                    if &user.id == summary_id
-                        && user.kind.is_compaction_summary()
-            )),
-            "the committed runtime summary is an ordinary canonical ledger fact"
+        assert_eq!(
+            snapshot.messages.len(),
+            result.canonical_history.len(),
+            "client transcript contains only canonical execution facts"
         );
     }
 
@@ -9776,7 +9839,7 @@ mod tests {
             result
                 .event_history
                 .iter()
-                .any(|event| matches!(event, RuntimeEvent::CompactionStarted))
+                .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
         );
         assert!(
             result
@@ -9796,14 +9859,8 @@ mod tests {
         ));
         assert_eq!(result.conversation.surface().compaction_generation(), 0);
         assert!(
-            result
-                .conversation
-                .ledger()
-                .audit_records()
-                .iter()
-                .all(|message| !matches!(message, MessageBlock::User(user)
-                    if user.kind.is_compaction_summary())),
-            "a failed compaction never commits a canonical summary"
+            result.projections.is_empty(),
+            "failed maintenance installs no projection"
         );
         let snapshot = observer.snapshot();
         assert!(!snapshot.context.compaction_in_progress);
@@ -9820,11 +9877,14 @@ mod tests {
         apply_event(
             &mut projection,
             RuntimeEvent::CompactionCompleted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
                 generation: 1,
-                summary_message_id: MessageId::new(
+                checkpoint_id: crate::runtime::identity::CheckpointId::new(
                     "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
                 ),
-                surface_revision: crate::conversation::SurfaceRevision::new(3),
+                activation_id: crate::context::checkpoint::ProjectionActivationId(3),
                 tokens_before: TokenMeasurement {
                     input_tokens: 4800,
                     source: TokenMeasurementSource::ProviderReported,
@@ -9836,11 +9896,14 @@ mod tests {
         apply_event(
             &mut projection,
             RuntimeEvent::CompactionCompleted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
                 generation: 2,
-                summary_message_id: MessageId::new(
+                checkpoint_id: crate::runtime::identity::CheckpointId::new(
                     "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-2",
                 ),
-                surface_revision: crate::conversation::SurfaceRevision::new(6),
+                activation_id: crate::context::checkpoint::ProjectionActivationId(6),
                 tokens_before: TokenMeasurement {
                     input_tokens: 4700,
                     source: TokenMeasurementSource::Estimated,
@@ -10035,11 +10098,18 @@ mod tests {
         assert!(wake.notified().now_or_never().is_some());
         assert_eq!(
             projection.poll_subscriber(subscriber),
-            SubscriberPoll::Lagged {
-                after_cursor: RuntimeClientCursor::new(0),
-                earliest_serviceable: RuntimeClientCursor::new(0),
+            SubscriberPoll::Unavailable {
+                message: "native Journal observation source unavailable".into(),
             }
         );
+        assert!(matches!(
+            projection.subscribe(RuntimeClientCursor::new(0)),
+            Err(RuntimeClientError::ObservationUnavailable { .. })
+        ));
+        assert!(matches!(
+            projection.validate_published_source(),
+            Err(RuntimeClientError::ObservationUnavailable { .. })
+        ));
         assert_eq!(projection.cursor(), RuntimeClientCursor::new(0));
     }
 
@@ -10062,6 +10132,7 @@ mod tests {
         assert!(!projection.install_read_domains(
             &cut,
             Ok(super::ReadDomainValues {
+                projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
                 trace: super::super::trace::TracePage::default(),
@@ -10154,7 +10225,7 @@ mod tests {
     }
 
     #[test]
-    fn read_failure_is_superseded_by_a_new_dependency_revision() {
+    fn read_failure_requires_successful_source_read_at_the_current_dependency_revision() {
         let mut projection = projection();
         projection.apply(event_observation(RuntimeEvent::TurnStarted));
         let failed = projection.read_domain_cut().unwrap();
@@ -10167,14 +10238,42 @@ mod tests {
         ));
         assert!(projection.read_failure.is_some());
         assert!(projection.read_domain_cut().is_none());
+        let cursor = projection.cursor();
+        assert_eq!(
+            projection.request_failed_read_repair(),
+            Some((failed.clone(), true))
+        );
+        assert_eq!(
+            projection.request_failed_read_repair(),
+            Some((failed.clone(), false))
+        );
+        assert_eq!(
+            projection.cursor(),
+            cursor,
+            "concurrent requests coalesce at one native fence"
+        );
+        assert!(projection.install_read_domains(
+            &failed,
+            Err(crate::durable::ConversationStoreError::InvalidReference(
+                "still unavailable".into()
+            )),
+            true,
+        ));
+        projection.apply(ConversationObservation::JournalSourceReady);
+        assert!(
+            projection.read_domain_cut().is_none(),
+            "a late wake cannot restart a completed failed read"
+        );
+        assert_eq!(projection.cursor(), cursor);
         projection.apply(event_observation(RuntimeEvent::TurnStarted));
         let next = projection.read_domain_cut().unwrap();
         assert_ne!(next, failed);
         assert!(
-            projection.read_failure.is_none(),
-            "failure belongs only to its dependency revision"
+            projection.read_failure.is_some(),
+            "a new dependency is not proof that its Source read succeeded"
         );
         let domains = super::ReadDomainValues {
+            projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
             occupancy: None,
             trace: super::super::trace::TracePage::default(),
@@ -10212,6 +10311,7 @@ mod tests {
         assert!(!projection.install_read_domains(
             &old,
             Ok(super::ReadDomainValues {
+                projection_head: None,
                 transcript: super::super::snapshot::RuntimeClientTranscriptPage::default(),
                 occupancy: None,
                 trace: super::super::trace::TracePage::default(),
@@ -10485,13 +10585,20 @@ mod tests {
                 retry_number: 1,
                 retry_delay_ms: Some(5),
             },
-            RuntimeEvent::CompactionStarted,
+            RuntimeEvent::CompactionStarted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
+            },
             RuntimeEvent::CompactionCompleted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
                 generation: 1,
-                summary_message_id: MessageId::new(
+                checkpoint_id: crate::runtime::identity::CheckpointId::new(
                     "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
                 ),
-                surface_revision: crate::conversation::SurfaceRevision::new(3),
+                activation_id: crate::context::checkpoint::ProjectionActivationId(3),
                 tokens_before: TokenMeasurement {
                     input_tokens: 1,
                     source: TokenMeasurementSource::Estimated,
@@ -10500,6 +10607,9 @@ mod tests {
                 occupancy: None,
             },
             RuntimeEvent::CompactionFailed {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
                 error: "boom".to_owned(),
             },
             RuntimeEvent::TurnCompleted,
@@ -10532,7 +10642,11 @@ mod tests {
         let mut projection = projection();
         projection.apply(ConversationObservation::ManualCompactionEvent {
             request_id: Some("test-request".to_owned().try_into().unwrap()),
-            event: RuntimeEvent::CompactionStarted,
+            event: RuntimeEvent::CompactionStarted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
+            },
         });
         let admitted = projection
             .snapshot_ref()
@@ -10551,11 +10665,14 @@ mod tests {
         projection.apply(ConversationObservation::ManualCompactionEvent {
             request_id: Some("test-request".to_owned().try_into().unwrap()),
             event: RuntimeEvent::CompactionCompleted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "fixture-compaction",
+                ),
                 generation: 1,
-                summary_message_id: MessageId::new(
+                checkpoint_id: crate::runtime::identity::CheckpointId::new(
                     "conv_36524fd8-f674-7fc2-8125-06d01fee0e18-summary-1",
                 ),
-                surface_revision: crate::conversation::SurfaceRevision::new(2),
+                activation_id: crate::context::checkpoint::ProjectionActivationId(2),
                 tokens_before: TokenMeasurement {
                     input_tokens: 8_400,
                     source: TokenMeasurementSource::Estimated,
@@ -12577,6 +12694,11 @@ mod tests {
         }
     }
 
+    mod prepared_trace_tests {
+        use super::*;
+        include!("projection/prepared_trace_tests.rs");
+    }
+
     mod cached_trace_tests {
         use super::*;
         include!("projection/cached_trace_tests.rs");
@@ -13847,7 +13969,7 @@ mod tests {
     }
 
     fn raw_publication_snapshot(
-        revision: crate::conversation::SurfaceRevision,
+        frontier: crate::context::resources::LedgerFrontier,
     ) -> crate::model::RequestSnapshot {
         crate::model::RequestSnapshot::new(
             crate::model::RequestIdentity {
@@ -13855,7 +13977,7 @@ mod tests {
                 turn: TurnId::new("1"),
                 retry_number: 0,
             },
-            revision,
+            frontier,
             "system".into(),
             Vec::new(),
             crate::runtime::RuntimeResourceRevision::new(1),
@@ -13889,7 +14011,9 @@ mod tests {
     ) {
         use crate::durable::ConversationStore;
         let store = crate::durable::SqliteConversationStore::in_memory(conversation_id).unwrap();
-        let snapshot = raw_publication_snapshot(store.load_head().unwrap().revision);
+        let snapshot = raw_publication_snapshot(crate::context::resources::LedgerFrontier(
+            store.observation_read_cut().unwrap().ledger_through,
+        ));
         store
             .commit_model_turn_start(&[], &snapshot, chrono::Utc::now())
             .unwrap();

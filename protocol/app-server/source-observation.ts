@@ -1,4 +1,4 @@
-import type { BoundedSourceSettings, SourceSettings, SourceFieldRef, SourceValueChunk } from './v48.ts';
+import type { BoundedSourceSettings, SourceSettings, SourceFieldRef, SourceValueChunk } from './v50.ts';
 import { materializeFields } from './field-observation.ts';
 const sourceCuts = new WeakMap<SourceSettings, BoundedSourceSettings>();
 export function sourceObservation(source: SourceSettings) { return sourceCuts.get(source); }

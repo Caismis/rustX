@@ -154,6 +154,8 @@ pub struct ObservationEventWitness {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OccupancyObservation {
+    /// Finite head captured with this original Completed J, before publication.
+    pub projection_head: crate::runtime_client::snapshot::RuntimeClientProjectionHeadView,
     pub compaction: crate::runtime_client::snapshot::RuntimeClientCompactionView,
     pub value: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
 }

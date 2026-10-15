@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v48 envelope and method vocabulary.
+//! Rust authority for the App Server v50 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 48;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -193,6 +193,19 @@ pub enum Method {
     SessionSwitchNode {
         target: AttachmentTarget,
         node_id: SessionNodeId,
+    },
+    #[serde(rename = "session/projections")]
+    Projections {
+        target: AttachmentTarget,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    },
+    #[serde(rename = "session/projectionDetail")]
+    ProjectionDetail {
+        target: AttachmentTarget,
+        checkpoint_id: crate::runtime::identity::CheckpointId,
+        offset: u32,
+        limit: usize,
     },
     #[serde(rename = "session/trace")]
     Trace {
@@ -516,6 +529,13 @@ pub enum Method {
         offset: usize,
         limit: usize,
     },
+    #[serde(rename = "session/forkProjection")]
+    SessionForkProjection {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        ledger: crate::context::resources::LedgerFrontier,
+        activation: crate::context::checkpoint::ProjectionActivationId,
+    },
     #[serde(rename = "session/fork")]
     SessionFork {
         session_id: SessionId,
@@ -736,6 +756,7 @@ pub enum Method {
 
 impl Method {
     /// A lost successful response can hide an execution or connection-state commit.
+    #[allow(clippy::too_many_lines)] // One exhaustive admission audit covers every public method.
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
@@ -747,6 +768,8 @@ impl Method {
             | Self::DeliveryLocate { .. }
             | Self::SessionUploadStatus { .. }
             | Self::Trace { .. }
+            | Self::Projections { .. }
+            | Self::ProjectionDetail { .. }
             | Self::TraceDetail { .. }
             | Self::TraceLocateTool { .. }
             | Self::Transcript { .. }
@@ -820,6 +843,7 @@ impl Method {
             | Self::SessionCreate { .. }
             | Self::SessionName { .. }
             | Self::SessionFork { .. }
+            | Self::SessionForkProjection { .. }
             | Self::SessionBranch { .. }
             | Self::SessionDelete { .. }
             | Self::SessionRecoverDeletion { .. }
@@ -1018,6 +1042,12 @@ pub enum MethodResult {
     },
     ContextCompacted {
         compaction: Option<crate::runtime_client::snapshot::RuntimeClientCompactionView>,
+    },
+    Projections {
+        page: crate::runtime_client::projection_history::ProjectionPage,
+    },
+    ProjectionDetail {
+        detail: Box<crate::runtime_client::projection_history::ProjectionDetail>,
     },
     Trace {
         page: crate::runtime_client::trace::TracePage,
@@ -1287,6 +1317,15 @@ pub enum NotificationMethod {
         target: AttachmentTarget,
         cursor: RuntimeClientCursor,
         event: Box<crate::runtime_client::event::RuntimeClientEvent>,
+    },
+    /// Source preparation failed. This registration is fenced without consuming a Cursor;
+    /// recovery requires an explicit checkpoint/subscription after the source is serviceable.
+    #[serde(rename = "session/observationUnavailable")]
+    ObservationUnavailable {
+        registration_id: String,
+        target: AttachmentTarget,
+        #[schemars(length(max = 512))]
+        message: String,
     },
     #[serde(rename = "session/resyncRequired")]
     ResyncRequired {

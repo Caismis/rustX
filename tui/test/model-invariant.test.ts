@@ -563,7 +563,7 @@ it('T05 T11 unavailable checkpoint keeps Applied and exposes an observation fail
   h.transport.respondError(request.id, {code: -32000, message: 'observation unavailable: native transcript commit awaits its observation owner', data: {kind: 'observation_unavailable', diagnostic: 'native transcript commit awaits its observation owner'}});
   await refused;
   assert.equal(h.session.state.cursor, '0');
-  assert.equal(h.session.observationPhase, 'resyncRequired');
+  assert.equal(h.session.observationPhase, 'unavailable');
   assert.match(h.session.observationError!, /Observation source unavailable/);
   assert.equal(h.session.state.attempt, undefined);
   assert.equal(h.transport.transportCount('session/subscribe'), 1);

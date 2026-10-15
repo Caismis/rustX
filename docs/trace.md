@@ -23,7 +23,7 @@ duplicated message body, recovery hook, or second subscription.
 | Event Journal | Exact identities, ordering, starts and proven terminal boundaries |
 | Immutable Request Snapshots | Owning Attempt/logical Step, actual request ordinal, historical model name and request limits |
 | Message Ledger | Accepted Assistant text/reasoning, canonical ToolCall proposals, Tool result artifact references |
-| Conversation Surface | Remains the current conversation authority; Trace neither alters it nor mistakes retired messages for deleted history |
+| Typed projection checkpoints/timeline | Separately inspect historical model context; projected tools are not execution records |
 | Current runtime projections | Positive evidence for current Attempt/request/foreground Tool activity, detached execution, Subagent, Workflow and interaction lifecycle labels |
 | Existing artifact carrier | Bounded `artifact/read` for legitimate canonical artifact IDs; no new binary endpoint |
 

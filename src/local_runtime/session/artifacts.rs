@@ -43,6 +43,51 @@ fn references(messages: &mut [MessageBlock], mut visit: impl FnMut(&mut Artifact
     }
 }
 
+fn projected_references(
+    checkpoints: &mut [crate::durable::projection::ProjectionCheckpoint],
+    mut visit: impl FnMut(&mut ArtifactId),
+) {
+    use crate::context::checkpoint::CheckpointMessage;
+    use crate::model::projected::ProjectedMessage;
+    for checkpoint in checkpoints {
+        for item in &mut checkpoint.candidate.items {
+            let CheckpointMessage::Derived(derived) = &mut item.message else {
+                continue;
+            };
+            match &mut derived.message {
+                ProjectedMessage::User { content, .. } => {
+                    for block in content {
+                        match block {
+                            UserContentBlock::File(r) => visit(&mut r.artifact_id),
+                            UserContentBlock::Image(r) => visit(&mut r.artifact_id),
+                            _ => {}
+                        }
+                    }
+                }
+                ProjectedMessage::Assistant { content } => {
+                    for block in content {
+                        if let AssistantContentBlock::Image(r) = block {
+                            visit(&mut r.artifact_id);
+                        }
+                    }
+                }
+                ProjectedMessage::Tool { result, .. } => {
+                    for r in &mut result.artifacts {
+                        visit(&mut r.artifact_id);
+                    }
+                    for block in &mut result.content {
+                        match block {
+                            ToolResultContent::File(r) => visit(&mut r.artifact_id),
+                            ToolResultContent::Image(r) => visit(&mut r.artifact_id),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl SessionCatalog {
     pub(super) fn lineage_artifacts(
         &self,
@@ -51,6 +96,7 @@ impl SessionCatalog {
     ) -> Result<Option<ArtifactStore>, SessionError> {
         let mut needed = false;
         references(&mut seed.canonical().to_vec(), |_| needed = true);
+        projected_references(&mut seed.projections().to_vec(), |_| needed = true);
         if !needed {
             return Ok(None);
         }
@@ -95,8 +141,12 @@ pub(super) fn materialize(
         let destination =
             ArtifactStore::new(conversation.clone(), root)?.with_lifecycle(Some(access));
         let mut canonical = seed.canonical().to_vec();
+        let mut projections = seed.projections().to_vec();
         let mut ids = BTreeSet::new();
         references(&mut canonical, |id| {
+            ids.insert(id.clone());
+        });
+        projected_references(&mut projections, |id| {
             ids.insert(id.clone());
         });
         // Finite preparation work, independently of presentation/transport limits.
@@ -112,16 +162,51 @@ pub(super) fn materialize(
             );
         }
         references(&mut canonical, |id| *id = remapped[id].clone());
-        Ok(LineageSeed::replayed(
-            canonical,
-            seed.surface_history().to_vec(),
-            seed.checkpoints().clone(),
-        )?
-        .with_completed_responses(seed.completed_responses().to_vec())?
-        // Message identities were remapped before materialization. Artifact IDs
-        // are content references, so copying them cannot change native ownership.
-        .with_turns(seed.turns().to_vec())?
-        .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?)
+        projected_references(&mut projections, |id| *id = remapped[id].clone());
+        let messages: BTreeMap<_, _> = canonical.iter().map(|m| (m.id().clone(), m)).collect();
+        let mut fingerprints = BTreeMap::new();
+        for checkpoint in &mut projections {
+            let remap = |reference: &mut crate::model::projected::CanonicalMessageRef| -> Result<(),Box<dyn std::error::Error>> {
+                let message = messages.get(&reference.message_id).ok_or("missing destination-owned Original after artifact copy")?;
+                *reference = crate::model::projected::CanonicalMessageRef::of(conversation,message);
+                Ok(())
+            };
+            for item in &mut checkpoint.candidate.items {
+                match &mut item.message {
+                    crate::context::checkpoint::CheckpointMessage::Original(reference) => {
+                        remap(reference)?;
+                    }
+                    crate::context::checkpoint::CheckpointMessage::Derived(derived) => {
+                        for source in &mut derived.sources {
+                            remap(source)?;
+                        }
+                        for source in &mut derived.checkpoint_sources {
+                            source.content_digest = fingerprints
+                                .get(&source.checkpoint_id)
+                                .cloned()
+                                .ok_or("missing copied checkpoint dependency")?;
+                        }
+                    }
+                }
+                for source in &mut item.call_sources {
+                    remap(&mut source.assistant)?;
+                }
+            }
+            checkpoint.fingerprint = checkpoint.candidate.fingerprint();
+            fingerprints.insert(
+                checkpoint.candidate.checkpoint_id.clone(),
+                checkpoint.fingerprint.clone(),
+            );
+        }
+        Ok(
+            LineageSeed::replayed(canonical, seed.surface_history().to_vec())?
+                .with_completed_responses(seed.completed_responses().to_vec())?
+                // Message identities were remapped before materialization. Artifact IDs
+                // are content references, so copying them cannot change native ownership.
+                .with_turns(seed.turns().to_vec())?
+                .with_projections(projections)?
+                .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?,
+        )
     };
     copy().map_err(|e| SessionError::Io {
         path: root.into(),

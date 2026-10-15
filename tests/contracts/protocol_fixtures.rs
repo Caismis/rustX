@@ -430,9 +430,13 @@ fn additional_event_variants_round_trip() {
     assert_eq!(decoded, outcome_unknown);
 
     let compaction = RuntimeEvent::CompactionCompleted {
+        operation_id: rustx::runtime::identity::CompactionOperationId::new("fixture-compaction"),
         generation: 3,
-        summary_message_id: MessageId::new("conv-1-summary-3"),
-        surface_revision: rustx::conversation::SurfaceRevision::new(12),
+        checkpoint_id: rustx::runtime::identity::CheckpointId::new(format!(
+            "{}",
+            MessageId::new("conv-1-summary-3")
+        )),
+        activation_id: rustx::context::checkpoint::ProjectionActivationId(12),
         tokens_before: TokenMeasurement {
             input_tokens: 4800,
             source: TokenMeasurementSource::ProviderReported,

@@ -393,6 +393,7 @@ impl RuntimeResourceSnapshot {
             binding,
             snapshot.primary().context_window(),
             crate::model::ModelRequest {
+                continuation_source: None,
                 images: std::collections::BTreeMap::new(),
                 invocation: snapshot.primary().invocation_config(),
                 messages: Vec::new(),
@@ -415,6 +416,7 @@ impl RuntimeResourceSnapshot {
             summary_binding,
             snapshot.summary_invocation().context_window(),
             crate::model::ModelRequest {
+                continuation_source: None,
                 images: std::collections::BTreeMap::new(),
                 invocation: snapshot.summary_invocation().invocation_config(),
                 messages: Vec::new(),

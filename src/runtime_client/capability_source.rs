@@ -10,12 +10,15 @@ use serde::{
 };
 use std::sync::{Arc, OnceLock};
 
+mod prepared;
+pub(crate) use prepared::PreparedCapabilityHead;
+
 #[derive(Debug, Clone)]
 pub(crate) struct CapabilityReadSource {
     snapshot: Arc<CapabilitySnapshot>,
     availability: CapabilityAvailability,
     model: Option<crate::model::catalog::ModelCapabilities>,
-    prepared: Arc<OnceLock<(CapabilityView, Vec<super::checkpoint::CollectionFrontier>)>>,
+    prepared: Arc<OnceLock<PreparedCapabilityHead>>,
 }
 impl CapabilityReadSource {
     pub(crate) fn new(
@@ -220,8 +223,8 @@ impl CapabilityReadSource {
                 self.availability.len(),
                 &mut frontiers,
             );
-            (
-                CapabilityView {
+            PreparedCapabilityHead::new(
+                &CapabilityView {
                     revision: self.snapshot.revision(),
                     configured_tools,
                     tools,
@@ -237,11 +240,13 @@ impl CapabilityReadSource {
         self.prepared
             .get()
             .expect("capability header prepared outside Projection")
-            .0
-            .clone()
+            .header()
     }
     pub(crate) fn frontiers(&self) -> Vec<super::checkpoint::CollectionFrontier> {
-        self.prepared.get().expect("source prepared").1.clone()
+        self.prepared_head().frontiers()
+    }
+    pub(crate) fn prepared_head(&self) -> PreparedCapabilityHead {
+        self.prepared.get().expect("source prepared").clone()
     }
     fn skill_views(&self) -> impl Iterator<Item = SkillReadView<'_>> {
         self.snapshot

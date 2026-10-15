@@ -119,22 +119,6 @@ impl TraceProjection<'_> {
                     facts.truncated |= canonical.truncated;
                 }
             }
-            D::CompactionStart => {
-                if let Some(end) = self.ending(
-                    anchor.sequence,
-                    &[
-                        crate::durable::observation::TraceFactKind::CompactionCompleted,
-                        crate::durable::observation::TraceFactKind::CompactionFailed,
-                    ],
-                )? && let D::Terminal(terminal) = end.fact
-                    && let Some(position) = terminal.summary_ledger_position
-                {
-                    facts.canonical(
-                        self.store
-                            .observation_trace_canonical_summary(self.cut()?, position)?,
-                    );
-                }
-            }
             D::ToolStart {
                 occurrence: Some(occurrence),
                 ..

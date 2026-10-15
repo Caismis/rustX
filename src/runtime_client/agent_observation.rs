@@ -510,7 +510,8 @@ fn cold_trace_selection(cut: &super::checkpoint::CheckpointReadCut, domain: &str
             || super::journal_observation::selection(domain).is_some()
             || super::delivery::selection(domain).is_some()
             || super::occupancy::selection(domain).is_some()
-            || super::attempt_identity::selection(domain).is_some())
+            || super::attempt_identity::selection(domain).is_some()
+            || super::projection_history::selection(domain).is_some())
 }
 
 fn cold_agent_value_read(

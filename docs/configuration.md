@@ -916,7 +916,7 @@ forgotten, which reads as having no receipt. Receipt ids name occurrences; they
 never order them. A receipt is withdrawn only when its source is found intrinsically healthy;
 a client deciding what to present reconciles against that order, never against
 which receipts it already showed (see [TUI and App Server](tui-app-server.md)
-and the [protocol](app-server-protocol.md#automatic-source-repair-receipts-v48)).
+and the [protocol](app-server-protocol.md#automatic-source-repair-receipts-v50)).
 A connection's interest is the User and the 64 Workspaces it most recently
 addressed. Each admission — including addressing a forgotten Workspace again —
 delivers the source's current level once, at the sequence it was read at: its

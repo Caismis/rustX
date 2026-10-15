@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import type {CheckpointReadCut,TraceFieldSource} from '../../../../protocol/app-server/v48';
+import type {CheckpointReadCut,TraceFieldSource} from '../../../../protocol/app-server/v50';
 import {traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import {readTraceFieldWindow} from '../../../../protocol/app-server/trace-field';
 import type {TraceFieldReader} from '../../client/trace';

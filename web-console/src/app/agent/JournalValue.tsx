@@ -1,6 +1,6 @@
 import { attemptIdentitySourceKey } from '../../../../protocol/app-server/attempt-identity';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { AttemptIdentitySource, AttachmentTarget, CheckpointReadCut, ContentRef, JournalFieldRef, ObservationReadCut, RuntimeClientSnapshot } from '../../../../protocol/app-server/v48';
+import type { AttemptIdentitySource, AttachmentTarget, CheckpointReadCut, ContentRef, JournalFieldRef, ObservationReadCut, RuntimeClientSnapshot } from '../../../../protocol/app-server/v50';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';

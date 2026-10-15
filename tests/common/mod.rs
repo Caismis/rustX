@@ -453,6 +453,7 @@ pub fn simple_request(
     use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
     use rustx::runtime::identity::MessageId;
     rustx::model::ModelRequest {
+        continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: invocation(protocol, model),
         messages: vec![rustx::model::ModelInputMessage::Canonical(
@@ -470,6 +471,41 @@ pub fn simple_request(
         effective_system_prompt: String::new(),
         continuation: None,
     }
+}
+
+/// Bind this explicitly selected fixture output to the previous simulated request.
+/// Text-only fixtures also retain the emitted native state-only reasoning unit,
+/// as the production `TurnAssembler` does after a `ContinuationState` event.
+pub fn bind_accepted_continuation_source(
+    request: &mut rustx::model::ModelRequest,
+    accepted_item: usize,
+) {
+    let rustx::model::ModelInputMessage::Canonical(rustx::message::types::MessageBlock::Assistant(
+        assistant,
+    )) = &mut request.messages[accepted_item]
+    else {
+        panic!("fixture source must be accepted canonical Assistant output");
+    };
+    if !assistant.content.iter().any(|block| matches!(block, rustx::message::types::AssistantContentBlock::Reasoning(reasoning) if reasoning.provider_state.is_some())) {
+        assistant.content.push(rustx::message::types::AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+            text: None,
+            provider_state: request.continuation.clone(),
+        }));
+    }
+    let accepted = request.messages[accepted_item]
+        .as_canonical()
+        .expect("fixture names actual canonical accepted output");
+    request.continuation_source = Some(
+        rustx::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
+            rustx::runtime::identity::RequestId::new("previous-actual-fixture-request"),
+            &rustx::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
+            &request.messages[..accepted_item],
+            accepted,
+        )
+        .expect("fixture accepted Assistant"),
+    );
 }
 
 /// One canonical tool definition used by adapter tests.
@@ -517,6 +553,10 @@ pub fn request_snapshots(
 /// not alter [`AgentExecutionResult`]: production settlement has no complete
 /// attempt-local event trace.
 pub struct DurableExecutionAudit {
+    /// Canonical facts read explicitly for the settled execution audit.
+    pub canonical_history: Vec<MessageBlock>,
+    /// Immutable historical projection activations read for architectural assertions.
+    pub projections: Vec<rustx::durable::projection::ProjectionCheckpoint>,
     /// The bounded settlement handoff returned by the Agent Loop.
     pub result: AgentExecutionResult,
     /// The durable Event Journal facts read through fixed-size pages for a
@@ -603,6 +643,11 @@ pub fn read_request_snapshot_history(
 }
 
 impl DurableExecutionAudit {
+    #[must_use]
+    pub fn messages(&self) -> &[MessageBlock] {
+        &self.canonical_history
+    }
+
     /// The released text of the attempt's publication streams, folded in
     /// release order.
     #[must_use]
@@ -644,7 +689,22 @@ pub fn durable_agent_result_with_publication(
 ) -> DurableExecutionAudit {
     let event_history = read_event_history(store, &result.attempt_id);
     let snapshot_history = read_request_snapshot_history(store, &result.attempt_id);
+    let canonical_history = store.load_canonical().expect("explicit canonical audit");
+    let mut projections = Vec::new();
+    let mut after = rustx::context::checkpoint::ProjectionActivationId(0);
+    loop {
+        let page = store
+            .projection_timeline(after, 64)
+            .expect("projection audit page");
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().unwrap().activation.activation;
+        projections.extend(page);
+    }
     DurableExecutionAudit {
+        canonical_history,
+        projections,
         result,
         event_history,
         snapshot_history,

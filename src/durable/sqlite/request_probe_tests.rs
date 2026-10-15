@@ -142,7 +142,7 @@ fn insert_corrupt_probe_fact(connection: &Connection, event: &RuntimeEventEnvelo
 #[test]
 fn t14_t19_native_request_probe_rejects_duplicate_original_starts_and_owner_mismatch() {
     let store = store();
-    let (snapshot, started, _) = seeded_probe_request(&store);
+    let (snapshot, started, completed) = seeded_probe_request(&store);
     let mut connection = store.lock().unwrap();
     let transaction = connection.transaction().unwrap();
     let mut wrong_owner = started.clone();
@@ -169,7 +169,7 @@ fn t14_t19_native_request_probe_rejects_duplicate_original_starts_and_owner_mism
     assert_eq!(
         require_started_request_tx(&transaction, store.conversation_id(), &snapshot.request_id)
             .unwrap(),
-        (snapshot.clone(), started.sequence)
+        (snapshot.clone(), started.sequence, Some(completed.sequence))
     );
     let mut duplicate = started;
     duplicate.sequence = 3;

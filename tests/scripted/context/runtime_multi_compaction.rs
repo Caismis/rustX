@@ -60,9 +60,7 @@ use rustx::model::{
     ModelAdapter, ModelError, ModelErrorKind, ModelEvent, ModelFinishReason, ModelProtocol,
     RequestParams,
 };
-use rustx::runtime::continuation::{
-    AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
-};
+use rustx::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
     EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeAttachment,
@@ -274,11 +272,16 @@ async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
 
 /// Waits until the runtime is idle again and returns its current working
 /// Message Ledger projection.
-async fn await_ledger(host: &RuntimeClientHost) -> Vec<MessageBlock> {
+async fn await_ledger(
+    host: &RuntimeClientHost,
+    store: &dyn rustx::durable::ConversationStore,
+) -> Vec<MessageBlock> {
     tokio::time::timeout(LIVENESS, async {
         loop {
-            if let Some(ledger) = host.host_ledger() {
-                return ledger;
+            if host.host_ledger().is_some() {
+                return store
+                    .load_canonical()
+                    .expect("explicit canonical execution audit");
             }
             tokio::task::yield_now().await;
         }
@@ -298,22 +301,28 @@ fn reconstruct_at(host: &RuntimeClientHost, index: usize) -> (RequestSnapshot, M
     (snapshot, request)
 }
 
+/// Only provider-visible typed content, excluding immutable source provenance.
+fn request_wire(messages: &[rustx::model::ModelInputMessage]) -> String {
+    serde_json::to_string(
+        &messages
+            .iter()
+            .map(rustx::model::ModelInputMessage::view)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
 /// Serializes canonical messages for byte-content marker assertions.
 fn wire<T: serde::Serialize>(messages: &T) -> String {
     serde_json::to_string(messages).expect("canonical messages serialize")
 }
 
 /// The number of committed compaction-summary messages in one message list.
-fn compaction_summaries(messages: &[MessageBlock]) -> usize {
-    messages
-        .iter()
-        .filter(|message| {
-            matches!(
-                message,
-                MessageBlock::User(user) if user.kind.is_compaction_summary()
-            )
-        })
-        .count()
+fn projection_count(store: &dyn rustx::durable::ConversationStore) -> usize {
+    store
+        .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+        .unwrap()
+        .len()
 }
 
 /// The same assertion over the provider-neutral request representation.
@@ -322,8 +331,8 @@ fn mixed_compaction_summaries(messages: &[rustx::model::ModelInputMessage]) -> u
         .iter()
         .filter(|message| {
             matches!(
-                message.as_canonical(),
-                Some(MessageBlock::User(user)) if user.kind.is_compaction_summary()
+                message,
+                rustx::model::ModelInputMessage::Derived(derived) if derived.transformations.contains(&rustx::model::projected::SemanticTransformation::Summary)
             )
         })
         .count()
@@ -374,15 +383,9 @@ fn assert_tool_units_complete(messages: &[rustx::model::ModelInputMessage], cont
     }
 }
 
-fn anthropic_state() -> ProviderContinuationState {
+fn anthropic_state(signature: &str) -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"signature": "sig-27"}),
-    })
-}
-
-fn stored_state() -> ProviderContinuationState {
-    ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
-        previous_response_id: "resp_27".to_owned(),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": signature}),
     })
 }
 
@@ -502,8 +505,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
         assert!(summary_request.effective_system_prompt.is_empty());
         assert_eq!(summary_request.continuation, None);
     }
-    assert!(wire(&requests[1].messages).contains("FILLER-ONE-MARKER"));
-    let summary_two_input = wire(&requests[3].messages);
+    assert!(request_wire(&requests[1].messages).contains("FILLER-ONE-MARKER"));
+    let summary_two_input = request_wire(&requests[3].messages);
     assert!(
         summary_two_input.contains("SUMMARY-ONE covers filler one"),
         "the second compaction's span retired the still-active first summary"
@@ -513,14 +516,14 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // R1 observed the pre-compaction surface; each proactive compaction retires
     // the old visible status, so R2/R3 observe exactly the rebuilt surfaces
     // [summary, inbound, status].
-    let r1_wire = wire(&requests[0].messages);
+    let r1_wire = request_wire(&requests[0].messages);
     assert!(r1_wire.contains("turn one"));
     assert!(r1_wire.contains("Current time:"));
     assert_eq!(mixed_compaction_summaries(&requests[0].messages), 0);
 
     assert_eq!(requests[2].messages.len(), 3, "[sum1, in2, st2]");
     assert_eq!(mixed_compaction_summaries(&requests[2].messages), 1);
-    let r2_wire = wire(&requests[2].messages);
+    let r2_wire = request_wire(&requests[2].messages);
     assert!(r2_wire.contains("SUMMARY-ONE covers filler one"));
     assert!(
         !r2_wire.contains("FILLER-ONE-MARKER"),
@@ -531,7 +534,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
 
     assert_eq!(requests[4].messages.len(), 3, "[sum2, in3, st3]");
     assert_eq!(mixed_compaction_summaries(&requests[4].messages), 1);
-    let r3_wire = wire(&requests[4].messages);
+    let r3_wire = request_wire(&requests[4].messages);
     assert!(r3_wire.contains("SUMMARY-TWO supersedes summary one"));
     assert!(
         !r3_wire.contains("SUMMARY-ONE covers filler one"),
@@ -560,8 +563,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
             "conv_1778c31f-3925-7199-9ba6-e52366afec4a-attempt-2"
         ]
     );
-    assert!(snapshots[0].surface_revision < snapshots[1].surface_revision);
-    assert!(snapshots[1].surface_revision < snapshots[2].surface_revision);
+    assert!(snapshots[0].canonical_frontier < snapshots[1].canonical_frontier);
+    assert!(snapshots[1].canonical_frontier < snapshots[2].canonical_frontier);
 
     // Historical reconstruction is byte-exact and stable across the second
     // compaction: R1 and R2 reconstruct identically before and after it.
@@ -580,30 +583,36 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // Commit order per attempt: the fresh inbound commits at turn start, the
     // proactive compaction's summary commits before status admission, and
     // the assistant message commits at turn completion.
-    let ledger = await_ledger(host).await;
+    let ledger = await_ledger(
+        host,
+        fixture.runtime.tool_runtime().durable_store().as_ref(),
+    )
+    .await;
     assert_eq!(
         ledger.len(),
-        11,
-        "3 inbounds + 3 status facts + 3 assistants + 2 summaries"
+        9,
+        "3 inbounds + 3 status facts + 3 assistants; summaries belong to checkpoints"
     );
     assert!(matches!(&ledger[0], MessageBlock::User(u) if u.kind == InboundKind::Message));
     assert!(is_agent_status(&ledger[1]));
     assert!(matches!(&ledger[2], MessageBlock::Assistant(_)));
     assert!(matches!(&ledger[3], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(matches!(&ledger[4], MessageBlock::User(u) if u.kind.is_compaction_summary()));
-    assert!(is_agent_status(&ledger[5]));
-    assert!(matches!(&ledger[6], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[7], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(matches!(&ledger[8], MessageBlock::User(u) if u.kind.is_compaction_summary()));
-    assert!(is_agent_status(&ledger[9]));
-    assert!(matches!(&ledger[10], MessageBlock::Assistant(_)));
+    assert_eq!(
+        projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
+        2
+    );
+    assert!(is_agent_status(&ledger[4]));
+    assert!(matches!(&ledger[5], MessageBlock::Assistant(_)));
+    assert!(matches!(&ledger[6], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    assert!(is_agent_status(&ledger[7]));
+    assert!(matches!(&ledger[8], MessageBlock::Assistant(_)));
     let ledger_wire = wire(&ledger);
     assert!(
         ledger_wire.contains("FILLER-ONE-MARKER"),
         "the ledger retains the retired filler verbatim"
     );
     assert!(ledger_wire.contains("FILLER-TWO-MARKER"));
-    assert!(ledger_wire.contains("SUMMARY-ONE covers filler one"));
+    assert!(!ledger_wire.contains("SUMMARY-ONE covers filler one"));
     assert!(ledger_wire.contains("Current time:"));
 
     // The external projection reports exactly two committed compactions in
@@ -709,8 +718,8 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let cross_attempt = stored_state();
-    let intra_attempt = anthropic_state();
+    let cross_attempt = anthropic_state("cross-attempt");
+    let intra_attempt = anthropic_state("intra-attempt");
 
     // Block 0 carries the continuation annotation; the tool call is block 1
     // (the exact layout proven by the m4 continuation suite).
@@ -769,8 +778,13 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     .register(&mut tools);
     let fixture = RuntimeClientFixture::builder(CONVERSATION)
         .tools(tools)
-        .session_model(scripted_session_model(
-            adapter.clone() as Arc<dyn ModelAdapter>
+        .session_model(super::super::support::model::fixture_session_model(
+            &[
+                FixtureModel::text("scripted/scripted", ModelProtocol::AnthropicMessages)
+                    .with_max_output_tokens(512),
+            ],
+            "scripted/scripted",
+            &ScriptedAdapterFactory::new(adapter.clone()),
         ))
         .status_engine(counting_status_engine(status_seam.clone()))
         .build()
@@ -834,19 +848,19 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
 
     // Compaction #1 retired the continuation-owning tool unit completely:
     // the retry observes only the summary — neither the call nor its result.
-    let retry_two = wire(&requests[4].messages);
+    let retry_two = request_wire(&requests[4].messages);
     assert_eq!(requests[4].messages.len(), 1, "[sum1]");
     assert!(retry_two.contains("SUMMARY-ONE covers the tool turn"));
     assert!(!retry_two.contains("call-1"));
     assert!(!retry_two.contains("TOOL-RESULT-OK"));
 
     // The summary input carried the complete retired tool unit.
-    let summary_one = wire(&requests[3].messages);
+    let summary_one = request_wire(&requests[3].messages);
     assert!(summary_one.contains("call-1"));
     assert!(summary_one.contains("TOOL-RESULT-OK"));
 
     // Compaction #2's span was exactly the still-active first summary.
-    let summary_two = wire(&requests[6].messages);
+    let summary_two = request_wire(&requests[6].messages);
     assert!(
         summary_two.contains("SUMMARY-ONE covers the tool turn"),
         "the second compaction retired the first summary, nothing else"
@@ -854,7 +868,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
 
     // The second retry observes [sum2, in3, st3]: the new summary, the fresh
     // inbound, and its admitted status fact — nothing retired.
-    let retry_three = wire(&requests[7].messages);
+    let retry_three = request_wire(&requests[7].messages);
     assert_eq!(requests[7].messages.len(), 3, "[sum2, in3, st3]");
     assert!(retry_three.contains("SUMMARY-TWO supersedes summary one"));
     assert!(!retry_three.contains("SUMMARY-ONE covers the tool turn"));
@@ -911,15 +925,18 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         "a new primary step admits a new context generation"
     );
     assert_ne!(
-        snapshots[2].surface_revision, snapshots[3].surface_revision,
-        "compaction gives the retry its own historical Surface revision"
+        snapshots[2].history_cut.activation, snapshots[3].history_cut.activation,
+        "compaction changes projection activation independently of canonical growth"
     );
     assert_eq!(snapshots[4].identity.turn, snapshots[5].identity.turn);
     assert_eq!(
         snapshots[4].context_generation,
         snapshots[5].context_generation
     );
-    assert_ne!(snapshots[4].surface_revision, snapshots[5].surface_revision);
+    assert_ne!(
+        snapshots[4].history_cut.activation,
+        snapshots[5].history_cut.activation
+    );
 
     // The frozen snapshots carry the exact per-request continuation facts.
     assert_eq!(snapshots[2].continuation, Some(intra_attempt));
@@ -945,20 +962,27 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     }
 
     // The ledger retains the retired tool unit and both summaries verbatim.
-    let ledger = await_ledger(host).await;
-    assert_eq!(ledger.len(), 12);
+    let ledger = await_ledger(
+        host,
+        fixture.runtime.tool_runtime().durable_store().as_ref(),
+    )
+    .await;
+    assert_eq!(ledger.len(), 10);
     assert!(
         matches!(&ledger[4], MessageBlock::Assistant(assistant)
             if assistant.content.iter().any(|block| matches!(block, AssistantContentBlock::ToolCall(_)))),
         "the retired continuation-owning tool call stays in the ledger"
     );
     assert!(matches!(&ledger[5], MessageBlock::Tool(_)));
-    assert_eq!(compaction_summaries(&ledger), 2);
+    assert_eq!(
+        projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
+        2
+    );
     let ledger_wire = wire(&ledger);
     assert!(ledger_wire.contains("call-1"));
     assert!(ledger_wire.contains("TOOL-RESULT-OK"));
-    assert!(ledger_wire.contains("SUMMARY-ONE covers the tool turn"));
-    assert!(ledger_wire.contains("SUMMARY-TWO supersedes summary one"));
+    assert!(!ledger_wire.contains("SUMMARY-ONE covers the tool turn"));
+    assert!(!ledger_wire.contains("SUMMARY-TWO supersedes summary one"));
 
     // Exactly two committed compactions, attributed in generation order.
     let compacted: Vec<(String, u64)> = events
@@ -1066,9 +1090,20 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         .submit_inbound(text("second"))
         .expect("the runtime admits inbound without any client");
     await_request_history_len(host, 3).await;
-    let detached_ledger = await_ledger(host).await;
-    assert_eq!(detached_ledger.len(), 6);
-    assert_eq!(compaction_summaries(&detached_ledger), 1);
+    let detached_ledger = await_ledger(
+        host,
+        fixture.runtime.tool_runtime().durable_store().as_ref(),
+    )
+    .await;
+    assert_eq!(
+        detached_ledger.len(),
+        5,
+        "summary projection adds no canonical message"
+    );
+    assert_eq!(
+        projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
+        1
+    );
 
     // Canonical reads answer while no client is attached.
     let requests = adapter.requests();
@@ -1091,7 +1126,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot without attachments");
     assert_eq!(detached_snapshot.context.compaction_count, 1);
-    assert_eq!(detached_snapshot.messages.len(), 6);
+    assert_eq!(detached_snapshot.messages.len(), 5);
 
     // A fresh attachment is a new projection binding over the same
     // continuous truth — never a transfer of semantic ownership.
@@ -1137,7 +1172,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     let keys = canonical_keys(&attachment_b, &checkpoint);
     assert_eq!(
         keys.len(),
-        10,
+        8,
         "bounded pages retain the whole canonical directory"
     );
 
@@ -1161,8 +1196,21 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             *request
         );
     }
-    let ledger = await_ledger(host).await;
-    assert_eq!(ledger.len(), 10);
+    let ledger = await_ledger(
+        host,
+        fixture.runtime.tool_runtime().durable_store().as_ref(),
+    )
+    .await;
+    assert_eq!(ledger.len(), 8);
+    let canonical = serde_json::to_string(&ledger).unwrap();
+    assert!(
+        !canonical.contains("SUMMARY-ONE") && !canonical.contains("SUMMARY-TWO"),
+        "canonical growth comes from real inbound/output/contributor commits, never Summary context"
+    );
+    assert_eq!(
+        projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
+        2
+    );
     assert_eq!(
         keys,
         ledger
@@ -1176,9 +1224,8 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             .iter()
             .map(MessageBlock::id)
             .collect::<Vec<_>>(),
-        ledger[2..].iter().map(MessageBlock::id).collect::<Vec<_>>()
+        ledger.iter().map(MessageBlock::id).collect::<Vec<_>>()
     );
-    assert_eq!(compaction_summaries(&ledger), 2);
 }
 
 // ---------------------------------------------------------------------------

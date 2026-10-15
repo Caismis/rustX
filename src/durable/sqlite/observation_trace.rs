@@ -151,8 +151,7 @@ pub(super) fn header(
             "Trace source beyond original J cut".into(),
         ));
     }
-    let row:Option<HeaderRow>=connection.query_row(
-        "SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner FROM events WHERE sequence=?1",
+    let row:Option<HeaderRow>=connection.prepare_cached("SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner FROM events WHERE sequence=?1").map_err(|error|storage(error.to_string()))?.query_row(
         [sequence],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
     let (bytes, kind, time, owner) = row.ok_or_else(|| {
         ConversationStoreError::InvalidReference("original Trace J absent".into())

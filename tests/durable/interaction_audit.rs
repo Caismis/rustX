@@ -275,13 +275,13 @@ fn start_request(
     turn: &TurnId,
 ) -> RequestId {
     let head = store.load_head().expect("head");
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt_id.clone(),
             turn: turn.clone(),
             retry_number: 0,
         },
-        head.revision,
+        rustx::context::resources::LedgerFrontier((head.revision).get()),
         "the frozen effective system prompt".to_owned(),
         Vec::new(),
         rustx::runtime::RuntimeResourceRevision::new(1),
@@ -299,6 +299,7 @@ fn start_request(
         Vec::new(),
     );
     let request_id = snapshot.request_id.clone();
+    crate::freeze_request(store, &mut snapshot);
     store
         .commit_model_turn_start(&[], &snapshot, fixed_time())
         .expect("request start");
@@ -426,8 +427,28 @@ impl Generation {
 ///
 /// Nothing here is an execution authorization: no `ToolExecutionStarted`
 /// exists, which is precisely the state the interaction regressions build on.
+fn two_generations(first: &Generation, second: &Generation) -> SqliteConversationStore {
+    let store = SqliteConversationStore::in_memory(conversation_id()).unwrap();
+    store.initialize(&[]).unwrap();
+    start_attempt(&store, &first.attempt);
+    let one = start_request(&store, &first.attempt, &first.turn);
+    if second.attempt != first.attempt {
+        start_attempt(&store, &second.attempt);
+    }
+    let two = start_request(&store, &second.attempt, &second.turn);
+    commit_generation_with_request(&store, first, one);
+    commit_generation_with_request(&store, second, two);
+    store
+}
 fn commit_generation(store: &SqliteConversationStore, generation: &Generation) {
     let request_id = start_request(store, &generation.attempt, &generation.turn);
+    commit_generation_with_request(store, generation, request_id);
+}
+fn commit_generation_with_request(
+    store: &SqliteConversationStore,
+    generation: &Generation,
+    request_id: RequestId,
+) {
     let message_id = generation.message_id();
     let start = PublicationStreamStart {
         stream_id: PublicationStreamId::for_request(&generation.attempt, &message_id),
@@ -1242,10 +1263,9 @@ fn fingerprint(store: &SqliteConversationStore) -> DurableFingerprint {
 /// `call-approved` belongs to turn 1.
 #[test]
 fn an_approval_cannot_reference_a_canonical_tool_call_from_another_turn() {
-    let store = policy_boundary_store();
     let first = Generation::first();
     let second = Generation::next("attempt-1", "2", "call-second-turn");
-    commit_generation(&store, &second);
+    let store = two_generations(&Generation::first(), &second);
 
     let before = fingerprint(&store);
     let id = InteractionId::for_attempt(&second.attempt, 1);
@@ -1281,11 +1301,9 @@ fn an_approval_cannot_reference_a_canonical_tool_call_from_another_turn() {
 /// owned by the generation that is asking.
 #[test]
 fn an_approval_cannot_reference_a_canonical_tool_call_from_another_attempt() {
-    let store = policy_boundary_store();
     let first = Generation::first();
     let second = Generation::next("attempt-2", "1", "call-second-attempt");
-    start_attempt(&store, &second.attempt);
-    commit_generation(&store, &second);
+    let store = two_generations(&Generation::first(), &second);
 
     // Attempt 1's call is unambiguously still canonical and active.
     assert!(
@@ -1326,9 +1344,8 @@ fn an_approval_cannot_reference_a_canonical_tool_call_from_another_attempt() {
 /// id, name, and canonical argument digest exactly.
 #[test]
 fn an_approval_commits_in_the_exact_generation_that_proposed_its_call() {
-    let store = policy_boundary_store();
     let second = Generation::next("attempt-1", "2", "call-second-turn");
-    commit_generation(&store, &second);
+    let store = two_generations(&Generation::first(), &second);
 
     for generation in [Generation::first(), second] {
         let id = InteractionId::for_attempt(
@@ -1777,9 +1794,13 @@ fn transcript_tool_occurrences_do_not_alias_across_attempts_and_reopen() {
         older.call.tool_id = ToolId::new("tool-bash");
         let mut newer = Generation::next("attempt-B", "1", "call-1");
         newer.call.tool_id = older.call.tool_id.clone();
+        let mut requests = Vec::new();
         for generation in [&older, &newer] {
             start_attempt(&store, &generation.attempt);
-            commit_generation(&store, generation);
+            requests.push(start_request(&store, &generation.attempt, &generation.turn));
+        }
+        for (generation, request) in [&older, &newer].into_iter().zip(requests) {
+            commit_generation_with_request(&store, generation, request);
         }
         let page_b = store.load_transcript_page(None, 1).unwrap();
         let cursor_b = page_b.entries[0].cursor;

@@ -121,13 +121,13 @@ fn attempt() -> AttemptId {
 /// the started request identity.
 fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
     let head = store.load_head().expect("head");
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new(turn),
             retry_number: 0,
         },
-        head.revision,
+        rustx::context::resources::LedgerFrontier((head.revision).get()),
         "the frozen effective system prompt".to_owned(),
         Vec::new(),
         rustx::runtime::RuntimeResourceRevision::new(1),
@@ -145,6 +145,7 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
         Vec::new(),
     );
     let request_id = snapshot.request_id.clone();
+    crate::freeze_request(store, &mut snapshot);
     store
         .commit_model_turn_start(&[], &snapshot, fixed_time())
         .expect("request start");
@@ -3175,18 +3176,16 @@ fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
         .unwrap();
     assert_eq!(captured.raw_tool_arguments.len(), 1);
     assert_eq!(captured.raw_tool_arguments[0].bytes, raw.as_bytes());
-    let seed = LineageSeed::replayed(
-        captured.canonical,
-        captured.surface_history,
-        captured.checkpoints,
-    )
-    .unwrap()
-    .with_completed_responses(captured.completed_responses)
-    .unwrap()
-    .with_turns(captured.turns)
-    .unwrap()
-    .with_raw_tool_arguments(captured.raw_tool_arguments)
-    .unwrap();
+    let seed = LineageSeed::replayed(captured.canonical, captured.surface_history)
+        .unwrap()
+        .with_completed_responses(captured.completed_responses)
+        .unwrap()
+        .with_turns(captured.turns)
+        .unwrap()
+        .with_projections(captured.projections)
+        .unwrap()
+        .with_raw_tool_arguments(captured.raw_tool_arguments)
+        .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("child.sqlite");
     let child_id = ConversationId::generate();
@@ -3330,22 +3329,26 @@ fn t08_t12_t19_live_and_audit_tool_metadata_keep_exact_components_and_frame_fron
 fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bounded() {
     let durable = Durable::new();
     let prompt = "λ🙂".repeat(700_000);
-    let body = "model context ".repeat(700_000);
+    // Keep the aggregate canonical input above nine MiB, while every
+    // original record satisfies the native model-input admission bound.
+    let body = "model context ".repeat(10_000);
     let store = durable.open();
     let messages: Vec<_> = (0..73)
         .map(|index| {
             MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("frozen-context-{index}")),
                 content: vec![AssistantContentBlock::Text(TextBlock {
-                    text: if index == 72 {
-                        body.clone()
-                    } else {
-                        format!("context-{index}")
-                    },
+                    text: body.clone(),
                 })],
             })
         })
         .collect();
+    assert!(
+        messages
+            .iter()
+            .all(|message| serde_json::to_vec(message).unwrap().len() < 1_048_576)
+    );
+    assert!(messages.len() * body.len() > 9 * 1_048_576);
     store.initialize(&messages).unwrap();
     let head = store.load_head().unwrap();
     let mut configured = invocation();
@@ -3356,13 +3359,13 @@ fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bound
         "api_key".into(),
         serde_json::json!("secret-key".repeat(200_000)),
     );
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new("trace-source"),
             retry_number: 0,
         },
-        head.revision,
+        rustx::context::resources::LedgerFrontier(head.revision.get()),
         prompt.clone(),
         Vec::new(),
         rustx::runtime::RuntimeResourceRevision::new(1),
@@ -3379,6 +3382,7 @@ fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bound
         None,
         Vec::new(),
     );
+    crate::freeze_request(&store, &mut snapshot);
     let started = store
         .commit_model_turn_start(&[], &snapshot, fixed_time())
         .unwrap()
@@ -3422,7 +3426,7 @@ fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bound
         )
         .unwrap();
     // Only the original Snapshot metadata plus finite C-owned descriptors
-    // is indexed. The nine-megabyte canonical body is never copied into a
+    // is indexed. The nine-megabyte canonical input is never copied into a
     // second request/display history.
     assert!(indexed_bytes < prompt.len() as u64 + 1_000_000);
     drop(connection);
@@ -3505,13 +3509,13 @@ fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_byt
     // between a genuine native key and a generated bounded read locator.
     schema.insert("@80".into(), serde_json::json!("reserved-looking-key"));
     schema.insert(huge_key.clone(), serde_json::json!("large-key-value"));
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new("source-large-key"),
             retry_number: 0,
         },
-        store.load_head().unwrap().revision,
+        rustx::context::resources::LedgerFrontier(store.load_head().unwrap().revision.get()),
         "prompt".into(),
         Vec::new(),
         rustx::runtime::RuntimeResourceRevision::new(1),
@@ -3533,6 +3537,7 @@ fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_byt
         None,
         Vec::new(),
     );
+    crate::freeze_request(&store, &mut snapshot);
     let sequence = store
         .commit_model_turn_start(&[], &snapshot, fixed_time())
         .unwrap()

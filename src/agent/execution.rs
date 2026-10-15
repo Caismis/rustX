@@ -427,6 +427,7 @@ pub struct AgentExecution<'a> {
     /// The committed Assistant message that established the pending
     /// continuation, when one is pending.
     continuation_owner: Option<MessageId>,
+    continuation_source: Option<crate::runtime::continuation::AcceptedOutputContinuationSource>,
     /// The pending fresh inbound turn: `Some` until a successful model
     /// invocation has observed it. One pending fresh inbound turn produces
     /// at most one Agent Status generation.
@@ -449,6 +450,8 @@ pub struct AgentExecution<'a> {
     /// schema rejection. This is request-only context, never canonical
     /// conversation history.
     workflow_output_feedback: Option<String>,
+    /// Workflow correction frozen for this logical generation, including recovery versions.
+    frozen_workflow_feedback: Option<String>,
     /// The semantic-generation recovery state of the current logical model
     /// step: its one spent corrective-generation budget, shared by every
     /// anomaly class, and — while a corrective generation is pending — the
@@ -470,6 +473,10 @@ pub struct AgentExecution<'a> {
     /// The one publication-audit carryover frozen for the current logical
     /// primary step. It is never reloaded for a retry.
     frozen_carryover: Option<FrozenCarryover>,
+    /// Latest authorized immutable semantic version of the current logical generation.
+    current_input: Option<Box<FrozenLogicalInput>>,
+    /// The current logical generation's accepted Context identities, exactly once.
+    logical_context_ids: Vec<MessageId>,
     /// The last request identity that durably crossed model start in the
     /// current logical step. It is the input to the shared live/recovery
     /// carryover selector.
@@ -751,6 +758,17 @@ struct PreparedModelTurn {
     estimated_input: u64,
 }
 
+/// Working set of the existing execution owner; never an execution state machine.
+#[derive(Clone)]
+struct FrozenLogicalInput {
+    snapshot: RequestSnapshot,
+    request: ModelRequest,
+    fingerprint: u64,
+    anchor: ObservedAnchor,
+    request_identity: u64,
+    estimated_input: u64,
+}
+
 /// The attempt-local `PostToolBatch` status opportunity together with the
 /// durable transcript position frozen when it was established.
 ///
@@ -779,7 +797,7 @@ struct PendingPostToolBatch {
 }
 
 /// The intermediate staged view of one model turn: scratch conversation,
-/// Effective System Prompt, projection, frozen snapshot, and request — all
+/// Effective System Prompt, projection, snapshot metadata, and request — all
 /// transient, nothing committed.
 struct StagedModelTurn {
     /// The staged projection (over the scratch conversation that includes
@@ -787,10 +805,12 @@ struct StagedModelTurn {
     projection: ContextProjection,
     /// The staged Effective System Prompt.
     effective_system_prompt: String,
-    /// The frozen snapshot of this actual request.
+    /// Snapshot metadata; exact input is frozen only after final preflight.
     snapshot: RequestSnapshot,
     /// The exact provider-neutral request of the staged projection.
     request: ModelRequest,
+    /// Coverage reconciliation is committed to hot state only after preflight.
+    retire_continuation: bool,
     /// The deterministic estimate of the exact mixed request input.
     estimated_input: u64,
 }
@@ -1228,6 +1248,7 @@ impl<'a> AgentExecution<'a> {
             durable_failure_kind: None,
             pending_continuation: None,
             continuation_owner: None,
+            continuation_source: None,
             pending_fresh_inbound: None,
             goal_creation_authorization: std::sync::Mutex::new(None),
             pending_post_tool_batch: None,
@@ -1235,9 +1256,12 @@ impl<'a> AgentExecution<'a> {
             subagent_context: runtime_policy.subagent_context,
             workflow_output: runtime_policy.workflow_output,
             workflow_output_feedback: None,
+            frozen_workflow_feedback: None,
             semantic_recovery: SemanticGenerationRecovery::default(),
             accepted_context: None,
             frozen_carryover: None,
+            current_input: None,
+            logical_context_ids: Vec::new(),
             last_started_request: None,
             logical_model_step: LogicalModelStepState::NotStarted,
             terminal_commit_state: TerminalCommitState::Ready,
@@ -1443,7 +1467,13 @@ impl<'a> AgentExecution<'a> {
     ///
     /// Panics only when the loop violates its own state-machine invariants;
     /// a durable terminal write failure is an explicit result, not a panic.
-    pub async fn run(mut self) -> AgentExecutionResult {
+    #[must_use]
+    pub fn run(self) -> futures_util::future::BoxFuture<'a, AgentExecutionResult> {
+        // Keep the retained frozen working set off each caller's async stack.
+        Box::pin(self.run_owned())
+    }
+
+    async fn run_owned(mut self) -> AgentExecutionResult {
         self.emit(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
         });
@@ -1618,6 +1648,10 @@ impl<'a> AgentExecution<'a> {
         // below. Retries never re-enter dynamic context admission.
         self.accepted_context = None;
         self.frozen_carryover = None;
+        self.current_input = None;
+        self.frozen_workflow_feedback = self.workflow_output_feedback.take();
+        self.logical_context_ids.clear();
+        self.context_runtime.engine.clear_media();
         self.last_started_request = None;
         // The semantic corrective-generation budget and any unresolved
         // corrective hint are semantic state of the step that just ended, so
@@ -1862,7 +1896,7 @@ impl<'a> AgentExecution<'a> {
         if self.pending_continuation.is_some() {
             self.continuation_owner = Some(assistant_message_id.clone());
         } else {
-            self.continuation_owner = None;
+            self.retire_continuation();
         }
         let has_tool_calls = !turn_assembly.tool_calls.is_empty();
         if let Err(error) = self.state.model_finished(has_tool_calls) {
@@ -1897,8 +1931,7 @@ impl<'a> AgentExecution<'a> {
                 }
                 match workflow_output.submit(protocol_calls[0].arguments.clone()) {
                     crate::runtime::workflow::WorkflowOutputSubmission::Committed => {
-                        self.pending_continuation.take();
-                        self.continuation_owner.take();
+                        self.retire_continuation();
                         self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
                         if let Err(error) = self.state.tools_finished() {
                             return Some(Terminal::Failed {
@@ -1960,6 +1993,23 @@ impl<'a> AgentExecution<'a> {
         // C succeeded: the logical model step is no longer unresolved, even
         // if a later tool/result phase causes the attempt itself to fail.
         self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
+        self.continuation_source = if self.pending_continuation.is_some() {
+            let input = self
+                .current_input
+                .as_ref()
+                .expect("accepted output has frozen actual request");
+            let output = self
+                .conversation
+                .ledger()
+                .get(&assistant_message_id)
+                .expect("accepted Assistant is committed");
+            Some(crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
+                input.snapshot.request_id.clone(), &self.request.conversation_id,
+                &input.request.messages, output,
+            ).expect("canonical accepted output is Assistant"))
+        } else {
+            None
+        };
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
             if let Some(terminal) = self.durable_failure_terminal_from_state() {
@@ -2053,13 +2103,20 @@ impl<'a> AgentExecution<'a> {
             feedback.to_owned(),
             2048,
         ));
-        self.pending_continuation.take();
-        self.continuation_owner.take();
+        self.retire_continuation();
         self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
         if had_tool_calls {
             let _ = self.state.tools_finished();
         }
         self.emit(RuntimeEvent::TurnCompleted);
+    }
+
+    /// Relinquish native state, accepted-output provenance and its planning
+    /// anchor together. This never changes canonical accepted output.
+    fn retire_continuation(&mut self) {
+        self.pending_continuation = None;
+        self.continuation_source = None;
+        self.continuation_owner = None;
     }
 
     /// Preflights every model-issued tool call of the turn.
@@ -2293,6 +2350,7 @@ impl<'a> AgentExecution<'a> {
         // newly staged context cannot fit on its own. This compaction is
         // independent conversation-history maintenance with its own
         // canonical commit; it reserves no staged tokens.
+        self.freeze_model_media(&[]).await?;
         let baseline_prompt = self.effective_system_prompt()?;
         let baseline_projection = self.current_projection(&baseline_prompt)?;
         if self
@@ -2412,6 +2470,8 @@ impl<'a> AgentExecution<'a> {
         // identities, and in-memory validation only. Nothing commits until
         // the start arbitration wins.
         let staged_context = self.stage_context(accepted)?;
+        self.logical_context_ids = staged_context.iter().map(|m| m.id().clone()).collect();
+        self.freeze_model_media(&staged_context).await?;
         let mut staged = self.stage_model_turn(request_ordinal, &staged_context)?;
         let budgets = self.compaction_budgets();
         let should_compact = match self
@@ -2609,7 +2669,7 @@ impl<'a> AgentExecution<'a> {
         let Some(fresh) = self.pending_fresh_inbound.as_ref() else {
             return Ok(());
         };
-        let active = self.conversation.active_messages().map_err(|error| {
+        let active = self.canonical_model_history().map_err(|error| {
             ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
         })?;
         fresh.validate_against(&active).map_err(|error| {
@@ -2618,6 +2678,50 @@ impl<'a> AgentExecution<'a> {
                 format!("pending fresh inbound turn is inconsistent: {error}"),
             )
         })
+    }
+
+    async fn freeze_model_media(
+        &mut self,
+        staged_context: &[MessageBlock],
+    ) -> Result<(), Terminal> {
+        let history = self.store.projected_history().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        let anchor = self
+            .frozen_carryover
+            .as_ref()
+            .and_then(|c| c.anchor.as_ref());
+        let carryover = self
+            .frozen_carryover
+            .as_ref()
+            .filter(|_| anchor.is_some())
+            .and_then(FrozenCarryover::admitted);
+        let complete = crate::model::input::assemble_model_input(
+            &history.messages,
+            staged_context,
+            carryover.as_ref(),
+            anchor,
+        )
+        .map_err(|e| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                e,
+            ))
+        })?;
+        self.context_runtime
+            .engine
+            .prepare_media(&history.messages, &complete, &self.cancellation.signal())
+            .await
+            .map_err(|e| {
+                if e.kind == ContextErrorKind::Cancelled {
+                    self.cancelled_terminal()
+                } else {
+                    Self::context_failure_terminal(&e)
+                }
+            })
     }
 
     /// Builds the staged view of one actual model request: a scratch
@@ -2635,12 +2739,13 @@ impl<'a> AgentExecution<'a> {
         retry_number: u32,
         staged_context: &[MessageBlock],
     ) -> Result<StagedModelTurn, Terminal> {
-        let active = self.conversation.active_messages().map_err(|error| {
+        let history = self.store.projected_history().map_err(|error| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::MalformedHistory,
                 error.to_string(),
             ))
         })?;
+        let active = &history.messages;
         let carryover_anchor = self
             .frozen_carryover
             .as_ref()
@@ -2650,46 +2755,26 @@ impl<'a> AgentExecution<'a> {
             .as_ref()
             .filter(|_| carryover_anchor.is_some())
             .and_then(FrozenCarryover::admitted);
-        let mut scratch = ConversationState::from_durable_head(
-            active.clone(),
-            self.conversation.active_ids().to_vec(),
-            self.conversation.revision(),
-            self.conversation.surface().compaction_generation(),
-        )
-        .map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
-        for block in staged_context {
-            // Infallible in practice: the staged messages were validated
-            // when they were produced; a rejection is an internal contract
-            // violation.
-            scratch.commit(block.clone()).map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    format!("staged context cannot enter the scratch conversation: {error}"),
-                ))
-            })?;
-        }
         let sections = self
             .accepted_context
             .as_ref()
             .map_or(&[][..], |accepted| accepted.system_sections.as_slice());
         let effective_system_prompt = render_effective_system_prompt(sections);
-        let projection = self
-            .context_runtime
-            .engine
-            .build_projection(
-                &scratch,
-                &self.tool_registry().model_definitions(),
-                self.reusable_observation(),
-                &effective_system_prompt,
-            )
-            .map_err(|error| Self::context_failure_terminal(&error))?;
+        let mut revision = self.conversation.revision();
+        for _ in staged_context {
+            revision = revision.next();
+        }
+        let mut projected = active.clone();
+        projected.extend(crate::model::input::canonical_input(staged_context));
+        let projection = self.context_runtime.engine.build_projection_input(
+            revision,
+            projected,
+            &self.tool_registry().model_definitions(),
+            self.reusable_observation(),
+            &effective_system_prompt,
+        );
         let mut request_messages = crate::model::input::assemble_model_input(
-            &active,
+            active,
             staged_context,
             carryover.as_ref(),
             carryover_anchor,
@@ -2700,39 +2785,23 @@ impl<'a> AgentExecution<'a> {
                 format!("request-only context cannot be assembled: {error}"),
             ))
         })?;
-        let upload_projection = self
+        let images = self
             .context_runtime
             .engine
-            .project_uploads(&mut request_messages)
+            .materialize_media(&mut request_messages)
             .map_err(|error| Self::context_failure_terminal(&error))?;
         let mut request = self.model_request_from_projection(&projection, request_messages);
-        crate::model::images::project(
-            &mut request.messages,
-            request
-                .invocation
-                .capabilities
-                .input_modalities
-                .contains(&crate::model::catalog::Modality::Image),
-        );
-        if request
-            .invocation
-            .capabilities
-            .input_modalities
-            .contains(&crate::model::catalog::Modality::Image)
-        {
-            request.images = crate::model::images::resolve(&request.messages, |id| {
-                self.tool_runtime
-                    .artifacts()
-                    .read_bounded(id)
-                    .map_err(|_| "image artifact is unavailable".to_owned())
-            })
-            .map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    error,
-                ))
-            })?;
-        }
+        request.images = images;
+        let compatibility_failure = |message: String| Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::Unsupported {
+                    message: format!("native model input compatibility: {message}"),
+                },
+            },
+        };
+        let retire_continuation = request
+            .reconcile_continuation()
+            .map_err(compatibility_failure)?;
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
@@ -2746,7 +2815,7 @@ impl<'a> AgentExecution<'a> {
                 turn: TurnId::new(self.turn.to_string()),
                 retry_number,
             },
-            projection.surface_revision,
+            crate::context::resources::LedgerFrontier((projection.surface_revision).get()),
             // `model_request_from_projection` may append request-scoped
             // protocol feedback (for example, a rejected workflow_output).
             // The snapshot must freeze the exact prompt sent to the provider,
@@ -2769,7 +2838,7 @@ impl<'a> AgentExecution<'a> {
                 .map(crate::conversation::message_id_of)
                 .collect(),
         );
-        snapshot.upload_projection = upload_projection;
+        snapshot.history_cut = history.cut.clone();
         if let Some(frozen_carryover) = self.frozen_carryover.as_ref() {
             snapshot.unresolved_output_carryover_source =
                 Some(frozen_carryover.full.source_stream_id.clone());
@@ -2778,29 +2847,37 @@ impl<'a> AgentExecution<'a> {
                 .unresolved_output_carryover_anchor
                 .clone_from(&frozen_carryover.anchor);
         }
-        snapshot.contributions =
-            accepted.request_contributions(&scratch.active_messages().map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::MalformedHistory,
-                    error.to_string(),
-                ))
-            })?);
-        let estimated_input = if self
-            .frozen_carryover
-            .as_ref()
-            .is_some_and(|carryover| carryover.level != CarryoverDetailLevel::Omitted)
-        {
-            self.context_runtime.engine.estimate_model_input(
-                &request.messages,
-                &request.effective_system_prompt,
-                &request.tools,
-            )
-        } else {
-            projection.estimated_input.input_tokens
-        };
+        snapshot.contributions = accepted.request_contributions(
+            &projection
+                .messages
+                .iter()
+                .filter_map(|m| m.as_canonical().cloned())
+                .collect::<Vec<_>>(),
+        );
+        let inserted_at = request
+            .messages
+            .iter()
+            .position(|message| matches!(message, ModelInputMessage::RequestOnly(_)));
+        snapshot.tool_associations = crate::model::occurrence::freeze_associations(
+            &history,
+            &snapshot.request_id,
+            &request,
+            inserted_at,
+        )
+        .map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error,
+            ))
+        })?;
+        let estimated_input = self
+            .context_runtime
+            .engine
+            .estimate_frozen_request(&request);
         Ok(StagedModelTurn {
+            retire_continuation,
             projection,
-            effective_system_prompt,
+            effective_system_prompt: request.effective_system_prompt.clone(),
             snapshot,
             request,
             estimated_input,
@@ -2814,8 +2891,47 @@ impl<'a> AgentExecution<'a> {
     fn finalize_model_turn(
         &mut self,
         staged_context: &[MessageBlock],
-        staged: StagedModelTurn,
+        mut staged: StagedModelTurn,
     ) -> Result<PreparedModelTurn, Terminal> {
+        let soft_limit = self
+            .context_runtime
+            .engine
+            .soft_input_limit(self.compaction_budgets().primary_output_budget)
+            .map_err(|error| Self::context_failure_terminal(&error))?;
+        if staged.estimated_input >= soft_limit {
+            return Err(Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::CannotFit,
+                "final frozen request exceeds the soft input limit",
+            )));
+        }
+        // The single mandatory adapter-owned semantic admission boundary follows
+        // all compaction/carryover/media transformations, before freeze and start.
+        // Ordinary retries bypass finalization and reuse this validated input.
+        crate::model::adapter::validation::validate_prepared_request(&staged.request).map_err(
+            |error| Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::Unsupported {
+                        message: format!("native model input compatibility: {}", error.message),
+                    },
+                },
+            },
+        )?;
+        let associations = std::mem::take(&mut staged.snapshot.tool_associations);
+        staged
+            .snapshot
+            .freeze_input(&self.request.conversation_id, &staged.request)
+            .map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::CannotFit,
+                    error,
+                ))
+            })?;
+        staged.snapshot.tool_associations = associations;
+        if staged.retire_continuation {
+            self.retire_continuation();
+            self.observed = None;
+            self.observed_request_identity = None;
+        }
         let mut context = Vec::with_capacity(staged_context.len());
         for block in staged_context {
             context.push(self.conversation.prepare_commit(block).map_err(|error| {
@@ -3013,7 +3129,7 @@ impl<'a> AgentExecution<'a> {
             self.store
                 .reconstruct_model_request(&prepared.snapshot.request_id)
         };
-        let mut reconstructed = reconstructed.map_err(|error| {
+        let reconstructed = reconstructed.map_err(|error| {
             self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
             self.durable_failure = Some(format!(
                 "durable request reconstruction failed after start: {error}"
@@ -3028,25 +3144,6 @@ impl<'a> AgentExecution<'a> {
                 },
             }
         })?;
-        if reconstructed
-            .invocation
-            .capabilities
-            .input_modalities
-            .contains(&crate::model::catalog::Modality::Image)
-        {
-            reconstructed.images = crate::model::images::resolve(&reconstructed.messages, |id| {
-                self.tool_runtime
-                    .artifacts()
-                    .read_bounded(id)
-                    .map_err(|_| "image artifact is unavailable".to_owned())
-            })
-            .map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    error,
-                ))
-            })?;
-        }
         if reconstructed != prepared.request {
             self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
             self.durable_failure = Some(
@@ -3063,6 +3160,14 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         }
+        self.current_input = Some(Box::new(FrozenLogicalInput {
+            snapshot: prepared.snapshot.clone(),
+            request: prepared.request.clone(),
+            fingerprint: prepared.fingerprint,
+            anchor: prepared.anchor.clone(),
+            request_identity: prepared.request_identity,
+            estimated_input: prepared.estimated_input,
+        }));
         Ok(StartedModelTurn {
             // A replay's old timestamp must never be paired with a new clock read.
             request_start_ms: (start_commit.disposition
@@ -3122,15 +3227,21 @@ impl<'a> AgentExecution<'a> {
         &self,
         effective_system_prompt: &str,
     ) -> Result<ContextProjection, Terminal> {
-        self.context_runtime
-            .engine
-            .build_projection(
-                &self.conversation,
-                &self.tool_registry().model_definitions(),
-                self.reusable_observation(),
-                effective_system_prompt,
-            )
-            .map_err(|error| Self::context_failure_terminal(&error))
+        #[cfg(test)]
+        let _profile = attribution::Timer::new(attribution::Phase::ContextProjection);
+        let history = self.store.projected_history().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        Ok(self.context_runtime.engine.build_projection_input(
+            self.conversation.revision(),
+            history.messages,
+            &self.tool_registry().model_definitions(),
+            self.reusable_observation(),
+            effective_system_prompt,
+        ))
     }
 
     /// Renders the exact request-time Effective System Prompt solely from
@@ -3153,8 +3264,22 @@ impl<'a> AgentExecution<'a> {
     }
 
     /// Creates the finite immutable input visible to all contributors.
+    /// Finite canonical members of the current compiled model projection.
+    /// Derived messages carry no execution identity and cannot become contributor facts.
+    fn canonical_model_history(
+        &self,
+    ) -> Result<Vec<MessageBlock>, crate::durable::ConversationStoreError> {
+        Ok(self
+            .store
+            .projected_history()?
+            .messages
+            .into_iter()
+            .filter_map(|m| m.as_canonical().cloned())
+            .collect())
+    }
+
     fn contributor_input_snapshot(&self) -> Result<ContributorInputSnapshot, Terminal> {
-        let active = self.conversation.active_messages().map_err(|error| {
+        let active = self.canonical_model_history().map_err(|error| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::MalformedHistory,
                 error.to_string(),
@@ -3227,7 +3352,7 @@ impl<'a> AgentExecution<'a> {
             .expect("context generation cannot overflow");
         accepted.generation.id = self.context_generation_serial;
         let namespace = format!("{}-turn-{}", self.request.attempt_id, self.turn);
-        let active = self.conversation.active_messages().map_err(|error| {
+        let active = self.canonical_model_history().map_err(|error| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::MalformedHistory,
                 error.to_string(),
@@ -3379,7 +3504,7 @@ impl<'a> AgentExecution<'a> {
     }
 
     /// Runs one compaction: plan, summarize, verify progress and fit, and
-    /// commit the canonical summary plus the Surface rewrite.
+    /// commit immutable typed checkpoint content and its durable activation.
     ///
     /// `overflow` distinguishes the two callers: a proactive compaction
     /// failure settles as `AttemptFailed(Runtime(ContextCompactionFailed))`,
@@ -3391,12 +3516,10 @@ impl<'a> AgentExecution<'a> {
     /// unobserved fresh inbound can never be retired) and the exact Effective
     /// System Prompt of this admitted request preparation.
     ///
-    /// Cancellation is observed before the compaction, raced (biased)
-    /// against the pending summary, checked again before the semantic
-    /// commit, and checked again before any retry by the callers: once
-    /// cancellation is observable, no summary, no Ledger append, no Surface
-    /// rewrite, and no retry progress may begin, and the pending summary
-    /// future is dropped.
+    /// Cancellation is observed before planning and raced against the summary.
+    /// The shared gate separately arbitrates checkpoint-commit authorization:
+    /// cancellation before the grant prevents commit; a granted transaction may
+    /// settle after cancellation. Each subsequent actual model start has its own gate.
     ///
     /// `staged_request_context` carries the **staged, not-yet-committed**
     /// request-scoped context (Issue #12, M9b): when the compaction is
@@ -3404,12 +3527,12 @@ impl<'a> AgentExecution<'a> {
     /// for is not yet on the canonical Surface (it commits only inside the
     /// durable model-turn start transaction). Every compaction candidate is
     /// evaluated against the exact hypothetical post-compaction request —
-    /// the rewritten Surface plus this overlay plus the Effective System
+    /// the compiled historical projection plus this overlay plus the Effective System
     /// Prompt plus tools — through the same token estimator, never as a
     /// scalar token delta. Independent compactions pass an empty overlay.
     ///
     /// This is also the **one** ownership path that invalidates the opaque
-    /// provider continuation: a successful incompatible Surface rewrite
+    /// provider continuation: a successful default Summary projection transition
     /// invalidates it exactly once, immediately after the semantic commit.
     /// A failed or cancelled compaction never clears it.
     async fn perform_compaction(
@@ -3426,9 +3549,14 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
-        self.emit(RuntimeEvent::CompactionStarted);
+        let operation_id =
+            crate::runtime::identity::CompactionOperationId::new(uuid::Uuid::now_v7().to_string());
+        self.emit(RuntimeEvent::CompactionStarted {
+            operation_id: operation_id.clone(),
+        });
         if let Some(message) = self.durable_failure.clone() {
             return Err(self.compaction_failure(
+                &operation_id,
                 &ContextError::new(ContextErrorKind::Internal, message),
                 overflow,
             ));
@@ -3436,6 +3564,7 @@ impl<'a> AgentExecution<'a> {
         loop {
             match self
                 .run_compaction(
+                    &operation_id,
                     must_cover_through,
                     fresh_inbound,
                     effective_system_prompt,
@@ -3445,23 +3574,19 @@ impl<'a> AgentExecution<'a> {
                 .await
             {
                 Ok(_completed) => {
-                    // The semantic commit already happened: the summary is a
-                    // Ledger fact and the new Surface revision exists. The
-                    // opaque provider continuation is now known to be
-                    // incompatible, and this is the single place that discards
-                    // it. The observed provider measurement belonged to the old
-                    // request context and is dropped with it.
-                    self.pending_continuation = None;
-                    self.continuation_owner = None;
+                    // The typed checkpoint and Projection Head are committed.
+                    // Complete replay replaces all primary continuation ownership;
+                    // the old request measurement is no longer evidence for it.
+                    self.retire_continuation();
                     self.observed = None;
                     self.observed_request_identity = None;
-                    // `commit_compaction` persisted and returned the exact
+                    // `commit_projection` persisted and returned the exact
                     // completion fact before this branch became observable.
                     break;
                 }
                 // Carryover is auxiliary. A full/reduced/metadata-only value
                 // may make a candidate fail the hard fit, but that must never
-                // turn a canonical compaction into a terminal CannotFit.
+                // turn a committed checkpoint into a terminal CannotFit.
                 Err(error) if error.kind == ContextErrorKind::CannotFit => {
                     let can_degrade = self
                         .frozen_carryover
@@ -3470,7 +3595,7 @@ impl<'a> AgentExecution<'a> {
                     if can_degrade {
                         continue;
                     }
-                    return Err(self.compaction_failure(&error, overflow));
+                    return Err(self.compaction_failure(&operation_id, &error, overflow));
                 }
                 // Cancellation never becomes a compaction failure: no
                 // `CompactionFailed` event is emitted and the attempt settles
@@ -3480,7 +3605,7 @@ impl<'a> AgentExecution<'a> {
                         reason: self.cancellation.reason(),
                     });
                 }
-                Err(error) => return Err(self.compaction_failure(&error, overflow)),
+                Err(error) => return Err(self.compaction_failure(&operation_id, &error, overflow)),
             }
         }
         Ok(())
@@ -3490,22 +3615,13 @@ impl<'a> AgentExecution<'a> {
     /// progress, fit-check, and commit.
     ///
     /// The **semantic commit / linearization point** of compaction is the
-    /// single `ConversationStore::commit_compaction` transaction. Before it
-    /// the old Ledger, the old Surface, and the old continuation semantics are
-    /// authoritative; after it the canonical
-    /// `User(Runtime / CompactionSummary)` message exists in the Ledger, a
-    /// new Surface revision exists in which that summary replaces the
-    /// selected active span, every covered Ledger fact remains intact and
-    /// addressable, and the provider continuation is known to be
-    /// incompatible.
-    ///
-    /// Cancellation is observed before the compaction, raced (biased)
-    /// against the pending summary, and checked again immediately before the
-    /// semantic commit: once cancellation is observable, no summary, no
-    /// canonical summary append, and no Surface rewrite happen, so no
-    /// half-committed state can exist.
+    /// single `ConversationStore::commit_projection` transaction. Before it
+    /// canonical facts remain immutable. After a successful checkpoint/head
+    /// transaction the current durable projection is installed and primary
+    /// continuation is cleared. Core inputs retain their generation ownership.
     async fn run_compaction(
         &mut self,
+        operation_id: &crate::runtime::identity::CompactionOperationId,
         must_cover_through: Option<&MessageId>,
         fresh_inbound: Option<&FreshInboundTurn>,
         effective_system_prompt: &str,
@@ -3540,6 +3656,7 @@ impl<'a> AgentExecution<'a> {
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
+                protected_context_ids: &self.logical_context_ids,
                 staged_request_context,
                 carryover: carryover.as_ref(),
                 carryover_anchor,
@@ -3547,6 +3664,7 @@ impl<'a> AgentExecution<'a> {
             },
             &cancellation,
             CompactionAttribution {
+                operation_id: operation_id.clone(),
                 attempt_id: Some(self.request.attempt_id.clone()),
                 turn_id: Some(TurnId::new(self.turn.to_string())),
             },
@@ -3555,6 +3673,16 @@ impl<'a> AgentExecution<'a> {
         let completed = match result {
             Ok(completed) => completed,
             Err(CompactionExecutionError::Context(error)) => return Err(error),
+            Err(CompactionExecutionError::Committed { completed, error }) => {
+                if completed.newly_committed {
+                    self.record_persisted_event(completed.persisted_event);
+                }
+                self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                self.durable_failure = Some(format!(
+                    "committed projection could not be installed: {error}"
+                ));
+                return Err(ContextError::new(ContextErrorKind::Internal, error));
+            }
             Err(CompactionExecutionError::Durable(error)) => {
                 self.durable_failure_kind = Some(DurableFailureKind::Compaction);
                 self.durable_failure = Some(format!(
@@ -3563,16 +3691,9 @@ impl<'a> AgentExecution<'a> {
                 return Err(ContextError::new(ContextErrorKind::Internal, error));
             }
         };
-        // The committed runtime summary is a canonical Ledger fact, observed
-        // at exactly the commit linearization point like every other commit.
-        if let Some(observer) = self.observer {
-            observer.observe_committed(
-                &self.request.attempt_id,
-                &completed.summary_block,
-                &completed.receipt,
-            );
+        if completed.newly_committed {
+            self.record_persisted_event(completed.persisted_event);
         }
-        self.record_persisted_event(completed.persisted_event);
         Ok(CompletedCompaction)
     }
 
@@ -3588,16 +3709,21 @@ impl<'a> AgentExecution<'a> {
     /// preparation failure.
     fn compaction_failure(
         &mut self,
+        operation_id: &crate::runtime::identity::CompactionOperationId,
         error: &ContextError,
         overflow: Option<&ModelError>,
     ) -> Terminal {
-        self.emit(RuntimeEvent::CompactionFailed {
-            error: error.message.clone(),
-        });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return terminal;
         }
-        match overflow {
+
+        self.emit(RuntimeEvent::CompactionFailed {
+            operation_id: operation_id.clone(),
+            error: error.message.clone(),
+        });
+        // An unfinished planner search is an independent runtime failure,
+        // not evidence that the provider's overflow remains irrecoverable.
+        match overflow.filter(|_| error.kind != ContextErrorKind::SearchIncomplete) {
             Some(overflow) => Terminal::Failed {
                 failure: AttemptFailure::Model {
                     error: overflow.clone(),
@@ -3680,6 +3806,46 @@ impl<'a> AgentExecution<'a> {
         request_ordinal: u32,
         next_request_ordinal: &mut u32,
     ) -> Result<ModelInvocation, Terminal> {
+        let input = *self
+            .current_input
+            .as_ref()
+            .ok_or_else(|| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    "retry has no current frozen input",
+                ))
+            })?
+            .clone();
+        let mut snapshot = input.snapshot;
+        snapshot.identity.retry_number = request_ordinal;
+        snapshot.request_id = snapshot.identity.request_id();
+        snapshot.provisional_message_id = snapshot.identity.provisional_message_id();
+        for association in &mut snapshot.tool_associations {
+            association.call.message.request_id = snapshot.request_id.clone();
+            association.result.request_id = snapshot.request_id.clone();
+        }
+        // A genuine new request introduces no context; same-request recovery
+        // retains the original snapshot in the durable start authority.
+        snapshot.request_context_ids.clear();
+        let prepared = PreparedModelTurn {
+            context: Vec::new(),
+            snapshot,
+            request: input.request,
+            fingerprint: input.fingerprint,
+            anchor: input.anchor,
+            request_identity: input.request_identity,
+            estimated_input: input.estimated_input,
+        };
+        let started = self.start_actual_model_request(prepared, next_request_ordinal)?;
+        self.consume_invocation(started).await
+    }
+
+    /// Compile an explicitly authorized semantic version, then make it current at start.
+    async fn start_recovered_model_turn(
+        &mut self,
+        request_ordinal: u32,
+        next_request_ordinal: &mut u32,
+    ) -> Result<ModelInvocation, Terminal> {
         let staged = self.stage_model_turn(request_ordinal, &[])?;
         let prepared = self.finalize_model_turn(&[], staged)?;
         let started = self.start_actual_model_request(prepared, next_request_ordinal)?;
@@ -3739,7 +3905,7 @@ impl<'a> AgentExecution<'a> {
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
-        self.retry_frozen_model_turn(retry_number, next_request_ordinal)
+        self.start_recovered_model_turn(retry_number, next_request_ordinal)
             .await
     }
 
@@ -3754,8 +3920,8 @@ impl<'a> AgentExecution<'a> {
     ///
     /// The retry is not a new admitted dynamic-context step. It reuses the
     /// already accepted context generation, status fact, Skill system section,
-    /// and contributor output; only the Surface revision and request identity
-    /// may change because compaction happened.
+    /// and contributor output; the historical projection and request identity
+    /// advance because compaction happened.
     ///
     /// The retry returns the complete retry invocation — provisional
     /// identity, assembler, and terminal together — so a successful retry
@@ -3854,7 +4020,7 @@ impl<'a> AgentExecution<'a> {
         // already committed it), freezes its own Request Snapshot, and
         // passes through the one cancellation-vs-start arbitration exactly
         // like the first request of the turn.
-        self.retry_frozen_model_turn(retry_number, next_request_ordinal)
+        self.start_recovered_model_turn(retry_number, next_request_ordinal)
             .await
     }
 
@@ -5184,12 +5350,12 @@ impl<'a> AgentExecution<'a> {
             });
         }
         let mut effective_system_prompt = projection.effective_system_prompt.clone();
-        if let Some(feedback) = self.workflow_output_feedback.take() {
+        if let Some(feedback) = &self.frozen_workflow_feedback {
             if !effective_system_prompt.is_empty() {
                 effective_system_prompt.push('\n');
             }
             effective_system_prompt.push_str("[runtime Workflow output feedback]\n");
-            effective_system_prompt.push_str(&feedback);
+            effective_system_prompt.push_str(feedback);
         }
         // The corrective hint of the pending corrective generation. It is
         // *borrowed*, never taken: building a request is not the lifetime
@@ -5216,6 +5382,7 @@ impl<'a> AgentExecution<'a> {
             tools,
             effective_system_prompt,
             continuation: self.pending_continuation.clone(),
+            continuation_source: self.continuation_source.clone(),
         }
     }
 
@@ -7166,7 +7333,7 @@ mod tests {
     /// snapshot as the execution. The window is far larger than any scripted
     /// request, so no compaction ever triggers in these tests.
     fn runtime(adapter: &Arc<ScriptedAdapter>) -> ContextRuntime {
-        ContextRuntime::for_attempt(
+        let mut context = ContextRuntime::for_attempt(
             crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -7178,7 +7345,12 @@ mod tests {
             crate::model::ModelTimeoutPolicy::default(),
             crate::scripted_suites::support::default_monotonic_clock(),
         )
-        .expect("valid context runtime")
+        .expect("valid context runtime");
+        // Boundary fixtures intentionally have no canonical history. Supply a
+        // real trusted System input so adapter preflight can admit the request.
+        context.native_system.core_runtime_identity =
+            Some("Execute the scripted boundary fixture.".into());
+        context
     }
 
     fn inbound_message(id: &str, text: &str) -> UserMessageBlock {
@@ -7891,18 +8063,18 @@ mod tests {
         assert!(
             !events.iter().any(|event| matches!(
                 event.event,
-                RuntimeEvent::CompactionStarted
+                RuntimeEvent::CompactionStarted { .. }
                     | RuntimeEvent::CompactionCompleted { .. }
                     | RuntimeEvent::CompactionFailed { .. }
             )),
             "generic request-size failure produces no compaction lifecycle"
         );
         assert!(
-            !result.messages().iter().any(|message| matches!(
-                message,
-                MessageBlock::User(user) if user.kind.is_compaction_summary()
-            )),
-            "no durable compaction summary is created"
+            tool_runtime
+                .durable_store()
+                .projection_head()
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -9232,7 +9404,7 @@ mod tests {
 
     /// A [`runtime`] variant over a `dyn` adapter handle.
     fn runtime_dyn(adapter: &Arc<dyn ModelAdapter>) -> ContextRuntime {
-        ContextRuntime::for_attempt(
+        let mut context = ContextRuntime::for_attempt(
             crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -9244,7 +9416,12 @@ mod tests {
             crate::model::ModelTimeoutPolicy::default(),
             crate::scripted_suites::support::default_monotonic_clock(),
         )
-        .expect("valid context runtime")
+        .expect("valid context runtime");
+        // Boundary fixtures intentionally have no canonical history. Supply a
+        // real trusted System input so adapter preflight can admit the request.
+        context.native_system.core_runtime_identity =
+            Some("Execute the scripted boundary fixture.".into());
+        context
     }
 
     /// Cancellation may become observable while a contributor is awaiting

@@ -6,7 +6,7 @@ use crate::durable::response::{
     AttemptEvidence, CompletedResponseProvenance, ResponseOrigin, add_usage,
 };
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::message::types::{InboundKind, MessageBlock};
+use crate::message::types::MessageBlock;
 use crate::model::finish::ModelFinishReason;
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +15,16 @@ pub(super) fn read(
     connection: &Connection,
     conversation: &ConversationId,
     revision: SurfaceRevision,
+) -> Result<LineageReadCut, ConversationStoreError> {
+    read_at(connection, conversation, revision, None, None)
+}
+
+pub(super) fn read_at(
+    connection: &Connection,
+    conversation: &ConversationId,
+    revision: SurfaceRevision,
+    activation: Option<crate::context::checkpoint::ProjectionActivationId>,
+    boundary: Option<(&MessageId, bool)>,
 ) -> Result<LineageReadCut, ConversationStoreError> {
     // This first SELECT linearizes temporal cut C. Selected revision R below
     // owns structure, not execution time; the same R at a newer C may observe
@@ -58,19 +68,26 @@ pub(super) fn read(
             .is_none_or(|id| referenced.contains(id))
     });
     let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
-    let mut checkpoints = BTreeMap::new();
-    for message in &canonical {
-        if let MessageBlock::User(user) = message
-            && user.kind.is_compaction_summary()
-        {
-            checkpoints.insert(
-                user.id.clone(),
-                super::load_compaction_checkpoint(connection, &user.id, read_cut.journal)?.0,
-            );
-        }
-    }
     let raw_tool_arguments = super::content::canonical_raw_arguments(connection, &canonical)?;
+    let projection_len = if let Some((id, include)) = boundary {
+        canonical.iter().position(|m| m.id() == id).ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "missing selected canonical lineage boundary".into(),
+            )
+        })? + usize::from(include)
+    } else {
+        canonical.len()
+    };
+    let ledger = crate::context::resources::LedgerFrontier(projection_len as u64);
+    let projections = selected_projections(
+        connection,
+        conversation,
+        ledger,
+        read_cut.journal,
+        activation,
+    )?;
     Ok(LineageReadCut {
+        projections,
         raw_tool_arguments,
         read_cut,
         conversation_id: conversation.clone(),
@@ -78,10 +95,88 @@ pub(super) fn read(
         messages,
         canonical,
         surface_history,
-        checkpoints,
         completed_responses,
         turns,
     })
+}
+
+fn selected_projections(
+    connection: &Connection,
+    conversation: &ConversationId,
+    ledger: crate::context::resources::LedgerFrontier,
+    journal: u64,
+    activation: Option<crate::context::checkpoint::ProjectionActivationId>,
+) -> Result<Vec<crate::durable::projection::ProjectionCheckpoint>, ConversationStoreError> {
+    let through = activation.unwrap_or(crate::context::checkpoint::ProjectionActivationId(
+        i64::MAX as u64,
+    ));
+    if let Some(selected) = activation.filter(|a| a.0 > 0) {
+        super::projection::validate_activation_boundary(
+            connection,
+            selected,
+            ledger,
+            crate::context::resources::JournalFrontier(journal),
+        )?;
+    }
+    let mut projections = Vec::new();
+    let mut previous_checkpoint = None;
+    let mut after = crate::context::checkpoint::ProjectionActivationId(0);
+    let mut remaining_projection_bytes =
+        crate::context::resources::ResourceLimits::default().total_bytes;
+    loop {
+        let page = super::projection::timeline_page(
+            connection,
+            after,
+            64,
+            Some((
+                ledger,
+                crate::context::resources::JournalFrontier(journal),
+                through,
+            )),
+            remaining_projection_bytes,
+        )?;
+        if page.is_empty() {
+            break;
+        }
+        after = page.last().unwrap().activation.activation;
+        for checkpoint in &page {
+            // A retained activation owns its immutable predecessor closure.
+            if checkpoint.candidate.expected_head.as_ref() != previous_checkpoint.as_ref() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "missing historical projection predecessor".into(),
+                ));
+            }
+            super::projection::validate_current_dependencies(
+                connection,
+                conversation,
+                &checkpoint.candidate,
+            )?;
+            if checkpoint.candidate.base_frontier > checkpoint.activation.ledger {
+                return Err(ConversationStoreError::InvalidReference(
+                    "checkpoint base exceeds activation boundary".into(),
+                ));
+            }
+            previous_checkpoint = Some(checkpoint.candidate.checkpoint_id.clone());
+            remaining_projection_bytes -= crate::context::resources::bounded_encoded_len(
+                checkpoint,
+                remaining_projection_bytes,
+            )?;
+        }
+        projections.extend(page);
+        if projections.len() > 8192 {
+            return Err(ConversationStoreError::InvalidReference(
+                "lineage projection timeline exceeds bound".into(),
+            ));
+        }
+    }
+    if activation
+        .is_some_and(|a| a.0 > 0 && !projections.iter().any(|p| p.activation.activation == a))
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "missing selected historical checkpoint".into(),
+        ));
+    }
+    Ok(projections)
 }
 
 #[allow(clippy::too_many_lines)] // One native response evidence fold under the same SQLite snapshot.
@@ -157,24 +252,8 @@ fn responses(
                     .take()
                     .filter(|closing| wanted.contains(closing))
                 {
-                    let retry_message_id = if let Some(request) = &evidence.last_request {
-                        let snapshot =
-                            super::load_request_snapshot(connection, conversation, request)?;
-                        super::reconstruct_surface(connection, snapshot.surface_revision)?
-                            .iter()
-                            .rev()
-                            .map(|id| super::load_message(connection, id))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .into_iter()
-                            .find_map(|message| match message {
-                                MessageBlock::User(user) if user.kind == InboundKind::Message => {
-                                    Some(user.id)
-                                }
-                                _ => None,
-                            })
-                    } else {
-                        None
-                    };
+                    let retry_message_id =
+                        super::reading::attempt_prompt(connection, &id, through)?;
                     completed.insert(
                         closing.clone(),
                         CompletedResponseProvenance {

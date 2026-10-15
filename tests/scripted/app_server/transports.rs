@@ -460,7 +460,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v48, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v50, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -871,7 +871,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v48, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v50, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -1070,11 +1070,11 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ));
         let token = driver::TOKEN;
         for offered in [
-            format!("rustx.app-server.v48, rustx-delivery-access.{DELIVERY}"),
-            format!("rustx.app-server.v48, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
-            format!("rustx.app-server.v48, rustx-token.{token}, rustx-delivery-access.{token}"),
-            format!("rustx.app-server.v48, rustx-token.{token}, rustx-delivery-access.wrong"),
-            format!("rustx.app-server.v48, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
+            format!("rustx.app-server.v50, rustx-delivery-access.{DELIVERY}"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{token}"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.wrong"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
         ] {
             assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
         }
@@ -1084,7 +1084,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         // A Product Host secret offered on the ordinary lane is not delivery access.
         let ordinary = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v48, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
+            &format!("rustx.app-server.v50, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
         )
         .await;
         assert!(!delivery_access(&ordinary).await);
@@ -1094,7 +1094,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ordinary.close().await;
         let granted = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v48, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+            &format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
         )
         .await;
         assert!(delivery_access(&granted).await);
@@ -1111,7 +1111,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v48, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+                &format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
             )
             .await
             .is_err()
@@ -1870,7 +1870,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             request.headers_mut().insert(
                 "sec-websocket-protocol",
                 format!(
-                    "rustx.app-server.v48, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
+                    "rustx.app-server.v50, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
                     driver::TOKEN
                 )
                 .parse()
@@ -2019,7 +2019,7 @@ async fn delivery_websocket(
     request.headers_mut().insert(
         "sec-websocket-protocol",
         format!(
-            "rustx.app-server.v48, rustx-token.{}, rustx-delivery-access.{credential}",
+            "rustx.app-server.v50, rustx-token.{}, rustx-delivery-access.{credential}",
             driver::TOKEN
         )
         .parse()

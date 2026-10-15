@@ -27,7 +27,6 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientOutcome;
-use crate::conversation::SurfaceRevision;
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
@@ -205,8 +204,8 @@ pub struct RuntimeClientSnapshot {
     pub publication_settlements: Vec<RuntimeClientPublicationSettlementRecord>,
     /// The bounded newest page of the derived durable transcript. This is
     /// distinct from `messages`: the latter is the current Surface working
-    /// set, while this page remains readable after compaction retires Surface
-    /// messages. Older pages are fetched through `transcript_page_get`.
+    /// set, while this page remains readable after compaction excludes messages
+    /// from the model projection. Older pages are fetched through `transcript_page_get`.
     pub transcript: RuntimeClientTranscriptPage,
     /// Bounded native Trace read window; independent from transcript and live cursors.
     pub trace: super::trace::TracePage,
@@ -362,9 +361,6 @@ pub struct RuntimeClientTranscriptPage {
 /// One derived transcript item and its stable durable cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptEntry {
-    /// Native facts of a canonical compaction checkpoint, including copied lineage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compaction: Option<super::compaction::CompactionMarker>,
     /// Exact native Attempt process membership, derived by native owners.
     /// Absence is not permission for a client to infer a process boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -674,7 +670,6 @@ fn transcript_entry_view(
         }
     };
     Ok(RuntimeClientTranscriptEntry {
-        compaction: None,
         turn_process: None,
         completed_response: None,
         response_pending: false,
@@ -804,6 +799,9 @@ pub(crate) fn interaction_settled_view(
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientContextView {
+    /// Independent current historical projection, including inherited activations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_head: Option<RuntimeClientProjectionHeadView>,
     /// Latest manual operation admitted in this runtime incarnation. Never inferred
     /// from a newer canonical checkpoint. Absence is insufficient evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -827,25 +825,36 @@ pub struct RuntimeClientContextView {
     pub latest_compaction: Option<RuntimeClientCompactionView>,
 }
 
+/// Projection ownership is independent of the local execution trajectory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientProjectionHeadView {
+    pub checkpoint_id: crate::runtime::identity::CheckpointId,
+    pub activation_id: crate::context::checkpoint::ProjectionActivationId,
+    pub base_frontier: crate::context::resources::LedgerFrontier,
+    pub activation_ledger: crate::context::resources::LedgerFrontier,
+    pub origin: crate::context::checkpoint::OriginActivation,
+    pub destination_installation: Option<crate::runtime::identity::LineageInstallationId>,
+    pub original_items: u32,
+    pub derived_items: u32,
+    pub summary_preview: Option<super::trace::TraceText>,
+}
+
 /// Public metadata for one committed compaction.
 ///
-/// Every field is derived from already-committed conversation state. The
-/// view names the canonical summary message by identity; its content is an
-/// ordinary Ledger fact in [`RuntimeClientSnapshot::messages`].
+/// Every field is derived from an actual local checkpoint commit. The
+/// independent projection disclosure carries summary content; canonical
+/// execution rows never acquire a fabricated summary identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientCompactionView {
-    /// The compaction generation maintained in the current Conversation
-    /// Surface head.
+    /// The local committed projection generation.
     pub generation: u64,
-    /// The identity of the committed canonical compaction summary message.
-    pub summary_message_id: Option<MessageId>,
-    pub summary_message_locator: super::content::CanonicalContentLocator,
-    pub summary_message_id_deferred: bool,
-    pub summary_message_id_source: Option<super::content::ContentRef>,
-    /// The Conversation Surface revision established by the rewrite.
-    pub surface_revision: SurfaceRevision,
+    /// The independently durable checkpoint identity.
+    pub checkpoint_id: crate::runtime::identity::CheckpointId,
+    /// The activation coordinate, independent of canonical and Journal order.
+    pub activation_id: crate::context::checkpoint::ProjectionActivationId,
     /// The pre-compaction input measurement and its provenance.
     pub tokens_before: TokenMeasurement,
     /// The deterministic estimate of the rebuilt request context.

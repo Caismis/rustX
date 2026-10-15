@@ -52,9 +52,9 @@ fn validate_canonical_provenance(
     if expected.ledger_through == 0 {
         return Ok(());
     }
-    let (journal,transcript): (Option<u64>,Option<u64>)=connection.query_row("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN observation_headers h ON h.ledger_position=l.position WHERE l.position=?1",[expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
+    let (journal,transcript): (Option<u64>,Option<u64>)=connection.prepare_cached("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN observation_headers h ON h.ledger_position=l.position WHERE l.position=?1").map_err(|error|storage(error.to_string()))?.query_row([expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
     let journal = journal.ok_or_else(|| storage("native canonical cut provenance unavailable"))?;
-    let append:Option<u64>=connection.query_row("SELECT first_append_revision FROM message_ledger INDEXED BY message_ledger_append_position_idx WHERE first_append_revision IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1",[expected.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let append:Option<u64>=connection.prepare_cached("SELECT first_append_revision FROM message_ledger INDEXED BY message_ledger_append_position_idx WHERE first_append_revision IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1").map_err(|error|storage(error.to_string()))?.query_row([expected.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     if journal > expected.read.journal
         || transcript.is_some_and(|position| position > expected.read.transcript)
         || append.is_some_and(|revision| revision > expected.surface_revision.get())
@@ -73,7 +73,6 @@ fn kind(message: &MessageBlock) -> (&'static str, &'static str, usize) {
             let kind = match &value.kind {
                 InboundKind::Message => "message",
                 InboundKind::GoalContinuation(_) => "goal_continuation",
-                InboundKind::CompactionSummary(_) => "compaction_summary",
                 InboundKind::Context(ContextKind::NativeEnvironment) => {
                     "context/native_environment"
                 }
@@ -567,7 +566,7 @@ pub(super) fn index_native_event(
         .ok_or_else(|| storage("native terminal process unavailable"))?;
         return store_transcript_header(transaction,kind,event.event_id.as_str(),TranscriptHeader {
             tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:if event.event_id.as_str().len()<=256 {event.event_id.to_string()} else {format!("transcript:{}",cursor.get())},message:None,
-            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { compaction:None,cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
+            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
             content:Vec::new(),collections:Vec::new(),deferred:false,
         });
     }
@@ -631,7 +630,7 @@ pub(super) fn index_item(
                 .ok_or_else(|| storage("inherited terminal process unavailable"))?;
         return store_transcript_header(transaction,kind,id,TranscriptHeader {
             tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:id.into(),message:None,
-            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { compaction:None,cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
+            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
             content:Vec::new(),collections:Vec::new(),deferred:false,
         });
     }
@@ -869,7 +868,6 @@ fn transcript_message_header(
                 item: crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
                     message: display_message,
                 },
-                compaction: None,
                 turn_process: None,
                 response_pending: false,
                 completed_response: None,
@@ -1775,7 +1773,6 @@ pub(super) fn index_audit(
     let display = capture
         .audit(audit, &conversation, &["display".into()])
         .map(|audit| RuntimeClientTranscriptEntry {
-            compaction: None,
             response_pending: false,
             cursor: cursor.into(),
             tool_calls: Vec::new(),

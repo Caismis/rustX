@@ -179,7 +179,7 @@ fn prepared_request(
 ) -> RequestSnapshot {
     let mut snapshot = RequestSnapshot::new(
         identity,
-        store.load_head().unwrap().revision,
+        crate::context::resources::LedgerFrontier((store.load_head().unwrap().revision).get()),
         SYSTEM_PROMPT.to_owned(),
         vec![],
         crate::runtime::RuntimeResourceRevision::new(1),
@@ -219,25 +219,12 @@ fn prepared_request(
             id: 1,
             contributors: vec![],
         },
-        Some(
-            crate::runtime::continuation::ProviderContinuationState::Anthropic(
-                crate::runtime::continuation::AnthropicContinuation {
-                    opaque: serde_json::json!(PROVIDER_CONTINUATION),
-                },
-            ),
-        ),
+        None,
         vec![],
     );
     if let Some(tools) = tools {
         snapshot.tool_definitions = tools;
     }
-    snapshot.continuation = Some(
-        crate::runtime::continuation::ProviderContinuationState::Anthropic(
-            crate::runtime::continuation::AnthropicContinuation {
-                opaque: serde_json::json!(PROVIDER_CONTINUATION),
-            },
-        ),
-    );
     snapshot
 }
 
@@ -248,9 +235,33 @@ fn prepared_request(
 /// between the two authorities this issue's Context path depends on.
 fn commit_request(
     store: &dyn ConversationStore,
-    snapshot: RequestSnapshot,
+    mut snapshot: RequestSnapshot,
     context: &[MessageBlock],
 ) -> RequestSnapshot {
+    let canonical = store.projected_history().unwrap();
+    snapshot.history_cut = canonical.cut;
+    let canonical = canonical.messages;
+    let messages = crate::model::input::assemble_model_input(
+        &canonical,
+        context,
+        snapshot.unresolved_output_carryover.as_ref(),
+        snapshot.unresolved_output_carryover_anchor.as_ref(),
+    )
+    .unwrap();
+    snapshot
+        .freeze_input(
+            store.conversation_id(),
+            &crate::model::ModelRequest {
+                continuation_source: snapshot.continuation_source.clone(),
+                images: crate::model::images::ResolvedImages::new(),
+                invocation: snapshot.invocation.clone(),
+                messages,
+                tools: snapshot.tool_definitions.clone(),
+                effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                continuation: snapshot.continuation.clone(),
+            },
+        )
+        .unwrap();
     store
         .commit_model_turn_start(
             context,
@@ -259,6 +270,69 @@ fn commit_request(
         )
         .unwrap();
     snapshot
+}
+
+fn request_with_private_continuation(store: &dyn ConversationStore) -> RequestSnapshot {
+    let mut prepared = prepared_request(
+        store,
+        0,
+        None,
+        RequestIdentity {
+            attempt_id: AttemptId::new("attempt-a"),
+            turn: TurnId::new("1"),
+            retry_number: 0,
+        },
+    );
+    prepared.invocation.protocol = ModelProtocol::AnthropicMessages;
+    let prior = commit_request(store, prepared, &[]);
+    completion(store, &prior, None, None, 2);
+    let native = crate::runtime::continuation::ProviderContinuationState::Anthropic(
+        crate::runtime::continuation::AnthropicContinuation {
+            opaque: serde_json::json!({"type":"thinking", "thinking":"retained native thinking", "signature":PROVIDER_CONTINUATION}),
+        },
+    );
+    let output = MessageBlock::Assistant(AssistantMessageBlock {
+        id: prior.provisional_message_id.clone(),
+        content: vec![AssistantContentBlock::Reasoning(
+            crate::message::types::ReasoningBlock {
+                text: None,
+                provider_state: Some(native.clone()),
+            },
+        )],
+    });
+    store
+        .append_canonical_with_event(
+            &output,
+            event(
+                store,
+                E::AssistantMessageCommitted {
+                    message_id: output.id().clone(),
+                },
+                3,
+            ),
+        )
+        .unwrap();
+    let mut next = prepared_request(
+        store,
+        1,
+        None,
+        RequestIdentity {
+            retry_number: 1,
+            ..prior.identity.clone()
+        },
+    );
+    next.invocation.protocol = ModelProtocol::AnthropicMessages;
+    next.continuation = Some(native);
+    next.continuation_source = Some(
+        crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
+            prior.request_id,
+            store.conversation_id(),
+            &[],
+            &output,
+        )
+        .unwrap(),
+    );
+    commit_request(store, next, &[])
 }
 
 fn failure(store: &dyn ConversationStore, request: &RequestSnapshot, kind: ModelErrorKind) {
@@ -326,6 +400,18 @@ fn record_of(page: &TracePage, kind: TraceKind) -> &TraceRecord {
         .iter()
         .find(|record| record.kind == kind)
         .unwrap_or_else(|| panic!("a {kind:?} record"))
+}
+
+fn request_record_of<'a>(page: &'a TracePage, snapshot: &RequestSnapshot) -> &'a TraceRecord {
+    page.records
+        .iter()
+        .find(|record| {
+            record
+                .request
+                .as_ref()
+                .is_some_and(|request| request.request_id.as_ref() == Some(&snapshot.request_id))
+        })
+        .expect("the exact actual request record")
 }
 
 /// Commits one canonical Assistant message proposing one Tool call.
@@ -524,7 +610,7 @@ fn historical_request_detail_ignores_later_configuration_and_later_history() {
             turn: TurnId::new("2"),
             retry_number: 0,
         },
-        store.load_head().unwrap().revision,
+        crate::context::resources::LedgerFrontier((store.load_head().unwrap().revision).get()),
         "A COMPLETELY DIFFERENT PROMPT".to_owned(),
         vec![],
         crate::runtime::RuntimeResourceRevision::new(9),
@@ -549,9 +635,7 @@ fn historical_request_detail_ignores_later_configuration_and_later_history() {
         vec![],
     );
     later.continuation = None;
-    store
-        .commit_model_turn_start(&[], &later, timestamp(21))
-        .unwrap();
+    let _later = commit_request(&store, later, &[]);
 
     let after = detail_of(&store, &record.id);
     assert_eq!(after, before, "historical detail is immutable");
@@ -981,13 +1065,21 @@ fn the_terminal_vocabulary_does_not_infer_missing_outcomes() {
     );
 }
 
-/// Compaction has no native operation identity, so its boundary is the next
-/// durable compaction fact — at any depth of history.
+/// Each native operation retains its own Started/terminal correlation even
+/// when many later compactions appear in the durable Journal.
 #[test]
 fn compaction_uses_the_next_boundary_even_far_back_in_history() {
     let store = store("conv_96847128-a59a-7bfa-8bf9-526873a32546");
     for index in 0..140 {
-        append(&store, E::CompactionStarted, index * 2);
+        append(
+            &store,
+            E::CompactionStarted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(format!(
+                    "fixture-compaction-{index}"
+                )),
+            },
+            index * 2,
+        );
         if index == 0 {
             let read = TraceProjection::new(&store).unwrap();
             let active = read.page(None, 1).unwrap().records.remove(0);
@@ -1006,6 +1098,9 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
         append(
             &store,
             E::CompactionFailed {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(format!(
+                    "fixture-compaction-{index}"
+                )),
                 error: "compaction diagnostic".into(),
             },
             index * 2 + 1,
@@ -1597,7 +1692,7 @@ fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
 fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure() {
     let store = store("conv_61fd83b0-2f3a-70b6-8e4d-8c9e2a5d7103");
     start(&store);
-    let frozen = request(&store, 0);
+    let frozen = request_with_private_continuation(&store);
     let call = bash_call("call-allowlist");
     propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
     failure(&store, &frozen, ModelErrorKind::Authentication);
@@ -1637,7 +1732,8 @@ fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure()
     );
 
     let projected = page(&store);
-    let request_detail = detail_of(&store, &record_of(&projected, TraceKind::Request).id);
+    let record = request_record_of(&projected, &frozen);
+    let request_detail = detail_of(&store, &record.id);
     let tool_detail = detail_of(&store, &record_of(&projected, TraceKind::Tool).id);
     let mut payload = serde_json::to_value(&projected).unwrap();
     assert!(
@@ -1679,7 +1775,8 @@ fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure()
         "capability_revision",
         "context_generation",
         "runtime_resource_revision",
-        "upload_projection",
+        "\"input\":",
+        "\"images\":",
         "system_sections",
         "surface_revision",
     ] {
@@ -2917,7 +3014,15 @@ fn compaction_and_request_only_input_never_become_context_facts() {
     )];
     let first = request_with(&store, "1", 0, "prompt-A", &introduced);
     completion(&store, &first, None, None, 4);
-    append(&store, E::CompactionStarted, 5);
+    append(
+        &store,
+        E::CompactionStarted {
+            operation_id: crate::runtime::identity::CompactionOperationId::new(
+                "fixture-compaction",
+            ),
+        },
+        5,
+    );
 
     // A request whose only extra input is request-only carryover: it has no
     // canonical MessageId, so it is request detail and nothing else.
@@ -4754,7 +4859,6 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
         source
             .load_surface_history(source.load_head().unwrap().revision)
             .unwrap(),
-        std::collections::BTreeMap::new(),
     )
     .unwrap();
     let child = SqliteConversationStore::in_memory(ConversationId::new(

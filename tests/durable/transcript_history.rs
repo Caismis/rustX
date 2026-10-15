@@ -15,10 +15,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::context::ContextGeneration;
-use rustx::conversation::{SurfaceRevision, SurfaceSpan};
 use rustx::durable::{
-    CompactionCommitInput, ConversationStore, ConversationStoreError, InboundDraft,
-    SqliteConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptCursor, TranscriptItem,
+    ConversationStore, ConversationStoreError, InboundDraft, SqliteConversationStore,
+    TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptCursor, TranscriptItem,
 };
 use rustx::events::interaction::{
     AnswerSpecification, InteractionRequester, InteractionSettlement, InteractionSubject,
@@ -33,8 +32,8 @@ use rustx::local_runtime::composition::{
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     AgentStatusGenerationMetadata, AgentStatusModuleId, AssistantContentBlock,
-    AssistantMessageBlock, CompactionSummaryMetadata, ContextKind, InboundKind, MessageBlock,
-    ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantMessageBlock, ContextKind, InboundKind, MessageBlock, ToolMessageBlock,
+    UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCapabilities, ModelCompat};
 use rustx::model::{
@@ -49,7 +48,6 @@ use rustx::runtime::identity::{
     AttemptId, CapabilityRevision, ConversationId, EventId, InteractionId, MessageId,
     PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
 };
-use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use rustx::runtime::{InteractionRef, InteractionResponse, RuntimeResourceRevision};
 use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
@@ -80,18 +78,6 @@ fn user_message(id: &str, text: &str) -> MessageBlock {
         kind: InboundKind::Message,
         timestamp: Some(fixed_time()),
     })
-}
-
-fn summary_message(id: &str, text: &str) -> UserMessageBlock {
-    UserMessageBlock {
-        id: MessageId::new(id),
-        content: vec![UserContentBlock::Text(TextBlock {
-            text: text.to_owned(),
-        })],
-        source: UserSource::Runtime,
-        kind: InboundKind::CompactionSummary(CompactionSummaryMetadata::empty()),
-        timestamp: None,
-    }
 }
 
 fn assistant_message(id: &str, text: &str) -> MessageBlock {
@@ -224,13 +210,13 @@ fn all_entries(
 
 fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
     let head = store.load_head().expect("head");
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new(turn),
             retry_number: 0,
         },
-        head.revision,
+        rustx::context::resources::LedgerFrontier((head.revision).get()),
         format!("system prompt for {turn}"),
         Vec::new(),
         RuntimeResourceRevision::new(1),
@@ -255,6 +241,7 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
         Vec::new(),
     );
     let request_id = snapshot.request_id.clone();
+    crate::freeze_request(store, &mut snapshot);
     store
         .commit_model_turn_start(&[], &snapshot, fixed_time())
         .expect("request start");
@@ -448,45 +435,25 @@ fn requirement_01_acceptance_is_the_transcript_visibility_frontier() {
 /// Requirement 2: compaction retires messages from the Surface but does not
 /// delete their durable transcript entries.
 #[test]
-fn requirement_02_compacted_history_remains_pageable_after_surface_replacement() {
-    let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
-    store
-        .initialize(&[user_message("user-a", "a"), user_message("user-b", "b")])
-        .expect("initialize");
-    let summary = summary_message("summary-1", "summary");
-    store
-        .commit_compaction(CompactionCommitInput {
-            summary: summary.clone(),
-            span: SurfaceSpan::new(MessageId::new("user-a"), MessageId::new("user-b")),
-            expected_revision: SurfaceRevision::new(2),
-            tokens_before: TokenMeasurement {
-                input_tokens: 20,
-                source: TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: 4,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: fixed_time(),
-            occupancy: None,
-        })
-        .expect("compaction");
-
+fn requirement_02_projection_compaction_preserves_every_canonical_transcript_entry() {
+    let store = SqliteConversationStore::in_memory(conversation_id()).unwrap();
+    let original = vec![user_message("user-a", "a"), user_message("user-b", "b")];
+    store.initialize(&original).unwrap();
+    let receipt = super::checkpoint(&store, "P1", 2, "summary");
+    assert!(store.load_head().unwrap().active_message_ids.is_empty());
     assert_eq!(
-        store.load_head().expect("head").active_message_ids,
-        vec![MessageId::new("summary-1")]
+        store.projection_head().unwrap().unwrap(),
+        receipt.checkpoint
     );
+    assert!(matches!(
+        store.projected_history().unwrap().messages[0],
+        rustx::model::ModelInputMessage::Derived(_)
+    ));
     assert_eq!(
-        page_message_ids(&store.load_transcript_page(None, 10).expect("transcript")),
-        vec!["user-a", "user-b", "summary-1"]
+        page_message_ids(&store.load_transcript_page(None, 10).unwrap()),
+        ["user-a", "user-b"]
     );
-    assert_eq!(
-        store
-            .load_canonical_page(None, 10)
-            .expect("canonical page")
-            .messages
-            .len(),
-        3
-    );
+    assert_eq!(store.load_canonical().unwrap(), original);
 }
 
 /// Requirement 3: the no-cursor read is a bounded bootstrap page, not a
@@ -604,7 +571,7 @@ fn dependencies() -> LocalRuntimeDependencies {
 }
 
 async fn seed_composed_store(paths: &mut LaunchFixture, messages: &[MessageBlock]) {
-    let mut runtime = LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
+    let runtime = LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
         .await
         .unwrap();
     runtime.shutdown().await.unwrap();
@@ -705,7 +672,7 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
     let root = tempfile::tempdir().expect("root");
     let mut paths = startup(root.path());
     seed_composed_store(&mut paths, &[user_message("seed-user", "persisted")]).await;
-    let mut runtime =
+    let runtime =
         LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
             .await
             .expect("interactive composition");
@@ -745,7 +712,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
     let mut paths = startup(root.path());
     seed_composed_store(&mut paths, &[]).await;
     {
-        let mut headless = HeadlessConversationRuntime::compose(
+        let headless = HeadlessConversationRuntime::compose(
             &(paths).resolve(),
             &selected_dependencies(&paths),
         )
@@ -769,7 +736,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
             .expect("release the native owner before reopening");
     }
 
-    let mut interactive =
+    let interactive =
         LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
             .await
             .expect("interactive reopen");
@@ -1156,7 +1123,7 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
         ],
     )
     .await;
-    let mut runtime =
+    let runtime =
         LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
             .await
             .expect("interactive composition");
@@ -1316,7 +1283,7 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
     )
     .expect("first skill");
     seed_composed_store(&mut paths, &[user_message("cold-user", "history")]).await;
-    let mut first =
+    let first =
         LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
             .await
             .expect("first composition");
@@ -1332,7 +1299,7 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
         "---\nname: reopened\ndescription: second\n---\nsecond\n",
     )
     .expect("updated skill");
-    let mut second =
+    let second =
         LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
             .await
             .expect("cold reopen");
@@ -1365,13 +1332,13 @@ fn requirement_15_old_request_snapshot_reconstructs_old_system_bytes() {
         .initialize(&[user_message("snapshot-user", "history")])
         .expect("initialize");
     let head = store.load_head().expect("head");
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new("old-request"),
             retry_number: 0,
         },
-        head.revision,
+        rustx::context::resources::LedgerFrontier((head.revision).get()),
         "old frozen System bytes".to_owned(),
         Vec::new(),
         RuntimeResourceRevision::new(1),
@@ -1395,6 +1362,7 @@ fn requirement_15_old_request_snapshot_reconstructs_old_system_bytes() {
         None,
         Vec::new(),
     );
+    crate::freeze_request(&store, &mut snapshot);
     store
         .commit_model_turn_start(&[], &snapshot, fixed_time())
         .expect("old request start");

@@ -39,8 +39,6 @@ const OBSOLETE: &[&str] = &[
     "source activation",
     "source disabling",
     "enabled source",
-    "rustx.app-server.v5",
-    "protocol/app-server/v5",
     "settings/sourcesread",
     "settings/sourceswrite",
     "settings/setapprovalmode",
@@ -52,6 +50,16 @@ const OBSOLETE: &[&str] = &[
 fn obsolete_contract(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     OBSOLETE.iter().any(|term| lower.contains(term))
+        || ["rustx.app-server.v5", "protocol/app-server/v5"]
+            .iter()
+            .any(|prefix| {
+                lower.match_indices(prefix).any(|(offset, matched)| {
+                    !lower
+                        .as_bytes()
+                        .get(offset + matched.len())
+                        .is_some_and(u8::is_ascii_digit)
+                })
+            })
         || (lower.contains("enabled by default")
             && ["todo", "goal", "agent status"]
                 .iter()
@@ -129,6 +137,7 @@ fn documentation_guard_distinguishes_current_paths_and_negative_spellings() {
         "--user-settings",
         "~/.agents/skills",
         "rustx.app-server.v5",
+        "protocol/app-server/v5.ts",
         "Todo Plugin, enabled by default",
     ] {
         assert!(obsolete_contract(obsolete), "{obsolete}");
@@ -140,6 +149,9 @@ fn documentation_guard_distinguishes_current_paths_and_negative_spellings() {
         "--config",
         "configuration/reconcile",
         "Plugins default off",
+        "rustx.app-server.v50",
+        "protocol/app-server/v50.ts",
+        "rustx.app-server.v51",
     ] {
         assert!(!obsolete_contract(current), "{current}");
     }

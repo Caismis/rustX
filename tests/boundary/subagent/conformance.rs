@@ -42,6 +42,12 @@
 
 use super::super::{common, support};
 
+fn inspection_tempdir() -> std::io::Result<tempfile::TempDir> {
+    // macOS TMPDIR can consume sockaddr_un's entire pathname budget before
+    // the real product/Conversation/inspection suffix is appended.
+    tempfile::Builder::new().prefix("rx-").tempdir_in("/tmp")
+}
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1051,6 +1057,9 @@ async fn await_root_interaction(
                         }
                     }
                 }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
+                }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("{description}: root subscription requires an unexpected resync")
                 }
@@ -1094,6 +1103,9 @@ async fn await_root_interaction_removed(
                             return;
                         }
                     }
+                }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
                 }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("{description}: root subscription requires an unexpected resync")
@@ -1263,7 +1275,7 @@ async fn park_child_in_retry_backoff(
 /// integration binary.
 #[tokio::test]
 async fn the_child_spec_carries_the_frozen_timeout_policy() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plan = test_spawn_plan(&dir.path().join("runtime"));
     let subagent_id =
         rustx::runtime::identity::SubagentId::new("conv_95489284-1901-7da7-8093-8754fbb0517e");
@@ -1330,7 +1342,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
 /// projection goes straight from Running to Succeeded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_transient_retries_settle_one_parent_success() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_8922ca62-7b5e-701f-ba4e-201ed534db9e");
     let child = child_fixture(
         &dir,
@@ -1416,7 +1428,7 @@ async fn child_transient_retries_settle_one_parent_success() {
 /// only the final answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_attempt_publication_stays_child_local() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_d621af25-1566-7bbb-91e3-ab2733eda977");
     let child = child_fixture(
         &dir,
@@ -1510,7 +1522,7 @@ async fn failed_attempt_publication_stays_child_local() {
 /// its own unresolved-output carryover pointer as durable local residue.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_8ba92ecd-5003-7efa-a870-61822bc44c39");
     let failing_script = || {
         vec![
@@ -1649,7 +1661,7 @@ async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() 
 /// carryover pointer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_carryover_never_enters_parent_conversation_or_requests() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
         "conv_37a1028a-6a51-70ac-b030-34bfd2f0b06c",
@@ -1770,7 +1782,7 @@ async fn child_carryover_never_enters_parent_conversation_or_requests() {
 /// publishes exactly one `Cancelled` terminal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_cancellation_during_retry_backoff_cancels_the_child() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_1be6c606-ae2d-7802-bc3d-3b9342b12ca3");
     let child = child_fixture(
         &dir,
@@ -1858,7 +1870,7 @@ async fn parent_cancellation_during_retry_backoff_cancels_the_child() {
 /// ("the runtime is shutting down"), never rewritten to a user request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
         "conv_091b2630-19f7-79a9-a87e-b02de2aace1a",
@@ -1956,7 +1968,7 @@ async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_4e3cd5bc-80e4-750c-8369-e65ca9ce7564");
     let child = child_fixture(
         &dir,
@@ -2051,7 +2063,7 @@ async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
 /// settled snapshot is returned unchanged and no second publication exists.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancellation_after_terminalization_cannot_rewrite_the_result() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_a08991e8-0c1d-70a5-9ecd-5459da30726e");
     let child = child_fixture(
         &dir,
@@ -2115,7 +2127,7 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
         (true, "requested by the user"),
         (false, "the runtime is shutting down"),
     ] {
-        let dir = tempfile::tempdir().expect("temp root");
+        let dir = inspection_tempdir().expect("temp root");
         let plane = standalone_parent_plane(&dir, "conv_987b5a05-95b6-754e-980e-50721bd7ca4e");
         let child = child_fixture(
             &dir,
@@ -2215,7 +2227,7 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
 /// scheduled ordinal, folded from the child's durable retry schedule.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_is_activity_never_lifecycle() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_de69a5cb-e55e-7819-a41e-aa728d5f6b9b");
     let child = child_fixture(
         &dir,
@@ -2370,7 +2382,7 @@ fn ask_user_arguments(question: &str) -> serde_json::Value {
 /// answer, or `ToolResult`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_questionnaire_routes_through_root_without_parent_mediation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_c27650cf-7376-753e-95af-c493e2de043f",
@@ -2566,7 +2578,7 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
 /// is resumed only after the child's durable Approved settlement.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_f827f1de-a705-78d1-8367-8747d8a1c98b",
@@ -2763,7 +2775,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
 /// policy-denied `ToolResult`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_7fef1d27-1af8-7c12-ad03-a38f8e57c071",
@@ -2880,7 +2892,7 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
 /// from the live child registry and can answer the same full routed address.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn routed_interaction_survives_root_detach_and_reconnect() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_ff54ad2c-f7b7-73ef-b0d3-70d74674b085",
@@ -3024,7 +3036,7 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
 /// order and each child must observe only its own response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_7d27cece-5131-7eb2-b2b5-547ef0cbca24",
@@ -3110,6 +3122,9 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
                         interactions.push(interaction.clone());
                     }
                     }
+                }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
                 }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("mixed interactions require an unexpected resync")
@@ -3305,7 +3320,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_death_removes_only_its_routed_interactions() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_54228aad-8ab2-7cbb-b603-2bd2ef743b95",
@@ -3384,6 +3399,9 @@ async fn child_death_removes_only_its_routed_interactions() {
                         interactions.push(interaction.clone());
                     }
                     }
+                }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
                 }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("child-death interactions require an unexpected resync")
@@ -3541,7 +3559,7 @@ async fn child_death_removes_only_its_routed_interactions() {
 /// closed. Runtime binding, not the presence of a client, grants availability.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_questionnaire_fails_closed_without_root_provider() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = standalone_parent_plane(&dir, "conv_0a422f7d-96cd-75e6-85eb-3c293deeb822");
     let child = child_fixture(
         &dir,
@@ -3584,7 +3602,7 @@ async fn child_questionnaire_fails_closed_without_root_provider() {
 /// observes the authoritative prompt and cancellation reaches the child owner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn root_detach_preserves_headless_child_publication_and_routed_cancellation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_a1557c10-e45c-744b-ad71-85d8ae26e91b",
@@ -3709,7 +3727,7 @@ fn event_kinds(events: &[RuntimeEvent]) -> Vec<String> {
 /// keeps the counters as the final record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn model_activity_projects_while_lifecycle_stays_running() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_41e0c081-549d-7ed8-952b-db2deb356df5");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -3805,7 +3823,7 @@ async fn model_activity_projects_while_lifecycle_stays_running() {
 /// progress can survive into a settled or later projection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tool_activity_projects_identity_scoped_progress_and_counts_executions() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_f5578161-daa5-7b53-98c1-d26358e4e432");
     let mut tools = ToolRegistry::new();
     // The first tool parks without reporting progress; the second parks
@@ -4029,7 +4047,7 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
 /// never skip past it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_88187cdd-43f7-7645-ab39-921033fd729c");
     let mut tools = ToolRegistry::new();
     // call-a parks without reporting progress; call-b parks, reports one
@@ -4232,7 +4250,7 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
 /// the retry ordinal it was scheduled under.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_transient_retry_projects_retrying_model_then_the_retried_request() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_a1951b70-2756-73a9-a86b-ff5a157b1fba");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -4401,7 +4419,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
     }
 
     async fn run(conversation: &str, topology: Topology) -> ExecutionRecord {
-        let dir = tempfile::tempdir().expect("temp root");
+        let dir = inspection_tempdir().expect("temp root");
         let (plane, parent_runtime, host) = match topology {
             Topology::Standalone | Topology::ObservationBroken => {
                 (standalone_parent_plane(&dir, conversation), None, None)
@@ -4753,7 +4771,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
 /// registry's latest revision without having observed the intermediates.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_a302f249-af50-7289-942e-c166d04125a4",
@@ -4993,7 +5011,7 @@ async fn await_child_publication_fact<T>(
 /// fact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_fd5f1ca7-c1e6-7664-9d06-c5d40791b868");
     let catalog = rustx::local_runtime::session::SessionCatalog::create(
         &plane.runtime_root,
@@ -5190,7 +5208,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         &plane.runtime_root,
         &child_conversation_id,
     );
-    let live_server =
+    let mut live_server =
         rustx::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
             socket_path.clone(),
             child.host.clone(),
@@ -5388,7 +5406,8 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     // EOF, the exact routing socket is removed, and nothing can attach.
     tokio::time::timeout(LIVENESS, live_server.shutdown())
         .await
-        .expect("live inspection shutdown settles held connections");
+        .expect("live inspection shutdown settles held connections")
+        .expect("the listener joins successfully");
     assert!(
         tokio::time::timeout(LIVENESS, held_lines.next_line())
             .await
@@ -5461,7 +5480,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
 /// to the conversation. The cumulative counter keeps the retry count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fresh_request_after_a_retry_projects_retry_zero() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_9e749cd5-a623-7c43-aa5e-5806aaa85b40");
     let mut tools = ToolRegistry::new();
     FakeTool::new(
@@ -5562,7 +5581,7 @@ async fn a_fresh_request_after_a_retry_projects_retry_zero() {
 /// the ownership fact and the one terminal publication, and nothing else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn activity_frames_commit_no_parent_journal_facts() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_d933f2dd-c757-73db-978b-5a0eb50843e8");
     let mut tools = ToolRegistry::new();
     // The tool parks so the mid-run Tool activity is applied before the
@@ -5671,7 +5690,7 @@ async fn activity_frames_commit_no_parent_journal_facts() {
 /// Agent-authored terminal inbound.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_activity_never_enters_the_parent_model_context() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
         "conv_789c0434-30c8-7ad9-bd0b-8ca0693eac95",
@@ -5804,7 +5823,7 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
         }
     }
 
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_36a1b005-528a-75f5-ae6b-5beb5ceb7829");
     let recorded = Arc::new(RecordingObserver::default());
     plane
@@ -5880,7 +5899,7 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
 /// event.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn snapshot_repair_serves_the_latest_subagent_observation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_112418f3-578e-706b-b917-7950d19a8036",
@@ -6023,7 +6042,7 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
 /// credentials or endpoints of the frozen provider binding.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_snapshot_projects_only_the_frozen_execution_profile() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_4781943a-d0c2-79ab-a6e5-d4790aed5fdb");
     let child = child_fixture(
         &dir,
@@ -6168,7 +6187,7 @@ fn request_carries_user_text(request: &rustx::model::ModelRequest, wanted: &str)
 /// one registry record, one spawn, one terminal publication.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_70bbecdd-3617-7fdf-b79d-bb3881570201");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -6282,7 +6301,7 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
 /// domain. No scheduler ordering is involved on either side.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_804e7c5c-0eb9-761c-87f8-2f107fa4d3cd");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -6344,7 +6363,7 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
 /// request or explicit admission call is needed after releasing owned work.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn goal350_subagent_terminal_publication_wakes_next_continuation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = inspection_tempdir().unwrap();
     let (parent, _) = compose_parent_runtime_plane(
         &dir,
         "conv_45000000-0000-7000-8000-000000000005",

@@ -1,4 +1,4 @@
-import type { ContentChunk, ContentRef } from './v48.ts';
+import type { ContentChunk, ContentRef } from './v50.ts';
 import { contentRefKey, sameContentRef } from './content-identity.ts';
 
 /** Finite loaded byte ranges, independent of Applied Cursor and source lifetime. */

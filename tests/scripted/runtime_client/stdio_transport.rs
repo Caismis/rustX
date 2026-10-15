@@ -1057,17 +1057,23 @@ async fn an_input_record_over_the_limit_is_rejected_without_dispatch() {
     );
 }
 
-/// A large canonical item has a bounded identity/checkpoint read. Transport
-/// observation neither truncates its source nor closes the byte stream.
+/// Aggregate canonical history exceeds the wire record limit while each
+/// original item remains admissible to the native model working set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint() {
-    let huge = "y".repeat(STDIO_JSONL_MAX_RECORD_BYTES + 1024);
+    let body = "y".repeat(512 * 1024 + 1024);
+    let originals: Vec<_> = (0..16)
+        .map(|index| {
+            MessageBlock::User(support::fake::inbound_message(
+                &format!("seed-{index}"),
+                &body,
+                UserSource::Human,
+            ))
+        })
+        .collect();
+    assert!(body.len() * originals.len() > STDIO_JSONL_MAX_RECORD_BYTES);
     let fixture = RuntimeClientFixture::builder("conv_aee41511-3bd5-7248-b7db-5be6c3a1c36f")
-        .initial_messages(vec![MessageBlock::User(support::fake::inbound_message(
-            "seed",
-            &huge,
-            UserSource::Human,
-        ))])
+        .initial_messages(originals.clone())
         .build()
         .await;
     let outcome = run_session(
@@ -1092,30 +1098,113 @@ async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint(
     else {
         panic!("independent bounded checkpoint");
     };
-    assert_eq!(checkpoint.snapshot.message_descriptors.len(), 1);
+    assert!(!checkpoint.snapshot.message_descriptors.is_empty());
+    let frontier = checkpoint
+        .collections
+        .iter()
+        .find(|frontier| frontier.domain == "messages")
+        .expect("advertised original canonical collection");
+    assert_eq!(frontier.total, originals.len() as u64);
     assert!(
-        checkpoint.snapshot.message_descriptors[0]
-            .content
-            .iter()
-            .any(|binding| {
+        frontier.next_offset.is_some(),
+        "the bounded head advertises remaining history"
+    );
+    let items = stdio_original_message_items(&fixture.host, &checkpoint.read_cut, frontier).await;
+    assert_eq!(items.len(), originals.len());
+    for (index, item) in items.iter().enumerate() {
+        let message: MessageBlock = rustx::runtime_client::checkpoint::decode_domain_value(
+            item.value
+                .clone()
+                .expect("finite original canonical metadata"),
+        )
+        .expect("typed native canonical preview");
+        assert_eq!(message.id().as_str(), format!("seed-{index}"));
+        // Canonical Page identity names its immutable Ledger seat; the
+        // original message identity remains in the native preview above.
+        assert_eq!(item.identity, format!("ledger:{}", index + 1));
+        let MessageBlock::User(message) = message else {
+            panic!("original User metadata")
+        };
+        assert_eq!(message.source, UserSource::Human);
+        assert!(
+            item.content.iter().any(|binding| {
                 binding.deferred
                     && binding.content_ref.representation
                         == rustx::runtime_client::content::ContentRepresentation::Utf8Text
-                    && binding.content_ref.readable_end == huge.len() as u64
+                    && binding.content_ref.readable_end == body.len() as u64
             }),
-        "complete original content frontier remains readable"
-    );
+            "every complete original content frontier remains readable"
+        );
+    }
     let ledger = fixture
         .runtime
         .durable_ledger()
         .expect("original canonical source");
-    let MessageBlock::User(message) = &ledger[0] else {
-        panic!("original User")
-    };
     assert_eq!(
-        message.content,
-        vec![UserContentBlock::Text(TextBlock { text: huge })]
+        ledger, originals,
+        "all aggregate source bodies remain exact"
     );
+}
+
+/// Follow original canonical metadata through the actual stdio Page method.
+async fn stdio_original_message_items(
+    host: &RuntimeClientHost,
+    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    frontier: &rustx::runtime_client::checkpoint::CollectionFrontier,
+) -> Vec<rustx::runtime_client::checkpoint::CheckpointPageItem> {
+    let mut items = Vec::new();
+    let mut offset = 0;
+    loop {
+        let mut request = serde_json::to_vec(
+            &rustx::runtime_client::RuntimeClientRequest::CheckpointPageGet {
+                id: rustx::runtime_client::RequestId::new(2),
+                cut: cut.clone(),
+                domain: frontier.domain.clone(),
+                offset,
+                limit: 8,
+            },
+        )
+        .unwrap();
+        request.push(b'\n');
+        let outcome = run_session(
+            host.endpoint(),
+            &[&initialize_record(1), &request],
+            LARGE_PIPE_BYTES,
+        )
+        .await;
+        assert!(matches!(outcome.result, Ok(StdioSessionEnd::InputEof)));
+        assert_eq!(outcome.records.len(), 2, "one complete record per request");
+        assert!(outcome.records[0].len() < 4096);
+        assert!(matches!(
+            as_response(&outcome.records[0]).result,
+            Some(RuntimeClientResult::Initialized { .. })
+        ));
+        assert!(outcome.records[1].len() <= STDIO_JSONL_MAX_RECORD_BYTES);
+        let Some(RuntimeClientResult::CheckpointPage { page }) =
+            as_response(&outcome.records[1]).result
+        else {
+            panic!("bounded original canonical metadata page");
+        };
+        assert_eq!(&page.read_cut, cut);
+        assert_eq!(page.domain, frontier.domain);
+        assert_eq!(page.total, frontier.total);
+        assert!(page.items.len() <= 8);
+        for item in &page.items {
+            assert_eq!(item.offset, items.len() as u64);
+            items.push(item.clone());
+        }
+        let end = offset + page.items.len() as u64;
+        if let Some(next) = page.next_offset {
+            assert_eq!(next, end);
+            assert!(next > offset && next < page.total);
+            offset = next;
+        } else {
+            assert_eq!(end, frontier.total);
+            break;
+        }
+    }
+    assert_eq!(items.len() as u64, frontier.total);
+    items
 }
 
 // ---------------------------------------------------------------------------

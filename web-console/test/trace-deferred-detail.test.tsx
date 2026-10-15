@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v48';
+import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v50';
 import {Server,checkpoint,snapshot} from './fixture';
 import {traceRecord,requestDetail} from './trace-fixture';
 import {AgentTraceReader} from '../src/client/agent-trace';

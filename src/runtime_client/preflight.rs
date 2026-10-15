@@ -26,6 +26,21 @@ pub(crate) fn bounded_fit(value: &(impl Serialize + ?Sized), limit: usize) -> Op
         Some(true)
     }
 }
+/// The exact conservative threshold of the existing admission walk. A prepared
+/// immutable DTO also retains its actual capped JSON size and representability.
+pub(crate) fn required_budget(value: &(impl Serialize + ?Sized), limit: usize) -> Option<usize> {
+    let mut left = limit;
+    let mut uncertain = false;
+    value
+        .serialize(Check {
+            left: &mut left,
+            opaque_json: is_opaque_json(value),
+            uncertain: &mut uncertain,
+            map_key: false,
+        })
+        .ok()?;
+    Some(limit - left)
+}
 // Native typed u64 domains have their own schema-driven decimal codec. Only
 // opaque JSON values are forbidden from becoming lossy JavaScript numbers.
 fn is_opaque_json<T: Serialize + ?Sized>(_: &T) -> bool {
@@ -49,16 +64,16 @@ impl ser::Error for Full {
 // Raw length rejects a huge borrowed string in O(1). Every scanned string is
 // at most the remaining encoded budget; JSON escapes are charged exactly.
 fn string_content(left: &mut usize, value: &str) -> Result<(), Full> {
-    if value.len() > *left {
-        return Err(Full);
-    }
+    // Charge the original UTF-8 bytes once. Only escaped bytes add work to
+    // the budget; ordinary bytes need no repeated checked subtraction.
+    *left = left.checked_sub(value.len()).ok_or(Full)?;
     for byte in value.bytes() {
-        let encoded = match byte {
-            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
-            0..=0x1f => 6,
-            _ => 1,
+        let extra = match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
+            0..=0x1f => 5,
+            _ => continue,
         };
-        *left = left.checked_sub(encoded).ok_or(Full)?;
+        *left = left.checked_sub(extra).ok_or(Full)?;
     }
     Ok(())
 }
@@ -472,6 +487,39 @@ mod tests {
             2047,
             "formatting stops exactly at the encoded byte budget, before allocating its unbounded result"
         );
+    }
+    #[test]
+    fn t01_t15_string_budget_matches_original_byte_walk_at_every_boundary() {
+        fn original(mut left: usize, value: &str) -> Option<usize> {
+            if value.len() > left {
+                return None;
+            }
+            for byte in value.bytes() {
+                let encoded = match byte {
+                    b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+                    0..=0x1f => 6,
+                    _ => 1,
+                };
+                left = left.checked_sub(encoded)?;
+            }
+            Some(left)
+        }
+        let controls: String = (0..=127).map(char::from).collect();
+        for value in [
+            String::new(),
+            controls,
+            "normal source identity".into(),
+            "水🙂é\\\"\n\u{0}".repeat(16),
+        ] {
+            let encoded = serde_json::to_vec(&value).unwrap();
+            for budget in 0..=encoded.len() + 2 {
+                let mut remaining = budget;
+                let actual = string_content(&mut remaining, &value)
+                    .ok()
+                    .map(|()| remaining);
+                assert_eq!(actual, original(budget, &value), "budget={budget}");
+            }
+        }
     }
     #[test]
     fn t01_t15_string_admission_counts_actual_json_escapes_and_utf8_bytes() {

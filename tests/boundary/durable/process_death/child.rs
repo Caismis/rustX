@@ -1977,7 +1977,7 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
     }
     if reopening {
         child
-            .runtime()
+            .headless
             .shutdown()
             .await
             .expect("recovered runtime shutdown");

@@ -1086,7 +1086,7 @@ fn timed_request_snapshot(
             turn: crate::runtime::identity::TurnId::new(format!("timing-{index}")),
             retry_number: 0,
         },
-        store.load_head().unwrap().revision,
+        crate::context::resources::LedgerFrontier(store.load_head().unwrap().revision.get()),
         "prompt".into(),
         Vec::new(),
         crate::runtime::RuntimeResourceRevision::new(1),
@@ -1122,6 +1122,23 @@ fn t08_t20_request_source_ranges_hold_only_two_finite_native_blob_rows() {
     let attempt = crate::runtime::identity::AttemptId::new("source-range");
     let mut snapshot = timed_request_snapshot(&store, &attempt, 0, "model".into());
     snapshot.effective_system_prompt = "λ🙂".repeat(400_000);
+    // Freeze the actual changed request, including its exact prompt fingerprint.
+    let history = store.projected_history().unwrap();
+    snapshot.history_cut = history.cut;
+    snapshot
+        .freeze_input(
+            &conversation,
+            &crate::model::ModelRequest {
+                images: snapshot.images.clone(),
+                invocation: snapshot.invocation.clone(),
+                messages: history.messages,
+                tools: snapshot.tool_definitions.clone(),
+                effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                continuation: snapshot.continuation.clone(),
+                continuation_source: snapshot.continuation_source.clone(),
+            },
+        )
+        .unwrap();
     let prompt = snapshot.effective_system_prompt.clone();
     let started = store
         .commit_model_turn_start(
@@ -1227,6 +1244,9 @@ fn t08_t15_t20_native_state_sources_survive_large_cache_eviction_and_reject_stal
             turn_id: None,
             timestamp: time,
             event: RuntimeEvent::CompactionFailed {
+                operation_id: crate::runtime::identity::CompactionOperationId::new(
+                    "diagnostic-compaction",
+                ),
                 error: body.clone(),
             },
         })
@@ -1584,12 +1604,12 @@ fn t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable
         panic!("native File source")
     };
     file.artifact_id = child_artifact;
-    let seed = crate::durable::LineageSeed::replayed(
-        captured.canonical,
-        captured.surface_history,
-        captured.checkpoints,
-    )
-    .unwrap();
+    let seed = crate::durable::LineageSeed::replayed(captured.canonical, captured.surface_history)
+        .unwrap()
+        .with_projections(captured.projections)
+        .unwrap()
+        .with_raw_tool_arguments(captured.raw_tool_arguments)
+        .unwrap();
     let child_path = child_dir.path().join("child.sqlite3");
     let child = SqliteConversationStore::open(child_conversation.clone(), &child_path).unwrap();
     child.initialize_lineage(&seed).unwrap();

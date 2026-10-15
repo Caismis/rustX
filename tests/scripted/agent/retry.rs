@@ -685,6 +685,38 @@ async fn transient_retry_does_not_reset_overflow_budget() {
     .await;
     let audit = finish_execution(execution, &tool_runtime, &publication).await;
 
+    let requests = model.requests();
+    assert_ne!(
+        requests[0], requests[1],
+        "overflow authorizes a new semantic input"
+    );
+    assert_eq!(
+        requests[1], requests[2],
+        "transient retry retains the post-compaction input"
+    );
+    let snapshots = audit.snapshot_history();
+    assert_ne!(
+        snapshots[0].semantic_input_fingerprint,
+        snapshots[1].semantic_input_fingerprint
+    );
+    assert_eq!(
+        snapshots[1].semantic_input_fingerprint,
+        snapshots[2].semantic_input_fingerprint
+    );
+    assert!(snapshots[1].request_context_ids.is_empty());
+    assert!(snapshots[2].request_context_ids.is_empty());
+    for id in &snapshots[0].request_context_ids {
+        for request in &requests {
+            assert_eq!(
+                request
+                    .messages
+                    .iter()
+                    .filter(|m| m.canonical_id() == Some(id))
+                    .count(),
+                1
+            );
+        }
+    }
     assert_eq!(model.requests().len(), 3);
     assert_eq!(
         audit
@@ -1334,12 +1366,25 @@ async fn transient_retry_preserves_frozen_provider_continuation() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime(CONVERSATION);
     let publication = common::RecordingPublicationObserver::default();
+    let mut input = continuation_request(
+        "attempt-134-continuation",
+        vec![user("seed", "hello")],
+        &model,
+    );
+    input.model = support::model::fixture_session_model(
+        &[support::model::FixtureModel::text(
+            "fixture/fake-model",
+            rustx::model::ModelProtocol::OpenAiResponses,
+        )
+        .with_context_window(10_000_000)
+        .with_max_output_tokens(512)],
+        "fixture/fake-model",
+        &support::model::ScriptedAdapterFactory::new(model.clone()),
+    )
+    .snapshot()
+    .unwrap();
     let execution = make_execution(
-        continuation_request(
-            "attempt-134-continuation",
-            vec![user("seed", "hello")],
-            &model,
-        ),
+        input,
         tools,
         &cancellation,
         runtime(Vec::new()),
@@ -1383,4 +1428,104 @@ fn retry_schedule_wire_shape_has_failed_request_and_no_next_request_id() {
     assert_eq!(value["retry_number"], 1);
     assert_eq!(value["retry_delay_ms"], 2_000);
     assert!(value.get("next_request_id").is_none());
+}
+
+/// Every stream terminal is a deterministic linearization point; no clock race.
+#[tokio::test]
+async fn corrective_overflow_transient_retry_retains_latest_input_and_context() {
+    let model = fake_model(vec![
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::Failed {
+                error: ModelError::malformed_tool_proposal(
+                    rustx::model::MalformedToolProposalSource::StreamAssembly,
+                    "missing usable call id",
+                ),
+            }),
+        ],
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(overflow_failure()),
+        ],
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(transient_failure("temporary", Some(0))),
+        ],
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(completed()),
+        ],
+    ]);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = common::tool_runtime(CONVERSATION);
+    let publication = common::RecordingPublicationObserver::default();
+    let execution = make_execution(
+        continuation_request(
+            "attempt-composed-correction",
+            vec![user("seed", "hello")],
+            &model,
+        ),
+        ToolRegistry::new(),
+        &cancellation,
+        compacting_runtime(vec![FakeSummaryStep::Return("summary".into())]),
+        &tool_runtime,
+    )
+    .await;
+    let audit = finish_execution(execution, &tool_runtime, &publication).await;
+    let requests = model.requests();
+    assert_eq!(requests.len(), 4);
+    assert_ne!(
+        requests[0].effective_system_prompt,
+        requests[1].effective_system_prompt
+    );
+    assert!(
+        requests[1]
+            .effective_system_prompt
+            .contains("[runtime generation feedback]")
+    );
+    assert_eq!(
+        requests[1].effective_system_prompt,
+        requests[2].effective_system_prompt
+    );
+    assert_ne!(requests[1].messages, requests[2].messages);
+    assert_eq!(requests[2], requests[3]);
+    let snapshots = audit.snapshot_history();
+    assert_eq!(
+        snapshots
+            .iter()
+            .map(|s| s.identity.retry_number)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    assert_eq!(
+        snapshots[2].semantic_input_fingerprint,
+        snapshots[3].semantic_input_fingerprint
+    );
+    assert!(
+        snapshots[1..]
+            .iter()
+            .all(|s| s.request_context_ids.is_empty())
+    );
+    for id in &snapshots[0].request_context_ids {
+        for request in &requests {
+            assert_eq!(
+                request
+                    .messages
+                    .iter()
+                    .filter(|m| m.canonical_id() == Some(id))
+                    .count(),
+                1
+            );
+        }
+    }
+    assert_eq!(started_ids(&audit.event_history).len(), 4);
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|e| matches!(e, RuntimeEvent::CompactionCompleted { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
 }

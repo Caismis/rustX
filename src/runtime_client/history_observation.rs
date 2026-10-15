@@ -254,6 +254,9 @@ pub(crate) fn value_read(
     path: &[String],
     range: (u64, u32),
 ) -> Result<CheckpointValueChunk, RuntimeClientError> {
+    if super::projection_history::selection(domain).is_some() {
+        return super::projection_history::value_read(store, cut, domain, item_offset, path, range);
+    }
     if super::delivery::selection(domain).is_some() {
         return super::delivery::value_read(
             store,

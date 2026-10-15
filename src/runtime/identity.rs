@@ -95,8 +95,21 @@ macro_rules! id_type {
     };
 }
 
-/// Typed `UUIDv7` domains serialize as canonical prefixed strings. Parsing is
-/// strict; UUID sort order is never a semantic ordering contract.
+id_type! {
+    /// Immutable historical context content, independent of canonical message identity.
+    CheckpointId
+}
+id_type! {
+    /// One compaction operation, allocated before its lifecycle facts.
+    CompactionOperationId
+}
+
+id_type! {
+    /// Immutable destination bootstrap installation, distinct from source activations.
+    LineageInstallationId
+}
+
+// Typed UUIDv7 domains parse strictly; sort order is not a semantic ordering contract.
 macro_rules! uuid_id_type {
     ($(#[$doc:meta])* $name:ident, $prefix:literal) => {
         $(#[$doc])*

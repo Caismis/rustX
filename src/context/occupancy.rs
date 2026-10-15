@@ -97,31 +97,38 @@ pub(crate) fn read(
     }
 }
 
-/// Derive the immutable bootstrap reading once from a validated lineage seed.
-/// The newest inherited request Turn owns absence as well as measurement;
-/// a retained Surface replacement after its content suppresses the reading.
+/// Inherited occupancy follows projection activation independently of execution.
+/// An activation covering the newest retained completed turn supersedes its
+/// old request measurement; source/destination Journal domains are never compared.
 pub(crate) fn inherit(
     turns: &[crate::durable::reading::TurnReadingProvenance],
-    history: &[crate::conversation::SurfaceOp],
+    canonical: &[crate::message::types::MessageBlock],
+    projections: &[crate::durable::projection::ProjectionCheckpoint],
 ) -> Option<ContextOccupancy> {
-    use crate::conversation::SurfaceOp;
     let turn = turns.iter().rev().find(|turn| {
         turn.execution
             .as_ref()
             .is_some_and(|execution| execution.model_requests > 0)
-    })?;
-    let members: std::collections::BTreeSet<_> = turn.process_message_ids.iter().collect();
-    let appended = history.iter().rposition(
-        |op| matches!(op, SurfaceOp::Append { message_id } if members.contains(message_id)),
-    );
-    let compacted = history
-        .iter()
-        .rposition(|op| matches!(op, SurfaceOp::Replace { .. }));
-    if compacted > appended {
-        return None;
+    });
+    if let Some(checkpoint) = projections.last() {
+        let last_turn_position = turn.and_then(|turn| {
+            turn.process_message_ids
+                .iter()
+                .filter_map(|id| {
+                    canonical
+                        .iter()
+                        .position(|message| message.id() == id)
+                        .map(|i| i as u64 + 1)
+                })
+                .max()
+        });
+        if last_turn_position
+            .is_none_or(|position| position <= checkpoint.candidate.base_frontier.0)
+        {
+            return checkpoint.occupancy.clone();
+        }
     }
-    turn.execution
-        .as_ref()
+    turn.and_then(|turn| turn.execution.as_ref())
         .and_then(|execution| execution.occupancy.clone())
 }
 

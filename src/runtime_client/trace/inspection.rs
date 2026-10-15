@@ -139,12 +139,13 @@ impl super::TraceProjection<'_> {
                     None => TraceToolDefinitionSelection::Unavailable,
                 },
             },
-            TraceFactData::Adoption { .. }
-            | TraceFactData::AssistantCommit { .. }
-            | TraceFactData::CompactionStart => TraceInspectionContent::Messages {
-                page: self.inspection_messages(anchor.sequence, 0, 8)?,
-            },
+            TraceFactData::Adoption { .. } | TraceFactData::AssistantCommit { .. } => {
+                TraceInspectionContent::Messages {
+                    page: self.inspection_messages(anchor.sequence, 0, 8)?,
+                }
+            }
             TraceFactData::AttemptStart
+            | TraceFactData::CompactionStart { .. }
             | TraceFactData::StepStart
             | TraceFactData::BackgroundStart { .. }
             | TraceFactData::SubagentStart { .. }
@@ -182,20 +183,6 @@ impl super::TraceProjection<'_> {
             }
             TraceFactData::AssistantCommit { ledger_position } => {
                 self.inspection_canonical(Some(ledger_position), offset)?
-            }
-            TraceFactData::CompactionStart => {
-                let terminal = self.ending(
-                    sequence,
-                    &[
-                        crate::durable::observation::TraceFactKind::CompactionCompleted,
-                        crate::durable::observation::TraceFactKind::CompactionFailed,
-                    ],
-                )?;
-                let position = terminal.and_then(|terminal| match terminal.fact {
-                    TraceFactData::Terminal(terminal) => terminal.summary_ledger_position,
-                    _ => None,
-                });
-                self.inspection_canonical(position, offset)?
             }
             _ => {
                 return Err(ConversationStoreError::InvalidReference(

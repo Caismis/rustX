@@ -608,6 +608,9 @@ pub(crate) fn history_value_read(
             message: "invalid Trace read bounds".into(),
         });
     }
+    if super::projection_history::selection(domain).is_some() {
+        return super::projection_history::value_read(store, cut, domain, item_offset, path, range);
+    }
     if super::delivery::selection(domain).is_some() {
         return super::delivery::value_read(
             store,

@@ -103,7 +103,40 @@ pub fn validate_request(
     }
 
     validate_continuation(request, protocol)?;
+    // Wire coverage/correlation is part of deterministic adapter admission,
+    // including accepted stored calls absent from this request's explicit input.
+    super::correlation::request_labels(request).map_err(invalid_request)?;
     validate_tools(request)
+}
+
+#[cfg(test)]
+thread_local! { static PREFLIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn take_preflights() -> usize {
+    PREFLIGHTS.with(|v| v.replace(0))
+}
+/// Adapter-owned preflight, including opaque native replay, without dispatch.
+/// No SDK or wire values escape the adapter boundary.
+pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), ModelError> {
+    #[cfg(test)]
+    PREFLIGHTS.with(|v| v.set(v.get() + 1));
+    let tools = validate_request(request, request.protocol())?;
+    match request.protocol() {
+        ModelProtocol::OpenAiChatCompletions => {
+            super::openai::chat_completions::translate_request(request)?;
+        }
+        ModelProtocol::OpenAiResponses => {
+            super::openai::responses::translate_request(
+                request,
+                &tools,
+                request.invocation.compat.responses_storage,
+            )?;
+        }
+        ModelProtocol::AnthropicMessages => {
+            super::anthropic::mapping::translate_request(request, &tools)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_continuation(
@@ -196,8 +229,62 @@ mod tests {
     use crate::runtime::identity::ToolId;
     use crate::tools::types::ModelToolDefinition;
 
+    #[test]
+    fn ambiguous_unresolved_wire_ids_fail_complete_adapter_preflight() {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
+            ToolCallOccurrenceRef, ToolMessageBlock,
+        };
+        use crate::runtime::identity::{MessageId, ToolCallId};
+        use crate::tools::types::ToolCall;
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            let mut input =
+                crate::scripted_suites::common::simple_request(protocol, "test", "input");
+            let call = ToolCall {
+                id: ToolCallId::new("repeat"),
+                tool_id: ToolId::new("tool"),
+                name: "tool".into(),
+                arguments: serde_json::json!({}),
+            };
+            input.messages.push(
+                MessageBlock::Assistant(AssistantMessageBlock {
+                    id: MessageId::new("assistant"),
+                    content: vec![
+                        AssistantContentBlock::ToolCall(call.clone()),
+                        AssistantContentBlock::ToolCall(call),
+                    ],
+                })
+                .into(),
+            );
+            for block in [1, 0] {
+                input.messages.push(
+                    MessageBlock::Tool(ToolMessageBlock {
+                        id: MessageId::new(format!("result-{block}")),
+                        tool_call_id: ToolCallId::new("repeat"),
+                        tool_id: ToolId::new("tool"),
+                        occurrence: ToolCallOccurrenceRef::new(
+                            MessageId::new("assistant"),
+                            ContentBlockIndex::new(block),
+                        ),
+                        result: crate::scripted_suites::support::fake::success_result("result"),
+                    })
+                    .into(),
+                );
+            }
+            let error = super::validate_prepared_request(&input)
+                .expect_err("raw wire IDs cannot disambiguate two pending physical occurrences");
+            assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+            assert!(error.message.contains("correlation"));
+        }
+    }
+
     fn request() -> ModelRequest {
         ModelRequest {
+            continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
                 model: "m".to_owned(),
@@ -211,6 +298,107 @@ mod tests {
             tools: Vec::new(),
             effective_system_prompt: String::new(),
             continuation: None,
+        }
+    }
+
+    #[test]
+    fn reconciled_coverage_replays_only_complete_native_units() {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, MessageBlock, ReasoningBlock,
+            UserContentBlock,
+        };
+        use crate::runtime::continuation::AcceptedOutputContinuationSource;
+        use crate::runtime::identity::{ConversationId, MessageId, RequestId};
+        let states = [
+            (
+                ModelProtocol::OpenAiResponses,
+                ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+                    previous_response_id: "accepted-response".into(),
+                }),
+                None,
+                true,
+            ),
+            (
+                ModelProtocol::OpenAiResponses,
+                ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+                    previous_response_id: "accepted-response".into(),
+                }),
+                Some("opaque reasoning unavailable"),
+                false,
+            ),
+            (
+                ModelProtocol::OpenAiResponses,
+                ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stateless {
+                        items: vec![
+                            serde_json::json!({"type":"reasoning", "id":"rs-real", "encrypted_content":"exact-encrypted-state"}),
+                        ],
+                    },
+                ),
+                None,
+                true,
+            ),
+            (
+                ModelProtocol::AnthropicMessages,
+                ProviderContinuationState::Anthropic(AnthropicContinuation {
+                    opaque: serde_json::json!({"type":"thinking", "thinking":"original thinking", "signature":"real-native-signature"}),
+                }),
+                Some("original thinking"),
+                true,
+            ),
+        ];
+        for (protocol, state, text, replayable) in states {
+            let mut input =
+                crate::scripted_suites::common::simple_request(protocol, "test", "covered input");
+            let output = MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("actual-output"),
+                content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                    text: text.map(str::to_owned),
+                    provider_state: Some(state.clone()),
+                })],
+            });
+            let source = AcceptedOutputContinuationSource::from_accepted_output(
+                RequestId::new("actual-request"),
+                &ConversationId::generate(),
+                &input.messages,
+                &output,
+            )
+            .unwrap();
+            input.messages.push(output.clone().into());
+            input.continuation = Some(state);
+            input.continuation_source = Some(source);
+            assert!(
+                !input.reconcile_continuation().unwrap(),
+                "unchanged coverage stays native"
+            );
+            let crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) =
+                &mut input.messages[0]
+            else {
+                panic!("user")
+            };
+            user.content = vec![UserContentBlock::Text(crate::message::TextBlock {
+                text: "request-local transformed input".into(),
+            })];
+            assert!(input.reconcile_continuation().unwrap());
+            assert!(input.continuation.is_none());
+            assert_eq!(
+                input.messages[1].as_canonical(),
+                Some(&output),
+                "native history remains immutable"
+            );
+            if replayable {
+                super::validate_prepared_request(&input).unwrap();
+            } else {
+                let error = super::validate_prepared_request(&input).unwrap_err();
+                assert!(
+                    error.message.contains("preserved provider-native"),
+                    "{error:?}"
+                );
+            }
+            assert!(
+                !input.reconcile_continuation().unwrap(),
+                "retry uses the reconciled version"
+            );
         }
     }
 

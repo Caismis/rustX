@@ -1,7 +1,7 @@
 //! On-demand durable access to historical Request Snapshots.
 //!
 //! This type is a read handle, not a `Vec<RequestSnapshot>` authority. The
-//! immutable snapshot and the historical Surface/Ledger it references live
+//! immutable snapshot and the immutable Ledger dependencies it references live
 //! in the conversation store; callers receive a bounded read result only
 //! when they ask for it.
 
@@ -27,7 +27,7 @@ impl std::fmt::Debug for RequestHistory {
 pub enum RequestHistoryError {
     /// No retained snapshot has this request identity.
     NotFound(RequestIdentity),
-    /// The retained snapshot or its referenced Surface/Ledger facts failed
+    /// The retained snapshot or its immutable input dependencies failed
     /// to reconstruct.
     Reconstruction(String),
 }
@@ -104,7 +104,7 @@ impl RequestHistory {
     ///
     /// Returns [`RequestHistoryError::NotFound`] when the identity has no
     /// retained snapshot, or [`RequestHistoryError::Reconstruction`] when the
-    /// immutable Surface/Ledger references cannot be read.
+    /// immutable frozen input dependencies cannot be read.
     pub fn reconstruct(
         &self,
         identity: &RequestIdentity,

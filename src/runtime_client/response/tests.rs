@@ -49,6 +49,80 @@ fn user(store: &dyn ConversationStore, id: &str) {
         }))
         .unwrap();
 }
+fn admitted_user(store: &dyn ConversationStore, id: &str, attempt: &str) {
+    append(
+        store,
+        attempt,
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new(attempt),
+        },
+    );
+    let accepted = store
+        .accept_inbound(crate::durable::InboundDraft {
+            message_id: Some(MessageId::new(id)),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock { text: id.into() })],
+            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            correlation: None,
+        })
+        .unwrap();
+    store
+        .adopt_pending_batch(accepted.sequence, Some(AttemptId::new(attempt)))
+        .unwrap();
+}
+fn canonical_result(store: &dyn ConversationStore, attempt: &str, owner: &str, failed: bool) {
+    let MessageBlock::Assistant(assistant) = store
+        .load_messages(&[MessageId::new(owner)])
+        .unwrap()
+        .pop()
+        .unwrap()
+    else {
+        panic!("physical Assistant")
+    };
+    let AssistantContentBlock::ToolCall(call) = &assistant.content[0] else {
+        panic!("physical call")
+    };
+    let id = MessageId::new(format!("{owner}-result"));
+    store
+        .append_canonical_with_event(
+            &MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+                id: id.clone(),
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    assistant.id,
+                    crate::message::types::ContentBlockIndex::new(0),
+                ),
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: crate::tools::types::ToolExecutionResult {
+                    status: if failed {
+                        crate::tools::types::ToolExecutionStatus::Failed {
+                            error: "controlled".into(),
+                        }
+                    } else {
+                        crate::tools::types::ToolExecutionStatus::Success
+                    },
+                    content: vec![],
+                    duration_ms: if failed { 1500 } else { 0 },
+                    exit_code: None,
+                    artifacts: vec![],
+                    deliveries: vec![],
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                },
+            }),
+            event(
+                store,
+                attempt,
+                RuntimeEvent::ToolMessageCommitted {
+                    message_id: id,
+                    tool_call_id: call.id.clone(),
+                },
+            ),
+        )
+        .unwrap();
+}
 fn assistant(store: &dyn ConversationStore, attempt: &str, id: &str) {
     store
         .append_canonical_with_event(
@@ -137,13 +211,13 @@ fn start_request_with_window(
     retry: u32,
     context_window: u64,
 ) -> RequestSnapshot {
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: AttemptId::new(attempt),
             turn: TurnId::new("1"),
             retry_number: retry,
         },
-        store.load_head().unwrap().revision,
+        crate::context::resources::LedgerFrontier((store.load_head().unwrap().revision).get()),
         "system".into(),
         vec![],
         crate::runtime::RuntimeResourceRevision::new(1),
@@ -167,6 +241,22 @@ fn start_request_with_window(
         None,
         vec![],
     );
+    let history = store.projected_history().unwrap();
+    snapshot.history_cut = history.cut;
+    snapshot
+        .freeze_input(
+            store.conversation_id(),
+            &crate::model::ModelRequest {
+                messages: history.messages,
+                images: crate::model::images::ResolvedImages::new(),
+                invocation: snapshot.invocation.clone(),
+                tools: snapshot.tool_definitions.clone(),
+                effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                continuation: snapshot.continuation.clone(),
+                continuation_source: snapshot.continuation_source.clone(),
+            },
+        )
+        .unwrap();
     store
         .commit_model_turn_start(&[], &snapshot, Utc.timestamp_opt(1_700_000_000, 0).unwrap())
         .unwrap();
@@ -272,6 +362,7 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
         );
         settled.timestamp += chrono::Duration::milliseconds(1500);
         store.append_event(settled).unwrap();
+        canonical_result(&store, attempt, &format!("proposal-{attempt}"), true);
         assistant(&store, attempt, &format!("answer-{attempt}"));
         finish(&store, attempt);
     }
@@ -308,14 +399,8 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
         "conv_b05f9cb7-dcec-7fa1-8fa9-2047ae76d95f",
     ))
     .unwrap();
-    user(&store, "input-a");
-    append(
-        &store,
-        "a",
-        RuntimeEvent::AttemptStarted {
-            attempt_id: AttemptId::new("a"),
-        },
-    );
+    admitted_user(&store, "input-a", "a");
+
     request(&store, "a", 0, Some(usage(Some(0))));
     store
         .append_canonical_with_event(
@@ -339,6 +424,7 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
             ),
         )
         .unwrap();
+    canonical_result(&store, "a", "intermediate", false);
     request(&store, "a", 1, Some(usage(None)));
     assistant(&store, "a", "closing");
     assert!(tails(&page(&store, None, 64)).is_empty());
@@ -541,7 +627,15 @@ fn context_measurement_survives_pending_and_failed_compaction() {
         "a genuine measured zero remains available"
     );
     let totals = page(&store, None, 64).statistics;
-    append(&store, "a", RuntimeEvent::CompactionStarted);
+    append(
+        &store,
+        "a",
+        RuntimeEvent::CompactionStarted {
+            operation_id: crate::runtime::identity::CompactionOperationId::new(
+                "fixture-compaction",
+            ),
+        },
+    );
     let pending = crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
         .unwrap()
         .unwrap();
@@ -554,6 +648,9 @@ fn context_measurement_survives_pending_and_failed_compaction() {
         &store,
         "a",
         RuntimeEvent::CompactionFailed {
+            operation_id: crate::runtime::identity::CompactionOperationId::new(
+                "fixture-compaction",
+            ),
             error: "summary failed".into(),
         },
     );
@@ -585,59 +682,33 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     let outline_before = store.conversation_turns(0, 64).unwrap();
     let before = page(&store, None, 64);
     let tail = tails(&before)[0].clone();
-    store
-        .commit_compaction(crate::durable::CompactionCommitInput {
-            summary: UserMessageBlock {
-                id: MessageId::new("summary"),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: "summary".into(),
-                })],
-                source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary(
-                    crate::message::types::CompactionSummaryMetadata::empty(),
-                ),
-                timestamp: None,
-            },
-            span: crate::conversation::SurfaceSpan::new(
-                MessageId::new("input-a"),
-                MessageId::new("response-a"),
-            ),
-            expected_revision: store.load_head().unwrap().revision,
-            tokens_before: crate::runtime::types::TokenMeasurement {
-                input_tokens: 100,
-                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
-            },
-            estimated_tokens_after: 20,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-            occupancy: Some(crate::context::occupancy::estimate(
-                20,
-                4096,
-                "compaction-primary",
-                "system",
-                &[],
-            )),
-        })
-        .unwrap();
+    let mut input = crate::scripted_suites::support::context::checkpoint_commit_fixture(
+        &store,
+        crate::scripted_suites::support::context::checkpoint_fixture(
+            &store, "summary", 2, "summary",
+        ),
+        None,
+    );
+    input.occupancy = Some(crate::context::occupancy::estimate(
+        20,
+        4096,
+        "compaction-primary",
+        "system",
+        &[],
+    ));
+    store.commit_projection(input).unwrap();
     let outline_after = store.conversation_turns(0, 64).unwrap();
     assert_eq!(outline_before.turns, outline_after.turns);
     assert_ne!(outline_before.cut, outline_after.cut);
     let after = page(&store, None, 64);
-    let marker = after
-        .entries
-        .iter()
-        .find_map(|entry| entry.compaction.as_ref())
-        .unwrap();
-    assert_eq!(marker.retired_messages, 2);
-    assert!(marker.retired_tokens > 0);
-    assert_eq!(marker.manual, Some(true));
-    let historical = page(&store, None, 1);
     assert_eq!(
-        historical.entries[0].compaction.as_ref(),
-        Some(marker),
-        "a bounded page resolves its own replacement facts"
+        after.entries.len(),
+        before.entries.len(),
+        "projection commits no transcript row"
     );
+    let checkpoint = store.projection_head().unwrap().unwrap();
+    assert_eq!(checkpoint.candidate.checkpoint_id.as_str(), "summary");
+    assert!(checkpoint.activation.destination_installation.is_none());
     assert_eq!(tails(&after)[0], &tail);
     assert_eq!(after.statistics, before.statistics);
     assert_eq!(
@@ -670,41 +741,27 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
         Some(tail.surface_revision)
     );
     let child_id = ConversationId::generate();
-    let canonical = store.load_canonical().unwrap();
-    let seed = crate::local_runtime::session::remap_seed(
+    let cut = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .unwrap();
+    let seed = crate::local_runtime::session::lineage_cut(
         &child_id,
-        &canonical,
-        &store
-            .load_surface_history(store.load_head().unwrap().revision)
-            .unwrap(),
-        &store
-            .read_lineage_cut(store.load_head().unwrap().revision)
-            .unwrap()
-            .checkpoints,
-        &store
-            .read_lineage_cut(store.load_head().unwrap().revision)
-            .map(|cut| cut.completed_responses)
-            .unwrap(),
-        &store
-            .read_lineage_cut(store.load_head().unwrap().revision)
-            .map(|cut| cut.turns)
-            .unwrap(),
-        &[],
+        &cut,
+        None,
+        crate::local_runtime::session::LineageSide::After,
     )
     .unwrap();
     let child = SqliteConversationStore::in_memory(child_id).unwrap();
     child.initialize_lineage(&seed).unwrap();
     let inherited = page(&child, None, 64);
-    let copied_marker = inherited
-        .entries
-        .iter()
-        .find_map(|entry| entry.compaction.as_ref())
-        .unwrap();
-    assert_eq!(copied_marker.retired_messages, 2);
-    assert!(copied_marker.retired_tokens > 0);
     assert_eq!(
-        copied_marker.manual, None,
-        "copied history does not fabricate local command attribution"
+        inherited.entries.len(),
+        before.entries.len(),
+        "copied execution facts preserve canonical transcript cardinality"
+    );
+    assert!(
+        child.read_events(None, 64).unwrap().events.is_empty(),
+        "lineage installation creates no destination execution event"
     );
     assert_eq!(tails(&inherited).len(), 1);
     let inherited_tail = tails(&inherited)[0];
@@ -731,11 +788,12 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     );
     assert_eq!(
         crate::context::occupancy::read(&child, child.presentation_frontier().unwrap()).unwrap(),
-        None
+        checkpoint.occupancy
     );
 }
 
 mod lineage;
+mod retry;
 
 fn is_completed_response(
     store: &dyn ConversationStore,
@@ -1380,33 +1438,18 @@ fn occupancy_compaction_absence_invalid_window_and_failed_usage_are_boundaries()
     user(&store, "compacted-input");
     assistant(&store, "a", "compacted-response");
     store
-        .commit_compaction(crate::durable::CompactionCommitInput {
-            summary: UserMessageBlock {
-                id: MessageId::new("absent-summary"),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: "summary".into(),
-                })],
-                source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary(
-                    crate::message::types::CompactionSummaryMetadata::empty(),
+        .commit_projection(
+            crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                &store,
+                crate::scripted_suites::support::context::checkpoint_fixture(
+                    &store,
+                    "absent-summary",
+                    2,
+                    "summary",
                 ),
-                timestamp: None,
-            },
-            span: crate::conversation::SurfaceSpan::new(
-                MessageId::new("compacted-input"),
-                MessageId::new("compacted-response"),
+                None,
             ),
-            expected_revision: store.load_head().unwrap().revision,
-            tokens_before: crate::runtime::types::TokenMeasurement {
-                input_tokens: 100,
-                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
-            },
-            estimated_tokens_after: 20,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-            occupancy: None,
-        })
+        )
         .unwrap();
     request(&store, "a", 3, None);
     assert_eq!(
@@ -1450,16 +1493,12 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
     let selected = source
         .read_lineage_cut(source.load_head().unwrap().revision)
         .unwrap();
-    let seed = crate::durable::LineageSeed::replayed(
-        selected.canonical,
-        selected.surface_history,
-        selected.checkpoints,
-    )
-    .unwrap()
-    .with_completed_responses(selected.completed_responses)
-    .unwrap()
-    .with_turns(selected.turns)
-    .unwrap();
+    let seed = crate::durable::LineageSeed::replayed(selected.canonical, selected.surface_history)
+        .unwrap()
+        .with_completed_responses(selected.completed_responses)
+        .unwrap()
+        .with_turns(selected.turns)
+        .unwrap();
     let child_id = ConversationId::generate();
     let child_path = directory.path().join("child.sqlite");
     let child = SqliteConversationStore::open(child_id.clone(), &child_path).unwrap();
@@ -1500,33 +1539,18 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
     );
     let before_compaction = child.presentation_frontier().unwrap();
     child
-        .commit_compaction(crate::durable::CompactionCommitInput {
-            summary: UserMessageBlock {
-                id: MessageId::new("child-summary"),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: "summary".into(),
-                })],
-                source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary(
-                    crate::message::types::CompactionSummaryMetadata::empty(),
+        .commit_projection(
+            crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                &child,
+                crate::scripted_suites::support::context::checkpoint_fixture(
+                    &child,
+                    "child-summary",
+                    2,
+                    "summary",
                 ),
-                timestamp: None,
-            },
-            span: crate::conversation::SurfaceSpan::new(
-                MessageId::new("input"),
-                MessageId::new("response"),
+                None,
             ),
-            expected_revision: child.load_head().unwrap().revision,
-            tokens_before: crate::runtime::types::TokenMeasurement {
-                input_tokens: 100,
-                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
-            },
-            estimated_tokens_after: 20,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-            occupancy: None,
-        })
+        )
         .unwrap();
     assert_eq!(
         crate::context::occupancy::read(&child, 0).unwrap(),

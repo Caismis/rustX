@@ -324,7 +324,7 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
         store.load_head().unwrap().revision,
         vec![],
     );
-    let opaque = serde_json::json!({"content":[{"not":"a ContentBinding"}],"collections":[{"not":"a frontier"}],"integer":7});
+    let opaque = serde_json::json!({"content":[{"not":"a ContentBinding"}],"collections":[{"not":"a frontier"}],"integer":7,"deferred":true});
     snapshot.tool_definitions = vec![crate::tools::types::ModelToolDefinition {
         id: ToolId::new("metadata-tool"),
         name: "Original".into(),
@@ -335,6 +335,7 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
     deferred.id = ToolId::new("metadata-unsafe-original");
     deferred.input_schema["integer"] = serde_json::json!(u64::MAX);
     snapshot.tool_definitions.push(deferred);
+    freeze_test_input(&store, &mut snapshot, &[]);
     let started = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
@@ -350,6 +351,10 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
         .request_field_header_at(started.sequence, started.sequence, &path)
         .unwrap();
     assert_eq!(selected.value, opaque);
+    assert!(
+        !selected.deferred,
+        "opaque schema property is not producer metadata"
+    );
     assert!(selected.content.is_empty() && selected.collections.is_empty());
     let page = store
         .request_field_page_at(
@@ -362,6 +367,10 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
         .unwrap();
     let schema = page.fields.iter().find(|field| field.path == path).unwrap();
     assert_eq!(schema.value, opaque);
+    assert!(
+        !schema.deferred,
+        "page headers preserve opaque schema semantics"
+    );
     assert!(schema.content.is_empty() && schema.collections.is_empty());
     let messages = store
         .request_field_page_at(
@@ -650,11 +659,24 @@ fn t08_t12_t14_t19_giant_completed_member_identity_survives_native_lineage_copy(
     let original = "inherited-final🙂水".repeat(70_000);
     let seed = member_completed_lineage(&original);
     source.initialize_lineage(&seed).unwrap();
+    assert!(
+        matches!(
+            source.load_head(),
+            Err(ConversationStoreError::ResourceBoundExceeded(_))
+        ),
+        "Source-only history does not bypass the bounded native model working set"
+    );
+    let original_cut = source.observation_read_cut().unwrap();
     let cut = source
-        .read_lineage_cut(source.load_head().unwrap().revision)
+        .read_lineage_cut(original_cut.read.surface_revision)
         .unwrap();
+    assert_eq!(cut.canonical.as_slice(), seed.canonical());
     assert_eq!(cut.completed_responses, seed.completed_responses());
-    let copied = LineageSeed::replayed(cut.canonical, cut.surface_history, cut.checkpoints)
+    let copied = LineageSeed::replayed(cut.canonical, cut.surface_history)
+        .unwrap()
+        .with_projections(cut.projections)
+        .unwrap()
+        .with_raw_tool_arguments(cut.raw_tool_arguments)
         .unwrap()
         .with_turns(cut.turns)
         .unwrap()
@@ -663,6 +685,15 @@ fn t08_t12_t14_t19_giant_completed_member_identity_survives_native_lineage_copy(
     let destination = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     assert_ne!(source.conversation_id(), destination.conversation_id());
     destination.initialize_lineage(&copied).unwrap();
+    assert_eq!(
+        destination.load_canonical().unwrap().as_slice(),
+        copied.canonical()
+    );
+    assert_eq!(destination.load_inherited_turns().unwrap(), copied.turns());
+    assert_eq!(
+        destination.load_inherited_responses().unwrap(),
+        copied.completed_responses()
+    );
     let counts = destination
         .observation_member_counts(&MessageId::new(&original), 0)
         .unwrap()

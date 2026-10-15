@@ -34,6 +34,7 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
     super::configuration::settled(&f, 0).await;
+    published_activation(&f.manager.configuration_host(id).unwrap()).await;
     f
 }
 
@@ -94,7 +95,6 @@ async fn assert_noop(f: &Fixture) {
     let resources = runtime.runtime_resources();
     let view = runtime.model_view();
     let configuration = runtime.configuration_view().unwrap();
-    published_activation(&host).await;
     host.projection_settled().await;
     host.inner.park_projection_worker();
     let checkpoint = host.checkpoint().unwrap();
@@ -104,11 +104,21 @@ async fn assert_noop(f: &Fixture) {
     let probe = f.manager.probe(&f.id(0).await);
     let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
     let changes = f.manager.configuration_changes();
+    let (reader, _) = host
+        .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let subscription = reader.subscribe_events(cursor).unwrap();
 
     assert_eq!(
         f.manager.set_model(id, selection).await.unwrap(),
         (view.clone(), settings.0)
     );
+    assert!(matches!(
+        subscription.try_next(),
+        crate::runtime_client::EventDelivery::Pending
+    ));
+    drop(subscription);
+    reader.detach();
 
     assert_eq!(
         f.manager.sessions.read_settings(id).await.unwrap(),
@@ -183,27 +193,60 @@ async fn identical_explicit_selection_is_inert_while_idle() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn identical_explicit_selection_is_inert_during_an_attempt() {
-    bounded(async {
+    let stage = std::cell::Cell::new("fixture");
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         let f = fixture().await;
+        stage.set("idle projection settled");
         let runtime = f.manager.configuration_runtime(&f.sessions[0].id).unwrap();
+        let host = f.manager.configuration_host(&f.sessions[0].id).unwrap();
+        host.projection_settled().await;
+        let baseline = host.checkpoint().unwrap();
+        assert_eq!(
+            baseline.snapshot.configuration_adoption_eligibility,
+            crate::local_runtime::configuration::application::AdoptionEligibility::Eligible
+        );
+        let (reader, _) = host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let subscription = reader.subscribe_events(baseline.cursor).unwrap();
         let execution = Arc::new(Gate::default());
         let execution_release = execution.arm_scoped();
         runtime.install_attempt_execution_gate(execution.clone());
         let after = runtime.settlement_ordinal_for_test();
         runtime.submit_inbound(input("request-A")).unwrap();
+        stage.set("native execution gate");
         tokio::task::spawn_blocking(move || execution.wait_entered())
             .await
             .unwrap();
         assert!(runtime.has_current_attempt());
+        stage.set("native admitted checkpoint");
+        // The positive idle publication was established before admission;
+        // the native admitted receipt is serviceable before execution starts.
+        let crate::runtime_client::EventDelivery::Event(event) = subscription.try_next() else {
+            panic!("original admitted attempt publication");
+        };
+        assert!(event.cursor > baseline.cursor);
+        assert_eq!(
+            host.checkpoint().unwrap().snapshot.attempt.unwrap().phase,
+            crate::runtime_client::RuntimeClientAttemptPhase::Admitted
+        );
+        drop(subscription);
+        reader.detach();
+        drop(host);
+        stage.set("assert noop");
         assert_noop(&f).await;
+        stage.set("provider gate");
         drop(execution_release);
         f.gates[0].wait_entered().await;
         f.gates[0].release();
+        stage.set("settlement");
         let receipt = runtime.child_attempt_settlement(after).await;
         assert_eq!(receipt.ordinal, after + 1);
+        stage.set("close");
         f.close().await;
     })
     .await;
+    assert!(result.is_ok(), "test liveness at {}", stage.get());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -288,6 +331,7 @@ async fn inherited_current_selection_commits_explicit_intent_then_becomes_inert(
             runtime.configuration_view().unwrap().adopted_binding,
             binding
         );
+        published_activation(&f.manager.configuration_host(id).unwrap()).await;
         assert_noop(&f).await;
         f.close().await;
     })
@@ -301,6 +345,7 @@ async fn identical_explicit_selection_is_inert_after_reload() {
         f.manager.unload(&f.id(0).await).await.unwrap();
         f.load(0).await.unwrap().unwrap();
         super::configuration::settled(&f, 0).await;
+        published_activation(&f.manager.configuration_host(&f.sessions[0].id).unwrap()).await;
         assert_noop(&f).await;
         f.close().await;
     })

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v48.ts';
+import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v50.ts';
 import { AppServerSession } from '../src/app-server/session.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 import { checkpoint, sessionView, snapshot } from './support/fixtures.ts';
@@ -64,10 +64,10 @@ it('T13 Root initial attach rejects a foreign cut before Subscribe', async () =>
   } finally { h.client.close(); }
 });
 
-function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v48.ts').RuntimeClientEvent {
+function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v50.ts').RuntimeClientEvent {
   return { type: 'projection_transition', events: [], metadata: { read_cut: value.read_cut, content: [], collections: [] } };
 }
-const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v48.ts').RuntimeClientEvent][] = [
+const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v50.ts').RuntimeClientEvent][] = [
   ['foreign snapshot', value => { value.snapshot.conversation_id = 'conv_01900000-0000-7000-8000-000000000003'; return { type: 'checkpoint_advanced', transition: 'scope', checkpoint: value }; }],
   ['foreign metadata', value => { value.read_cut.conversation_id = 'conv_01900000-0000-7000-8000-000000000003'; return scopedEvent(value); }],
   ['Child metadata', value => { value.read_cut.activation_id = 'child-activation'; return scopedEvent(value); }],
@@ -163,4 +163,50 @@ it('T17 prepared attach released immediately never starts a subscription', async
     assert.equal(session.state.cursor, '2');
     assert.equal(h.transport.log.matching('session/subscribe').length, 1);
   } finally { h.client.close(); }
+});
+
+it('Source unavailability preserves Applied and requires explicit recovery without replay or execution mutation', async () => {
+  const h = await harness(), before = h.session.state, baseline = h.session.checkpoint;
+  try {
+    const unavailable = (registration_id: string) => h.transport.notify({jsonrpc:'2.0',method:'session/observationUnavailable',params:{target:h.target,registration_id,message:'Original source preparation failed'}});
+    unavailable('retired-registration');
+    assert.equal(h.session.controlReady, true);
+    unavailable('harness-registration-1');
+    assert.equal(h.session.controlReady, false);
+    assert.equal(h.session.state, before); assert.equal(h.session.checkpoint, baseline);
+    assert.equal(h.session.state.cursor, '0');
+    assert.match(h.session.observationError!, /Original source preparation failed/);
+    await assert.rejects(h.session.submitInbound([{type:'text',text:'must stay unsent'}]), /not ready|following|observation/i);
+    h.transport.emit(h.target,'1',{type:'message_committed',attempt_id:'old',transcript_cursor:'1',message:{id:'stale',role:'assistant',content:[]}});
+    await Promise.resolve();
+    assert.equal(h.session.state, before);
+    assert.equal(h.transport.log.count('session/checkpoint'),1); assert.equal(h.transport.log.count('session/subscribe'),1);
+    assert.equal(h.transport.log.count('turn/start'),0); assert.equal(h.transport.log.count('turn/cancel'),0);
+    const repair=h.session.resync(), read=await nextRequest(h,'session/checkpoint');
+    h.transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint(snapshot(),'2')});
+    const subscribe=await nextRequest(h,'session/subscribe');
+    h.transport.respond(subscribe.id,{type:'subscribed',target:h.target,registration_id:'serviceable-source',after_cursor:'2'});
+    await repair;
+    assert.equal(h.session.state.cursor,'2'); assert.equal(h.session.controlReady,true);
+    unavailable('harness-registration-1'); assert.equal(h.session.controlReady,true);
+    h.transport.notify({jsonrpc:'2.0',method:'session/event',params:{target:h.target,registration_id:'serviceable-source',cursor:'3',event:{type:'message_committed',attempt_id:'current',transcript_cursor:'3',message:{id:'current',role:'assistant',content:[]}}}});
+    assert.equal(h.session.state.cursor,'3');
+    assert.equal(h.transport.log.count('session/checkpoint'),2); assert.equal(h.transport.log.count('session/subscribe'),2);
+  } finally { h.client.close(); }
+});
+
+it('unavailable buffered before the Subscribe promise continuation stays unavailable without another checkpoint',async()=>{
+ const h=await harness();
+ try {
+  const work=h.session.resync(),refused=assert.rejects(work,/source unavailable/i);
+  const read=await nextRequest(h,'session/checkpoint');h.transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint(snapshot(),'2')});
+  const subscribing=await nextRequest(h,'session/subscribe'),before=h.session.state;
+  h.transport.respond(subscribing.id,{type:'subscribed',target:h.target,registration_id:'pending-unavailable',after_cursor:'2'});
+  h.transport.notify({jsonrpc:'2.0',method:'session/observationUnavailable',params:{target:h.target,registration_id:'pending-unavailable',message:'pending source fault'}});
+  assert.equal(h.session.observationPhase,'subscribePending');
+  await refused;
+  assert.equal(h.session.observationPhase,'unavailable');assert.equal(h.session.state,before);assert.equal(h.session.state.cursor,'2');
+  assert.equal(h.session.controlReady,false);assert.match(h.session.observationError!,/source unavailable/i);
+  await Promise.resolve();assert.equal(h.transport.log.count('session/checkpoint'),2);assert.equal(h.transport.log.count('session/subscribe'),2);assert.equal(h.transport.log.count('turn/start'),0);
+ }finally{h.client.close();}
 });

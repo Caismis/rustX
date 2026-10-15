@@ -802,7 +802,8 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
                 rustx::model::ModelInputMessage::Canonical(
                     MessageBlock::User(_) | MessageBlock::Assistant(_),
                 )
-                | rustx::model::ModelInputMessage::RequestOnly(_) => None,
+                | rustx::model::ModelInputMessage::RequestOnly(_)
+                | rustx::model::ModelInputMessage::Derived(_) => None,
             })
         })
         .expect("the rejected result reaches the next model request");

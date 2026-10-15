@@ -12,15 +12,15 @@
 //!         |
 //!         +--> canonical tool facts
 //!                 -> this module's deterministic extractor
-//!                 -> CompactionSummaryMetadata (typed canonical authority)
+//!                 -> CompactionSummaryMetadata (validated checkpoint metadata)
 //!                 -> read_files / modified_files
 //! ```
 //!
 //! The summary model never contributes to the metadata: prose it generates —
 //! including any file path it invents or mentions — is not parsed back into
 //! facts. The metadata is accumulated over the compaction lineage only: the
-//! earlier compaction summaries inside the selected retired span contribute
-//! their typed metadata, and nothing else does. There is no
+//! earlier immutable checkpoint summaries inside the selected retired span
+//! contribute their validated metadata, and nothing else does. There is no
 //! conversation-global accumulator, no sidecar file-history store, and no
 //! hidden previous-summary channel.
 
@@ -46,10 +46,6 @@ use crate::tools::native::{NativeFileOperation, native_file_operation};
 /// [`CompactionSummaryMetadata::accumulate`]: union, then modification wins
 /// over read, in deterministic ascending order.
 pub(crate) fn retired_span_metadata(retired: &[MessageBlock]) -> CompactionSummaryMetadata {
-    let inherited = retired.iter().filter_map(|message| match message {
-        MessageBlock::User(user) => user.kind.compaction_summary_metadata(),
-        MessageBlock::Assistant(_) | MessageBlock::Tool(_) => None,
-    });
     let mut new_read = Vec::new();
     let mut new_modified = Vec::new();
     for message in retired {
@@ -67,7 +63,7 @@ pub(crate) fn retired_span_metadata(retired: &[MessageBlock]) -> CompactionSumma
             }
         }
     }
-    CompactionSummaryMetadata::accumulate(inherited, new_read, new_modified)
+    CompactionSummaryMetadata::accumulate(std::iter::empty(), new_read, new_modified)
 }
 
 /// Renders the committed compaction summary text: the model-produced
@@ -103,8 +99,7 @@ mod tests {
     use super::{render_summary_text, retired_span_metadata};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, InboundKind,
-        MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AssistantContentBlock, AssistantMessageBlock, CompactionSummaryMetadata, MessageBlock,
     };
     use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
     use crate::tools::types::ToolCall;
@@ -126,20 +121,6 @@ mod tests {
             name: name.to_owned(),
             arguments: serde_json::json!({ "path": path }),
         }
-    }
-
-    fn previous_summary(id: &str, read: Vec<String>, modified: Vec<String>) -> MessageBlock {
-        MessageBlock::User(UserMessageBlock {
-            id: MessageId::new(id),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "earlier summary".to_owned(),
-            })],
-            source: UserSource::Runtime,
-            kind: InboundKind::CompactionSummary(
-                CompactionSummaryMetadata::new(read, modified).expect("valid metadata"),
-            ),
-            timestamp: None,
-        })
     }
 
     /// The first-compaction extraction contract: reads and modifications are
@@ -210,32 +191,33 @@ mod tests {
     /// new history modifies it.
     #[test]
     fn extraction_merges_inherited_metadata_over_the_lineage() {
-        let retired = vec![
-            previous_summary(
-                "summary-1",
-                vec!["/a".to_owned(), "/b".to_owned()],
-                vec!["/c".to_owned()],
-            ),
-            assistant_with_calls(
-                "a1",
-                vec![
-                    call("c1", "tool-read", "read", "/d"),
-                    call("c2", "tool-edit", "edit", "/a"),
-                ],
-            ),
-        ];
-        let metadata = retired_span_metadata(&retired);
-        assert_eq!(metadata.read_files(), &["/b".to_owned(), "/d".to_owned()]);
+        let inherited =
+            CompactionSummaryMetadata::new(vec!["/a".into(), "/b".into()], vec!["/c".into()])
+                .unwrap();
+        let physical = retired_span_metadata(&[assistant_with_calls(
+            "a1",
+            vec![
+                call("c1", "tool-read", "read", "/d"),
+                call("c2", "tool-edit", "edit", "/a"),
+            ],
+        )]);
+        let combined = CompactionSummaryMetadata::accumulate(
+            [&inherited],
+            physical.read_files().to_vec(),
+            physical.modified_files().to_vec(),
+        );
+        assert_eq!(combined.read_files(), ["/b".to_owned(), "/d".to_owned()]);
         assert_eq!(
-            metadata.modified_files(),
-            &["/a".to_owned(), "/c".to_owned()]
+            combined.modified_files(),
+            ["/a".to_owned(), "/c".to_owned()]
         );
     }
 
     /// A previous summary outside the retired span contributes nothing.
     #[test]
     fn extraction_never_reaches_outside_the_retired_span() {
-        let outside = previous_summary("summary-1", vec!["/outside".to_owned()], Vec::new());
+        let outside =
+            CompactionSummaryMetadata::new(vec!["/outside".to_owned()], Vec::new()).unwrap();
         let retired = vec![assistant_with_calls(
             "a1",
             vec![call("c1", "tool-read", "read", "/inside")],

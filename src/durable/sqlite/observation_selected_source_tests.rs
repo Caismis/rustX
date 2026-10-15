@@ -26,11 +26,23 @@ fn deny_selected_original_columns(
 fn t08_t12_t14_t19_giant_native_membership_witness_binds_exact_numeric_c() {
     let store = store();
     let original = "native-member🙂水".repeat(70_000);
-    let seed = member_completed_lineage(&original);
-    store.initialize_lineage(&seed).unwrap();
-    store
-        .append_canonical(&assistant_message("other-native-position", "Other body"))
+    let inherited = member_completed_lineage(&original);
+    let mut canonical = inherited.canonical().to_vec();
+    // A real independent User C has no Assistant membership row of its own,
+    // so the negative reaches the paired native FK rather than UNIQUE(L).
+    canonical.push(user_message("other-native-position", "Other body"));
+    // Import all actual immutable C together. This proof never asks the native
+    // model working set to materialize the giant original closing identity.
+    let seed = LineageSeed::history(canonical)
+        .with_turns(inherited.turns().to_vec())
+        .unwrap()
+        .with_completed_responses(inherited.completed_responses().to_vec())
         .unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    assert!(matches!(
+        store.load_head(),
+        Err(ConversationStoreError::ResourceBoundExceeded(_))
+    ));
     let cut = store.observation_read_cut().unwrap();
     store
         .lock()
@@ -55,7 +67,11 @@ fn t08_t12_t14_t19_giant_native_membership_witness_binds_exact_numeric_c() {
         .unwrap()
         .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
     let connection = store.lock().unwrap();
-    assert!(connection.execute("UPDATE inherited_message_membership SET assistant_ledger_position=3 WHERE assistant_ledger_position=2",[]).is_err(),"native composite FK remains authoritative");
+    let error = connection.execute("UPDATE inherited_message_membership SET assistant_ledger_position=3 WHERE assistant_ledger_position=2",[]).unwrap_err();
+    assert!(
+        matches!(error, rusqlite::Error::SqliteFailure(ref code, _) if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY),
+        "native composite FK remains authoritative: {error}"
+    );
     connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
     connection.execute("UPDATE inherited_message_membership SET assistant_ledger_position=3 WHERE assistant_ledger_position=2",[]).unwrap();
     assert!(
@@ -305,18 +321,45 @@ fn escaped_delivery_file(
     root: &std::path::Path,
     conversation: &ConversationId,
 ) -> crate::tools::session_files::SessionFileReference {
-    let component = "\u{1}".repeat(200);
-    let mut directory = root.to_owned();
-    for _ in 0..15 {
-        directory.push(&component);
-        std::fs::create_dir(&directory).unwrap();
+    use nix::fcntl::{OFlag, openat};
+    use nix::sys::stat::{Mode, mkdirat};
+    use std::io::Write as _;
+    let canonical_root = root.canonicalize().unwrap();
+    let root = canonical_root.as_path();
+    // Directory-relative syscalls preserve the real >PATH_MAX source while
+    // every native filesystem component stays below NAME_MAX on macOS too.
+    let component = "\u{1}".repeat(96);
+    let mut directory = std::fs::File::open(root).unwrap();
+    let mut relative = std::path::PathBuf::new();
+    for _ in 0..32 {
+        mkdirat(&directory, component.as_str(), Mode::S_IRWXU).unwrap();
+        directory = std::fs::File::from(
+            openat(
+                &directory,
+                component.as_str(),
+                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap(),
+        );
+        relative.push(&component);
     }
-    let path = directory.join(format!("{component}.txt"));
-    std::fs::write(&path, b"original authorized bytes").unwrap();
+    let name = format!("{component}.txt");
+    let mut file = std::fs::File::from(
+        openat(
+            &directory,
+            name.as_str(),
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .unwrap(),
+    );
+    file.write_all(b"original authorized bytes").unwrap();
+    relative.push(name);
     crate::tools::session_files::declare(
         root,
         conversation,
-        path.strip_prefix(root).unwrap().to_str().unwrap(),
+        relative.to_str().unwrap(),
         Some("\u{1}".repeat(512)),
     )
     .unwrap()
@@ -471,11 +514,12 @@ fn t08_t12_t14_t19_original_nine_deliveries_advance_and_select_last_index() {
     use crate::runtime_client::content::CanonicalContentLocator;
     let store = store();
     let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().canonicalize().unwrap();
     let files = (0..9)
         .map(|index| {
             let path = format!("original-{index}.txt");
             std::fs::write(root.path().join(&path), format!("original file {index}")).unwrap();
-            crate::tools::session_files::declare(root.path(), store.conversation_id(), &path, None)
+            crate::tools::session_files::declare(&root_path, store.conversation_id(), &path, None)
                 .unwrap()
         })
         .collect::<Vec<_>>();

@@ -156,8 +156,6 @@ fn terminal(class: TraceTerminalClass) -> TraceTerminalHeader {
         failure_kind: None,
         usage: None,
         generation: None,
-        summary_ledger_position: None,
-        summary_message_id: None,
     }
 }
 fn cancel_detail(status: &Status) -> Option<String> {
@@ -379,7 +377,18 @@ fn core_data(
             ledger_position: position(connection, message_id)?
                 .ok_or_else(|| storage("native Tool C absent"))?,
         }),
-        E::CompactionStarted => Ok(TraceFactData::CompactionStart),
+        E::CompactionStarted { operation_id } => {
+            alias(
+                fields,
+                event,
+                TraceFieldKind::NativeId,
+                "operation_id",
+                operation_id.as_str(),
+            )?;
+            Ok(TraceFactData::CompactionStart {
+                native_id: (operation_id.as_str().len() <= 512).then(|| operation_id.to_string()),
+            })
+        }
         _ => Err(storage("not a typed native Trace start")),
     }
 }
@@ -561,7 +570,9 @@ fn terminal_data(
             )?);
             terminal(C::Completed)
         }
-        E::TurnCompleted | E::WorkflowCompleted { .. } => terminal(C::Completed),
+        E::TurnCompleted | E::WorkflowCompleted { .. } | E::CompactionCompleted { .. } => {
+            terminal(C::Completed)
+        }
         E::AttemptFailed { .. } => {
             if let Some(summary) = super::super::observation_execution::summary_at_sequence(
                 connection,
@@ -590,22 +601,6 @@ fn terminal_data(
         E::AttemptCancelled { .. } | E::WorkflowCancelled { .. } => terminal(C::Cancelled),
         E::AttemptTimedOut { .. } => terminal(C::TimedOut),
         E::AttemptLimitExceeded { .. } => terminal(C::Limited),
-        E::CompactionCompleted {
-            summary_message_id, ..
-        } => {
-            alias(
-                fields,
-                event,
-                TraceFieldKind::MessageId,
-                "summary_message_id",
-                summary_message_id.as_str(),
-            )?;
-            let mut end = terminal(C::Completed);
-            end.summary_message_id =
-                (summary_message_id.as_str().len() <= 512).then(|| summary_message_id.clone());
-            end.summary_ledger_position = position(connection, summary_message_id)?;
-            end
-        }
         _ => return Err(storage("not a typed native Trace terminal")),
     };
     Ok(TraceFactData::Terminal(ending))
@@ -661,7 +656,7 @@ fn data(
         | E::AssistantMessageCommitted { .. }
         | E::ToolExecutionStarted { .. }
         | E::ToolMessageCommitted { .. }
-        | E::CompactionStarted => core_data(connection, event, fields),
+        | E::CompactionStarted { .. } => core_data(connection, event, fields),
         E::BackgroundExecutionCommitted { .. }
         | E::SubagentOwnershipCommitted { .. }
         | E::WorkflowStarted { .. }

@@ -539,17 +539,18 @@ verbatim). Protocols without reconstructable state simply carry `None` —
 nothing is fabricated, and a model that cannot continue without state
 fails explicitly.
 
-The context path is mandatory: every model request carries the finite
-projection of the current Surface (complete canonical messages in exact
-order), the rustX-rendered Effective System Prompt, and a frozen
-RequestSnapshot. Agent Status is a canonical User context fact admitted before
-the snapshot. Skill guidance is request-time native system capability guidance
-rendered from the attempt's immutable capability snapshot; it is not a
-canonical User fact or a hidden adapter attachment.
-A successful compaction appends one runtime User summary and applies one
-Surface Replace, establishing a new revision and invalidating the pending
-continuation; the continuation-owning turn is retired completely, so an old
-opaque provider continuation is never paired with a new projection.
+Every actual model request freezes the active typed historical checkpoint,
+eligible Tail strictly after its base through the pre-start cut, core-owned
+Fresh Inbound/Context/carryover, exact semantic media transformations, invocation
+and Effective System Prompt in a RequestSnapshot. Ordinary retries reuse the
+latest immutable semantic generation input. Authorized correction or compaction
+advances that version; later transient retries cannot revert it.
+
+Successful default Summary compaction clears the active primary continuation
+unconditionally and compiles the complete new history projection. Continuation
+otherwise refers only to actual accepted Assistant output of the previous
+request. Canonical execution facts and historical projection content remain
+independent authorities.
 Issue #61 extracted the enclosing `ConversationRuntime` coordinator from the
 Runtime Client boundary (see `docs/architecture.md`); the loop itself is
 unchanged by the extraction.
@@ -2143,3 +2144,42 @@ outcome. Pending interaction waiters receive ControlLost before runtime shutdown
 cancels and settles the enclosing native owners. A Quiescent child may leave an
 exact incarnation receipt; recovery combines it with exclusive lease release and
 durably records physical proof. The logical Interrupted outcome remains unknown.
+
+## Final semantic request admission
+
+`finalize_model_turn` is the mandatory adapter preflight boundary for each new logical
+input version: initial input, post-compaction input, overflow recovery and semantic
+correction all pass it. Preliminary `stage_model_turn` reconciles native continuation
+coverage on a detached request, but has no start or dispatch authority. Finalization
+validates the complete deterministic translation after all media and carryover changes,
+then freezes exact input and preserves compiled occurrence associations. A retired
+continuation installs in hot state only after replay validation and freeze succeed.
+Canonical signed/encrypted output is never changed to satisfy replay.
+
+A deterministic incompatibility settles as an explicit runtime compatibility failure,
+without a started Snapshot, `ModelRequestStarted`, provider invocation, canonical
+Assistant output or partial request-owned Context. An already committed compaction
+remains independently valid if the subsequent request is incompatible. The existing
+cancellation start gate remains the sole request-start arbitration point.
+
+`retry_frozen_model_turn` bypasses semantic finalization: it reuses the current validated
+input, assigns distinct physical request/snapshot/publication identities, and changes
+neither contributors nor media nor continuation. Authorized semantic recovery finalizes
+its new input through the same preflight boundary before replacing the current version.
+
+Wire Tool correlation is adapter-owned encoding of deterministic request-local occurrence
+labels. The shared correlation encoder and frozen associations use `wire_labels`;
+canonical IDs and physical execution occurrences remain unchanged. Older repeated generic
+calls may receive synthetic labels, while the latest accepted output retains its native
+ID for continuation. A complete encrypted native output that would need editing is
+rejected before start. Stored Responses transmits the uncovered suffix; covered input
+associations remain historical evidence, rather than claims of retransmitted fields.
+
+Responses continuation coverage is also part of adapter-owned wire planning. Fully
+covered associations have no explicit wire ID in the new request (`wire_id: null`).
+Stored continuation associates transmitted results with the accepted output's native
+IDs; stateless continuation labels only the replayed output and uncovered tail. Full
+explicit history uses the complete label plan. Snapshot freezing/reconstruction validates
+this same neutral adapter plan. Duplicate unresolved raw IDs cannot be disambiguated by
+serialized protocol fields and fail before encoding or request start. The nullable
+observation field requires App Server v49 / Runtime Client v70; no old reader is retained.

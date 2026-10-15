@@ -113,7 +113,6 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
-use crate::conversation::{RecoverySafetyError, recovery_safety};
 use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundItem};
 use crate::events::types::{
     AttemptFailure, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
@@ -394,6 +393,8 @@ pub struct RecoveryEvidence {
     /// The current Surface head's active canonical messages, in model-visible
     /// order.
     active: Vec<MessageBlock>,
+    unsettled_canonical_calls:
+        std::collections::BTreeSet<crate::message::types::ToolCallOccurrenceRef>,
     /// Accepted-but-not-yet-adopted inbound, exactly as #63 committed it.
     pending: Vec<PendingInboundItem>,
     /// Non-terminal attempts. The admission invariant permits at most one; a
@@ -491,11 +492,32 @@ impl RecoveryEvidence {
     pub fn reconstruct(store: &dyn ConversationStore) -> Result<Self, RecoveryError> {
         let conversation_id = store.conversation_id().clone();
         let head = store.load_head()?;
-        let active = store.load_messages(&head.active_message_ids)?;
+        let mut active = store.load_messages(&head.active_message_ids)?;
+        let unsettled = store.unsettled_canonical_tool_calls(8192)?;
+        let mut present = active
+            .iter()
+            .map(|m| m.id().clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let missing = unsettled
+            .iter()
+            .filter_map(|(o, _)| {
+                present
+                    .insert(o.assistant_message_id.clone())
+                    .then_some(o.assistant_message_id.clone())
+            })
+            .collect::<Vec<_>>();
+        let mut resources = crate::context::resources::CompactionResources::capture(
+            store,
+            crate::context::resources::ResourceLimits::default(),
+        )?;
+        for ids in missing.chunks(64) {
+            active.extend(resources.originals(ids)?.rows.into_iter().map(|(_, m)| m));
+        }
         let pending = store.load_pending()?;
         let mut evidence = Self {
             conversation_id,
             active,
+            unsettled_canonical_calls: unsettled.into_iter().map(|(o, _)| o).collect(),
             pending,
             unsettled_attempts: BTreeMap::new(),
             tool_repairs: BTreeMap::new(),
@@ -1491,13 +1513,6 @@ impl RecoveryPlan {
     /// an already-terminal attempt (Class D) that crashed between its terminal
     /// and its result batch must be repaired exactly the same way.
     fn plan_tool_repairs(evidence: &RecoveryEvidence) -> Vec<ToolTurnRepair> {
-        let mut answered: std::collections::BTreeSet<crate::message::types::ToolCallOccurrenceRef> =
-            std::collections::BTreeSet::new();
-        for message in &evidence.active {
-            if let MessageBlock::Tool(tool) = message {
-                answered.insert(tool.occurrence.clone());
-            }
-        }
         let mut repairs = Vec::new();
         for message in &evidence.active {
             let MessageBlock::Assistant(assistant) = message else {
@@ -1511,10 +1526,12 @@ impl RecoveryPlan {
                 let block_index = crate::message::types::ContentBlockIndex::new(
                     u32::try_from(index).expect("canonical block index"),
                 );
-                if answered.contains(&crate::message::types::ToolCallOccurrenceRef::new(
-                    assistant.id.clone(),
-                    block_index,
-                )) {
+                if !evidence.unsettled_canonical_calls.contains(
+                    &crate::message::types::ToolCallOccurrenceRef::new(
+                        assistant.id.clone(),
+                        block_index,
+                    ),
+                ) {
                     continue;
                 }
                 // The exact owning attempt of this active call, from the
@@ -2201,7 +2218,7 @@ impl RecoveryReport {
 /// functions so each can be exercised — and reviewed — on its own.
 ///
 /// The post-condition is checked, not assumed: after reconciliation the
-/// current Surface must satisfy [`recovery_safety`]. If it does not, recovery
+/// canonical occurrence index must contain no unsettled Tool call. If it does not, recovery
 /// could not honestly repair the conversation and fails closed rather than
 /// producing a runtime that would later trip the live admission guard.
 ///
@@ -2219,10 +2236,7 @@ pub fn recover(
     let report = plan.reconcile(store, clock)?;
     // The post-condition of the whole pipeline, re-read from the durable
     // authority rather than from the pre-reconciliation working set.
-    let head = store.load_head()?;
-    let active = store.load_messages(&head.active_message_ids)?;
-    if let Err(RecoverySafetyError::IncompleteToolTurn { tool_call_id }) = recovery_safety(&active)
-    {
+    if let Some((_, tool_call_id)) = store.unsettled_canonical_tool_calls(1)?.into_iter().next() {
         return Err(RecoveryError::Unrecoverable(format!(
             "the reconciled Surface still ends inside an incomplete tool turn: tool call \
              {tool_call_id} has no committed ToolResult"
@@ -2289,6 +2303,7 @@ mod tests {
         RecoveryEvidence {
             conversation_id: conversation(),
             active: Vec::new(),
+            unsettled_canonical_calls: std::collections::BTreeSet::new(),
             pending: Vec::new(),
             unsettled_attempts: BTreeMap::new(),
             tool_repairs: BTreeMap::new(),

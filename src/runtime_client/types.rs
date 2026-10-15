@@ -268,7 +268,10 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Candidate, worktree disposal or resource lifecycle vocabulary.
 /// Version 68 adds the immutable inherited transcript boundary. Version 67 peers
 /// are rejected before an attachment or application operation is admitted.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 69;
+/// Version 69 separates typed projection history and exact frozen request occurrences from canonical execution.
+/// Version 70 represents absent wire fields for native-covered Tool associations.
+/// Version 71 adds bounded observation and exact source-unavailability handling.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 71;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -870,6 +873,12 @@ pub enum RuntimeClientResult {
         checkpoint: Box<super::checkpoint::RuntimeClientCheckpoint>,
     },
     /// `transcript_page_get` succeeded.
+    ProjectionPage {
+        page: super::projection_history::ProjectionPage,
+    },
+    ProjectionDetail {
+        detail: Box<super::projection_history::ProjectionDetail>,
+    },
     /// Bounded read-only Trace page of summary records.
     TracePage {
         page: super::trace::TracePage,
@@ -1351,7 +1360,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 69);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 71);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

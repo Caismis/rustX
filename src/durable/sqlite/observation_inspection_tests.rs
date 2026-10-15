@@ -31,6 +31,7 @@ fn inspection_request(
             input_schema: serde_json::json!({"duplicate":true}),
         },
     ];
+    freeze_test_input(store, &mut request, &[]);
     let start = store
         .commit_model_turn_start(&[], &request, Utc::now())
         .unwrap()
@@ -76,6 +77,33 @@ fn inspection_assistant(
         },
     )
 }
+// Complete the original physical C batch before a later actual request. C
+// result content is independent of ToolExecution terminal Journal settlement.
+fn inspection_result(store: &SqliteConversationStore, request: &RequestSnapshot) {
+    store
+        .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new(format!("result:{}", request.provisional_message_id)),
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                request.provisional_message_id.clone(),
+                ContentBlockIndex::new(0),
+            ),
+            tool_call_id: ToolCallId::new("reused-call"),
+            tool_id: ToolId::new("same-original-tool"),
+            result: ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![],
+                duration_ms: 1,
+                exit_code: None,
+                artifacts: vec![],
+                deliveries: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+        }))
+        .unwrap();
+}
+
 fn deny_inspection_original_columns(
     context: rusqlite::hooks::AuthContext<'_>,
 ) -> rusqlite::hooks::Authorization {
@@ -170,8 +198,7 @@ fn t08_t12_t15_t19_trace_definition_uses_exact_original_retry_catalog_without_bo
     assert_eq!(original.len() as u64, encoded_bytes);
     assert_eq!(original, serde_json::to_vec(&expected).unwrap());
     let mut foreign = current.clone();
-    foreign.read.conversation_id =
-        ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e19");
+    foreign.read.conversation_id = ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e19");
     assert!(
         store
             .observation_trace_tool_definition(&foreign, &first_occurrence)
@@ -232,6 +259,7 @@ fn t10_t12_t19_trace_definition_auxiliary_failure_preserves_native_c_j_and_own_l
         .unwrap()
         .execute_batch("DROP TRIGGER fail_definition")
         .unwrap();
+    inspection_result(&store, &request);
     let (next, _) = inspection_request(&store, 1, "unaffected original schema");
     let (_, _, next_occurrence) = inspection_assistant(&store, &next);
     assert!(
@@ -292,13 +320,14 @@ fn t10_t12_t19_trace_definition_missing_and_ambiguous_catalogs_never_become_abse
     store.initialize(&[]).unwrap();
     let _ = inspection_request(&store, 0, "original");
     // A new real request with no matching catalog member is genuine absence.
-    let request = progress_request_snapshot(
+    let mut request = progress_request_snapshot(
         "inspection-original-owner",
         "1",
         1,
         store.load_head().unwrap().revision,
         Vec::new(),
     );
+    freeze_test_input(&store, &mut request, &[]);
     store
         .commit_model_turn_start(&[], &request, Utc::now())
         .unwrap();
@@ -467,6 +496,7 @@ fn t12_t19_trace_definition_rejects_another_real_request_and_later_matching_ordi
     store.initialize(&[]).unwrap();
     let (first, first_start) = inspection_request(&store, 0, "first original schema");
     let (_, _, occurrence) = inspection_assistant(&store, &first);
+    inspection_result(&store, &first);
     let (second, second_start) = inspection_request(&store, 1, "second original schema");
     inspection_assistant(&store, &second);
     let cut = store.observation_read_cut().unwrap();
@@ -624,6 +654,7 @@ fn t10_t12_t19_missing_request_body_layout_never_hides_own_assistant_tool_facts(
         .unwrap()
         .execute_batch("DROP TRIGGER fail_entire_request_layout")
         .unwrap();
+    inspection_result(&store, &request);
     let (next, _) = inspection_request(&store, 1, "healthy original schema");
     let (_, _, next_occurrence) = inspection_assistant(&store, &next);
     assert!(

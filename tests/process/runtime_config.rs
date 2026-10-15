@@ -192,7 +192,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     )
     .expect("old project instructions");
 
-    let mut product = (startup)
+    let product = (startup)
         .compose(&dependencies())
         .await
         .expect("initial product");
@@ -249,7 +249,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         },
         ..startup.clone()
     };
-    let mut resumed = (resumed_startup)
+    let resumed = (resumed_startup)
         .compose(&dependencies())
         .await
         .expect("resumed product");
@@ -320,16 +320,23 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         id: RequestId::new(3),
         protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
-    let initialized_snapshot = match resumed_initialized.result {
+    let initialized_checkpoint = match resumed_initialized.result {
         Some(RuntimeClientResult::Initialized { .. }) => {
-            resumed
-                .host()
-                .checkpoint()
-                .expect("bounded checkpoint")
-                .snapshot
+            resumed.host().checkpoint().expect("bounded checkpoint")
         }
         other => panic!("initialize returned an unexpected result: {other:?}"),
     };
+    assert_eq!(
+        initialized_checkpoint
+            .read_cut
+            .source_cut
+            .as_ref()
+            .expect("native checkpoint source cut")
+            .ledger_through,
+        0,
+        "cold resource discovery creates no canonical conversation message"
+    );
+    let initialized_snapshot = initialized_checkpoint.snapshot;
     assert!(
         initialized_snapshot.messages.iter().all(|message| {
             let json = serde_json::to_string(message).expect("message JSON");
@@ -390,7 +397,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     resumed.shutdown().await.unwrap();
     drop(resumed_endpoint);
     drop(resumed);
-    let mut fresh = (startup)
+    let fresh = (startup)
         .compose(&dependencies())
         .await
         .expect("fresh Session after current default change");
@@ -644,7 +651,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     std::fs::write(&config_path, format!("{source}\n{MODELS}")).unwrap();
     let fixture = paths(root.path(), &config_path);
 
-    let mut live = rustx::local_runtime::composition::LocalConversationRuntime::compose(
+    let live = rustx::local_runtime::composition::LocalConversationRuntime::compose(
         &(fixture).resolve(),
         &dependencies(),
     )
@@ -714,7 +721,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
 
     // Regression 2: a launch that composes no Agent Status projects absence
     // unambiguously, and absence is not "present with everything off".
-    let mut empty = rustx::local_runtime::composition::LocalConversationRuntime::compose(
+    let empty = rustx::local_runtime::composition::LocalConversationRuntime::compose(
         &paths(root.path(), &config_path).resolve(),
         &dependencies(),
     )

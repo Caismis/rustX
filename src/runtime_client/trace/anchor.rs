@@ -91,6 +91,22 @@ impl AnchorFacts {
         let D::Terminal(terminal) = end.fact else {
             return;
         };
+        if self.kind == TraceKind::Compaction
+            && end.kind == K::CompactionCompleted
+            && let Some(crate::durable::observation::TraceBootstrapFact::CompactionCompleted {
+                reading,
+            }) = end.bootstrap
+            && let Some(preview) = reading.projection_head.summary_preview
+        {
+            // The matched original Completed J already owns this finite
+            // projection summary. Never substitute the current projection head
+            // or a canonical Message for a historical compaction.
+            self.truncated |= preview.truncated;
+            self.preview = Some(TracePreview {
+                text: preview.text,
+                truncated: preview.truncated,
+            });
+        }
         self.state = terminal_state(terminal.class);
         self.timing.ended_at = Some(end.timestamp);
         self.timing.duration_ms =
@@ -138,12 +154,6 @@ impl TraceProjection<'_> {
         } else {
             self.ending(anchor.sequence, &endings)?
         };
-        if let Some(end) = &ending
-            && let D::Terminal(terminal) = &end.fact
-            && terminal.summary_message_id.is_some()
-        {
-            facts.message_id.clone_from(&terminal.summary_message_id);
-        }
         facts.terminal(ending, anchor.sequence);
         Ok(facts)
     }
@@ -205,8 +215,9 @@ impl TraceProjection<'_> {
                 self.tool_start(facts, occurrence.as_ref(), call_id.clone(), tool_id.clone())?;
                 vec![K::ToolExecutionCompleted, K::ToolExecutionFailed]
             }
-            D::CompactionStart => {
+            D::CompactionStart { native_id } => {
                 facts.kind = TraceKind::Compaction;
+                facts.native_id.clone_from(native_id);
                 facts.has_detail = true;
                 vec![K::CompactionCompleted, K::CompactionFailed]
             }

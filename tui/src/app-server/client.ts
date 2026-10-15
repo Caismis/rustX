@@ -72,7 +72,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 48;
+export const APP_SERVER_PROTOCOL_VERSION = 50;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -167,6 +167,9 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   // consumes no pending work, and settles nothing, so a lost response is
   // safely retryable.
   "session/traceDetail": "read",
+  "session/projections": "read",
+  "session/projectionDetail": "read",
+  "session/forkProjection": "side_effecting",
   "artifact/read": "read",
   // Bounded pure reads under transport-granted delivery access.
   "delivery/read": "read",
@@ -555,7 +558,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v48 protocol message");
+      this.#fail("invalid App Server v50 protocol message");
       return;
     }
 

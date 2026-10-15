@@ -20,7 +20,7 @@ import { useTranslation } from '../../locale/react';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v48';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition } from '../../../../protocol/app-server/v50';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -283,13 +283,13 @@ function Attachments({ artifacts, preview }: { artifacts: readonly TraceArtifact
   </ul>;
 }
 
-function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceContentBlock[]; preview: boolean; onOpenCall: (callId: string) => void }) {
+function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceContentBlock[]; preview: boolean; onOpenCall: ((callId: string) => void) | undefined }) {
   const tx = useTranslation();
   const calls = blocks.flatMap(block => block.type === 'tool_call' ? [block] : []);
   if (!calls.length) return null;
   return <ul className={preview ? `${css.assistantToolCalls} ${css.assistantToolCallsPreview}` : css.assistantToolCalls}>
     {calls.map(call => <li key={call.call_id}>
-      <button type="button" className={css.assistantToolCallButton} title={tx('trajectory:block.open-summary-title')} onClick={() => onOpenCall(call.call_id)}>
+      <button type="button" className={css.assistantToolCallButton} title={tx('trajectory:block.open-summary-title')} disabled={!onOpenCall} onClick={() => onOpenCall?.(call.call_id)}>
         <svg className={css.assistantToolCallIcon} width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -302,13 +302,13 @@ function ToolCalls({ blocks, preview, onOpenCall }: { blocks: readonly TraceCont
   </ul>;
 }
 
-function SourceBlocks({ blocks, onOpenCall }: { blocks: readonly TraceContentBlock[]; onOpenCall: (callId: string) => void }) {
+function SourceBlocks({ blocks, onOpenCall }: { blocks: readonly TraceContentBlock[]; onOpenCall: ((callId: string) => void) | undefined }) {
   const tx = useTranslation();
   return <div className={css.sourceBlocks}>
     {blocks.map((block, index) => {
       const label = <span className={css.sourceBlockLabel}>{tx('trajectory:block.label', { index: index + 1, type: block.type })}</span>;
       return <section className={css.sourceBlock} key={index}>
-        {block.type === 'tool_call'
+        {block.type === 'tool_call' && onOpenCall
           ? <button type="button" className={css.sourceBlockJumpTarget} aria-label={tx('trajectory:block.open-summary', { index: index + 1 })} title={tx('trajectory:block.open-summary-title')} onClick={() => onOpenCall(block.call_id)}>
             {label}<IconChevronRightOutline14 className={css.sourceBlockJumpIcon} size={12} />
           </button>
@@ -328,7 +328,7 @@ function MessageContent({ blocks, fallback, artifacts, rendered, preview = false
   preview?: boolean;
   thinkingExpanded: boolean;
   onThinkingExpanded: (expanded: boolean) => void;
-  onOpenCall: (callId: string) => void;
+  onOpenCall: ((callId: string) => void) | undefined;
 }) {
   const tx = useTranslation();
   if (!rendered && blocks?.length) return <SourceBlocks blocks={blocks} onOpenCall={onOpenCall} />;
@@ -520,12 +520,12 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v48').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v50').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
-  deferredContent?:import('../../../../protocol/app-server/v48').ContentBinding[]|undefined;
+  deferredContent?:import('../../../../protocol/app-server/v50').ContentBinding[]|undefined;
   readContent?:import('../../client/trace').TraceDetailEntry['readContent'];
-  fieldSources?:import('../../../../protocol/app-server/v48').TraceFieldSource[];
-  fieldCut?:import('../../../../protocol/app-server/v48').CheckpointReadCut;
+  fieldSources?:import('../../../../protocol/app-server/v50').TraceFieldSource[];
+  fieldCut?:import('../../../../protocol/app-server/v50').CheckpointReadCut;
   fieldReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   error?: string | undefined;
@@ -580,7 +580,8 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
   const [thinkingExpanded, setThinkingExpanded] = useState(true);
   const messages = item.type === 'ContextRow'
     ? item.context_message_id!=null ? detail?.request?.messages.filter(message => message.message_id === item.context_message_id) : undefined
-    : detail?.messages;
+    : record.kind === 'compaction' ? detail?.projected_messages : detail?.messages;
+  const provenanceFields = (item.type === 'RequestBoundary' ? detail?.request?.messages : messages)?.flatMap(message => 'provenance_source' in message && message.provenance_source ? [message.provenance_source] : []) ?? [];
   // A detail with no canonical message leaves the record's own preview as the content.
   const blocks = messages?.length ? messages.flatMap(message => message.blocks) : undefined;
   const fallback = item.type === 'ContextRow' ? item.context.preview?.text : record.preview?.text;
@@ -628,7 +629,8 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
   const messageFields=(sourceOnly=false)=>messagesHead&&detailPage?<TraceMessages messages={messagesHead} page={detailPage} reader={detailReader} fields={traceFields(sourceRecord)} sourceOnly={sourceOnly} owned={()=>true} artifacts={items=><Attachments artifacts={items} preview={false}/>}/>:null;
   const content = (rendered: boolean, preview = false) => messagesHead?messageFields():pending && !fallback
     ? <DetailPending error={error} deferred={!!detailPage} />
-    : <MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={openCall} />;
+    : <><MessageContent blocks={blocks} fallback={fallback} artifacts={artifacts} rendered={rendered} preview={preview} thinkingExpanded={thinkingExpanded} onThinkingExpanded={setThinkingExpanded} onOpenCall={record.kind === 'compaction' || item.type === 'ContextRow' || item.type === 'RequestBoundary' ? undefined : openCall} />
+      {record.kind === 'compaction' && !blocks && record.preview?.truncated && <p role="status">{tx('common:activity.content-deferred')}</p>}</>;
   const tabLabel = (tab: TrajectoryFacet) => tab === 'input' && program ? tx('trajectory:code.source') : tab === 'raw' && record.kind === 'compaction' ? tx('trajectory:tab.raw-output') : tx(TAB_LABEL[tab]);
   const title = item.type === 'RequestBoundary'
     ? <>
@@ -746,6 +748,7 @@ export function TrajectoryInspector({ detailPage,detailReader,fieldSources,field
   return <>
     {item.type==='RequestBoundary'&&record.request&&<TraceContexts request={record.request} cut={fieldCut} reader={fieldReader} owned={()=>true}/>}
     {record.calls.some(call=>call.call_id==null||call.name==null)&&<ul>{record.calls.map(call=>{const tool=records.find(candidate=>candidate.kind==='tool'&&candidate.tool?.occurrence!=null&&traceOccurrenceKey(candidate.tool.occurrence)===traceOccurrenceKey(call.occurrence)&&sameTraceStep(candidate.location,record.location));return <li key={traceOccurrenceKey(call.occurrence)}><button type="button" disabled={!tool} onClick={()=>tool&&onOpen(tool.id)}>{call.name??tx('common:activity.content-deferred')}</button></li>;})}</ul>}
+    {provenanceFields.length ? <TraceFields fields={provenanceFields} cut={detailPage?.read_cut??fieldCut} reader={detailPage?detailReader:fieldReader} owned={()=>true}/> : null}
     {metadataFields.length?<TraceFields fields={metadataFields} cut={toolHead?detailPage?.read_cut:fieldCut} reader={toolHead?detailReader:fieldReader} owned={()=>true}/>:null}
     {deferredContent?.length&&readContent?<DeferredContent bindings={deferredContent} read={readContent} owned={()=>true}/>:null}
     <div className={css.detailsHeader}>

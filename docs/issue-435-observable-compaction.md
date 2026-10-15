@@ -25,7 +25,7 @@ intent, transport evidence, scope fences, and presentation only.
 
 1. Local request evidence exists before dispatch. It is not native admission.
 2. Native admission checks out ConversationState and publishes manual start.
-3. The owned task commits summary and Surface. Its settlement gate can still hold
+3. The owned task commits typed checkpoint content and its activation/head. Its settlement gate can still hold
    coordinator ownership at this point; the RPC is unfinished and no terminal
    manual observation has been published.
 4. `finish_manual_compaction` restores ConversationState and clears the slot under
@@ -33,8 +33,8 @@ intent, transport evidence, scope fences, and presentation only.
    observation. The waiter completes afterward. This is the release boundary used
    by the resident surface. Automatic context completion does not settle its Attempt.
 
-The new UI adds no canonical history. Existing native summary identity and transcript
-paging remain responsible for checkpoints. No fake command message, synthetic
+The UI adds no canonical history. Immutable checkpoint identity and historical
+projection reads supply summary provenance independently of transcript paging. No fake command message, synthetic
 Attempt, execution queue, polling, retry, or cancellation mechanism is introduced.
 
 ## Repair and applicability

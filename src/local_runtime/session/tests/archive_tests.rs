@@ -38,12 +38,12 @@ fn records(
 }
 
 #[tokio::test]
-async fn archive_v3_contract_preserves_accepted_contributions_and_journal_vocabulary() {
+async fn archive_v4_contract_preserves_accepted_contributions_and_journal_vocabulary() {
     let (directory, catalog, _) = open_catalog();
     let (conversation, session, _) = append_history(&catalog, &[]);
     let store = store_for(&catalog, &session, &conversation);
     let status_id = MessageId::new("archive-v3-status");
-    let snapshot = todo_status_start_snapshot(
+    let mut snapshot = todo_status_start_snapshot(
         store.load_head().unwrap().revision.next(),
         status_id.clone(),
         ContributionEmission {
@@ -51,6 +51,7 @@ async fn archive_v3_contract_preserves_accepted_contributions_and_journal_vocabu
             fingerprint: "archive-v3-fingerprint".into(),
         },
     );
+    freeze_session_test_input(&store, &mut snapshot, &[todo_status(status_id.as_str())]);
     store
         .commit_model_turn_start(&[todo_status(status_id.as_str())], &snapshot, Utc::now())
         .unwrap();
@@ -59,11 +60,11 @@ async fn archive_v3_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v3");
+    assert_eq!(manifest["format"], "rustx-session-archive/v4");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 2, "messages": 1, "surface": 1, "requests": 3,
+            "journal": 2, "messages": 1, "surface": 1, "requests": 4, "projections": 1,
             "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
         })
     );
@@ -109,7 +110,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     let store = store_for(&catalog, &session, &conversation);
     let child = super::deletion_tests::child(directory.path(), &store, 1, false);
     let status_id = MessageId::new("archive-status");
-    let snapshot = todo_status_start_snapshot(
+    let mut snapshot = todo_status_start_snapshot(
         store.load_head().unwrap().revision.next(),
         status_id.clone(),
         ContributionEmission {
@@ -117,6 +118,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
             fingerprint: "archive-fingerprint".into(),
         },
     );
+    freeze_session_test_input(&store, &mut snapshot, &[todo_status(status_id.as_str())]);
     let receipt = store
         .commit_model_turn_start(&[todo_status(status_id.as_str())], &snapshot, Utc::now())
         .unwrap();
@@ -171,9 +173,11 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     later_request.identity.retry_number = 1;
     later_request.request_id = later_request.identity.request_id();
     later_request.provisional_message_id = later_request.identity.provisional_message_id();
-    later_request.surface_revision = store.load_head().unwrap().revision;
+    later_request.canonical_frontier =
+        crate::context::resources::LedgerFrontier(store.load_head().unwrap().revision.get());
     later_request.request_context_ids.clear();
     later_request.contributions.clear();
+    freeze_session_test_input(&store, &mut later_request, &[]);
     let later_receipt = store
         .commit_model_turn_start(&[], &later_request, Utc::now())
         .unwrap();
@@ -195,7 +199,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v3");
+    assert_eq!(manifest["format"], "rustx-session-archive/v4");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));
@@ -410,7 +414,74 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         "some_unknown_future_secret_key":"ARCHIVE_UNKNOWN_SECRET"
     }))
     .unwrap();
+    // The inspection request's opaque continuation belongs to a distinct
+    // actual started request and its committed output, not arbitrary history.
+    let history = store.load_canonical().unwrap();
+    let mut prior = snapshot.clone();
+    prior.canonical_frontier =
+        crate::context::resources::LedgerFrontier(store.load_head().unwrap().revision.get());
+    prior.identity.turn = crate::runtime::identity::TurnId::new("archive-source");
+    prior.request_id = prior.identity.request_id();
+    prior.provisional_message_id = prior.identity.provisional_message_id();
+    prior.request_context_ids.clear();
+    prior.contributions.clear();
+    prior.history_cut = store.projected_history().unwrap().cut;
+    prior
+        .freeze_input(
+            &conversation,
+            &crate::model::ModelRequest {
+                images: crate::model::images::ResolvedImages::new(),
+                invocation: prior.invocation.clone(),
+                messages: crate::model::input::canonical_input(&history),
+                tools: prior.tool_definitions.clone(),
+                effective_system_prompt: prior.effective_system_prompt.clone(),
+                continuation: None,
+                continuation_source: None,
+            },
+        )
+        .unwrap();
+    store
+        .commit_model_turn_start(&[], &prior, Utc::now())
+        .unwrap();
+    let output = MessageBlock::Assistant(AssistantMessageBlock {
+        id: prior.provisional_message_id.clone(),
+        content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+            text: None,
+            provider_state: private("ARCHIVE_CONTINUATION_SECRET"),
+        })],
+    });
+    store.append_canonical(&output).unwrap();
+    snapshot.canonical_frontier =
+        crate::context::resources::LedgerFrontier(store.load_head().unwrap().revision.next().get());
     snapshot.continuation = private("ARCHIVE_CONTINUATION_SECRET");
+    let source =
+        crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
+            prior.request_id,
+            &conversation,
+            &crate::model::input::canonical_input(&history),
+            &output,
+        )
+        .unwrap();
+    let mut input = crate::model::input::canonical_input(&history);
+    input.push(crate::model::ModelInputMessage::Canonical(output));
+    input.push(crate::model::ModelInputMessage::Canonical(todo_status(
+        status_id.as_str(),
+    )));
+    snapshot.history_cut = store.projected_history().unwrap().cut;
+    snapshot
+        .freeze_input(
+            &conversation,
+            &crate::model::ModelRequest {
+                continuation_source: Some(source),
+                images: crate::model::images::ResolvedImages::new(),
+                invocation: snapshot.invocation.clone(),
+                messages: input,
+                tools: snapshot.tool_definitions.clone(),
+                effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                continuation: snapshot.continuation.clone(),
+            },
+        )
+        .unwrap();
     let receipt = store
         .commit_model_turn_start(&[todo_status(status_id.as_str())], &snapshot, Utc::now())
         .unwrap();
@@ -467,7 +538,11 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
             .to_string()
             .contains("AUTHORED_REASONING_SECRET")
     );
-    let request = &records(&files, &conversation, "requests")[0];
+    let requests = records(&files, &conversation, "requests");
+    let request = requests
+        .iter()
+        .find(|request| request["request_id"] == serde_json::json!(snapshot.request_id))
+        .unwrap();
     assert_eq!(
         request["invocation"]["request_options"],
         serde_json::json!({"temperature":0.25})
@@ -1121,4 +1196,101 @@ async fn inherited_turn_archive(member: bool) {
     }
     assert_eq!(store.conversation_read_cut().unwrap(), source_before);
     assert_eq!(store.read_events(None, 64).unwrap().events, source_events);
+}
+
+#[tokio::test]
+async fn lossy_archive_reports_missing_old_encrypted_input_without_invalidating_current_checkpoint()
+{
+    let (directory, catalog, _) = open_catalog();
+    let (conversation, session, _) =
+        append_history(&catalog, &[user("old-user", "historical input")]);
+    let store = store_for(&catalog, &session, &conversation);
+    store.append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+        id: MessageId::new("old-native"),
+        content: vec![AssistantContentBlock::Reasoning(crate::message::types::ReasoningBlock {
+            text: None,
+            provider_state: Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
+                crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {
+                    items: vec![serde_json::json!({"type":"reasoning", "id":"rs-old", "encrypted_content":"OLD_ENCRYPTED_INPUT_BYTES"})],
+                },
+            )),
+        })],
+    })).unwrap();
+    let mut old = todo_status_start_snapshot(
+        store.load_head().unwrap().revision,
+        MessageId::new("unused-context"),
+        ContributionEmission {
+            key: "unused".into(),
+            fingerprint: "unused".into(),
+        },
+    );
+    old.request_context_ids.clear();
+    old.contributions.clear();
+    old.invocation.protocol = ModelProtocol::OpenAiResponses;
+    old.invocation.compat.responses_storage =
+        crate::model::catalog::ResponsesStorageMode::Stateless;
+    freeze_session_test_input(&store, &mut old, &[]);
+    let receipt = store
+        .commit_model_turn_start(&[], &old, Utc::now())
+        .unwrap();
+    let mut terminal = receipt.started;
+    terminal.event_id = crate::runtime::identity::EventId::new("old-terminal");
+    terminal.sequence = 0;
+    terminal.event = crate::events::RuntimeEvent::ModelRequestCompleted {
+        request_id: old.request_id.clone(),
+        finish_reason: crate::model::ModelFinishReason::Stop,
+        usage: None,
+        generation: None,
+    };
+    store.append_event(terminal).unwrap();
+    store
+        .commit_projection(
+            crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                &store,
+                crate::scripted_suites::support::context::checkpoint_fixture(
+                    &store,
+                    "current",
+                    2,
+                    "complete current summary",
+                ),
+                None,
+            ),
+        )
+        .unwrap();
+    let current = store.projected_history().unwrap();
+    let exact = store.reconstruct_model_request(&old.request_id).unwrap();
+    assert!(
+        serde_json::to_string(&exact)
+            .unwrap()
+            .contains("OLD_ENCRYPTED_INPUT_BYTES")
+    );
+    let files = decode(
+        SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
+            .unwrap(),
+    )
+    .await;
+    let old_export = records(&files, &conversation, "requests");
+    assert_eq!(old_export.len(), 1);
+    assert_eq!(old_export[0]["exact_reconstruction"], false);
+    assert!(
+        old_export[0]["missing_input_components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("native"))
+    );
+    assert!(
+        !files
+            .values()
+            .any(|bytes| String::from_utf8_lossy(bytes).contains("OLD_ENCRYPTED_INPUT_BYTES"))
+    );
+    assert_eq!(
+        store.projected_history().unwrap(),
+        current,
+        "lossy inspection does not invalidate independently complete active authority"
+    );
+    assert_eq!(
+        store.reconstruct_model_request(&old.request_id).unwrap(),
+        exact
+    );
 }

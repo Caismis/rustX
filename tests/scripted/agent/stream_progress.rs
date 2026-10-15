@@ -880,7 +880,10 @@ async fn summarizer_consumes_generation_and_liveness_progress_without_retry() {
         Duration::from_secs(2),
         summarizer.summarize(
             SummaryRequest {
-                retired: vec![user("retired", "old")],
+                retired: (vec![user("retired", "old")])
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             },
             rustx::runtime::CancellationSignal::new(),
         ),

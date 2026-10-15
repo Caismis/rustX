@@ -116,10 +116,32 @@ pub(crate) fn probe_liveness(path: &Path) -> std::io::Result<Option<bool>> {
 pub(crate) struct LiveConversationInspectionServer {
     path: PathBuf,
     stop: Arc<tokio::sync::Notify>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: Option<tokio::task::JoinHandle<Result<(), InspectionShutdownFailure>>>,
+    shutdown_failure: Option<InspectionShutdownFailure>,
     #[cfg(test)]
     workset: tokio::sync::watch::Receiver<usize>,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum InspectionShutdownFailure {
+    Cancelled,
+    Panicked,
+    ConnectionCancelled,
+    ConnectionPanicked,
+}
+impl std::fmt::Display for InspectionShutdownFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cancelled => "live inspection listener was cancelled before physical join",
+            Self::Panicked => "live inspection listener panicked before physical join",
+            Self::ConnectionCancelled => {
+                "live inspection connection was cancelled before physical join"
+            }
+            Self::ConnectionPanicked => "live inspection connection panicked before physical join",
+        })
+    }
+}
+impl std::error::Error for InspectionShutdownFailure {}
 
 impl LiveConversationInspectionServer {
     /// Binds the child-owned endpoint at the identity-derived local path.
@@ -165,6 +187,7 @@ impl LiveConversationInspectionServer {
             path,
             stop,
             task: Some(task),
+            shutdown_failure: None,
             #[cfg(test)]
             workset: workset_rx,
         })
@@ -178,12 +201,26 @@ impl LiveConversationInspectionServer {
 
     /// Stops the accept loop, closes active inspection connections, and
     /// removes the exact process-routing socket.
-    pub(crate) async fn shutdown(mut self) {
+    pub(crate) async fn shutdown(&mut self) -> Result<(), InspectionShutdownFailure> {
         self.stop.notify_one();
-        if let Some(task) = self.task.take() {
-            let _ = task.await;
+        if let Some(task) = self.task.as_mut() {
+            let result = task.await;
+            self.task.take();
+            self.shutdown_failure = match result {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error),
+                Err(error) => Some(if error.is_cancelled() {
+                    InspectionShutdownFailure::Cancelled
+                } else {
+                    InspectionShutdownFailure::Panicked
+                }),
+            };
+        }
+        if let Some(error) = self.shutdown_failure {
+            return Err(error);
         }
         let _ = std::fs::remove_file(&self.path);
+        Ok(())
     }
 }
 
@@ -252,14 +289,20 @@ async fn run_listener(
     host: RuntimeClientHost,
     stop: Arc<tokio::sync::Notify>,
     #[cfg(test)] workset: tokio::sync::watch::Sender<usize>,
-) {
+) -> Result<(), InspectionShutdownFailure> {
     let mut connections = JoinSet::new();
+    let mut connection_failure = None;
+    let mut endpoints: Vec<crate::runtime_client::endpoint::EndpointRetirement> = Vec::new();
     let socket_stop = tokio_util::sync::CancellationToken::new();
     loop {
         tokio::select! {
             biased;
             () = stop.notified() => break,
-            _ = connections.join_next(), if !connections.is_empty() => {
+            joined = connections.join_next(), if !connections.is_empty() => {
+                if let Some(result) = joined {
+                    record_connection_failure(&mut connection_failure, result);
+                }
+                endpoints.retain(crate::runtime_client::endpoint::EndpointRetirement::is_alive);
                 #[cfg(test)]
                 workset.send_replace(connections.len());
             },
@@ -273,11 +316,11 @@ async fn run_listener(
                     drop(stream);
                     continue;
                 }
-                let host = host.clone();
+                let endpoint = RuntimeClientEndpoint::new_read_only(&host);
+                endpoints.push(endpoint.retirement());
                 let socket_stop=socket_stop.clone();
                 connections.spawn(async move {
                     let (reader, writer) = stream.into_split();
-                    let endpoint = RuntimeClientEndpoint::new_read_only(&host);
                     let _ = serve_stdio_jsonl_with_io(endpoint, InspectionIo::new(reader,socket_stop.clone()), InspectionIo::new(writer,socket_stop)).await;
                 });
                 #[cfg(test)]
@@ -285,10 +328,40 @@ async fn run_listener(
             }
         }
     }
+    // Retire actual admitted observation waits, including a decoded request
+    // racing to subscribe. Physical Source work still owns its JoinSet task.
+    for endpoint in endpoints {
+        endpoint.retire();
+    }
     socket_stop.cancel();
-    while connections.join_next().await.is_some() {}
+    drain_connections(&mut connections, &mut connection_failure).await;
     #[cfg(test)]
     workset.send_replace(0);
+    connection_failure.map_or(Ok(()), Err)
+}
+
+fn record_connection_failure(
+    failure: &mut Option<InspectionShutdownFailure>,
+    result: Result<(), tokio::task::JoinError>,
+) {
+    if let Err(error) = result
+        && failure.is_none()
+    {
+        *failure = Some(if error.is_cancelled() {
+            InspectionShutdownFailure::ConnectionCancelled
+        } else {
+            InspectionShutdownFailure::ConnectionPanicked
+        });
+    }
+}
+
+async fn drain_connections(
+    connections: &mut JoinSet<()>,
+    failure: &mut Option<InspectionShutdownFailure>,
+) {
+    while let Some(result) = connections.join_next().await {
+        record_connection_failure(failure, result);
+    }
 }
 
 #[cfg(test)]
@@ -323,3 +396,6 @@ pub(crate) fn trace_read_gate(conversation: &crate::runtime::identity::Conversat
         release.recv().unwrap();
     }
 }
+
+#[cfg(test)]
+mod shutdown_tests;

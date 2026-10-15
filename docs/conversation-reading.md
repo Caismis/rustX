@@ -47,11 +47,25 @@ sequence alone cannot identify the cut for a Tool result or request context.
 Trace lifecycle queries read finite typed headers captured from the original
 Journal records. Numeric original owner sequences join starts and terminal facts;
 optional request, context and proposal summaries do not own that lifecycle.
+A Compaction preview comes from that record's exact Completed-J bootstrap,
+including its original truncation flag. A later projection activation cannot
+replace historical summary content. Truncated Summary and Raw views remain
+explicitly deferred; no canonical summary Message is synthesized.
 Selected fields advertise either the existing bounded Value reader or an existing
 Content binding. Canonical metadata uses the original Content source, rather than
 an invented message-identity selector. A deferred request or Tool identifier is
 never replaced by a synthetic execution ID. Navigation to a committed Assistant
 requires an explicit native identity relation at the captured canonical frontier.
+
+The private Request field index distinguishes an inline preview from an original
+byte span. Only parser-proven spans containing at most 32 nodes and 16 KiB may
+defer preview construction. Selecting such a header reads at most two existing
+content-segment rows at the same cut, then applies the same JSON normalization
+and integer checks as an inline preview. Native message descriptors and truncated
+previews remain inline. This removes duplicate small-field previews without
+removing paths, changing original bytes, or creating another source authority.
+Original-byte reads use coordinates directly and do not materialize a header.
+
 Loaded Trace caches retain at most 512 page records and one protected selection.
 Lifecycle repair admits at most eight explicit interests in one read; clients batch their cache independently of
 the native event cursor. A page bounds both its records and repair bytes, so a
@@ -133,6 +147,13 @@ precedes later steering input; when only response replay input is retained, that
 recorded input provides the preview. Neither nearby User messages nor live reads
 of the source Session establish ownership. The inherited response is
 the newest text-bearing retained member of a settled inherited turn.
+
+Retry identity uses this same original adoption order. RequestStart captures the
+opening input in its native transaction, using canonical ordinary-user, nonblank
+text and Human/delegated-Agent source eligibility. Later steering and frozen
+Original/Derived model inputs do not replace that identity. The resolver does not
+depend on optional display headers or preview Source availability; the optional
+deferred retry-ID field receives the already selected native identity.
 
 Local prompt lookup uses the existing Attempt/type/sequence index for the
 selected Attempt and the exact idle range between the previous and current
@@ -243,7 +264,7 @@ A read cut C is `(ConversationId, journal, transcript, mutation_revision)`, the
 inclusive upper bounds one read was captured at. `mutation_revision` is the
 native monotonic epoch of successful pending-body edits/removals. Pending
 adoption preserves its accepted body and position; new admissions and ordinary
-execution append facts. Surface compaction preserves immutable Ledger/Journal
+execution append facts. Projection activation preserves immutable Ledger/Journal
 meaning. Latest reads capture a fresh C. Anchor and continuation reads name C and reject
 foreign, future or mutated cuts; append-only growth remains reconstructible.
 
@@ -408,4 +429,38 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary is stored with the lineage bootstrap in SQLite schema 58. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and snapshot reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 64 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+
+## Request field metadata
+
+SQLite schema 64 stores each frozen Request's original byte segments independently.
+An eligible unchanged canonical Message may share its immutable relative field
+metadata with another Request. The native layout certifies the exact producer
+header and static byte spans. The current Request retains its own root header,
+absolute coordinates and generated `provenance_source` field metadata. Derived
+and oversized items use their own field rows. This choice occurs during capture
+and is never a fallback for a missing or corrupt selected read.
+
+The shared static index contains at most 512 fields in one 65,536-byte BLOB.
+The generated descriptor has at most 32 fields in a separate Request-owned
+16,384-byte BLOB on the existing item anchor; its full original bytes remain in
+that Request's segments. Both indexes have explicit type and length gates before
+allocation, a complete digest and bounded field decoders. Fixed anchor columns
+precede the growing descriptor BLOB. The Request-specific witness binds the
+original source identity, item, header digest, both index hashes and root/hole
+geometry. Reuse must also preserve the original capture witness and the absolute
+path-length bound. Old Requests are never retagged after canonical replacement.
+Index creation and Request anchors commit inside the existing optional Source
+savepoint; failure cannot alter native Request, canonical or Journal commitment.
+
+A Store field or selected range primitive loads at most one bounded index BLOB.
+A message-root page combines at most the static index and its Request-owned
+descriptor index; other pages select one index. Pages materialize at most 32
+results and retain their encoded-byte budget. The public selected-field ValueRead
+route composes a parent header, an optional one-item page and the selected range:
+it loads at most three bounded index BLOBs, including when the parent is a message
+root (zero, two and one, respectively). It performs no history scan. Original
+content ranges still use the Request's own segments, at most two 65,536-byte rows
+per range. Index reads are additional bounded metadata work, separate from the
+two-content-row claim. Metadata remains under the durable Store's existing
+retention and read-cut ownership and grants no client authorization.

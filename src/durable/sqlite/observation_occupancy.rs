@@ -31,7 +31,17 @@ pub(super) fn witness(
                 // missing derived capture cannot refuse this original fact.
                 return None;
             };
+            let projection_head = super::observation_projection::read(connection, event.sequence)
+                .ok()
+                .flatten()?;
+            if projection_head.activation_id != compaction.activation_id
+                || projection_head.checkpoint_id != compaction.checkpoint_id
+                || projection_head.origin.completed_journal.0 != event.sequence
+            {
+                return None;
+            }
             Some(crate::durable::observation::OccupancyObservation {
+                projection_head,
                 compaction,
                 value: occupancy.as_ref().map(|value| {
                     RuntimeClientContextOccupancy::from_native(
@@ -51,8 +61,8 @@ pub(super) fn compaction(
 ) -> Result<crate::runtime_client::snapshot::RuntimeClientCompactionView, ConversationStoreError> {
     let RuntimeEvent::CompactionCompleted {
         generation,
-        summary_message_id,
-        surface_revision,
+        checkpoint_id,
+        activation_id,
         tokens_before,
         estimated_tokens_after,
         ..
@@ -66,46 +76,18 @@ pub(super) fn compaction(
     if FAIL_COMPACTION_CAPTURE.with(std::cell::Cell::get) {
         return Err(storage("fault injected at derived compaction capture"));
     }
-    let position: u64 = connection
-        .query_row(
-            "SELECT position FROM message_ledger WHERE message_id=?1",
-            [summary_message_id.as_str()],
-            |row| row.get(0),
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    let locator =
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position };
-    let inline = summary_message_id.as_str().len() <= 256;
-    let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-        component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
-        locator: locator.clone(),
-        block_index: crate::message::types::ContentBlockIndex::new(0),
-    };
-    let reference = if inline {
-        None
-    } else {
-        super::content::descriptor(
-            connection,
-            &event.conversation_id,
-            &source,
-            crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
-        )
-        .ok()
-        .flatten()
-    };
+    let _ = connection;
     Ok(
         crate::runtime_client::snapshot::RuntimeClientCompactionView {
             generation: *generation,
-            summary_message_id: inline.then(|| summary_message_id.clone()),
-            summary_message_locator: locator,
-            summary_message_id_deferred: !inline,
-            summary_message_id_source: reference,
-            surface_revision: *surface_revision,
+            checkpoint_id: checkpoint_id.clone(),
+            activation_id: *activation_id,
             tokens_before: *tokens_before,
             estimated_tokens_after: *estimated_tokens_after,
         },
     )
 }
+
 #[cfg(test)]
 thread_local! { static READ_WORK:std::cell::Cell<(usize,usize)>=const{std::cell::Cell::new((0,0))}; }
 #[cfg(test)]

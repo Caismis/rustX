@@ -1,7 +1,7 @@
 import { JournalValue, ToolMetadataValue } from './JournalValue';
 import { useToolInspection } from './tool-inspection';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v48';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
 import { toolCard } from '../../bindings/tools';
 import { askUserRow } from '../../bindings/ask-user';
 import { QuestionRow } from '../../presentation/agent/QuestionRow';

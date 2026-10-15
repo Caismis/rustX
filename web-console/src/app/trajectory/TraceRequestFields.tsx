@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import type {CheckpointPage,CheckpointPageItem} from '../../../../protocol/app-server/v48';
+import type {CheckpointPage,CheckpointPageItem} from '../../../../protocol/app-server/v50';
 import {readTraceSelectedWindow,type TraceValueSelector} from '../../../../protocol/app-server/trace-field';
 import type {TraceFieldReader} from '../../client/trace';
 import {useTranslation} from '../../locale/react';

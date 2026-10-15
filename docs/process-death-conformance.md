@@ -246,12 +246,12 @@ live response, or authorizes a tool from historical `Approved`.
 
 ## 6. Compaction
 
-| Boundary | Durable before kill | Surface after reopen | Ledger | Test |
+| Boundary | Durable before kill | Projection after reopen | Canonical Ledger | Test |
 | --- | --- | --- | --- | --- |
-| summary side request in flight | nothing of the compaction | the pre-compaction Surface, authoritative | untouched | `kill_during_the_compaction_summary_keeps_the_old_surface` |
-| `before:commit_compaction` | nothing of the compaction | the pre-compaction Surface | untouched | `compaction_surface_replace_is_atomic` |
-| `after:commit_compaction` | one `CompactionCompleted` | exactly the planned span replaced by its summary | historical prefix intact, summary appended | `compaction_surface_replace_is_atomic` |
-| project instructions and Skill catalog edited across the compaction | — | the post-compaction request still carries the loaded generation | no canonical project-instruction or Skill-guidance fact | `compaction_never_refreshes_resource_derived_authority` |
+| summary provider in flight | no checkpoint commit | previous head | unchanged | `kill_during_the_compaction_summary_keeps_the_old_surface` |
+| `before:commit_projection` | no checkpoint/head/receipt/completion | previous head | unchanged | `compaction_checkpoint_receipt_and_activation_are_atomic` |
+| `after:commit_projection` | immutable content, activation/head, operation receipt and local completion | exact committed checkpoint | unchanged | `compaction_checkpoint_receipt_and_activation_are_atomic` |
+| project instructions and Skill catalog edited during compaction | admitted resource generation retained | new checkpoint with frozen core input | no invented instruction/Skill fact | `compaction_never_refreshes_resource_derived_authority` |
 
 Compaction is not a configuration application boundary: it does not discover, refresh,
 suppress, or remove resource-derived System authority, and the resource

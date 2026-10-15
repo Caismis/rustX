@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v48';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v50';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {traceTool} from './trace-fixture';
 import {checkpoint,Server,snapshot} from './fixture';
@@ -18,9 +18,22 @@ function head(original:CheckpointReadCut,kind:TraceRecord['kind']='user',total=1
 function messagePage(original:CheckpointReadCut,offset:number):CheckpointPage {return {read_cut:original,cursor:original.revision,domain:'trace.records.295.detail.messages',total:'19',next_offset:offset===8?'16':null,collections:[],items:Array.from({length:offset===8?8:3},(_,index)=>({offset:String(offset+index),identity:`ledger:${offset+index+1}`,key:null,value:JSON.parse(JSON.stringify(row(offset+index))),deferred:true,body_complete:false,content:[]}))};}
 function props(native:TraceRecord):TrajectoryInspectorProps{return {item:{type:'RecordRow',record:native,display_key:'row',owner_record_id:native.id,facet:'overview',label:'Message',preview:''},facet:'rendered',onFacet:vi.fn(),onLoadDetail:vi.fn(),onClose:vi.fn(),records:[native],executions:new Map(),requestNumbers:new Map(),completeHistory:true,onOpen:vi.fn()};}
 function direct(original=cut()) {let active=true;const value=vi.fn(),content=vi.fn(),page=vi.fn(async(_cut,_domain,offset)=>messagePage(original,offset));const source:TraceFieldReader={value,content,page};return {reader:bindTraceDetailReader(source,head(original),()=>active),page,value,content,retire:()=>{active=false;}};}
-it.each(['assistant','user','context','compaction'] as const)('%s renders its positive finite message head and source without a full Detail cast',kind=>{
- const original=cut(),page=head(original,kind,1),load=vi.fn();render(<TrajectoryInspector {...props(record(kind))} facet={kind==='compaction'?'raw':'rendered'} detailPage={page} onLoadDetail={load}/>);
+it.each(['assistant','user','context'] as const)('%s renders its positive finite message head and source without a full Detail cast',kind=>{
+ const original=cut(),page=head(original,kind,1),load=vi.fn();render(<TrajectoryInspector {...props(record(kind))} facet="rendered" detailPage={page} onLoadDetail={load}/>);
  expect(screen.getByText('ORIGINAL_PREVIEW_0')).toBeTruthy();expect(screen.getByText('"human"')).toBeTruthy();expect(screen.getByText('Ordinary input: true')).toBeTruthy();expect(screen.queryByText('Loading…')).toBeNull();expect(load).not.toHaveBeenCalled();expect((screen.getByRole('button',{name:'Read original value'}) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('compaction retains its native operation lifecycle and selected original field without canonical message provenance',async()=>{
+ const original=cut(),native=record('compaction'),load=vi.fn(),bytes=new TextEncoder().encode(JSON.stringify('original-operation'));
+ native.fields=[{type:'value',field:'native_id',domain:'journal.295',item_offset:0,path:['event','operation_id'],encoded_bytes:String(bytes.length)}];
+ const page=head(original,'user',1),value:TraceInspectionHead={id:native.id,kind:'compaction',record:native,content:{type:'lifecycle'}};
+ page.items[0].value=JSON.parse(JSON.stringify(value));
+ const read=vi.fn(async()=>({representation:'canonical_json_v1' as const,cut:original,domain:'journal.295',item_offset:0,path:['event','operation_id'],offset:0,bytes_base64:Buffer.from(bytes).toString('base64'),next_offset:null,readable_end:bytes.length}));
+ const reader:TraceFieldReader={value:read,content:vi.fn(),page:vi.fn()};
+ render(<TrajectoryInspector {...props(native)} facet="overview" detailPage={page} fieldSources={native.fields} fieldCut={original} fieldReader={reader} onLoadDetail={load}/>);
+ expect(screen.getByText('Completed')).toBeTruthy();expect(screen.queryByRole('combobox',{name:'Message'})).toBeNull();expect(screen.queryByText('ORIGINAL_PREVIEW_0')).toBeNull();expect(load).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'Read original value'}));await screen.findByText('"original-operation"');
+ expect(read.mock.calls[0].slice(0,3)).toEqual([original,native.fields[0],0]);expect(reader.content).not.toHaveBeenCalled();expect(reader.page).not.toHaveBeenCalled();
 });
 it('replaces a nineteen-message adoption page at exact native ordinals, retaining source and first-page navigation',async()=>{
  const original=cut(),reader=direct(original);render(<TrajectoryInspector {...props(record())} detailPage={head(original)} detailReader={reader.reader}/>);

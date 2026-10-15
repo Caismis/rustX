@@ -2777,7 +2777,9 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
         assert_eq!(user["content"][0]["text"], format!("<user_uploaded_files>\n  <file name=\"picture.png\" path=\"{}\" />\n</user_uploaded_files>\n\n{body}", files[0].path));
         assert!(!requests[0].contains("NOT_EAGERLY_INJECTED"));
         let snapshots = native.request_history().page(None, 4).unwrap().snapshots;
-        assert_eq!(snapshots[0].upload_projection.files[0].path, files[0].path);
+        let frozen_input = serde_json::to_string(&snapshots[0].input).unwrap();
+        assert!(frozen_input.contains(&files[0].path));
+        assert!(snapshots[0].input.iter().any(|m| matches!(m, rustx::model::projected::FrozenModelInput::Derived(_))));
         let history = native.tool_runtime().durable_store().load_canonical().unwrap();
         let canonical = serde_json::to_string(&history).unwrap();
         assert!(canonical.contains("uploaded_file"));
@@ -4835,7 +4837,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         use crate::durable::{ConversationStore, SqliteConversationStore};
         use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
         use crate::local_runtime::session::LineageSide;
-        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock, UserSource};
         use crate::message::TextBlock;
         use crate::model::finish::ModelFinishReason;
         use crate::runtime::identity::{AttemptId, EventId, MessageId};
@@ -4852,9 +4854,13 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(), event: kind,
         };
         for (input, output, attempt) in [("user-a", "assistant-a", "a"), ("user-b", "assistant-b", "b")] {
-            store.append_canonical(&MessageBlock::User(UserMessageBlock { id: MessageId::new(input), source: UserSource::Human,
-                kind: InboundKind::Message, timestamp: None, content: vec![UserContentBlock::Text(TextBlock { text: input.into() })] })).unwrap();
+            let accepted = store.accept_inbound(crate::durable::InboundDraft {
+                message_id: Some(MessageId::new(input)), source: UserSource::Human, kind: InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock { text: input.into() })],
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(), correlation: None,
+            }).unwrap();
             store.append_event(event(attempt, RuntimeEvent::AttemptStarted { attempt_id: AttemptId::new(attempt) })).unwrap();
+            store.adopt_pending_batch(accepted.sequence, Some(AttemptId::new(attempt))).unwrap();
             crate::runtime_client::response::tests::request(&store, attempt, 0, Some(crate::model::ModelUsage { input_tokens: 100, output_tokens: 20, total_tokens: 120, details: None }));
             store.append_canonical_with_event(&MessageBlock::Assistant(AssistantMessageBlock { id: MessageId::new(output),
                 content: vec![AssistantContentBlock::Text(TextBlock { text: output.into() })] }),
@@ -5043,19 +5049,35 @@ impl AttemptCompletion {
         );
         let receipt = self.runtime.child_attempt_settlement(self.after).await;
         assert_eq!(receipt.ordinal, self.after + 1, "exact next native handoff");
+        let mut last_cursor = None;
         loop {
+            let notification = connection.next_notification().await.notification;
+            match &notification {
+                NotificationMethod::ObservationUnavailable { target, .. }
+                | NotificationMethod::ResyncRequired { target, .. }
+                | NotificationMethod::Closed { target }
+                    if target == expected =>
+                {
+                    panic!(
+                        "native settlement publication failed: receipt={receipt:?}, captured_after={}, last_cursor={last_cursor:?}, notification={notification:?}",
+                        self.after,
+                    );
+                }
+                _ => {}
+            }
             let NotificationMethod::Event {
                 target,
                 cursor,
                 event,
                 ..
-            } = connection.next_notification().await.notification
+            } = notification
             else {
                 continue;
             };
             if &target != expected {
                 continue;
             }
+            last_cursor = Some(cursor);
             if event.facts().iter().any(|fact| match fact {
                 RuntimeClientEvent::AttemptSettled { attempt_id, .. } => {
                     *attempt_id == receipt.attempt_id
@@ -9693,7 +9715,7 @@ async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity
         })).unwrap();
         let header = store.message_header(&original_id).unwrap().unwrap();
         let locator = CanonicalContentLocator::ByLedgerPosition { position:header.ledger_position.unwrap() };
-        let revision = store.load_head().unwrap().revision;
+        let revision = store.observation_read_cut().unwrap().surface_revision;
         drop(store);
         drop(access);
         let connection = AppServerConnection::new(fixture.host.clone());
@@ -9720,7 +9742,7 @@ async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity
     }).await;
 }
 
-async fn retained_huge_root(fixture: &Fixture) -> (crate::runtime::identity::MessageId, u64) {
+async fn retained_huge_root(fixture: &Fixture) -> Vec<(crate::runtime::identity::MessageId, u64)> {
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -9738,21 +9760,31 @@ async fn retained_huge_root(fixture: &Fixture) -> (crate::runtime::identity::Mes
         &access.database_path,
     )
     .unwrap();
-    let text = "水\n".repeat(600_000);
-    let readable_end = u64::try_from(text.len()).unwrap();
-    let message_id = MessageId::new("retained-huge-root");
-    store
-        .append_canonical(&MessageBlock::User(UserMessageBlock {
+    // The model admission limit is per immutable record. Keep the retained
+    // aggregate above 2 MiB while each original is a legal native input.
+    let mut originals = Vec::new();
+    for index in 0..4 {
+        let text = "水\n".repeat(150_000);
+        let readable_end = u64::try_from(text.len()).unwrap();
+        let message_id = MessageId::new(format!("retained-huge-root-{index}"));
+        let original = MessageBlock::User(UserMessageBlock {
             id: message_id.clone(),
             source: UserSource::Human,
             kind: InboundKind::Message,
             timestamp: None,
             content: vec![UserContentBlock::Text(crate::message::TextBlock { text })],
-        }))
-        .unwrap();
+        });
+        assert!(
+            serde_json::to_vec(&original).unwrap().len()
+                < crate::context::resources::ResourceLimits::default().record_bytes
+        );
+        store.append_canonical(&original).unwrap();
+        originals.push((message_id, readable_end));
+    }
+    assert!(originals.iter().map(|(_, bytes)| bytes).sum::<u64>() > 2 * 1_048_576);
     drop(store);
     drop(access);
-    (message_id, readable_end)
+    originals
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -9760,7 +9792,7 @@ async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admissio
     bounded(async {
         use std::task::Poll;
         let fixture = Fixture::new().await;
-        let (message_id, readable_end) = retained_huge_root(&fixture).await;
+        let originals = retained_huge_root(&fixture).await;
         let session = &fixture.sessions[0];
         let connection = AppServerConnection::new(fixture.host.clone());
         initialize(&connection).await;
@@ -9825,14 +9857,17 @@ async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admissio
             panic!("independent bounded checkpoint");
         };
         assert!(serde_json::to_vec(&checkpoint).unwrap().len() <= 786_432);
-        let descriptor = checkpoint
-            .snapshot
-            .message_descriptors
-            .iter()
-            .find(|descriptor| descriptor.identity.as_ref() == Some(&message_id))
-            .unwrap();
-        assert!(descriptor.content.iter().any(|binding|
-            binding.deferred && binding.content_ref.readable_end == readable_end));
+        for (message_id, readable_end) in &originals {
+            let descriptor = checkpoint
+                .snapshot
+                .message_descriptors
+                .iter()
+                .find(|descriptor| descriptor.identity.as_ref() == Some(message_id))
+                .unwrap();
+            assert!(descriptor.content.iter().any(
+                |binding| binding.deferred && binding.content_ref.readable_end == *readable_end
+            ));
+        }
         assert!(
             fixture.provider.request_bodies().is_empty(),
             "reconciliation starts no model work"
@@ -9850,6 +9885,330 @@ async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admissio
             MethodResult::AttachmentStatus { target: None, .. }
         ));
         connection.close();
+        fixture.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn projection_history_and_activation_fork_cross_native_app_server_boundary() {
+    bounded(async {
+        use crate::context::checkpoint::ProjectionActivationId;
+        use crate::context::resources::LedgerFrontier;
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+        use crate::runtime::identity::MessageId;
+        let f = Fixture::new().await;
+        let source = &f.sessions[0];
+        let controller = f.manager.session_controller();
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(
+            source.active_conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        store
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("canonical-source"),
+                content: input("immutable execution content"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }))
+            .unwrap();
+        for (id, body) in [
+            ("P1", "first projected summary"),
+            ("P2", "second projected summary"),
+        ] {
+            store
+                .commit_projection(
+                    crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                        &store,
+                        crate::scripted_suites::support::context::checkpoint_fixture(
+                            &store, id, 1, body,
+                        ),
+                        None,
+                    ),
+                )
+                .unwrap();
+        }
+        drop(store);
+        drop(access);
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let MethodResult::Projections { page } = call(
+            &connection,
+            30,
+            Method::Projections {
+                target: target.clone(),
+                after: ProjectionActivationId(0),
+                limit: 16,
+            },
+        )
+        .await
+        else {
+            panic!("native timeline")
+        };
+        assert_eq!(page.records.len(), 2);
+        assert!(
+            page.next_activation.is_none(),
+            "the terminal historical page has no phantom continuation"
+        );
+        assert_eq!(
+            page.records[0].activation_ledger,
+            page.records[1].activation_ledger
+        );
+        assert!(
+            page.records
+                .iter()
+                .all(|p| p.destination_installation.is_none())
+        );
+        for (index, expected) in [
+            (0, "first projected summary"),
+            (1, "second projected summary"),
+        ] {
+            let MethodResult::ProjectionDetail { detail } = call(
+                &connection,
+                40,
+                Method::ProjectionDetail {
+                    target: target.clone(),
+                    checkpoint_id: page.records[index].checkpoint_id.clone(),
+                    offset: 0,
+                    limit: 16,
+                },
+            )
+            .await
+            else {
+                panic!("typed detail")
+            };
+            assert_eq!(detail.items.len(), 1);
+            assert_eq!(detail.items[0].occurrence.item_index, 0);
+            assert!(serde_json::to_string(&detail).unwrap().contains(expected));
+            let MethodResult::SessionTransition { session, .. } = call(
+                &connection,
+                50,
+                Method::SessionForkProjection {
+                    session_id: source.id.clone(),
+                    node_id: Some(source.active_node.clone()),
+                    ledger: LedgerFrontier(1),
+                    activation: page.records[index].activation_id,
+                },
+            )
+            .await
+            else {
+                panic!("activation fork")
+            };
+            let access = controller.acquire_session(&session.id, None).await.unwrap();
+            let child = SqliteConversationStore::open_existing(
+                session.active_conversation_id.clone(),
+                &access.database_path,
+            )
+            .unwrap();
+            let inherited = child.projection_head().unwrap().unwrap();
+            assert!(inherited.activation.destination_installation.is_some());
+            assert_eq!(
+                inherited.activation.origin.conversation_id,
+                source.active_conversation_id
+            );
+            assert!(
+                serde_json::to_string(&child.projected_history().unwrap().messages)
+                    .unwrap()
+                    .contains(expected)
+            );
+            assert!(
+                child
+                    .read_events(None, 64)
+                    .unwrap()
+                    .events
+                    .iter()
+                    .all(|e| !matches!(
+                        e.event,
+                        crate::events::RuntimeEvent::CompactionCompleted { .. }
+                    ))
+            );
+        }
+        assert!(
+            f.provider.request_bodies().is_empty(),
+            "historical reads and forks start no model request"
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t07_t13_source_failure_fences_registration_without_replay_loss_or_cursor_consumption() {
+    bounded(async {
+        use futures_util::FutureExt;
+        use crate::durable::ConversationStore as _;
+        struct SourceFault { connection: rusqlite::Connection, original: Vec<u8> }
+        impl SourceFault {
+            fn restore(&self) {
+                assert_eq!(self.connection.execute("UPDATE bootstrap_identity SET occupancy_observation=?1 WHERE id=1",[&self.original]).unwrap(),1);
+            }
+        }
+        impl Drop for SourceFault { fn drop(&mut self) { self.restore(); } }
+        let fixture = Fixture::new().await;
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &fixture, 0).await;
+        let native = fixture
+            .manager
+            .configuration_host(&target.session_id)
+            .unwrap();
+        native.projection_settled().await;
+        let inner = native.weak_inner().upgrade().unwrap();
+        inner.park_projection_worker();
+        let MethodResult::Checkpoint { checkpoint } = call(
+            &connection,
+            47_800,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("native checkpoint")
+        };
+        let MethodResult::Subscribed {
+            registration_id, ..
+        } = call(
+            &connection,
+            47_801,
+            Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: checkpoint.cursor,
+            },
+        )
+        .await
+        else {
+            panic!("accepted registration")
+        };
+        let slot = connection.registration_for_test(&target);
+        assert_eq!(slot.accepted_cursor(), Some(checkpoint.cursor));
+        // Retain a real derived Source fault while explicit checkpoint repair
+        // uses the original worker. Canonical/J/operation authority is untouched.
+        let access=fixture.manager.session_controller().acquire_read(&target.session_id,Some(&fixture.sessions[0].active_node)).await.unwrap();
+        let source=rusqlite::Connection::open(&access.database_path).unwrap();
+        let store=crate::durable::SqliteConversationStore::open_existing(target.conversation_id.clone(),&access.database_path).unwrap();
+        drop(access);
+        let original_cut=store.observation_read_cut().unwrap();
+        let original_journal=store.read_events(None,32).unwrap().events;
+        let original=source.query_row("SELECT occupancy_observation FROM bootstrap_identity WHERE id=1",[],|row|row.get::<_,Vec<u8>>(0)).unwrap();
+        assert_eq!(source.execute("UPDATE bootstrap_identity SET occupancy_observation=NULL WHERE id=1",[]).unwrap(),1);
+        let fault=SourceFault {connection:source,original};
+        native.fail_projection_read_for_test("same-fence source failure");
+        loop {
+            match connection.next_notification().await.notification {
+                NotificationMethod::ObservationUnavailable {
+                    target: found,
+                    registration_id: found_registration,
+                    message,
+                } => {
+                    assert_eq!(found, target);
+                    assert_eq!(found_registration, registration_id);
+                    assert!(message.contains("same-fence source failure"));
+                    break;
+                }
+                NotificationMethod::ResyncRequired { .. }
+                | NotificationMethod::Event { .. }
+                | NotificationMethod::Closed { .. } => {
+                    panic!("source failure is neither replay loss nor an event/close")
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(slot.accepted_cursor(), Some(checkpoint.cursor));
+        inner.unpark_projection_worker();
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::SessionCheckpoint {
+                    target: target.clone(),
+                    trace_records: vec![]
+                }
+            )
+            .await,
+            ErrorData::ObservationUnavailable {diagnostic} if diagnostic.contains("inherited occupancy reading source unavailable")
+        ));
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::SessionSubscribe {
+                    target: target.clone(),
+                    after_cursor: checkpoint.cursor
+                }
+            )
+            .await,
+            ErrorData::ObservationUnavailable {diagnostic} if diagnostic.contains("inherited occupancy reading source unavailable")
+        ));
+        assert!(
+            connection
+                .next_notification_candidate()
+                .now_or_never()
+                .is_none(),
+            "unavailable registration is fenced, not a notification loop"
+        );
+        assert_eq!(slot.accepted_cursor(), Some(checkpoint.cursor));
+        fault.restore();
+        let MethodResult::Checkpoint {checkpoint:repaired}=call(&connection,47_803,Method::SessionCheckpoint {target:target.clone(),trace_records:vec![]}).await else {panic!("explicit public checkpoint repairs the original Source");};
+        assert_eq!(repaired.cursor.get(),checkpoint.cursor.get()+1);
+        assert_eq!(repaired.read_cut.source_cut,checkpoint.read_cut.source_cut);
+        assert_eq!(store.observation_read_cut().unwrap(),original_cut);
+        assert_eq!(store.read_events(None,32).unwrap().events,original_journal);
+        let MethodResult::Subscribed {
+            registration_id: successor,
+            ..
+        } = call(
+            &connection,
+            47_802,
+            Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: checkpoint.cursor,
+            },
+        )
+        .await
+        else {
+            panic!("explicit recovery")
+        };
+        assert_ne!(successor, registration_id);
+        loop {
+            match connection.next_notification().await.notification {
+                NotificationMethod::Event {
+                    registration_id: found,
+                    cursor,
+                    event,
+                    ..
+                } => {
+                    assert_eq!(found, successor);
+                    assert_eq!(cursor.get(), checkpoint.cursor.get() + 1);
+                    assert!(
+                        event.facts().iter().any(|fact| matches!(
+                            fact,
+                            RuntimeClientEvent::ReadDomainsUpdated { .. }
+                        ))
+                    );
+                    break;
+                }
+                NotificationMethod::ResyncRequired { .. }
+                | NotificationMethod::ObservationUnavailable { .. }
+                | NotificationMethod::Closed { .. } => {
+                    panic!("same-fence successful repair remains continuously replayable")
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            fixture.provider.request_bodies().len(),
+            0,
+            "observation recovery starts no execution"
+        );
+        drop(fault);
+        drop(store);
+        drop(inner);
+        drop(native);
         fixture.close().await;
     })
     .await;

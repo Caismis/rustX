@@ -165,6 +165,7 @@ fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() 
     );
     publish_source_fact(&mut projection, |projection| {
         projection.publish(RuntimeClientEvent::ReadDomainsUpdated {
+            projection_head: projection.snapshot.context.projection_head.clone(),
             transcript: projection.snapshot.transcript.clone(),
             trace: projection.snapshot.trace.clone(),
             occupancy: projection.snapshot.context.occupancy.clone(),

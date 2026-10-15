@@ -1,5 +1,5 @@
 import { materializeSource } from '../../../protocol/app-server/source-observation';
-import type { AttachmentTarget, RuntimeClientEvent, SourceTarget } from '../../../protocol/app-server/v48';
+import type { AttachmentTarget, RuntimeClientEvent, SourceTarget } from '../../../protocol/app-server/v50';
 import { ObservationChain } from '../../../protocol/app-server/observation';
 import { checkpointSnapshot, foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
@@ -64,10 +64,12 @@ export async function followRoot(remote: AppServerHost, target: AttachmentTarget
     else current.reject(new Error(`Native Attempt failed: ${JSON.stringify(attempt.phase.outcome)}`));
   };
   const stop = remote.client.onNotification(note => {
-    if ((note.method !== 'session/event' && note.method !== 'session/resyncRequired') || JSON.stringify(note.params.target) !== JSON.stringify(target)) return;
+    if ((note.method !== 'session/event' && note.method !== 'session/resyncRequired' && note.method !== 'session/observationUnavailable') || JSON.stringify(note.params.target) !== JSON.stringify(target)) return;
     const result = observation.deliver(note.method === 'session/event'
       ? { registrationId: note.params.registration_id, cursor: note.params.cursor, event: note.params.event }
+      : note.method === 'session/observationUnavailable' ? {registrationId:note.params.registration_id,unavailable:true}
       : { registrationId: note.params.registration_id, resync: true }, fold);
+    if (result === 'unavailable') { waiting?.reject(new Error('Native preparation source is unavailable.')); waiting = undefined; }
     if (result === 'recovery') { waiting?.reject(new Error('Native preparation observation requires recovery.')); waiting = undefined; }
   });
   try {

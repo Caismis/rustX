@@ -1,7 +1,7 @@
 import {validateCanonicalInspectionPage} from '../../protocol/app-server/trace-inspection.ts';
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type {CheckpointPage,TraceFieldSource,TraceInspectionHead,TraceInspectionMessage,TraceRecord} from '../../protocol/app-server/v48.ts';
+import type {CheckpointPage,TraceFieldSource,TraceInspectionHead,TraceInspectionMessage,TraceRecord} from '../../protocol/app-server/v50.ts';
 import {harness,nextRequest} from './support/app-server-harness.ts';
 import {paramsOf} from './support/app-server-peer.ts';
 import {SubagentTranscript} from '../src/app-server/subagent-transcript.ts';
@@ -298,4 +298,24 @@ it('T11 Root Tool result metadata and original image bytes remain independently 
  const bytes=Buffer.from([137,80,78,71,0,255]),reference={...metaRef,source:{...source,component:'payload' as const},representation:'binary_bytes' as const,readable_end:bytes.length},loading=h.dispatcher.submit(`/observation ${domain}`),request=await nextRequest(h,'conversation/checkpointPage');h.transport.respond(request.id,{type:'checkpoint_page',page:{domain,cursor:'12',read_cut:selected.read_cut,total:'1',items:[{offset:'0',identity:'image',value:{type:'image',mime_type:'image/png'},content:[{path:['value','binary'],content_ref:reference,deferred:true}],deferred:true}],next_offset:null}});await loading;
  const reading=h.dispatcher.submit('/content 2'),payload=await nextRequest(h,'conversation/contentRead',1);assert.deepEqual(paramsOf(payload,'conversation/contentRead').content_ref,reference);h.transport.respond(payload.id,{type:'content_chunk',chunk:{content_ref:reference,offset:0,data_base64:bytes.toString('base64'),readable_end:bytes.length,end_offset:bytes.length,next_offset:null,complete:true}});const result=await reading;assert.equal(result.kind,'inspect');if(result.kind==='inspect'){assert.match(result.body,/Binary bytes \(Base64\)/);assert.ok(result.body.includes(bytes.toString('base64')));}
  assert.equal(h.session.state.cursor,'0');assert.equal(h.transport.transportCount('conversation/checkpointValueRead'),0);assert.equal(h.transport.transportCount('turn/start'),0);h.client.close();
+});
+
+it('selected Projection provenance uses its returned cut and rejects a held range after replacement',async()=>{
+ const h=await harness();
+ const source:TraceFieldSource={type:'value',field:'provenance',domain:'context.projections.1.items.0.provenance',item_offset:0,path:[],encoded_bytes:'2'};
+ const detail=(id:string,revision:string):import('../../protocol/app-server/v50.ts').ProjectionDetail=>({
+  read_cut:checkpoint(snapshot(),revision).read_cut,
+  checkpoint:{checkpoint_id:id,activation_id:'1',base_frontier:'1',activation_ledger:'1',origin:{conversation_id:h.target.conversation_id,activation:'1',completed_journal:'1'},destination_installation:null,original_items:0,derived_items:1,summary_preview:null},
+  next_item:null,items:[{occurrence:{checkpoint_id:id,item_index:0},content:{request_occurrence:null,role:'user',message_id:null,source:null,provenance:{type:'derived',sources:[],checkpoint_sources:[],transformations:['summary'],truncated:false},provenance_source:source,blocks:[],truncated:true}}],
+ });
+ const opening=h.dispatcher.submit('/context projection original');const request=await nextRequest(h,'session/projectionDetail');
+ const first=detail('original','7');h.transport.respond(request.id,{type:'projection_detail',detail:first});await opening;
+ const listing=await h.dispatcher.submit('/content');assert.equal(listing.kind,'inspect');if(listing.kind==='inspect')assert.match(listing.body,/projection:original\/0 · provenance/);
+ const reading=h.dispatcher.submit('/content 1');const range=await nextRequest(h,'conversation/checkpointValueRead');
+ assert.deepEqual(paramsOf(range,'conversation/checkpointValueRead'),{target:h.target,agent_id:null,cut:first.read_cut,domain:source.domain,item_offset:0,path:[],offset:0,max_bytes:65536});
+ const replacing=h.dispatcher.submit('/context projection replacement');const replacement=await nextRequest(h,'session/projectionDetail',1);
+ h.transport.respond(replacement.id,{type:'projection_detail',detail:detail('replacement','9')});await replacing;
+ h.transport.respond(range.id,{type:'checkpoint_value_chunk',chunk:{cut:first.read_cut,domain:source.domain,item_offset:0,path:[],offset:0,bytes_base64:'e30=',readable_end:2,next_offset:null,representation:'canonical_json_v1'}});
+ const old=await reading;assert.equal(old.kind,'transient');if(old.kind==='transient')assert.match(old.text,/replaced/);
+ assert.equal(h.session.state.cursor,'0');assert.equal(h.session.deferredTraceFields[0]?.record,'projection:replacement/0');h.client.close();
 });

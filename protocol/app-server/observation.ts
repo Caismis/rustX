@@ -1,4 +1,4 @@
-import type { AttachmentTarget, CheckpointReadCut, RuntimeClientCheckpoint, RuntimeClientEvent } from './v48.ts';
+import type { AttachmentTarget, CheckpointReadCut, RuntimeClientCheckpoint, RuntimeClientEvent } from './v50.ts';
 
 /** Validate the returned native Root cut before installing any client state. */
 export function validateRootCheckpoint(target: AttachmentTarget, checkpoint: RuntimeClientCheckpoint, applied?: string): void {
@@ -37,8 +37,8 @@ function checkpointCursor(value: string): bigint {
 }
 
 /** Client application authority. Transport acceptance never advances this cursor. */
-export type ObservationPhase = 'attached' | 'checkpointLoading' | 'subscribePending' | 'following' | 'resyncRequired' | 'retired';
-export type ObservationRecord<E> = { registrationId: string; cursor: string; event: E } | { registrationId: string; resync: true };
+export type ObservationPhase = 'attached' | 'checkpointLoading' | 'subscribePending' | 'following' | 'resyncRequired' | 'unavailable' | 'retired';
+export type ObservationRecord<E> = { registrationId: string; cursor: string; event: E } | { registrationId: string; resync: true } | { registrationId: string; unavailable: true };
 
 export class ObservationChain<E> {
   phase: ObservationPhase = 'checkpointLoading';
@@ -78,13 +78,14 @@ export class ObservationChain<E> {
     for (const { record, fold } of pending) this.deliver(record, fold);
     return this.phase === 'following';
   }
-  deliver(record: ObservationRecord<E>, fold: (event: E, cursor: string) => void): 'buffered' | 'ignored' | 'applied' | 'recovery' {
+  deliver(record: ObservationRecord<E>, fold: (event: E, cursor: string) => void): 'buffered' | 'ignored' | 'applied' | 'recovery' | 'unavailable' {
     if (this.phase === 'subscribePending') {
       if (this.pending.length === 32) { this.requireRecovery(); return 'recovery'; }
       this.pending.push({ record, fold });
       return 'buffered';
     }
     if (this.phase !== 'following' || record.registrationId !== this.registrationId) return 'ignored';
+    if ('unavailable' in record) { this.markUnavailable(); return 'unavailable'; }
     if ('resync' in record) { this.requireRecovery(); return 'recovery'; }
     const previous = BigInt(this.applied!);
     const next = BigInt(record.cursor);
@@ -95,6 +96,7 @@ export class ObservationChain<E> {
     this.applied = record.cursor;
     return 'applied';
   }
+  markUnavailable() { this.phase = 'unavailable'; this.pending = []; }
   requireRecovery() { this.phase = 'resyncRequired'; this.pending = []; }
   retire() { this.phase = 'retired'; this.pending = []; this.registrationId = undefined; }
 }

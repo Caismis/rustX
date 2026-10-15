@@ -518,6 +518,69 @@ async fn a_real_child_shares_the_session_workspace_subdirectory() {
     assert!(status.success(), "clean shutdown: {stderr}");
 }
 
+/// Read the advertised original message descriptors at the retained detail cut.
+async fn original_child_request_messages(
+    parent: &mut Parent,
+    agent: &rustx::runtime::identity::AgentId,
+    detail: &rustx::runtime_client::checkpoint::CheckpointPage,
+    request: &str,
+) -> Vec<serde_json::Value> {
+    let sequence = request
+        .strip_prefix("trace:")
+        .expect("native Trace identity");
+    let domain = format!("trace.records.{sequence}.detail.request.messages");
+    let frontier = detail
+        .collections
+        .iter()
+        .find(|frontier| frontier.domain == domain)
+        .expect("advertised original request message collection");
+    let mut messages = Vec::new();
+    let mut offset = 0;
+    loop {
+        let result = parent
+            .call(Method::ConversationCheckpointPage {
+                target: parent.target(),
+                agent_id: Some(agent.clone()),
+                cut: detail.read_cut.clone(),
+                domain: frontier.domain.clone(),
+                offset,
+                limit: 32,
+            })
+            .await;
+        let Ok(MethodResult::CheckpointPage { page }) = result else {
+            panic!("original child request message page: {result:?}");
+        };
+        assert_eq!(page.read_cut, detail.read_cut);
+        assert_eq!(page.domain, frontier.domain);
+        assert_eq!(page.total, frontier.total);
+        assert!(page.items.len() <= 32);
+        assert!(
+            serde_json::to_vec(&page).unwrap().len()
+                <= rustx::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
+        );
+        let end = offset + u64::try_from(page.items.len()).unwrap();
+        for item in &page.items {
+            assert_eq!(item.offset, u64::try_from(messages.len()).unwrap());
+            assert_eq!(item.identity, format!("messages.{}", item.offset));
+            messages.push(
+                item.value
+                    .clone()
+                    .expect("finite original message descriptor"),
+            );
+        }
+        if let Some(next) = page.next_offset {
+            assert_eq!(next, end);
+            assert!(next > offset && next < page.total);
+            offset = next;
+        } else {
+            assert_eq!(end, page.total);
+            break;
+        }
+    }
+    assert_eq!(u64::try_from(messages.len()).unwrap(), frontier.total);
+    messages
+}
+
 /// The complete subagent lifecycle through the real binary: the parent's
 /// model delegates, the `subagent` intrinsic durably commits the child, a
 /// real second `rustx` process boots headlessly, asks the provider about its
@@ -916,12 +979,11 @@ async fn subagent_process_stack(alias_root: bool) {
     assert_eq!(detail["id"], request_id);
     assert_eq!(detail["kind"], "request");
     assert_eq!(detail_page.read_cut.conversation_id, child_conversation_id);
-    let messages = detail["request"]["messages"]
-        .as_array()
-        .expect("bounded native request messages");
+    let messages =
+        original_child_request_messages(&mut reopened, &agent_id, &detail_page, &request_id).await;
     assert!(!messages.is_empty());
     let mut task_in_original_messages = false;
-    for message in messages {
+    for message in &messages {
         let role: rustx::runtime_client::trace::TraceMessageRole =
             serde_json::from_value(message["role"].clone()).expect("exact native message role");
         let identity: Option<rustx::runtime::identity::MessageId> =
@@ -963,7 +1025,7 @@ async fn subagent_process_stack(alias_root: bool) {
         assert!(message["deferred"].is_boolean());
     }
     assert!(task_in_original_messages);
-    let detail_text = serde_json::to_string(&detail).unwrap();
+    let detail_text = serde_json::to_string(&(detail, &messages)).unwrap();
     assert!(detail_text.contains("count the workspace files"));
     assert!(!detail_text.contains("please delegate"));
     let older = reopened

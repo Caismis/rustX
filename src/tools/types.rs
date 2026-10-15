@@ -417,10 +417,43 @@ impl ToolResultProjection {
 }
 
 /// Bounded model-facing content, retaining the canonical image/text ordering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
 pub(crate) enum ModelToolResultPart {
     Text(String),
     Image(crate::message::content::ImageReference),
+}
+
+/// Bounded semantic content shared by accounting and semantic fingerprints.
+/// Text-only part boundaries carry no provider-neutral semantic distinction;
+/// media parts retain their model-visible ordering.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum ModelToolResultContent {
+    Text(String),
+    Parts(Vec<ModelToolResultPart>),
+}
+impl ToolExecutionResult {
+    pub(crate) fn model_visible_content(&self) -> Result<ModelToolResultContent, &'static str> {
+        let parts = self.image_projection()?;
+        if parts
+            .iter()
+            .any(|p| matches!(p, ModelToolResultPart::Image(_)))
+        {
+            Ok(ModelToolResultContent::Parts(parts))
+        } else {
+            Ok(ModelToolResultContent::Text(
+                parts
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        ModelToolResultPart::Text(text) => Some(text),
+                        ModelToolResultPart::Image(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ))
+        }
+    }
 }
 
 impl ToolExecutionResult {
@@ -447,9 +480,7 @@ impl ToolExecutionResult {
                 .map(ModelToolResultPart::Text)
                 .collect());
         }
-        let mut feedback = self.clone();
-        feedback.content.clear();
-        let feedback = feedback.model_facing_projection();
+        let feedback = Self::project_result(&[], &self.status, self.managed_output.as_deref());
         let mut remaining =
             crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES.saturating_sub(feedback.byte_len());
         let mut parts = Vec::new();
@@ -457,11 +488,12 @@ impl ToolExecutionResult {
             if let ToolResultContent::Image(image) = block {
                 parts.push(ModelToolResultPart::Image(image.clone()));
             } else {
-                let mut segment = self.clone();
-                segment.content = vec![block.clone()];
-                segment.status = ToolExecutionStatus::Success;
-                segment.managed_output = None;
-                let mut text = segment.model_facing_projection().as_text();
+                let mut text = Self::project_result(
+                    std::slice::from_ref(block),
+                    &ToolExecutionStatus::Success,
+                    None,
+                )
+                .as_text();
                 let mut end = remaining.min(text.len());
                 while !text.is_char_boundary(end) {
                     end -= 1;
@@ -503,23 +535,31 @@ impl ToolExecutionResult {
     /// managed-output fields remain unchanged and authoritative.
     #[must_use]
     pub fn model_facing_projection(&self) -> ToolResultProjection {
+        Self::project_result(&self.content, &self.status, self.managed_output.as_deref())
+    }
+
+    /// The single projection policy borrows only model-visible fields. Media
+    /// segments never clone the full result or unrelated execution metadata.
+    fn project_result(
+        content: &[ToolResultContent],
+        status: &ToolExecutionStatus,
+        managed_output: Option<&ManagedOutputContinuation>,
+    ) -> ToolResultProjection {
         const CONTENT_TRUNCATION_MARKER: &str = "\n...[tool-owned result content truncated]";
         const STATUS_TRUNCATION_MARKER: &str = "\n...[tool status truncated]";
         let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
 
-        let status = self.status.feedback_text();
-        let (content, contains_non_text_content) = render_tool_owned_content(&self.content);
+        let status = status.feedback_text();
+        let (content, contains_non_text_content) = render_tool_owned_content(content);
         // Reserve the minimum truthful continuation before allowing a large
         // status diagnostic to consume the result budget. This makes the
         // locator/guidance structural rather than something that can be
         // accidentally truncated away by an error string.
-        let continuation_minimum = self
-            .managed_output
-            .as_deref()
+        let continuation_minimum = managed_output
             .map(ManagedOutputContinuation::minimum_render)
             .map_or(0, |text| text.len());
         let status_budget = bound.saturating_sub(
-            continuation_minimum + usize::from(status.is_some() && self.managed_output.is_some()),
+            continuation_minimum + usize::from(status.is_some() && managed_output.is_some()),
         );
         let status = status
             .map(|text| bounded_projection_text(&text, status_budget, STATUS_TRUNCATION_MARKER));
@@ -528,10 +568,8 @@ impl ToolExecutionResult {
         // Its structural minimum is guaranteed by the reservation above.
         let continuation_budget = bound
             .saturating_sub(status.as_ref().map_or(0, String::len) + usize::from(status.is_some()));
-        let continuation = self
-            .managed_output
-            .as_deref()
-            .map(|continuation| continuation.render_bounded(continuation_budget));
+        let continuation =
+            managed_output.map(|continuation| continuation.render_bounded(continuation_budget));
 
         let reserved = status.as_ref().map_or(0, String::len)
             + continuation.as_ref().map_or(0, String::len)

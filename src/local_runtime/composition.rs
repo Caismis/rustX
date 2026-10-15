@@ -1025,6 +1025,16 @@ impl std::fmt::Debug for LocalConversationCore {
 }
 
 impl LocalConversationCore {
+    /// Settle all semantic owners of this core, which has no presentation worker.
+    ///
+    /// # Errors
+    /// Returns the native runtime settlement failure.
+    pub async fn shutdown(
+        &self,
+    ) -> Result<(), crate::runtime::conversation_runtime::ShutdownError> {
+        self.runtime.shutdown().await
+    }
+
     /// Composes the shared semantic runtime from validated resolved launch inputs.
     ///
     /// The runtime is left **inactive**: the caller must finish through
@@ -2043,14 +2053,17 @@ impl LocalConversationRuntime {
         &self.core.capability
     }
 
-    /// Drain the semantic runtime, then join its downstream presentation worker.
-    /// The composition still owns its storage until this handle is dropped.
+    /// Drain the semantic runtime, then join its downstream presentation worker
+    /// and all physical reads owned by that worker. Unlike `runtime().shutdown()`,
+    /// successful completion proves the presentation side has terminated.
+    /// Cancelling this wait retains the original worker in the host; a subsequent
+    /// call joins that same worker. The composition and any explicitly retained
+    /// external leases still own storage until their handles are dropped.
     ///
     /// # Errors
     /// Returns the native settlement failure, or an explicit presentation join failure.
-    pub async fn shutdown(&mut self) -> Result<(), LocalConversationShutdownError> {
+    pub async fn shutdown(&self) -> Result<(), LocalConversationShutdownError> {
         self.core
-            .runtime
             .shutdown()
             .await
             .map_err(LocalConversationShutdownError::NativeRuntimeShutdown)?;
@@ -2134,9 +2147,9 @@ impl HeadlessConversationRuntime {
     /// # Errors
     /// Returns the native runtime settlement failure.
     pub async fn shutdown(
-        &mut self,
+        &self,
     ) -> Result<(), crate::runtime::conversation_runtime::ShutdownError> {
-        self.core.runtime.shutdown().await
+        self.core.shutdown().await
     }
 }
 
@@ -2565,7 +2578,7 @@ chat_reasoning_replay = "omit"
                     crate::events::types::RuntimeEvent::AttemptStarted { .. }
                 ))
         );
-        child.runtime().shutdown().await.unwrap();
+        child.shutdown().await.unwrap();
         dispatcher.shutdown().await;
         assert_eq!(store.load_pending().unwrap().len(), 1);
     }
@@ -4346,12 +4359,7 @@ compat = { chat_reasoning_replay = "omit" }
                 | RuntimeEvent::SubagentTerminalPublished { .. }
         )));
 
-        fixture
-            .runtime
-            .runtime()
-            .shutdown()
-            .await
-            .expect("runtime shutdown");
+        fixture.runtime.shutdown().await.expect("runtime shutdown");
     }
 
     /// A structurally complete MCP call with invalid business arguments still
@@ -4430,12 +4438,7 @@ compat = { chat_reasoning_replay = "omit" }
             })
         ));
 
-        fixture
-            .runtime
-            .runtime()
-            .shutdown()
-            .await
-            .expect("runtime shutdown");
+        fixture.runtime.shutdown().await.expect("runtime shutdown");
     }
 }
 

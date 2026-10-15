@@ -1,7 +1,7 @@
 import { selectedRevision, revisionSelector } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v48';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v48';
+import type { TraceDetail } from '../../protocol/app-server/v50';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v50';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -10,6 +10,7 @@ export const TOKEN = 'fixture-transport-token-'.padEnd(43, 'x');
 export const endpoint = 'ws://127.0.0.1:8080/';
 const rustHello = fixtures.find(message => 'result' in message && message.result?.type === 'initialized');
 if (!rustHello || !('result' in rustHello) || rustHello.result?.type !== 'initialized') throw new Error('Missing Rust-serialized initialize fixture');
+const protocolVersion = rustHello.result.protocol_version;
 export const capabilities: ServerCapabilities = rustHello.result.capabilities;
 export function snapshot(id = 'A'): RuntimeClientSnapshot {
   return {
@@ -19,9 +20,9 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
     message_descriptors:[], publication_settlements:[], inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
   };
 }
-export function checkpoint(value: RuntimeClientSnapshot, cursor = '0'): import('../../protocol/app-server/v48').RuntimeClientCheckpoint {
+export function checkpoint(value: RuntimeClientSnapshot, cursor = '0'): import('../../protocol/app-server/v50').RuntimeClientCheckpoint {
   const attempt=value.attempt;
-  const content:import('../../protocol/app-server/v48').ContentBinding[]=[];
+  const content:import('../../protocol/app-server/v50').ContentBinding[]=[];
   if(attempt?.in_flight&&attempt.attempt_id!=null)for(const [index,block] of (attempt.in_flight.blocks??[]).entries()){
     const text='text' in block?block.text:'arguments' in block?block.arguments:undefined;
     if(typeof text!=='string'||!text.length)continue;
@@ -31,13 +32,13 @@ export function checkpoint(value: RuntimeClientSnapshot, cursor = '0'): import('
   }
   return {snapshot:value,cursor,read_cut:{conversation_id:value.conversation_id,revision:cursor,through:cursor,domain_revisions:{},collection_cuts:{}},content,collections:[]};
 }
-export function boundedSettings(value:import('../../protocol/app-server/v48').SourceSettings):Extract<MethodResult,{type:'source_settings'}>['projection'] {
+export function boundedSettings(value:import('../../protocol/app-server/v50').SourceSettings):Extract<MethodResult,{type:'source_settings'}>['projection'] {
  return {target:value.target,revision:'fixture-native-source',inline:value,fields:[],collections:[]};
 }
-export function sourceReceipt(value: import('../../protocol/app-server/v48').SourceSettings, mutation?: import('../../protocol/app-server/v48').SourceMutation) {
+export function sourceReceipt(value: import('../../protocol/app-server/v50').SourceSettings, mutation?: import('../../protocol/app-server/v50').SourceMutation) {
   return {target:value.target,revision:selectedRevision(value, mutation ? revisionSelector(mutation) : {kind:'config'})};
 }
-export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): import('../../protocol/app-server/v48').RuntimeClientInteractionHeader {
+export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): import('../../protocol/app-server/v50').RuntimeClientInteractionHeader {
   const routed:RoutedInteraction = { interaction: { conversation_id: `conversation-${id}`, interaction_id: interactionId }, source: { type: 'primary' },
     request: { id: interactionId, conversation_id: `conversation-${id}`, attempt_id: 'attempt-A', turn: 1,
       kind: type === 'approval' ? {
@@ -57,7 +58,7 @@ export function childConversation(page: RuntimeClientSnapshot['transcript'], age
 }
 type SubscribedSeed=Omit<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'> & Partial<Pick<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'>>;
 type FixtureNotification=Exclude<Notification,{method:'session/event'|'session/resyncRequired'}> | {jsonrpc:'2.0',method:'session/event',params:Omit<Extract<Notification,{method:'session/event'}>['params'],'registration_id'> & {registration_id?:string}} | {jsonrpc:'2.0',method:'session/resyncRequired',params:Omit<Extract<Notification,{method:'session/resyncRequired'}>['params'],'registration_id'|'reason'|'checkpoint_required'> & {registration_id?:string,reason?:Extract<Notification,{method:'session/resyncRequired'}>['params']['reason'],checkpoint_required?:boolean}};
-export function editorPage(locator:import('../../protocol/app-server/v48').EditorLocator,content:import('../../protocol/app-server/v48').UserInputBlock[],block_index:number,offset:number,max_bytes:number):Extract<MethodResult,{type:'editor_page'}> {
+export function editorPage(locator:import('../../protocol/app-server/v50').EditorLocator,content:import('../../protocol/app-server/v50').UserInputBlock[],block_index:number,offset:number,max_bytes:number):Extract<MethodResult,{type:'editor_page'}> {
  const block=content[block_index],next_block=block_index+1<content.length?block_index+1:null;
  if(!block)return {type:'editor_page',page:{locator,block_index,next_block:null,chunk:null,upload:null}};
  if(block.type==='upload')return {type:'editor_page',page:{locator,block_index,next_block,chunk:null,upload:{session_id:block.session_id,batch_id:block.batch_id,token:block.token}}};
@@ -114,8 +115,8 @@ export class Server {
   private attachmentSequence = 0;
   private registrationSequence = 0;
   readonly registrations = new Map<string,string>();
-  private readonly editors=new Map<string,import("../../protocol/app-server/v48").UserInputBlock[]>();
-  editor(session:{id:string,active_node:string,[key:string]:unknown},content:import("../../protocol/app-server/v48").UserInputBlock[]|null|undefined):import("../../protocol/app-server/v48").EditorLocator|null {
+  private readonly editors=new Map<string,import("../../protocol/app-server/v50").UserInputBlock[]>();
+  editor(session:{id:string,active_node:string,[key:string]:unknown},content:import("../../protocol/app-server/v50").UserInputBlock[]|null|undefined):import("../../protocol/app-server/v50").EditorLocator|null {
     if(content==null)return null;
     const locator={session_id:session.id,node_id:session.active_node,source_session:"A",source_node:"node-A",source_surface_revision:"1"};
     this.editors.set(JSON.stringify(locator),structuredClone(content));return locator;
@@ -130,12 +131,12 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 48;
+  version = protocolVersion;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v48' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v50' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); },target=>this.registrations.get(JSON.stringify(target)),target=>{const id=`registration-${++this.registrationSequence}`;this.registrations.set(JSON.stringify(target),id);return id;}); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
@@ -344,27 +345,34 @@ export class Server {
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v48').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page }; }
+export function readingWindow(page: import('../../protocol/app-server/v50').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page }; }
 
 export const utf8Length = (text: string) => new TextEncoder().encode(text).length;
-export function contentAdvance(input: {attempt_id:string;message_id:string;block_index:number;position?:number;kind:'text'|'reasoning'|'refusal'|'tool_call_arguments';delta:string}, base=0, revision=1, conversation=snapshot().conversation_id): Extract<import('../../protocol/app-server/v48').RuntimeClientEvent,{type:'block_content_advanced'}> {
+export function contentAdvance(input: {attempt_id:string;message_id:string;block_index:number;position?:number;kind:'text'|'reasoning'|'refusal'|'tool_call_arguments';delta:string}, base=0, revision=1, conversation=snapshot().conversation_id): Extract<import('../../protocol/app-server/v50').RuntimeClientEvent,{type:'block_content_advanced'}> {
  const end=base+utf8Length(input.delta);
  return {type:'block_content_advanced',position:input.position??input.block_index,attempt_id:input.attempt_id,message_id:input.message_id,block_index:input.block_index,kind:input.kind,base_length:String(base),end_length:String(end),content_revision:String(revision),inline_delta:input.delta,
    content_ref:{conversation_id:conversation,source:{type:'live_publication_prefix',component:'payload',stream_id:`stream-${input.attempt_id}`,message_id:input.message_id,attempt_id:input.attempt_id,turn_id:`turn-${input.attempt_id}`,publication_request_id:`request-${input.attempt_id}`,block_index:input.block_index},representation:input.kind==='tool_call_arguments'?'raw_json_utf8':'utf8_text',version:1,content_revision:revision,readable_end:end}};
 }
 
-export function settingsReceipt(settings: import('../../protocol/app-server/v48').SessionPersistentState,revision='0'): Extract<import('../../protocol/app-server/v48').MethodResult,{type:'settings'}> {return {type:'settings',projection:{revision,cwd:settings.cwd,inline:settings,reference:null}};}
+export function settingsReceipt(settings: import('../../protocol/app-server/v50').SessionPersistentState,revision='0'): Extract<import('../../protocol/app-server/v50').MethodResult,{type:'settings'}> {return {type:'settings',projection:{revision,cwd:settings.cwd,inline:settings,reference:null}};}
 
-export function domainReceipt(domain:string,items:unknown[],options:{total?:number;next?:number|null}={}):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'domain_page'}>{const cut=checkpoint(snapshot()).read_cut;return {type:'domain_page',page:{domain,cursor:'0',read_cut:cut,total:String(options.total??items.length),items:items.map((value,index)=>({offset:String(index),identity:String(index),value,content:[],deferred:false})),next_offset:options.next==null?null:String(options.next)}};}
-export function jobReceipt(job:Pick<import('../../protocol/app-server/v48').RuntimeClientJob,'job_id'|'state'> & Partial<Omit<import('../../protocol/app-server/v48').RuntimeClientJob,'job_id'|'state'>>):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'job_outcome'}>{return {type:'job_outcome',job_id:job.job_id,state:job.state};}
-export function goalReceipt(view:import('../../protocol/app-server/v48').RuntimeClientGoalView):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'goal_mutation'}>{return {type:'goal_mutation',reference:view.current?.reference??null};}
-export function compactReceipt(context:Partial<import('../../protocol/app-server/v48').RuntimeClientContextView>):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'context_compacted'}>{return {type:'context_compacted',compaction:context.latest_compaction??null};}
+export function domainReceipt(domain:string,items:unknown[],options:{total?:number;next?:number|null}={}):Extract<import('../../protocol/app-server/v50').MethodResult,{type:'domain_page'}>{const cut=checkpoint(snapshot()).read_cut;return {type:'domain_page',page:{domain,cursor:'0',read_cut:cut,total:String(options.total??items.length),items:items.map((value,index)=>({offset:String(index),identity:String(index),value,content:[],deferred:false})),next_offset:options.next==null?null:String(options.next)}};}
+export function jobReceipt(job:Pick<import('../../protocol/app-server/v50').RuntimeClientJob,'job_id'|'state'> & Partial<Omit<import('../../protocol/app-server/v50').RuntimeClientJob,'job_id'|'state'>>):Extract<import('../../protocol/app-server/v50').MethodResult,{type:'job_outcome'}>{return {type:'job_outcome',job_id:job.job_id,state:job.state};}
+export function goalReceipt(view:import('../../protocol/app-server/v50').RuntimeClientGoalView):Extract<import('../../protocol/app-server/v50').MethodResult,{type:'goal_mutation'}>{return {type:'goal_mutation',reference:view.current?.reference??null};}
+export function compactReceipt(context:Partial<import('../../protocol/app-server/v50').RuntimeClientContextView>):Extract<import('../../protocol/app-server/v50').MethodResult,{type:'context_compacted'}>{return {type:'context_compacted',compaction:context.latest_compaction??null};}
 
-export function readCut(conversation_id=snapshot().conversation_id):import('../../protocol/app-server/v48').ConversationReadCut {return {conversation_id,journal:'0',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};}
+export function readCut(conversation_id=snapshot().conversation_id):import('../../protocol/app-server/v50').ConversationReadCut {return {conversation_id,journal:'0',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};}
 
-export function applicationReceipt(value:import('../../protocol/app-server/v48').ConfigurationApplication):import('../../protocol/app-server/v48').BoundedSessionApplication;
+export function applicationReceipt(value:import('../../protocol/app-server/v50').ConfigurationApplication):import('../../protocol/app-server/v50').BoundedSessionApplication;
 export function applicationReceipt(value:null|undefined):null;
-export function applicationReceipt(value:import('../../protocol/app-server/v48').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v48').BoundedSessionApplication|null;
-export function applicationReceipt(value:import('../../protocol/app-server/v48').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v48').BoundedSessionApplication|null{return value==null?null:{scope:value.scope,sources:value.sources,version:value.version,inline:value,reference:null};}
+export function applicationReceipt(value:import('../../protocol/app-server/v50').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v50').BoundedSessionApplication|null;
+export function applicationReceipt(value:import('../../protocol/app-server/v50').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v50').BoundedSessionApplication|null{return value==null?null:{scope:value.scope,sources:value.sources,version:value.version,inline:value,reference:null};}
 
 export function traceReceipt(detail:TraceDetail|null|undefined){return domainReceipt('trace.records.1.detail',detail==null?[]:[detail]);}
+/** Authoritative projection read-domain fixture, separate from all canonical rows. */
+export function projectionHead(text = '## Preserved context\n\nNative summary facts.', inherited = false): import('../../protocol/app-server/v50').RuntimeClientProjectionHeadView {
+  return {checkpoint_id:'checkpoint-1',activation_id:'1',base_frontier:'100',activation_ledger:'100',
+    origin:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',activation:'1',completed_journal:'200'},
+    destination_installation:inherited?'installation:fixture':null,original_items:1,derived_items:1,
+    summary_preview:{text,truncated:false}};
+}

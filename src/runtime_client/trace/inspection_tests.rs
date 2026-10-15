@@ -554,7 +554,15 @@ fn t08_t14_t19_tool_inspection_keeps_c_without_j_and_old_cut_after_terminal() {
 #[test]
 fn t08_t14_trace_assistant_compaction_and_lifecycle_heads_use_their_own_kind() {
     let (store, _, _, _) = tool_fixture(false);
-    append(store.as_ref(), E::CompactionStarted, 5);
+    append(
+        store.as_ref(),
+        E::CompactionStarted {
+            operation_id: crate::runtime::identity::CompactionOperationId::new(
+                "inspection-operation",
+            ),
+        },
+        5,
+    );
     let projection = TraceProjection::new(store.as_ref()).unwrap();
     let cut = projection.history_cut().unwrap();
     let records = projection.page(None, 32).unwrap().records;
@@ -603,12 +611,14 @@ fn t08_t14_trace_assistant_compaction_and_lifecycle_heads_use_their_own_kind() {
                     .any(|frontier| frontier.domain.ends_with(".blocks"))
             );
         } else if record.kind == TraceKind::Compaction {
-            let TraceInspectionContent::Messages { page } = head.content else {
-                panic!("Compaction at original cut")
-            };
+            assert!(matches!(head.content, TraceInspectionContent::Lifecycle));
             assert_eq!(
-                page.total, 0,
-                "unsettled Compaction does not invent summary C"
+                head.record.native_id.as_deref(),
+                Some("inspection-operation")
+            );
+            assert!(
+                head.record.collections.is_empty(),
+                "ProjectionHistory never invents canonical summary C"
             );
         }
     }

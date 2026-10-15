@@ -307,7 +307,6 @@ fn decorate_projection(
         validate_decoration_cut(page, through)?;
         return decorate_numeric(store, page, through);
     }
-    super::compaction::decorate(store, page, through)?;
     clear_response_readings(page);
     let wanted: BTreeSet<_> = page
         .entries
@@ -416,7 +415,6 @@ fn decorate_numeric(
             "response decoration differs from native window cut".into(),
         ));
     }
-    super::compaction::decorate(store, page, through)?;
     for entry in &mut page.entries {
         let process = store.observation_transcript_process(&cut, entry.cursor.get())?;
         if let RuntimeClientTranscriptItem::AttemptTerminal { turn } = &mut entry.item

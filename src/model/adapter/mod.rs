@@ -16,6 +16,7 @@
 
 pub mod anthropic;
 pub mod block_index;
+pub(crate) mod correlation;
 pub mod openai;
 pub(crate) mod proposal;
 pub mod traits;

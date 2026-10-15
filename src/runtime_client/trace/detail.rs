@@ -25,6 +25,7 @@ use crate::tools::types::ToolCall;
 
 impl TraceProjection<'_> {
     /// Builds the detail of one resolved anchor.
+    #[allow(clippy::too_many_lines)] // Exhaustive native detail projection from an actual execution anchor.
     pub(super) fn build_detail(
         &self,
         anchor: &RuntimeEventEnvelope,
@@ -35,6 +36,7 @@ impl TraceProjection<'_> {
             request: None,
             tool: None,
             messages: Vec::new(),
+            projected_messages: Vec::new(),
             truncated: false,
         };
         match &anchor.event {
@@ -73,12 +75,12 @@ impl TraceProjection<'_> {
                     }
                 }
             }
-            E::CompactionStarted => {
+            E::CompactionStarted { operation_id } => {
                 detail.kind = TraceKind::Compaction;
                 if let Some(event) = self
                     .store
                     .read_presentation_events(&crate::durable::presentation::FactQuery {
-                        scope: FactScope::All,
+                        scope: FactScope::Compaction(operation_id.clone()),
                         kinds: vec![
                             "compaction_started",
                             "compaction_completed",
@@ -91,19 +93,28 @@ impl TraceProjection<'_> {
                         limit: 1,
                     })?
                     .pop()
-                    && let E::CompactionCompleted {
-                        summary_message_id, ..
-                    } = &event.event
-                    && let Some(message) = self
-                        .store
-                        .load_messages(std::slice::from_ref(summary_message_id))?
-                        .first()
+                    && let E::CompactionCompleted { checkpoint_id, .. } = &event.event
                 {
-                    if let Some(message) = message_detail(message) {
-                        detail.messages.push(message);
-                    } else {
-                        detail.truncated = true;
+                    let checkpoint = self.store.projection_checkpoint(checkpoint_id)?;
+                    for item in checkpoint
+                        .candidate
+                        .items
+                        .iter()
+                        .take(super::bounds::TRACE_DETAIL_BLOCKS)
+                    {
+                        let input = match &item.message {
+                            crate::context::checkpoint::CheckpointMessage::Original(source) => crate::model::ModelInputMessage::Canonical(self.store.load_messages(std::slice::from_ref(&source.message_id))?.into_iter().next().ok_or_else(||crate::durable::ConversationStoreError::InvalidReference("missing projection Original".into()))?),
+                            crate::context::checkpoint::CheckpointMessage::Derived(derived) => crate::model::ModelInputMessage::Derived(derived.as_ref().clone()),
+                        };
+                        detail
+                            .projected_messages
+                            .push(super::request::request_message(
+                                &input,
+                                self.store.conversation_id(),
+                            ));
                     }
+                    detail.truncated |=
+                        checkpoint.candidate.items.len() > super::bounds::TRACE_DETAIL_BLOCKS;
                 }
             }
             E::ToolExecutionStarted {

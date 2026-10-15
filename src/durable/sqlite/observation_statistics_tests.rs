@@ -7,8 +7,10 @@ struct StatisticsBodyFixture {
 }
 fn statistics_body_fixture() -> StatisticsBodyFixture {
     let store = store();
+    // Actual model input remains native-admissible (<1 MiB per Original);
+    // growing J/R diagnostics below still exceed the finite display limits.
     store
-        .initialize(&[user_message("stats-input", &"original🙂水".repeat(220_000))])
+        .initialize(&[user_message("stats-input", &"original🙂水".repeat(30_000))])
         .unwrap();
     let base = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
     let attempt = AttemptId::new("stats-source-attempt");
@@ -31,6 +33,7 @@ fn statistics_body_fixture() -> StatisticsBodyFixture {
     );
     snapshot.effective_system_prompt = "native growing prompt".repeat(130_000);
     snapshot.invocation.model = "original model🙂水".repeat(150_000);
+    freeze_test_input(&store, &mut snapshot, &[]);
     let request = store
         .commit_model_turn_start(&[], &snapshot, base + chrono::Duration::seconds(1))
         .unwrap();
@@ -186,18 +189,14 @@ fn t14_t19_local_agent_statistics_exclude_inherited_aggregates() {
 }
 
 #[test]
-fn t08_t14_t19_giant_compaction_summary_identity_keeps_numeric_locator_and_original_metadata() {
-    use crate::runtime_client::content::{CanonicalContentLocator, ContentSource};
-    use base64::Engine;
+fn t08_t14_t19_compaction_checkpoint_view_keeps_canonical_history_immutable() {
     let store = store();
-    store
-        .initialize(&[user_message("giant-summary-input", "native original")])
-        .unwrap();
-    let summary = "native-summary🙂水".repeat(70_000);
+    let original = user_message("checkpoint-input", "native original");
+    store.initialize(std::slice::from_ref(&original)).unwrap();
     let event = occupancy_origin_compact(
         &store,
-        "giant-summary-input",
-        &summary,
+        "checkpoint-input",
+        "native-checkpoint",
         &occupancy_origin_native("exact model", 200),
     );
     let witness = store
@@ -205,44 +204,18 @@ fn t08_t14_t19_giant_compaction_summary_identity_keeps_numeric_locator_and_origi
         .unwrap()
         .unwrap();
     let compaction = witness.occupancy.unwrap().compaction;
-    assert!(compaction.summary_message_id.is_none());
-    assert!(compaction.summary_message_id_deferred);
-    assert!(matches!(
-        compaction.summary_message_locator,
-        CanonicalContentLocator::ByLedgerPosition { .. }
-    ));
+    assert_eq!(compaction.checkpoint_id.as_str(), "native-checkpoint");
+    assert_eq!(compaction.activation_id.0, 1);
     assert!(serde_json::to_vec(&compaction).unwrap().len() <= 16_384);
-    let reference = compaction.summary_message_id_source.unwrap();
-    let ContentSource::CanonicalMessageBlock { locator, .. } = &reference.source else {
-        panic!("native canonical metadata source");
-    };
-    assert_eq!(locator, &compaction.summary_message_locator);
-    let mut bytes = Vec::new();
-    let mut offset = 0;
-    loop {
-        let chunk = store.content_read(&reference, offset, 65_536).unwrap();
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(chunk.data_base64)
-            .unwrap();
-        assert!(decoded.len() <= 65_536);
-        assert!(!decoded.is_empty());
-        bytes.extend(decoded);
-        let Some(next) = chunk.next_offset else {
-            break;
-        };
-        assert!(next > offset);
-        offset = next;
-    }
-    let original: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(original["id"], summary);
+    assert_eq!(store.load_canonical().unwrap(), vec![original]);
     assert_eq!(
         store
-            .message_ledger_position(&MessageId::new(summary))
-            .unwrap(),
-        match compaction.summary_message_locator {
-            CanonicalContentLocator::ByLedgerPosition { position } => Some(position),
-            CanonicalContentLocator::ByMessageId { .. } => unreachable!(),
-        }
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .candidate
+            .checkpoint_id,
+        compaction.checkpoint_id
     );
 }
 

@@ -206,7 +206,7 @@ async fn interactive_and_headless_share_one_semantic_composition() {
                 result,
                 rustx::runtime_client::types::RuntimeClientResult::Initialized { .. }
             ));
-            interactive.runtime().shutdown().await.unwrap();
+            interactive.shutdown().await.unwrap();
             drop(attachment);
             drop(interactive);
             projection
@@ -438,7 +438,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
             .unwrap()
             .persisted_session_ids()
     };
-    let mut historical = paths.clone().compose(&dependencies()).await.unwrap();
+    let historical = paths.clone().compose(&dependencies()).await.unwrap();
     let b_conversation = historical.runtime().conversation_id().clone();
     let b = sessions(&paths.runtime_root)[0].clone();
     let database = paths
@@ -465,7 +465,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     // root is cold-composed; logical handle drop alone is not that boundary.
     historical.shutdown().await.unwrap();
     drop(historical);
-    let mut product = paths.clone().compose(&dependencies()).await.unwrap();
+    let product = paths.clone().compose(&dependencies()).await.unwrap();
     let a = sessions(&paths.runtime_root)
         .into_iter()
         .find(|id| *id != b)

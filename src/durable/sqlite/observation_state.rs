@@ -177,7 +177,7 @@ pub(super) fn event(
     use crate::events::types::RuntimeEvent;
     if matches!(
         event.event,
-        RuntimeEvent::CompactionStarted
+        RuntimeEvent::CompactionStarted { .. }
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::CompactionCompleted { .. }
     ) {
@@ -195,7 +195,7 @@ pub(super) fn event(
                 )
                 .map_err(|error| storage(error.to_string()))?;
         }
-        RuntimeEvent::CompactionStarted => {
+        RuntimeEvent::CompactionStarted { .. } => {
             super::observation_request::index_state(
                 connection,
                 "observation_context",
@@ -203,7 +203,7 @@ pub(super) fn event(
                 &serde_json::json!({}),
             )?;
         }
-        RuntimeEvent::CompactionFailed { error } => {
+        RuntimeEvent::CompactionFailed { error, .. } => {
             #[derive(serde::Serialize, schemars::JsonSchema)]
             struct Diagnostic<'a> {
                 compaction_error: &'a str,

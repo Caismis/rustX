@@ -150,7 +150,7 @@ async fn python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_a
     .await
     .unwrap();
     inert.runtime().activate();
-    inert.runtime().shutdown().await.unwrap();
+    inert.shutdown().await.unwrap();
     drop(inert);
     std::fs::write(
         host.launch_directory.join("rustx.toml"),
@@ -267,7 +267,7 @@ async fn unused_invalid_resource_collections_warn_without_blocking_unrelated_sta
                 .definitions()
                 .is_empty()
         );
-        product.runtime().shutdown().await.unwrap();
+        product.shutdown().await.unwrap();
     }
 }
 #[test]
@@ -807,7 +807,7 @@ async fn headless_composition_allocates_session_owned_uuid_conversation_database
             .is_file()
     );
     core.runtime().activate();
-    core.runtime().shutdown().await.unwrap();
+    core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -859,7 +859,7 @@ async fn malformed_workspace_mcp_reserves_shadow_and_unused_definition_warns() {
                 .resource_diagnostics
                 .is_empty()
         );
-        core.runtime().shutdown().await.unwrap();
+        core.shutdown().await.unwrap();
         std::fs::write(
             request.workspace.as_ref().unwrap().join("rustx.toml"),
             "[agent.tools.sources]\nservice = 'all'\n",

@@ -5,7 +5,7 @@ import { ObservationChain } from '../../protocol/app-server/observation.ts';
 import { ChildObservation } from '../../protocol/app-server/child-observation.ts';
 import { ContentCache } from '../../protocol/app-server/content-cache.ts';
 import { readEditor } from '../../protocol/app-server/editor.ts';
-import type { ContentRef, ContentChunk, EditorLocator, EditorPage, AgentObservation } from '../../protocol/app-server/v48.ts';
+import type { ContentRef, ContentChunk, EditorLocator, EditorPage, AgentObservation } from '../../protocol/app-server/v50.ts';
 import { JsonlDecoder, encodeRecord } from '../src/protocol/jsonl.ts';
 import { checkpoint, snapshot } from './support/fixtures.ts';
 
@@ -399,4 +399,16 @@ it('T14 T17 Child event revision must match its own record before fold or Applie
  child.apply({type:'checkpoint',...identity,source:'live',cursor:{...identity,cursor:'5'},checkpoint:repaired});
  child.apply({type:'events',after:{...identity,cursor:'5'},cursor:{...identity,cursor:'7'},events:['6','7'].map(cursor=>({cursor,event:{type:'projection_transition' as const,events:[],metadata:{read_cut:{...repaired.read_cut,revision:cursor},collections:[],content:[]}}}))});
  assert.equal(child.appliedCursor?.cursor,'7');assert.equal(child.checkpoint?.read_cut.revision,'7');
+});
+
+it('typed unavailable fences only the exact registration without consuming its next cursor',()=>{
+ const chain=new ObservationChain<string>();chain.installCheckpoint('7');chain.beginSubscription('7');chain.acceptReceipt('original','7');let folds=0;
+ const fold=()=>{folds++;};
+ assert.equal(chain.deliver({registrationId:'foreign',unavailable:true},fold),'ignored');
+ assert.equal(chain.deliver({registrationId:'original',unavailable:true},fold),'unavailable');
+ assert.equal(chain.applied,'7');assert.equal(chain.phase,'unavailable');
+ assert.equal(chain.deliver({registrationId:'original',cursor:'8',event:'old'},fold),'ignored');assert.equal(folds,0);
+ chain.installCheckpoint('7');chain.beginSubscription('7');chain.acceptReceipt('recovered','7');
+ assert.equal(chain.deliver({registrationId:'original',unavailable:true},fold),'ignored');
+ assert.equal(chain.deliver({registrationId:'recovered',cursor:'8',event:'actual'},fold),'applied');assert.equal(folds,1);assert.equal(chain.applied,'8');
 });

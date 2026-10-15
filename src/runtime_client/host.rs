@@ -1304,6 +1304,66 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
     }
 }
 
+type ProjectionReadResult = (
+    super::projection::ReadDomainCut,
+    Result<super::projection::ReadDomainValues, crate::durable::ConversationStoreError>,
+);
+type ProjectionReadSlot = tokio::sync::Mutex<Option<tokio::task::JoinHandle<ProjectionReadResult>>>;
+
+#[derive(Default)]
+enum ProjectionWorker {
+    #[default]
+    Vacant,
+    Running(tokio::task::JoinHandle<()>),
+    // Retained if a shutdown waiter is cancelled while joining the Source read.
+    Joined(Result<(), tokio::task::JoinError>),
+}
+
+fn completed_projection_read(
+    result: Result<ProjectionReadResult, tokio::task::JoinError>,
+    cut: Option<super::projection::ReadDomainCut>,
+) -> Option<ProjectionReadResult> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => cut.map(|cut| {
+            let message = if error.is_panic() {
+                "native projection Source task panicked"
+            } else {
+                "native projection Source task was cancelled"
+            };
+            (
+                cut,
+                Err(crate::durable::ConversationStoreError::Storage(
+                    message.into(),
+                )),
+            )
+        }),
+    }
+}
+
+async fn next_projection_read(
+    reads: &ProjectionReadSlot,
+) -> Result<ProjectionReadResult, tokio::task::JoinError> {
+    let mut slot = reads.lock().await;
+    let Some(task) = slot.as_mut() else {
+        drop(slot);
+        return std::future::pending().await;
+    };
+    let result = task.await;
+    slot.take();
+    result
+}
+
+async fn drain_projection_read(reads: &ProjectionReadSlot) -> Result<(), tokio::task::JoinError> {
+    let mut slot = reads.lock().await;
+    let result = match slot.as_mut() {
+        Some(task) => task.await.map(|_| ()),
+        None => Ok(()),
+    };
+    slot.take();
+    result
+}
+
 /// The shared Runtime Client host state.
 pub(crate) struct ClientInner {
     pub(super) conversation_id: ConversationId,
@@ -1331,7 +1391,8 @@ pub(crate) struct ClientInner {
     pending: Arc<PendingObservations>,
     /// Whether the projection worker task was spawned.
     worker_started: AtomicBool,
-    worker: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    worker: tokio::sync::Mutex<ProjectionWorker>,
+    projection_read: Arc<ProjectionReadSlot>,
     #[cfg(test)]
     read_domain_hook: Arc<Mutex<Option<ReadDomainHook>>>,
     #[cfg(test)]
@@ -1496,6 +1557,7 @@ impl ClientInner {
                 projection.install_read_domains(
                     &candidate.read_cut,
                     Ok(super::projection::ReadDomainValues {
+                        projection_head: candidate.snapshot.context.projection_head.clone(),
                         transcript: candidate.snapshot.transcript.clone(),
                         occupancy: candidate.snapshot.context.occupancy.clone(),
                         trace: candidate.snapshot.trace.clone(),
@@ -1515,9 +1577,7 @@ impl ClientInner {
     }
 
     /// Claims the one worker when a Tokio runtime is available.
-    fn claim_worker(
-        &self,
-    ) -> Option<tokio::sync::MutexGuard<'_, Option<tokio::task::JoinHandle<()>>>> {
+    fn claim_worker(&self) -> Option<tokio::sync::MutexGuard<'_, ProjectionWorker>> {
         let worker_slot = self.worker.try_lock().ok()?;
         if self.pending.is_closed()
             || self.runtime.is_none()
@@ -1558,8 +1618,9 @@ impl ClientInner {
         let read_domain_hook = self.read_domain_hook.clone();
         #[cfg(test)]
         let worker_turns = Arc::clone(&self.worker_turns);
+        let reads = self.projection_read.clone();
         let worker = tokio::spawn(async move {
-            let mut read = None;
+            let mut reading = None;
             loop {
                 tokio::select! {
                     () = pending.wait() => {},
@@ -1569,14 +1630,8 @@ impl ClientInner {
                             None => std::future::pending::<()>().await,
                         }
                     } => {},
-                    result = async {
-                        match &mut read {
-                            Some(task) => task.await,
-                            None => std::future::pending().await,
-                        }
-                    } => {
-                        read = None;
-                        if let Ok((cut, domains)) = result {
+                    result = next_projection_read(&reads) => {
+                        if let Some((cut, domains)) = completed_projection_read(result, reading.take()) {
                             let Some(source)=store.upgrade() else { break };
                             drop(prepared_lock(&state,&preparation,&publication_gate,&pending,source.as_ref(),workflow_state.as_ref()));
                             commit_display(&state, &publication_gate, |projection| {
@@ -1601,7 +1656,7 @@ impl ClientInner {
                         workflow_state.as_ref(),
                     );
                     close_shutting_down_reader(&guard.projection, &store);
-                    if read.is_some()
+                    if reading.is_some()
                         || !pending.can_publish_prepared_reads()
                         || pending.has_unpublished()
                         || guard.projection.snapshot_ref().shutting_down
@@ -1611,7 +1666,7 @@ impl ClientInner {
                         guard.projection.read_domain_candidate()
                     }
                 };
-                if read.is_none()
+                if reading.is_none()
                     && let Some((cut, candidate)) = cut
                 {
                     let Some(store) = store.upgrade() else {
@@ -1621,7 +1676,9 @@ impl ClientInner {
                     // projection lock; semantic delivery continues while it waits.
                     #[cfg(test)]
                     let hook = read_domain_hook.lock().unwrap().take();
-                    read = Some(tokio::task::spawn_blocking(move || {
+                    let mut read_slot = reads.lock().await;
+                    reading = Some(cut.clone());
+                    *read_slot = Some(tokio::task::spawn_blocking(move || {
                         #[cfg(test)]
                         if let Some(hook) = hook
                             && let Err(error) = hook()
@@ -1637,14 +1694,12 @@ impl ClientInner {
             if let Some(store) = store.upgrade() {
                 store.close_presentation_reader();
             }
-            if let Some(read) = read {
-                let _ = read.await;
-            }
+            let _ = drain_projection_read(&reads).await;
             // Cancellation is followed by terminal proof, not handle detachment.
             #[cfg(test)]
             pending.signal_worker_exit();
         });
-        *worker_slot = Some(worker);
+        *worker_slot = ProjectionWorker::Running(worker);
     }
 
     pub(crate) fn cancel_presentation_reads(&self) {
@@ -1658,12 +1713,18 @@ impl ClientInner {
         let mut worker_slot = self.worker.lock().await;
         // A cancelled waiter releases this guard, not the native JoinHandle.
         // A retry must still join the original worker and its finite Source read.
-        let result = match worker_slot.as_mut() {
-            Some(worker) => worker.await,
-            None => Ok(()),
+        if let ProjectionWorker::Running(worker) = &mut *worker_slot {
+            *worker_slot = ProjectionWorker::Joined(worker.await);
+        }
+        // The read slot outlives worker panic/abort. Neither await removes its
+        // original handle until completion, including a cancelled drain waiter.
+        let read_result = drain_projection_read(&self.projection_read).await;
+        let worker_result = match std::mem::take(&mut *worker_slot) {
+            ProjectionWorker::Joined(result) => result,
+            ProjectionWorker::Vacant => Ok(()),
+            ProjectionWorker::Running(_) => unreachable!("worker was joined in place"),
         };
-        drop(worker_slot.take());
-        result
+        worker_result.and(read_result)
     }
 
     /// Admits one attachment: the internal primitive behind the
@@ -1672,9 +1733,9 @@ impl ClientInner {
     /// The Runtime Client host allows one control attachment. A second
     /// simultaneous control attach fails deterministically and never evicts
     /// the first; explicitly read-only inspection attachments use a separate
-    /// subscriber set and may coexist with it. The returned snapshot and
-    /// cursor are linearized with admission under the one projection
-    /// synchronization boundary.
+    /// subscriber set and may coexist with it. Initialization returns only
+    /// the admitted identity and finite capabilities; a checkpoint is read
+    /// separately against the current observation-source state.
     ///
     /// # Errors
     ///
@@ -1772,6 +1833,19 @@ impl ClientInner {
             self,
             read_only_attachment,
         ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inspection_subscriber_for_test(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Option<u64> {
+        self.state
+            .lock()
+            .expect("native projection lock")
+            .read_only_attachments
+            .get(attachment_id)
+            .and_then(|attachment| attachment.subscriber_id)
     }
 
     /// Releases one attachment. Idempotent: a second detach (or an
@@ -2809,6 +2883,20 @@ impl ClientInner {
         path: &[String],
         (offset, max_bytes): (u64, u32),
     ) -> Result<Option<super::checkpoint::CheckpointValueChunk>, RuntimeClientError> {
+        if super::projection_history::selection(domain).is_some() {
+            self.lock_published_state()
+                .projection
+                .validate_checkpoint_cut(cut)?;
+            return super::projection_history::value_read(
+                self.store.as_ref(),
+                cut,
+                domain,
+                item_offset,
+                path,
+                (offset, max_bytes),
+            )
+            .map(Some);
+        }
         if super::delivery::selection(domain).is_some() {
             self.lock_published_state()
                 .projection
@@ -3538,7 +3626,10 @@ impl ClientInner {
             if std::time::Instant::now() >= deadline {
                 break;
             }
-            match self.materialize_checkpoint(records, deadline) {
+            let result = self
+                .repair_failed_source_for_checkpoint(deadline)
+                .and_then(|()| self.materialize_checkpoint(records, deadline));
+            match result {
                 Ok(checkpoint) => return Ok(checkpoint),
                 Err(RuntimeClientError::ReadCutExpired) => {
                     last = RuntimeClientError::ReadCutExpired;
@@ -3550,6 +3641,60 @@ impl ClientInner {
             }
         }
         Err(last)
+    }
+
+    /// Request one read on the existing worker and await its exact fence.
+    /// The worker retains/cancels/joins physical Source work during shutdown.
+    fn repair_failed_source_for_checkpoint(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<(), RuntimeClientError> {
+        if self.read_only || !self.worker_started.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let cut = {
+            let mut state = self.lock_published_state();
+            if self.pending.is_closed()
+                || !self.pending.can_publish_prepared_reads()
+                || state.projection.snapshot_ref().shutting_down
+            {
+                return Ok(());
+            }
+            state.projection.request_failed_read_repair()
+        };
+        let Some((cut, newly_requested)) = cut else {
+            return Ok(());
+        };
+        if newly_requested {
+            self.pending
+                .push(ConversationObservation::JournalSourceReady);
+        }
+        loop {
+            let progress = self.publication_gate.generation();
+            {
+                let state = self.lock_published_state();
+                if state.projection.read_domain_fence() != cut {
+                    return Err(RuntimeClientError::ReadCutExpired);
+                }
+                if state.projection.read_domain_cut().is_none() {
+                    return Ok(());
+                }
+                if self.pending.is_closed()
+                    || !self.pending.can_publish_prepared_reads()
+                    || state.projection.snapshot_ref().shutting_down
+                {
+                    return Err(RuntimeClientError::ObservationUnavailable {
+                        message: "native Source repair awaits its observation owner".into(),
+                    });
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(RuntimeClientError::ObservationUnavailable {
+                    message: "checkpoint Source repair deadline exhausted".into(),
+                });
+            }
+            self.publication_gate.wait_after(progress, deadline);
+        }
     }
 
     fn materialize_checkpoint(
@@ -3746,6 +3891,43 @@ impl ClientInner {
     /// work and settles nothing. Its lifecycle-bearing summary counterpart
     /// stays the authority for current state, so no live repair applies here
     /// — detail carries immutable historical facts only.
+    #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
+    pub(crate) fn projection_page(
+        &self,
+        after: crate::context::checkpoint::ProjectionActivationId,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let through = {
+            let state = self.lock_state();
+            state.projection.validate_published_source()?;
+            state.projection.checkpoint_read_cut().through
+        };
+        super::projection_history::page(self.store.as_ref(), through, after, limit)
+            .map(|page| RuntimeClientResult::ProjectionPage { page })
+            .map_err(|e| RuntimeClientError::RuntimeFailure {
+                message: e.to_string(),
+            })
+    }
+    #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
+    pub(crate) fn projection_detail(
+        &self,
+        id: crate::runtime::identity::CheckpointId,
+        offset: u32,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let cut = {
+            let state = self.lock_state();
+            state.projection.validate_published_source()?;
+            state.projection.checkpoint_read_cut()
+        };
+        super::projection_history::detail(self.store.as_ref(), &cut, &id, offset, limit)
+            .map(|detail| RuntimeClientResult::ProjectionDetail {
+                detail: Box::new(detail),
+            })
+            .map_err(|e| RuntimeClientError::RuntimeFailure {
+                message: e.to_string(),
+            })
+    }
     #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
     pub(crate) fn trace_detail(
         &self,
@@ -3945,6 +4127,9 @@ impl ClientInner {
                         after_cursor,
                         earliest_serviceable,
                     });
+                }
+                EventDelivery::Unavailable { message } => {
+                    return Err(RuntimeClientError::ObservationUnavailable { message });
                 }
                 EventDelivery::Exhausted => return Err(RuntimeClientError::ProjectionExhausted),
                 EventDelivery::Closed => {
@@ -4918,7 +5103,8 @@ impl RuntimeClientHost {
             publication_gate: Arc::new(PublicationGate::default()),
             pending,
             worker_started: AtomicBool::new(false),
-            worker: tokio::sync::Mutex::new(None),
+            worker: tokio::sync::Mutex::new(ProjectionWorker::default()),
+            projection_read: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
             #[cfg(test)]
@@ -5011,7 +5197,8 @@ impl RuntimeClientHost {
             publication_gate: Arc::new(PublicationGate::default()),
             pending,
             worker_started: AtomicBool::new(false),
-            worker: tokio::sync::Mutex::new(None),
+            worker: tokio::sync::Mutex::new(ProjectionWorker::default()),
+            projection_read: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(test)]
             trace_cut_hook: Mutex::new(None),
             #[cfg(test)]
@@ -5156,7 +5343,7 @@ impl RuntimeClientHost {
     /// # Errors
     ///
     /// Returns a typed lifecycle, busy, context, or durability error. A
-    /// successful response means the canonical compaction already committed.
+    /// successful response means the typed checkpoint already committed.
     pub async fn compact_context(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
@@ -5202,6 +5389,9 @@ impl RuntimeClientHost {
     /// # Errors
     ///
     /// Returns a native source/cut error when the captured checkpoint cannot be served.
+    /// A failed derived Source may request one worker retry within the shared
+    /// checkpoint deadline. This synchronous call must leave the existing
+    /// worker runnable (use a blocking lane when called from an async executor).
     pub fn checkpoint(
         &self,
     ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
@@ -5363,7 +5553,49 @@ impl RuntimeClientHost {
             .is_some_and(ConversationRuntime::has_current_attempt)
     }
 
-    /// A non-owning handle to the shared host state, for lifetime tests.
+    /// Injects one derived Source failure at the current native dependency fence.
+    #[cfg(test)]
+    pub(crate) fn fail_projection_read_for_test(&self, message: &str) {
+        commit_display(
+            &self.inner.state,
+            &self.inner.publication_gate,
+            |projection| {
+                projection.request_read_domains_for_test();
+                let cut = projection.read_domain_fence();
+                assert!(projection.install_read_domains(
+                    &cut,
+                    Err(crate::durable::ConversationStoreError::InvalidReference(
+                        message.into()
+                    ),),
+                    true
+                ));
+            },
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_projection_read_for_test(
+        &self,
+        entered: tokio::sync::oneshot::Sender<()>,
+        cancelled: tokio::sync::oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) {
+        let reader = self.inner.read_store.clone();
+        *self.inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
+            reader.park_presentation_read_until_cancelled(entered);
+            let _ = cancelled.send(());
+            let _ = release.recv();
+            Ok(())
+        }));
+        self.inner
+            .lock_state()
+            .projection
+            .request_read_domains_for_test();
+        self.inner
+            .pending
+            .push(ConversationObservation::JournalSourceReady);
+    }
+
     #[cfg(test)]
     pub(crate) fn weak_inner(&self) -> Weak<ClientInner> {
         Arc::downgrade(&self.inner)
@@ -5440,6 +5672,8 @@ pub enum EventDelivery {
         /// The oldest cursor the runtime can still serve.
         earliest_serviceable: RuntimeClientCursor,
     },
+    /// The native source is unavailable; no cursor is consumed or skipped.
+    Unavailable { message: String },
     /// The cursor space is exhausted; nothing further will be published.
     Exhausted,
 }
@@ -5512,6 +5746,7 @@ impl EventSubscription {
             SubscriberPoll::Event(event) => EventDelivery::Event(event),
             SubscriberPoll::Pending => EventDelivery::Pending,
             SubscriberPoll::Closed => EventDelivery::Closed,
+            SubscriberPoll::Unavailable { message } => EventDelivery::Unavailable { message },
             SubscriberPoll::Lagged {
                 after_cursor,
                 earliest_serviceable,
@@ -5694,6 +5929,12 @@ mod tests {
     mod initial_cut_tests {
         include!("host/initial_cut_tests.rs");
     }
+    mod compaction_head_tests {
+        include!("host/compaction_head_tests.rs");
+    }
+    mod source_recovery_tests {
+        include!("host/source_recovery_tests.rs");
+    }
     mod member_tests {
         include!("host/member_tests.rs");
     }
@@ -5728,7 +5969,10 @@ mod tests {
 
     use tokio::sync::watch;
 
-    use super::{EventDelivery, EventSubscription, RuntimeClientHost, RuntimeClientHostConfig};
+    use super::{
+        EventDelivery, EventSubscription, ProjectionWorker, RuntimeClientHost,
+        RuntimeClientHostConfig,
+    };
     use crate::context::{
         AgentStatusClock, AgentStatusConfig, AgentStatusEngine, DefaultTokenEstimator,
         TokenEstimator,
@@ -6075,7 +6319,7 @@ mod tests {
     /// coordinator, its Runtime Client host adapter, and the scripted
     /// adapter driving attempts.
     struct HostFixture {
-        _dir: tempfile::TempDir,
+        directory: tempfile::TempDir,
         host: RuntimeClientHost,
         runtime: ConversationRuntime,
         coordinator: crate::capabilities::CapabilityCoordinator,
@@ -6301,7 +6545,7 @@ mod tests {
         (
             adapter,
             HostFixture {
-                _dir: dir,
+                directory: dir,
                 host,
                 runtime,
                 coordinator,
@@ -6403,7 +6647,7 @@ mod tests {
         (
             adapter,
             HostFixture {
-                _dir: dir,
+                directory: dir,
                 host,
                 runtime,
                 coordinator,
@@ -8275,8 +8519,8 @@ mod tests {
             "overflow retry keeps the one admitted context generation"
         );
         assert_ne!(
-            snapshots[1].surface_revision, snapshots[2].surface_revision,
-            "compaction gives the retry its own historical Surface revision"
+            snapshots[1].history_cut.activation, snapshots[2].history_cut.activation,
+            "compaction gives the retry a distinct typed historical activation"
         );
 
         let provider_requests = adapter.requests();
@@ -9504,7 +9748,7 @@ mod tests {
         let (_adapter, fixture) =
             host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let HostFixture {
-            _dir: dir,
+            directory: dir,
             host,
             runtime,
             coordinator,
@@ -10000,39 +10244,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn authoritative_snapshot_repairs_idle_background_read_failure() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
-        let inner = fixture.host.weak_inner().upgrade().unwrap();
-        let (attachment, _) = fixture
-            .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .unwrap();
-        let cursor = inner.lock_state().projection.cursor();
-        let subscriber = attachment.subscribe_events(cursor).unwrap();
-        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(|| {
-            Err(crate::durable::ConversationStoreError::InvalidReference(
-                "one read fault".into(),
-            ))
-        }));
-        inner.pending.push(ConversationObservation::Event {
-            attempt_id: AttemptId::new("failed-cut"),
-            event: RuntimeEvent::AttemptStarted {
-                attempt_id: AttemptId::new("failed-cut"),
-            },
-        });
-        loop {
-            match subscriber.next().await {
-                EventDelivery::ResyncRequired { .. } => break,
-                EventDelivery::Event(_) => {}
-                _ => panic!("live failure must notify the subscriber"),
-            }
-        }
+    fn assert_source_failure_preserves_retained_cut(
+        host: &RuntimeClientHost,
+        attachment: &crate::runtime_client::RuntimeAttachment,
+        subscriber: &EventSubscription,
+        retained: &crate::runtime_client::checkpoint::RuntimeClientCheckpoint,
+    ) -> crate::runtime_client::projection::ReadDomainCut {
+        let inner = &host.inner;
         let (cut, cursor) = {
             let state = inner.lock_state();
             assert!(matches!(
                 state.projection.snapshot_ref_checked(),
-                Err(RuntimeClientError::RuntimeFailure { .. })
+                Err(RuntimeClientError::ObservationUnavailable { .. })
             ));
             assert!(
                 state.projection.read_domain_cut().is_none(),
@@ -10043,51 +10266,52 @@ mod tests {
                 state.projection.cursor(),
             )
         };
-        // Pure checkpoint reads expose the published cut without clearing the
-        // working source failure or installing a derived transition.
-        let unchanged = fixture.host.checkpoint().unwrap();
-        assert_eq!(unchanged.cursor, cursor);
+        assert_eq!(cursor, retained.cursor);
+        // Current checkpoint reads reject without clearing the failure;
+        // the retained historical cut remains independently readable.
+        assert!(matches!(
+            host.checkpoint(),
+            Err(RuntimeClientError::ObservationUnavailable { .. })
+        ));
+        assert!(matches!(
+            attachment.subscribe_events(cursor),
+            Err(RuntimeClientError::ObservationUnavailable { .. })
+        ));
+        assert!(matches!(
+            subscriber.try_next(),
+            EventDelivery::Unavailable { .. }
+        ));
+        let old_page = inner
+            .checkpoint_page(&retained.read_cut, "capabilities.available_tools", 0, 1)
+            .unwrap();
+        assert_eq!(old_page.read_cut, retained.read_cut);
+        assert_eq!(inner.lock_state().projection.cursor(), cursor);
         let failed = {
             let state = inner.state.lock().unwrap();
             state.projection.snapshot_ref_checked().is_err()
         };
         assert!(failed);
-        // The source worker's existing owner reads outside the raw lock and
-        // installs one successful result at the exact failed fence.
-        let read = cut.read(inner.store.as_ref());
+        cut
+    }
+
+    fn assert_source_repair_resumes_normal_events(
+        inner: &super::ClientInner,
+        recovered: &EventSubscription,
+        cursor: RuntimeClientCursor,
+    ) {
         super::commit_display(&inner.state, &inner.publication_gate, |projection| {
-            assert!(projection.install_read_domains(&cut, read, true));
+            projection.apply(ConversationObservation::Event {
+                attempt_id: AttemptId::new("failed-cut"),
+                event: RuntimeEvent::AttemptStarted {
+                    attempt_id: AttemptId::new("failed-cut"),
+                },
+            });
         });
-        let repaired = fixture.host.checkpoint().unwrap();
-        let recovered_cursor = repaired.cursor;
-        assert_eq!(recovered_cursor.get(), cursor.get() + 1);
-        let (same_fence, valid, no_spin) = {
-            let state = inner.state.lock().unwrap();
-            (
-                state.projection.read_domain_fence() == cut,
-                state.projection.snapshot_ref_checked().is_ok(),
-                state.projection.read_domain_cut().is_none(),
-            )
+        let EventDelivery::Event(started) = recovered.try_next() else {
+            panic!("normal start delivery resumes after genuine source repair");
         };
-        assert!(same_fence && valid && no_spin);
-        assert_eq!(fixture.host.checkpoint().unwrap(), repaired);
-        let recovered = attachment.subscribe_events(recovered_cursor).unwrap();
-        assert!(matches!(subscriber.try_next(), EventDelivery::Closed));
-        loop {
-            match recovered.try_next() {
-                EventDelivery::Event(event) => {
-                    assert!(
-                        event.event.facts().iter().any(|fact| matches!(
-                            fact,
-                            RuntimeClientEvent::ReadDomainsUpdated { .. }
-                        ))
-                    );
-                }
-                EventDelivery::Pending => break,
-                _ => panic!("successful authoritative repair must retire the old failure"),
-            }
-        }
-        let cursor = recovered_cursor;
+        assert_eq!(started.cursor.get(), cursor.get() + 1);
+        let cursor = started.cursor;
         super::commit_display(&inner.state, &inner.publication_gate, |projection| {
             projection.apply(ConversationObservation::Event {
                 attempt_id: AttemptId::new("failed-cut"),
@@ -10105,6 +10329,134 @@ mod tests {
                 .iter()
                 .any(|fact| matches!(fact, RuntimeClientEvent::AttemptTurnUpdated { turn: 1, .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn panicked_projection_source_installs_same_cut_unavailability_without_spinning() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner.projection_settled().await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let (cursor, cut) = {
+            let state = inner.lock_state();
+            (
+                state.projection.cursor(),
+                state.projection.read_domain_fence(),
+            )
+        };
+        let subscriber = attachment.subscribe_events(cursor).unwrap();
+        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(|| {
+            panic!("private Source panic payload must not enter display diagnostics");
+        }));
+        inner
+            .lock_state()
+            .projection
+            .request_read_domains_for_test();
+        inner
+            .pending
+            .push(ConversationObservation::JournalSourceReady);
+        let EventDelivery::Unavailable { message } = subscriber.next().await else {
+            panic!("a Source panic must resolve subscribers as unavailable");
+        };
+        assert!(message.contains("native projection Source task panicked"));
+        assert!(!message.contains("private Source panic payload"));
+        let mut turns = inner.worker_turns.subscribe();
+        turns.borrow_and_update();
+        inner
+            .pending
+            .push(ConversationObservation::JournalSourceReady);
+        turns.changed().await.unwrap();
+        {
+            let state = inner.lock_state();
+            assert_eq!(state.projection.cursor(), cursor);
+            assert_eq!(state.projection.read_domain_fence(), cut);
+            assert!(state.projection.read_domain_cut().is_none());
+            assert!(matches!(
+                state.projection.validate_published_source(),
+                Err(RuntimeClientError::ObservationUnavailable { .. })
+            ));
+        }
+        assert!(inner.projection_read.lock().await.is_none());
+        fixture.runtime.shutdown().await.unwrap();
+        inner.drain_projection().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn source_failure_is_unavailable_until_same_cut_native_read_repair() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let cursor = inner.lock_state().projection.cursor();
+        let subscriber = attachment.subscribe_events(cursor).unwrap();
+        let retained = fixture.host.checkpoint().unwrap();
+        let mut source_fault = source_recovery_tests::OccupancySourceFault::new(&fixture);
+        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(|| {
+            Err(crate::durable::ConversationStoreError::InvalidReference(
+                "one read fault".into(),
+            ))
+        }));
+        let journal = inner.store.presentation_frontier().unwrap();
+        inner
+            .lock_state()
+            .projection
+            .request_read_domains_for_test();
+        inner
+            .pending
+            .push(ConversationObservation::JournalSourceReady);
+        let EventDelivery::Unavailable { message } = subscriber.next().await else {
+            panic!("Source failure reports unavailability without an ordinary event");
+        };
+        assert!(message.contains("one read fault"));
+        let cut = assert_source_failure_preserves_retained_cut(
+            &fixture.host,
+            &attachment,
+            &subscriber,
+            &retained,
+        );
+        assert_eq!(inner.store.presentation_frontier().unwrap(), journal);
+        // The source worker's existing owner reads outside the raw lock and
+        // installs one successful result at the exact failed fence.
+        source_fault.repair();
+        let read = cut.read(inner.store.as_ref());
+        super::commit_display(&inner.state, &inner.publication_gate, |projection| {
+            assert!(projection.install_read_domains(&cut, read, true));
+        });
+        let repaired = fixture.host.checkpoint().unwrap();
+        let recovered_cursor = repaired.cursor;
+        assert_eq!(recovered_cursor.get(), cursor.get() + 1);
+        assert_eq!(repaired.read_cut.source_cut, retained.read_cut.source_cut);
+        assert_eq!(inner.store.presentation_frontier().unwrap(), journal);
+        let (same_fence, valid, no_spin) = {
+            let state = inner.state.lock().unwrap();
+            (
+                state.projection.read_domain_fence() == cut,
+                state.projection.snapshot_ref_checked().is_ok(),
+                state.projection.read_domain_cut().is_none(),
+            )
+        };
+        assert!(same_fence && valid && no_spin);
+        assert_eq!(fixture.host.checkpoint().unwrap(), repaired);
+        let EventDelivery::Event(repair) = subscriber.try_next() else {
+            panic!("genuine Source repair publishes one complete transition");
+        };
+        assert_eq!(repair.cursor, recovered_cursor);
+        assert!(
+            repair
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { .. }))
+        );
+        let recovered = attachment.subscribe_events(recovered_cursor).unwrap();
+        assert!(matches!(subscriber.try_next(), EventDelivery::Closed));
+        assert!(matches!(recovered.try_next(), EventDelivery::Pending));
+        assert_source_repair_resumes_normal_events(&inner, &recovered, recovered_cursor);
     }
 
     #[tokio::test]
@@ -10251,11 +10603,13 @@ mod tests {
                 }
             }
             RuntimeClientEvent::ReadDomainsUpdated {
+                projection_head,
                 transcript,
                 trace,
                 occupancy,
                 todos,
             } => {
+                snapshot.context.projection_head.clone_from(projection_head);
                 snapshot.transcript.clone_from(transcript);
                 snapshot.trace.clone_from(trace);
                 snapshot.context.occupancy.clone_from(occupancy);
@@ -10306,6 +10660,7 @@ mod tests {
             !state.projection.install_read_domains(
                 &old_cut,
                 Ok(super::super::projection::ReadDomainValues {
+                    projection_head: candidate.snapshot.context.projection_head.clone(),
                     transcript: candidate.snapshot.transcript.clone(),
                     occupancy: candidate.snapshot.context.occupancy.clone(),
                     trace: candidate.snapshot.trace.clone(),
@@ -10486,7 +10841,10 @@ mod tests {
             result = cancelled_rx => result.unwrap(),
         }
         drop(first);
-        assert!(inner.worker.try_lock().unwrap().is_some());
+        assert!(matches!(
+            *inner.worker.try_lock().unwrap(),
+            ProjectionWorker::Running(_)
+        ));
         let mut retry = Box::pin(inner.drain_projection());
         std::future::poll_fn(|context| {
             assert!(
@@ -10498,9 +10856,110 @@ mod tests {
         .await;
         release.send(()).unwrap();
         retry.await.unwrap();
-        assert!(inner.worker.try_lock().unwrap().is_none());
+        assert!(matches!(
+            *inner.worker.try_lock().unwrap(),
+            ProjectionWorker::Vacant
+        ));
         assert!(inner.pending.is_closed());
         drop(release_on_unwind);
+    }
+
+    async fn failed_projection_worker_keeps_its_physical_read(abort: bool) {
+        use std::future::Future as _;
+        struct ReleaseOnDrop(std::sync::mpsc::Sender<()>);
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let capacity = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = capacity.clone().acquire_owned().await.unwrap();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let release_on_unwind = ReleaseOnDrop(release.clone());
+        *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
+            let _permit = permit;
+            entered.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        }));
+        inner.pending.push(ConversationObservation::Event {
+            attempt_id: AttemptId::new("failed-worker-read"),
+            event: RuntimeEvent::TurnStarted,
+        });
+        entered_rx.await.unwrap();
+        if abort {
+            let worker = inner.worker.lock().await;
+            let ProjectionWorker::Running(task) = &*worker else {
+                panic!("worker must be running")
+            };
+            task.abort();
+        } else {
+            // This is the real production panic boundary while a Source task
+            // remains outstanding, rather than a replacement worker fixture.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = inner.observation_preparation.lock().unwrap();
+                panic!("poison preparation before the worker's next turn");
+            }));
+            inner
+                .pending
+                .push(ConversationObservation::JournalSourceReady);
+        }
+        loop {
+            let finished = match &*inner.worker.lock().await {
+                ProjectionWorker::Running(task) => task.is_finished(),
+                _ => panic!("only drain may consume the worker proof"),
+            };
+            if finished {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        inner.observation_preparation.clear_poison();
+        fixture.runtime.shutdown().await.unwrap();
+        let mut first = Box::pin(inner.drain_projection());
+        std::future::poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(capacity.available_permits(), 0);
+        drop(first);
+        assert!(matches!(
+            *inner.worker.try_lock().unwrap(),
+            ProjectionWorker::Joined(Err(_))
+        ));
+        assert!(inner.projection_read.try_lock().unwrap().is_some());
+        let mut retry = Box::pin(inner.drain_projection());
+        std::future::poll_fn(|cx| {
+            assert!(
+                retry.as_mut().poll(cx).is_pending(),
+                "failed worker cannot prove its detached read ended"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(capacity.available_permits(), 0);
+        release.send(()).unwrap();
+        let error = retry.await.unwrap_err();
+        assert_eq!(error.is_cancelled(), abort);
+        assert_eq!(error.is_panic(), !abort);
+        assert_eq!(capacity.available_permits(), 1);
+        assert!(inner.projection_read.try_lock().unwrap().is_none());
+        inner.drain_projection().await.unwrap(); // Both physical tasks are now joined.
+        drop(release_on_unwind);
+    }
+
+    #[tokio::test]
+    async fn projection_drain_joins_residual_read_after_worker_panic_and_waiter_cancellation() {
+        failed_projection_worker_keeps_its_physical_read(false).await;
+    }
+
+    #[tokio::test]
+    async fn projection_drain_joins_residual_read_after_worker_abort_and_waiter_cancellation() {
+        failed_projection_worker_keeps_its_physical_read(true).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -12123,7 +12582,7 @@ mod tests {
         (
             adapter,
             HostFixture {
-                _dir: dir,
+                directory: dir,
                 host,
                 runtime,
                 coordinator,
@@ -12229,7 +12688,7 @@ mod tests {
         (
             adapter,
             HostFixture {
-                _dir: dir,
+                directory: dir,
                 host,
                 runtime,
                 coordinator,

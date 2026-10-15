@@ -508,7 +508,7 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
             result.is_err(),
             "selected invalid child reference fails at admission: {expected}"
         );
-        product.runtime().shutdown().await.unwrap();
+        product.shutdown().await.unwrap();
     }
 }
 
@@ -588,7 +588,7 @@ async fn a_named_agent_only_source_remains_unprepared_until_child_admission() {
             )
         }
     ));
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 /// A definition with no explicit model inherits the invoking attempt's
@@ -1287,11 +1287,7 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         "---\nname: alpha\ndescription: a completely different description\n---\n\nrewritten body\n",
     )
     .expect("rewrite SKILL.md");
-    product
-        .runtime()
-        .shutdown()
-        .await
-        .expect("settle the original owner");
+    product.shutdown().await.expect("settle the original owner");
     drop(resources);
     drop(product);
     let reloaded = (lab.paths())
@@ -1477,7 +1473,7 @@ async fn ext256_root_extension_configuration_never_reaches_a_named_role() {
         );
     }
 
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 /// Issue #256 regression 7: two role definitions that differ only in their
@@ -1553,5 +1549,5 @@ async fn ext256_extension_settings_are_part_of_a_role_identity() {
         "an extension-only difference is a semantic difference"
     );
 
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }

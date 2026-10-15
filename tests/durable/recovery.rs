@@ -244,13 +244,13 @@ fn snapshot_at(
     model: &str,
 ) -> RequestSnapshot {
     let head = store.load_head().expect("head");
-    RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: attempt_id.clone(),
             turn: TurnId::new(turn),
             retry_number: 0,
         },
-        head.revision,
+        rustx::context::resources::LedgerFrontier((head.revision).get()),
         "the frozen effective system prompt".to_owned(),
         Vec::new(),
         rustx::runtime::RuntimeResourceRevision::new(1),
@@ -266,7 +266,9 @@ fn snapshot_at(
         },
         None,
         Vec::new(),
-    )
+    );
+    crate::freeze_request(store, &mut snapshot);
+    snapshot
 }
 
 /// Runs the real recovery pipeline over a freshly reopened durable store.
@@ -2226,7 +2228,8 @@ fn recovery_repairs_exact_occurrences_when_provider_ids_repeat_on_the_surface() 
             .unwrap()
             .contains("old-result")
     );
-    rustx::conversation::StructuralIndex::build(&canonical).unwrap();
+    // Validate repaired canonical occurrences through the production typed compiler.
+    store.projected_history().unwrap();
 }
 
 // ---------------------------------------------------------------------------

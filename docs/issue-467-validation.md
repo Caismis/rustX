@@ -2,23 +2,289 @@
 
 This ledger records the RFC v3 implementation at the existing execution, durable,
 publication, Runtime Client, connection, registration, and transport owners.
-Final-source local validation passed, including the full Native, client and
+The pre-review PR HEAD `6f9cfbdb3ebd4b145ba5d54c044a91b0832fada3` had local validation passing, including the full Native, client and
 317-case browser commands recorded below. The browser filesystem qualification
 and unavailable local macOS checks remain explicit. Earlier epoch sections are
-historical diagnostics; they do not override these final results or imply remote
-CI success.
+historical diagnostics; they do not override the pre-review results or imply
+current repaired-source or remote CI success.
 The normative contract is in [invariants](invariants.md), the public methods and
 lock order in [App Server protocol](app-server-protocol.md), and source/read-cut
 semantics in [conversation reading](conversation-reading.md).
 
-## Latest complete-command evidence
+## PR #478 repair and latest-main integration
+
+Status: local validation passes on the final repaired source: **4,782 Rust tests**,
+**317 browser cases**, and the maintained client, protocol and Linux boundary
+commands below. Existing opt-in skips remain unchanged. Remote CI is reported by
+the checks attached to the pushed PR HEAD; this local ledger does not claim a
+remote result. PR #478 remains open for independent review and must not be merged
+by this task.
+
+### Repository and ownership
+
+The repair starts from PR HEAD `6f9cfbdb3ebd4b145ba5d54c044a91b0832fada3` and merges
+`origin/main` at `8cb41624eb2dc2ca87e4409961f42553ceb029cf` into the existing
+`issue-467-bounded-observation` worktree. Main contributes PR #477 / Issue #466's
+immutable-history model-context projection. The old base was
+`97096020d64ea00218493a0a99b9b805821eeb28`. No unmerged PR is a dependency.
+
+Execution and canonical history retain their existing owners. Original/Derived
+provenance and frozen Attempt model input remain authoritative; display reads do
+not reconstruct deprecated canonical compaction summaries. The original Completed-J
+occupancy witness carries a finite projection head, so compaction head and context
+publish atomically before asynchronous refinement. Lost commitment acknowledgments
+reuse that original receipt, without repeating semantic work.
+
+Composition shutdown first settles the semantic runtime, then closes presentation
+reads and joins the original Projection Worker and every outstanding physical
+Source read. The read previously could retain the Store Arc and exclusive product
+storage lock after semantic shutdown. Cancelling a shutdown waiter now leaves the
+original JoinHandle in its supervised slot; another waiter joins the same task.
+A separate physical-read slot survives worker panic/abort and is drained before
+successful ownership release. Dropping a handle is not claimed as physical proof.
+Runtime Manager retirement waits for admitted operations and supervised drain;
+internal inspection tasks retain their JoinSet/capacity ownership until termination.
+Explicitly retained external leases still own storage until released.
+
+The subsequent browser run exposed an admitted Observe wait that outlived listener
+stop. Inspection shutdown now permanently retires its exact endpoint registrations
+before cancelling socket readiness and joining all connection tasks. Retirement
+shares initialization's identity lock, then detaches at the native subscription
+lock; a racing Observe either closes or fails admission. Physical Source reads are
+still awaited. The shutdown method borrows its owner and retains the original
+listener handle across cancellation. Listener/connection join failure remains an
+explicit persistent failure after surviving tasks drain; it is not release proof.
+
+Source failure is typed observation unavailability, distinct from Replay eviction.
+A retained historical checkpoint is not evidence that the current native source is
+serviceable. Checkpoint/subscription admission consults current serviceability;
+failed native reads fence the affected registration without inventing a cursor or
+execution outcome. Only a successful read at the current dependency fence clears
+the failure. Explicit recovery requests one bounded read through the existing
+Projection Worker; concurrent requests at the same fence share that work. WebUI
+and TUI preserve Applied, stop automatic resynchronization, and fence late results
+by original registration/activation. Real Child Unix recovery preserves activation
+and never falls back to a second Parent projection or semantic replay.
+
+Current independent versions: App Server **50**, WebSocket **rustx.app-server.v50**,
+Runtime Client **71**, SQLite **64**, Runtime Event **1**, Subagent Control **33**,
+private Product Host **4**, Session catalog **16**. Generated contracts agree.
+
+### Bounded work and source identity
+
+Request Source indexing reuses only bounded immutable relative geometry. Every
+request retains its own original bytes, original producer/cut witness and readable
+extent. Static metadata is capped at 64 KiB/512 facts; each request-owned generated
+provenance hole is capped at 16 KiB/32 facts. Neither pack contains replacement
+content. SQL type/length checks precede BLOB allocation; hashes, exact original
+capture witnesses and geometry checks precede use. Corruption cannot be laundered
+through a later request. Unsupported/oversized inputs keep the existing Own layout.
+Optional display-index failure rolls back its savepoint without refusing native
+request, Journal or canonical commitment.
+
+Store point/range reads admit one bounded metadata BLOB; a message-root page may
+admit two. The tested selected-field public route reads at most three metadata
+BLOBs. Each underlying range operation reads at most two original 64 KiB
+segments; a composed ValueRead may perform up to six segment reads across its
+header, optional one-item page and range operations. A 32-result page may normalize
+32 bounded 16 KiB headers. These are distinct primitive and composed-route bounds,
+not a two-segment bound for every RPC. Canonical/publication frontiers and original
+byte-oriented range semantics are unchanged.
+
+The source-copy path pins one original file owner, reads at most 64 KiB at a time,
+and copies only its certified extent. Certified root finalization avoids duplicate
+SQL updates, with actual update-counter and uncached-layout oracles. Provider
+outcome and publication P/U/C/audit validation reuse the same already-validated
+request row inside one Immediate transaction; original integrity, start, envelope,
+outcome and error-precedence checks remain. No cross-transaction cache is added.
+
+Prepared capability and Trace heads retain bounded normalized DTOs and their exact
+encoded/conservative admission charges under their original owner. Changed records
+replace that owner; held checkpoint seeds retain the previous rows and cut. Lazy
+Trace preparation occurs off the Projection lock. Final full-record bounds,
+checkpoint fitting, frontiers and normalization still apply. Exact UTF-8 string
+admission charges raw bytes once plus escape expansion, with an original-byte-walk
+oracle at every budget boundary.
+
+### Deterministic repair evidence
+
+The original repair selectors below were discovered and executed by final109's
+complete Rust command; later opening-adoption tests are also covered by repair112
+and final113. The latest full-run results remain distinguished below. The original T01–T20 matrix
+below remains the architecture-wide mapping.
+
+| Test selector | Boundary and synchronization evidence |
+| --- | --- |
+| `composition_shutdown_retry_joins_physical_read_before_immediate_recomposition` | Actual blocking Store read signals entry and logical cancellation; channel release gates physical termination. Cancelling the first shutdown waiter retains the original join handle. Retry stays pending until release, then weak owners expire and immediate real-lock recomposition succeeds. |
+| `explicit_checkpoint_repairs_a_real_source_fault_on_the_original_worker_without_native_work` | Actual SQLite finite occupancy-source fault held through public checkpoint/subscription refusal; exact original BLOB restoration followed by public checkpoint wakes the original worker, publishes one read transition, preserves native cuts and makes zero model requests. |
+| `unix_checkpoint_source_repair_keeps_the_current_thread_executor_serviceable` | Real Unix socket and JSONL server on a single-thread executor prove that checkpoint recovery yields the executor while the original Projection worker completes; persistent SQL fault stays unavailable and restoration advances one display transition without semantic work. |
+| `projection_drain_joins_residual_read_after_worker_panic_and_waiter_cancellation` and `projection_drain_joins_residual_read_after_worker_abort_and_waiter_cancellation` | An actually blocked Source read retains its physical permit across worker failure and cancellation of the first drain waiter; retry stays pending until channel release, then preserves the worker outcome and proves both handles joined. |
+| `committed_compaction_head_is_atomic_with_context_while_domain_reads_are_parked` | Two real native compactions with the read worker parked at the second completion; exact Completed-J, checkpoint cut and full contiguous replay already contain head activation two before background refinement. |
+| `source_failure_is_unavailable_until_same_cut_native_read_repair` | Failed native read after a published checkpoint, no intervening semantic event, typed checkpoint/subscriber refusal, and successful same-cut source repair. |
+| `read_failure_requires_successful_source_read_at_the_current_dependency_revision` | Installation under the Projection lock rejects obsolete read results; only the matching dependency fence clears source failure. |
+| `failed_journal_batch_wakes_subscribers_without_inventing_a_trace_cut` | Native failure wakes observation without fabricating a cursor or execution fact. |
+| `t18_child_source_failure_recovers_over_unix_at_the_same_activation_without_native_work` | Real Unix inspection transport preserves Child activation, typed unavailability and original source identity across repair without cold fallback or semantic work. |
+| `manual_compaction_lost_commit_ack_publishes_the_original_receipt_after_owner_release` | Actual SQLite post-commit failure and held semantic owner prove original receipt publication ordering, unchanged canonical history and one compaction transition. |
+| `giant_original_provenance_retains_scope_digest_and_exact_canonical_metadata_source` | A large original identity retains ancestor conversation scope and digest while its local canonical locator remains authoritative for deferred metadata. |
+| `derived_provenance_admits_exact_byte_bounded_prefixes_without_copying_giant_aliases` | Combined encoded-byte admission retains exact provenance prefixes and explicit truncation. |
+
+
+Opening-adoption regression selectors (six Store tests and one production-wire/Fork test):
+
+| Selector | Proof |
+| --- | --- |
+| `uploaded_frozen_request_retains_the_exact_original_retry_boundary` | Real idle adoption, AttemptStart and upload-rendered Derived input; native retry identity/C1, reconstructed model request, RequestStart frontier and exact replay receipt remain original. |
+| `retry_opening_source_keeps_native_frozen_input_validation` | Forged canonical digest fails before native RequestStart; adoption cannot bypass model-input integrity. |
+| `uploaded_retry_deferred_identity_uses_the_same_original_anchor_as_its_locator` | A giant opening identity is deferred; both requests around later steering retain C1 and exact original UTF-8 ID bytes. |
+| `retry_eligibility_uses_original_adoption_and_native_user_classification` | Nine source/content cases preserve Human/delegated-Agent text eligibility and exclude unadopted context, notices, Unicode whitespace and text-free media. |
+| `retry_capture_ignores_optional_display_holes_and_other_attempt_steering` | Actual deletion of the optional C header cannot refuse native R/J or change captured opening identity; selected display read returns its exact missing-source error, C1 remains, and no hidden repair occurs. Previous-Attempt steering never opens a later Attempt. |
+| `a_projection_summary_without_adoption_cannot_invent_a_retry_opening` | A real committed context projection and frozen Summary without adoption confer no retry authority. |
+| `opening_adoption_retry_is_identical_in_live_wire_and_fork_lineage_after_steering` | Opening A, first request, later steering B, second request and settlement use the production bounded transcript serializer; real native lineage/Fork bootstrap preserves original A/C1 and execution origin without executing the copied Attempt. |
+
+Additional bounded-work regression selectors:
+
+| Selector | Proof |
+| --- | --- |
+| `t08_t14_t19_packed_message_hole_facts_reconstruct_every_default_field_and_original_byte` | Independent uncached full field/page/range reconstruction preserves every original byte. |
+| `t08_t12_t19_packed_request_holes_reject_corruption_before_allocation_and_restore_exactly` | SQL admission bounds and exact restored metadata; no corrupt-reference expansion. |
+| `t10_t12_t19_packed_hole_geometry_cannot_be_rehashed_or_laundered_into_new_requests` | Original capture witness prevents rebasing and later-request laundering. |
+| `t10_t14_t19_packed_hole_update_failure_never_refuses_native_request_or_journal` | Optional-index savepoint failure leaves native commitments intact. |
+| `t08_t14_t19_certified_request_roots_finalize_once_with_exact_legacy_geometry_and_witness` | Actual SQL update counters plus complete legacy geometry/byte oracle, including Own fallback. |
+| `t10_t14_t19_certified_root_finalization_failure_rolls_back_only_optional_source` | Actual SQL failure trigger and healthy subsequent capture; no native rollback. |
+| `t14_t19_t20_provider_outcomes_decode_the_same_transaction_snapshot_once` | Old two-read versus new one-read materialization counters, for success and failure. |
+| `t14_t19_snapshot_reuse_preserves_original_provider_validation_errors_and_precedence` | Independent original-path oracle across twelve malformed/foreign/duplicate cases. |
+| `t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot` | Actual public P/U/C/audit transactions retain all native start/outcome checks. |
+| `runtime_client::checkpoint::prepared_capability_tests::` | Three exhaustive budget/normalization/exact-source-owner tests. |
+| `runtime_client::checkpoint::prepared_trace_tests::` and `prepared_trace_owner_reuses_exact_rows_and_retires_after_native_terminal_install` | Four tests covering every budget, rejection/count frontiers, serde normalization, real native Tool transitions and held old cuts. |
+| `runtime::read_layout::source_copy_tests::` | Four tests: exact original extent, bounded writes, actual file/index open counts, EOF/destination failure and owner release. |
+| `t01_t15_string_budget_matches_original_byte_walk_at_every_boundary` | Original UTF-8/escape admission oracle for every surrounding budget. |
+
+The original model no-op test now establishes the initial published Eligible state
+before admitting an Attempt; waiting for that obsolete state afterward could miss
+a coalesced transition. Background conformance preserves the initial dispatch
+assertion, then waits for Running on the exact parked Job before reading status;
+Starting→Running legitimately changes its native collection cut. Neither fix
+retries mutations, accepts expired cuts, changes a deadline, or removes an assertion.
+
+A retained-progress timeout occurred in earlier full runs while the same module
+passed alone. Failure-only diagnostics now read one native J frontier and at most
+12 indexed facts, with the original 10-second guard and all 256 retained facts
+unchanged. Production progress semantics were not changed. Run 102 passed the
+unchanged workload in the complete suite; earlier failures remain recorded in the
+[repair history](issue-467-repair-history.md), not relabeled as passes or proven
+infrastructure failures. Remote CI remains an independent required gate.
+
+### Browser-discovered integration repairs
+
+Browser103 exposed three distinct issues, without changing its existing assertions:
+
+- A new Observe after RuntimeShutdown waited for its ten-second deadline while
+  the inspection listener was trying to join connections. Exact endpoint retirement
+  now wakes the pure wait while physical Source work remains joined.
+- Upload rendering in main produces a Derived input, and later steering can
+  change the last frozen input within one Attempt. Retry authority must instead
+  come from the original opening adoption, shared by live and inherited responses.
+  The final correction captures that original native identity inside request-start
+  using canonical eligibility and adoption order, independently of optional display
+  sources. Frozen Original/Derived model context cannot grant retry authority. The
+  same captured anchor supplies the optional deferred retry-ID field.
+- The exact Compaction Completed-J bootstrap already held its original bounded
+  summary, but Trace assembly discarded it. Trace now retains that original preview
+  and truncation flag. A later activation cannot replace historical content. No
+  canonical summary Message, new read authority or schema change is introduced;
+  truncated Summary/Raw views explicitly show Content deferred.
+
+The added selectors are `runtime_client::endpoint::retirement_tests::` (three),
+`local_runtime::live_inspection::shutdown_tests::` (two),
+`t20_real_unix_shutdown_retires_the_exact_pending_observe_before_its_deadline`,
+`request_retry_tests::` (six),
+`runtime_client::response::tests::retry::` (one), and
+`trace_preview_tests::` (two).
+The existing `t20_real_unix_shutdown_joins_admitted_physical_source_worker` now
+also cancels and retries the original shutdown waiter. These tests use installed
+native subscriptions, immediate future polls, exact channels, actual Unix sockets
+and native transaction facts. Web component tests add four summary identity and
+truncation cases. Repair107 passed all twelve selected native tests (eleven new and one extended),
+strict Clippy, binary build and all-target compilation. Browser108 passed all six
+originally failed cases unchanged. Browser103 remains a failed historical run.
+
+### Current validation commands
+
+Final121's complete Rust command passed **4,782 tests, zero failures, ten
+existing ignores** in 644.885 seconds: 4,101 library, 661 external-target and
+20 example-target passes. The exact original failing test also passed alone.
+Repeated in-crate boundary (237), external boundary (451) and Subagent (47)
+commands also passed; these subsets do not add distinct tests to that total.
+
+All Rust repair commands use `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`,
+`RUST_TEST_THREADS=4`, and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Real provider APIs
+were not invoked. Existing opt-in/credentialed ignores and client skips remain;
+none was added to obtain passing results. Build writes complete before timed
+integration execution; test budgets, workloads and filesystem are unchanged.
+
+The table records final maintained-command evidence. Focused repair107 selectors
+are additionally discovered and executed by final121's complete command; the
+opening-adoption suite is recorded after its correction. Browser108 is a
+historical focused run superseded by all 317 cases passing in browser120. Earlier
+failed commands and the two full-run liveness failures remain in the repair
+history. All six App Server cases and the parallel Tool-progress case pass in
+final121 without changed budgets, reduced workloads or semantic workarounds.
+
+| Exact command | Result | Repair run |
+| --- | --- | --- |
+| `git diff --check` | Passed (0.015s) | final121 |
+| `cargo fmt --all -- --check` | Passed (4.537s) | final121 |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed (73.019s) | final121 |
+| `cargo build --bins` | Passed (79.275s) | final113 |
+| `cargo test --all-targets --all-features --no-run` | Passed (147.206s) | repair107 |
+| `cargo test --lib --all-features runtime_client::endpoint::retirement_tests:: -- --nocapture` | Passed (160.112s) | repair107 |
+| `cargo test --lib --all-features local_runtime::live_inspection::shutdown_tests:: -- --nocapture` | Passed (0.273s) | repair107 |
+| `cargo test --lib --all-features t20_real_unix_shutdown_ -- --nocapture` | Passed (0.479s) | repair107 |
+| `cargo test --lib --all-features request_retry_tests:: -- --nocapture` | Passed (177.713s) | final113 |
+| `cargo test --lib --all-features trace_preview_tests:: -- --nocapture` | Passed (0.313s) | repair107 |
+| `cargo test --lib --all-features runtime_client::response::tests:: -- --nocapture` | Passed (58.444s) | repair112 |
+| `cargo test --lib --all-features scripted_suites::agent::tool_progress:: -- --nocapture` | Passed (164.508s) | final121 |
+| `cargo test --all-targets --all-features` | Passed (644.885s) | final121 |
+| `cargo test --all-features --test subagent definitions::skill_version_identity_is_frozen_across_the_boundary -- --exact --nocapture` | Passed (0.843s) | remaining117 |
+| `cargo test --all-features --test subagent` | Passed (35.549s) | remaining117 |
+| `cargo test --lib --all-features -- boundary_suites::` | Passed (80.332s) | remaining117 |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | Passed (149.023s) | remaining117 |
+| `cargo run --all-features --example check_test_lanes` | Passed (15.733s) | final121 |
+| `pnpm --dir protocol/app-server check` | Passed (1.635s) | final121 |
+| `uv run --frozen pytest` | Passed (0.359s) | remaining117 |
+| `pnpm --dir protocol/app-server typecheck` | Passed (0.873s) | clients114 |
+| `pnpm --dir dev typecheck` | Passed (1.400s) | clients114 |
+| `pnpm --dir dev test` | Passed (2.730s) | clients114 |
+| `pnpm --dir tui typecheck` | Passed (3.699s) | clients114 |
+| `pnpm --dir tui test` | Passed (35.800s) | clients114 |
+| `pnpm --dir web-console typecheck` | Passed (13.023s) | clients114 |
+| `pnpm --dir web-console test` | Passed (35.241s) | clients114 |
+| `pnpm --dir web-console build` | Passed (5.890s) | clients114 |
+| `pnpm --dir web-console check:i18n` | Passed (0.879s) | clients114 |
+| `pnpm --dir web-console check:provenance` | Passed (1.061s) | clients114 |
+| `bash web-console/scripts/browser-tests.sh test/e2e/child-capabilities.spec.ts test/e2e/commands.spec.ts test/e2e/compaction.spec.ts` | Passed (195.696s) | browser108 |
+| `pnpm --dir web-console test:e2e` | Passed (1499.771s) | browser120 |
+
+Linux/macOS remote results must be checked against the exact pushed HEAD in
+[PR #478 checks](https://github.com/Caismis/rustX/pull/478/checks). Old-head CI
+failure is not represented as repaired-head success. The dedicated worktree and
+branch remain available for review.
+
+Earlier repair commands, failed runs, environment diagnostics and intermediate
+results are preserved in [the chronological repair history](issue-467-repair-history.md).
+That history contains obsolete intermediate statuses and versions; this section
+is the current repair evidence. Pre-review records below are separately historical.
+
+## Historical pre-review complete-command evidence
 
 All Native validation used `CARGO_INCREMENTAL=0` and required Provider Emulator
 availability (`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`). The full Rust command used
 `RUST_TEST_THREADS=4`. Epoch numbers identify retained command logs, not versions.
-Later source changes after Native111 are confined to clients/tests and documentation.
+Within this pre-review record, later changes after Native111 were confined to
+clients/tests and documentation. The main integration and subsequent Native
+repairs are recorded separately above.
 
-| Command | Final-source result |
+| Command | Pre-review result |
 | --- | --- |
 | `git diff --check` | Passed (114; repeated after documentation edits). |
 | `cargo fmt --all -- --check` | Passed (111). |
@@ -1127,7 +1393,7 @@ continuation evidence. These client changes require fresh client/browser runs;
 the epoch-111 Rust pass remains evidence for unchanged Native sources.
 
 
-## Final client validation epochs 113–114
+## Historical pre-review client validation epochs 113–114
 
 The Tool result omission recorded at browser111 is repaired in both clients.
 Web `TraceToolFields` selects the original `record.collections` source under the
@@ -1159,9 +1425,9 @@ select the exact `pre` window before the complete rerun.
 | `pnpm --dir web-console check:i18n` (114) | Passed. |
 | `pnpm --dir web-console check:provenance` (114) | Passed; 276 source records and 264 production package notices. |
 
-The final Native sources are unchanged from the complete epoch-111 Rust and lane
-passes. Final Chat and complete browser results are recorded below; both passed
-before commit and PR publication.
+At this pre-review checkpoint, Native sources were unchanged from the complete
+epoch-111 Rust and lane passes. Its Chat and complete browser results are recorded
+below; both passed before the original commit and PR publication.
 
 A fresh main fetch at epoch114 still resolves to
 `97096020d64ea00218493a0a99b9b805821eeb28`. Open PR #477 advanced to
@@ -1190,12 +1456,12 @@ including default-disk writeback throttling and the actual Tool collection UI ga
 Both 300-Attempt preparations completed under their original 240-second budgets.
 No screenshot baseline, race assertion, workload or correctness timeout was relaxed.
 
-The final pre-publication fetch again confirmed main
+That pre-review pre-publication fetch again confirmed main
 `97096020d64ea00218493a0a99b9b805821eeb28` and unmerged PR #477 head
 `843dd7dd17ef86cb3a14253dc8bf4dfaf86d3926`. There is no known unresolved local
 contract failure in the mapped T01–T20 evidence. Remote CI and macOS execution
 must be reported from their actual run states, independently of these local passes.
 
-Final staged-tree `git diff --cached --check` and protocol regeneration/drift checks
+Pre-review staged-tree `git diff --cached --check` and protocol regeneration/drift checks
 passed. The index contains v48 generated contracts and all intended source/tests,
 with v47 artifacts removed and no logs, databases or browser recordings staged.

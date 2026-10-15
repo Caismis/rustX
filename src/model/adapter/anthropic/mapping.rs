@@ -3,14 +3,15 @@
 
 use reqwest::{StatusCode, header::HeaderMap};
 
-use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
+use crate::message::types::{AssistantContentBlock, UserContentBlock};
 use crate::model::adapter::validation::ValidatedTools;
 use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };
 use crate::model::finish::ModelFinishReason;
-use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
+use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
+use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 
@@ -379,7 +380,7 @@ fn construct_request(
         tools: (!tools.is_empty()).then_some(tools),
         stream: true,
     };
-    let value = serde_json::to_value(&wire).map_err(|error| ModelError {
+    let mut value = serde_json::to_value(&wire).map_err(|error| ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: format!("failed to serialize the Anthropic request: {error}"),
         retry_disposition: crate::model::error::ModelRetryDisposition::Never,
@@ -390,6 +391,8 @@ fn construct_request(
         timeout_phase: None,
         generation: None,
     })?;
+    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::AnthropicMessages)
+        .map_err(invalid_request)?;
     finalize_provider_request(
         value,
         request.request_params(),
@@ -432,11 +435,11 @@ fn translate_messages(
     };
 
     for (position, block) in request.messages.iter().enumerate() {
-        match block {
-            ModelInputMessage::Canonical(MessageBlock::User(user)) => {
+        match block.view() {
+            ModelMessageView::User(user) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
                 let mut content = Vec::new();
-                for user_content in &user.content {
+                for user_content in user {
                     match user_content {
                         UserContentBlock::Text(text) => {
                             content.push(serde_json::json!({
@@ -459,25 +462,31 @@ fn translate_messages(
                     content,
                 });
             }
-            ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) => {
+            ModelMessageView::Assistant(assistant) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
-                let is_last_assistant = request.messages[position + 1..].iter().all(|later| {
-                    !matches!(
-                        later,
-                        ModelInputMessage::Canonical(MessageBlock::Assistant(_))
-                    )
-                });
-                let content =
-                    translate_assistant_content(assistant, tools, continuation, is_last_assistant)?;
+                let is_continuation_output = request
+                    .continuation_boundary()
+                    .map_err(|error| unsupported(&error))?
+                    == Some(position);
+                let content = translate_assistant_content(
+                    assistant,
+                    tools,
+                    continuation,
+                    is_continuation_output,
+                )?;
                 messages.push(WireRequestMessage {
                     role: "assistant",
                     content,
                 });
             }
-            ModelInputMessage::Canonical(MessageBlock::Tool(tool_message)) => {
-                pending_tool_results.push(translate_tool_result(tool_message, &request.images)?);
+            ModelMessageView::Tool(tool_call_id, result) => {
+                pending_tool_results.push(translate_tool_result(
+                    tool_call_id,
+                    result,
+                    &request.images,
+                )?);
             }
-            ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+            ModelMessageView::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
             )) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
@@ -516,18 +525,17 @@ fn translate_messages(
 /// provider state; a signed thinking block is never reconstructed from
 /// canonical text alone and no signature is ever fabricated.
 fn translate_assistant_content(
-    assistant: &crate::message::types::AssistantMessageBlock,
+    assistant: &[crate::message::types::AssistantContentBlock],
     _tools: &ValidatedTools,
     continuation: Option<&AnthropicContinuation>,
-    is_last_assistant: bool,
+    is_continuation_output: bool,
 ) -> Result<Vec<serde_json::Value>, ModelError> {
     let mut content = Vec::new();
     let mut reasoning_seen = false;
     let last_reasoning_position = assistant
-        .content
         .iter()
         .rposition(|block| matches!(block, AssistantContentBlock::Reasoning(_)));
-    for (position, block) in assistant.content.iter().enumerate() {
+    for (position, block) in assistant.iter().enumerate() {
         match block {
             AssistantContentBlock::Text(text) => {
                 content.push(serde_json::json!({
@@ -537,7 +545,8 @@ fn translate_assistant_content(
             }
             AssistantContentBlock::Reasoning(reasoning) => {
                 reasoning_seen = true;
-                let is_boundary = is_last_assistant && Some(position) == last_reasoning_position;
+                let is_boundary =
+                    is_continuation_output && Some(position) == last_reasoning_position;
                 let state = match &reasoning.provider_state {
                     Some(ProviderContinuationState::Anthropic(state)) => {
                         if is_boundary
@@ -558,27 +567,12 @@ fn translate_assistant_content(
                         ));
                     }
                     None => {
-                        if is_boundary {
-                            if let Some(continuation) = continuation {
-                                // The runtime carried the continuation state
-                                // separately; attach it to the boundary block.
-                                continuation
-                            } else {
-                                return Err(unsupported(
-                                    "previous Anthropic thinking block has no provider \
-                                     continuation state; a signed thinking block cannot be \
-                                     reconstructed from canonical text",
-                                ));
-                            }
-                        } else {
-                            return Err(unsupported(
-                                "previous Anthropic thinking block has no provider \
-                                 continuation state; a signed thinking block cannot be \
-                                 reconstructed from canonical text",
-                            ));
-                        }
+                        return Err(unsupported(
+                            "Anthropic thinking lacks its complete original native replay unit",
+                        ));
                     }
                 };
+                validate_thinking_unit(reasoning, state)?;
                 content.push(state.opaque.clone());
             }
             AssistantContentBlock::ToolCall(call) => {
@@ -602,7 +596,7 @@ fn translate_assistant_content(
             }
         }
     }
-    if continuation.is_some() && !reasoning_seen && is_last_assistant {
+    if continuation.is_some() && !reasoning_seen && is_continuation_output {
         return Err(invalid_request(
             "continuation state has no coherent preceding Assistant reasoning boundary",
         ));
@@ -610,15 +604,49 @@ fn translate_assistant_content(
     Ok(content)
 }
 
+fn validate_thinking_unit(
+    reasoning: &crate::message::types::ReasoningBlock,
+    state: &AnthropicContinuation,
+) -> Result<(), ModelError> {
+    match state.opaque["type"].as_str() {
+        Some("thinking") => {
+            let thinking = state.opaque["thinking"]
+                .as_str()
+                .ok_or_else(|| unsupported("signed thinking is missing native text"))?;
+            if state.opaque["signature"].as_str().is_none_or(str::is_empty)
+                || reasoning
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text != thinking)
+            {
+                return Err(unsupported(
+                    "changed or incomplete Anthropic signed thinking unit",
+                ));
+            }
+        }
+        Some("redacted_thinking")
+            if state.opaque["data"]
+                .as_str()
+                .is_some_and(|data| !data.is_empty())
+                && reasoning.text.as_deref().is_none_or(str::is_empty) => {}
+        _ => {
+            return Err(unsupported(
+                "unsupported or incomplete Anthropic native thinking unit",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Translates the canonical model-facing tool-result projection into the
 /// Anthropic tool-result block shape. Projection policy, status rendering,
 /// and aggregate bounding are owned by the Tool Plane.
 fn translate_tool_result(
-    tool: &crate::message::types::ToolMessageBlock,
+    tool_call_id: &crate::runtime::identity::ToolCallId,
+    result: &crate::tools::types::ToolExecutionResult,
     images: &crate::model::images::ResolvedImages,
 ) -> Result<serde_json::Value, ModelError> {
-    let content = tool
-        .result
+    let content = result
         .image_projection()
         .map_err(unsupported)?
         .into_iter()
@@ -631,7 +659,7 @@ fn translate_tool_result(
         .collect::<Result<Vec<_>, ModelError>>()?;
     Ok(serde_json::json!({
         "type": "tool_result",
-        "tool_use_id": tool.tool_call_id,
+        "tool_use_id": tool_call_id,
         "content": content,
     }))
 }
@@ -865,8 +893,12 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message, &std::collections::BTreeMap::new())
-            .expect("translate cancelled result");
+        let encoded = translate_tool_result(
+            &message.tool_call_id,
+            &message.result,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("translate cancelled result");
         assert_eq!(
             encoded["content"][0]["text"],
             "Tool call was cancelled (reason: parent_cancelled). Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
@@ -911,8 +943,12 @@ mod tests {
                     managed_output: None,
                 },
             };
-            let encoded = translate_tool_result(&message, &std::collections::BTreeMap::new())
-                .expect("translate status result");
+            let encoded = translate_tool_result(
+                &message.tool_call_id,
+                &message.result,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("translate status result");
             let projection = message.result.model_facing_projection();
             let wire_parts: Vec<String> = encoded["content"]
                 .as_array()
@@ -959,8 +995,12 @@ mod tests {
                 managed_output: None,
             },
         };
-        let encoded = translate_tool_result(&message, &std::collections::BTreeMap::new())
-            .expect("translate failed tool result");
+        let encoded = translate_tool_result(
+            &message.tool_call_id,
+            &message.result,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("translate failed tool result");
         let projection = message.result.model_facing_projection();
         let wire_parts: Vec<String> = encoded["content"]
             .as_array()

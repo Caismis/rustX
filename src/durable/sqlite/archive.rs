@@ -12,6 +12,9 @@ pub struct ConversationArchiveFrontiers {
     pub messages: i64,
     pub surface: i64,
     pub requests: i64,
+    /// Historical projection activation prefix, independent of canonical commits.
+    pub projections: i64,
+    pub projection_head: Option<crate::runtime::identity::CheckpointId>,
     pub publication_audits: i64,
     /// Presence frontier of the immutable lineage bootstrap row, shared by
     /// completed-response and turn-reading provenance.
@@ -56,11 +59,17 @@ impl SqliteConversationStore {
             )
             .map_err(error)
         };
+        let projection_head = super::projection::head(&conn).map_err(error)?;
+        // Current dependency closure is independently checked; historical snapshots
+        // may be deliberately exported lossily without contaminating active execution.
+        super::projection::history(&conn, &self.conversation_id).map_err(error)?;
         Ok(ConversationArchiveFrontiers {
             journal: max("events", "sequence")?,
             messages: max("message_ledger", "position")?,
             surface: max("surface_ops", "revision")?,
             requests: max("request_snapshots", "rowid")?,
+            projections: max("projection_activations", "activation")?,
+            projection_head: projection_head.map(|checkpoint| checkpoint.candidate.checkpoint_id),
             publication_audits: max("publication_audits", "rowid")?,
             bootstrap: max("bootstrap_identity", "id")?,
         })
@@ -75,6 +84,30 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
+        if matches!(authority, Authority::Projections) {
+            let connection = self.lock().map_err(error)?;
+            let checkpoint = super::projection::timeline(
+                &connection,
+                crate::context::checkpoint::ProjectionActivationId(
+                    u64::try_from(after.max(0)).map_err(error)?,
+                ),
+                1,
+            )
+            .map_err(error)?
+            .into_iter()
+            .next();
+            return checkpoint
+                .filter(|checkpoint| {
+                    checkpoint.activation.activation.0 <= u64::try_from(through).unwrap_or(0)
+                })
+                .map(|checkpoint| {
+                    Ok((
+                        i64::try_from(checkpoint.activation.activation.0).map_err(error)?,
+                        serde_json::to_string(&checkpoint).map_err(error)?,
+                    ))
+                })
+                .transpose();
+        }
         if let Some(table) = match authority {
             Authority::InheritedResponses => Some("inherited_response_provenance"),
             Authority::InheritedTurns => Some("inherited_turn_provenance"),
@@ -99,6 +132,7 @@ pub(crate) enum Authority {
     Messages,
     Surface,
     Requests,
+    Projections,
     PublicationAudits,
     InheritedResponses,
     InheritedTurns,
@@ -111,7 +145,7 @@ impl Authority {
             Self::Surface => ("surface_ops", "revision", "op_json"),
             Self::Requests => ("request_snapshots", "rowid", "snapshot_json"),
             Self::PublicationAudits => ("publication_audits", "rowid", "audit_json"),
-            Self::InheritedResponses | Self::InheritedTurns => {
+            Self::InheritedResponses | Self::InheritedTurns | Self::Projections => {
                 unreachable!("bootstrap provenance uses its immutable presence frontier")
             }
         }

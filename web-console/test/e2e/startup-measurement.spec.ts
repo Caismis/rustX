@@ -54,9 +54,14 @@ for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sa
     await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Plan the composer docks');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
+    // Plan recorded belongs to the second request, after three real Todo calls.
+    // Synchronize with the producer; the measurement asserts ordering, not a
+    // five-second deadline for that entire native execution pipeline.
+    await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
     await expect(page.getByText('Plan recorded.', { exact: true })).toBeVisible();
     const result = await page.evaluate(() => (window as any).__startup);
     console.log('STARTUP_MEASUREMENT', JSON.stringify({ sample, ...result }));
     expect(result.times.T9).toBeGreaterThan(result.times.T3);
-  } finally { await fixture.stop(false); }
+  } catch (error) { console.error('STARTUP_NATIVE_DIAGNOSTICS', fixture.diagnostics()); throw error; }
+  finally { await fixture.stop(false); }
 });

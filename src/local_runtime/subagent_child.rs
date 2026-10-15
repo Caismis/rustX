@@ -372,7 +372,7 @@ async fn run_child_inner(
     // activation cut, so live non-durable state belongs to the child's own
     // projection instead of being reconstructed from SQLite or tunneled as a
     // transcript through the parent observation lane.
-    let mut interactive = core
+    let interactive = core
         .into_subagent_child_with_route(
             spec.subagent_id.clone(),
             Arc::new(ChildInteractionRoute::new(handle.clone())),
@@ -446,8 +446,12 @@ async fn run_child_inner(
     // extend the child's semantic lifetime. Once the child reports its
     // bounded result (or loses its parent), close the endpoint and remove
     // exactly its disposable socket path.
-    if let Some(live_server) = live_server {
-        live_server.shutdown().await;
+    if let Some(mut live_server) = live_server
+        && let Err(error) = live_server.shutdown().await
+    {
+        // The already published semantic result is independent. This is
+        // not proof of physical release; the parent still requires reap.
+        eprintln!("subagent child: inspection cleanup: {error}");
     }
     // The semantic result was already decided and, when accepted, published.
     // Join downstream observation ownership without reclassifying that result.

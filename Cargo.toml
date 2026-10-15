@@ -44,7 +44,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 # Correctly rounded float parsing: authored request-parameter numbers must read
 # back as exactly the binary64 value that was written (and that JSON clients
 # print), or a native source round trip would silently move them.
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 thiserror = "2"
 # PEP 508 grammar and PyPA normalized distribution identities for managed
 # Python requirements. Chumsky is direct only to normalize pep-508's public
@@ -105,7 +105,7 @@ schemars = { version = "1", features = ["chrono04"] }
 tempfile = "3.27.0"
 # The M8 durability backend (Issue #63 / #11). `bundled` compiles the SQLite
 # amalgamation so no system libsqlite3 is required on any CI platform.
-rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+rusqlite = { version = "0.32", features = ["bundled", "hooks", "functions"] }
 # The parser-only document decode backend behind native Read (Issue #48).
 # rustX owns the supported-format whitelist (`.pdf`, `.docx`, `.xlsx`,
 # `.pptx`), the path contract, and all extraction policy; xberg only decodes.

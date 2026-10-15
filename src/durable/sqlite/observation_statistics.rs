@@ -127,7 +127,7 @@ pub(super) fn requires_statistics(event: &RuntimeEventEnvelope) -> bool {
                 | RuntimeEvent::ToolExecutionStarted { .. }
                 | RuntimeEvent::ToolExecutionCompleted { .. }
                 | RuntimeEvent::ToolExecutionFailed { .. }
-                | RuntimeEvent::CompactionStarted
+                | RuntimeEvent::CompactionStarted { .. }
                 | RuntimeEvent::CompactionCompleted { .. }
         )
 }
@@ -181,7 +181,7 @@ pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolExecutionStarted { .. }
-            | RuntimeEvent::CompactionStarted
+            | RuntimeEvent::CompactionStarted { .. }
             | RuntimeEvent::BackgroundExecutionCommitted { .. }
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
             | RuntimeEvent::WorkflowStarted { .. }

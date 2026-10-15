@@ -2,8 +2,8 @@
 use super::*;
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
-    ToolCallOccurrenceRef, ToolMessageBlock,
+    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+    ToolCallOccurrenceRef, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
 use crate::runtime_client::content::CanonicalContentLocator;
@@ -33,7 +33,7 @@ async fn granted_connection(
             .await
         });
         let offered = format!(
-            "rustx.app-server.v48, rustx-token.{}, rustx-delivery-access.{DELIVERY_SECRET}",
+            "rustx.app-server.v50, rustx-token.{}, rustx-delivery-access.{DELIVERY_SECRET}",
             driver::TOKEN
         );
         (driver::websocket_offering(&url, &offered).await, server)
@@ -66,6 +66,19 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             ).unwrap();
             let access = fixture.manager.session_controller().acquire_session(&session.id, None).await.unwrap();
             let store = SqliteConversationStore::open(session.active_conversation_id.clone(), &access.database_path).unwrap();
+            // Exercise a genuinely large retained aggregate while every immutable
+            // model input remains admissible under the native per-record limit.
+            let mut originals = Vec::new();
+            for index in 0..5 {
+                let message = MessageBlock::User(UserMessageBlock {
+                    id: MessageId::new(format!("bounded-delivery-retained-{index}")),
+                    source: UserSource::Human, kind: InboundKind::Message, timestamp: None,
+                    content: vec![UserContentBlock::Text(crate::message::content::TextBlock {text:"retained original 水🙂".repeat(35_000)})],
+                });
+                assert!(serde_json::to_vec(&message).unwrap().len() < crate::context::resources::ResourceLimits::default().record_bytes);
+                store.append_canonical(&message).unwrap();
+                originals.push(message);
+            }
             let proposal = MessageId::new("bounded-delivery-proposal");
             let call_id = ToolCallId::new("bounded-delivery-call");
             let tool_id = ToolId::new("native-present");
@@ -75,17 +88,19 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
                     id: call_id.clone(), tool_id: tool_id.clone(), name: "present".into(), arguments: serde_json::json!({"files":[{"path":file.path}]}),
                 })],
             })).unwrap();
-            let original_id = MessageId::new("original-delivery🙂水".repeat(70_000));
+            let original_id = MessageId::new("original-delivery🙂水".repeat(100));
             let original = MessageBlock::Tool(ToolMessageBlock {
                 id: original_id.clone(), occurrence: ToolCallOccurrenceRef::new(proposal, ContentBlockIndex::new(0)), tool_call_id: call_id, tool_id,
                 result: crate::tools::types::ToolExecutionResult {
                     status: crate::tools::types::ToolExecutionStatus::Success,
-                    content: vec![crate::tools::types::ToolResultContent::Text(crate::message::content::TextBlock { text: "original result 水🙂".repeat(90_000) })],
+                    content: vec![crate::tools::types::ToolResultContent::Text(crate::message::content::TextBlock { text: "original result 水🙂".repeat(30_000) })],
                     duration_ms: 1, exit_code: None, artifacts: vec![], deliveries: vec![file.clone(); 9], truncation: None, workflow: None, managed_output: None,
                 },
             });
-            assert!(original_id.as_str().len() > 1_048_576);
-            assert!(serde_json::to_vec(&original).unwrap().len() > 1_048_576);
+            assert!(original_id.as_str().len() > 256 && original_id.as_str().len() <= 4096);
+            assert!(serde_json::to_vec(&original).unwrap().len() < crate::context::resources::ResourceLimits::default().record_bytes);
+            originals.push(original.clone());
+            assert!(originals.iter().map(|message|serde_json::to_vec(message).unwrap().len()).sum::<usize>() > 4 * 1_048_576);
             store.append_canonical(&original).unwrap();
             let original_cut = store.observation_read_cut().unwrap();
             let locator = CanonicalContentLocator::ByLedgerPosition { position: original_cut.ledger_through };
@@ -155,7 +170,9 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             let access = fixture.manager.session_controller().acquire_read(&session.id, Some(&session.active_node)).await.unwrap();
             let retained = SqliteConversationStore::open_existing(session.active_conversation_id.clone(), &access.database_path).unwrap();
             assert_eq!(retained.observation_read_cut().unwrap(), *checkpoint.read_cut.source_cut.as_ref().unwrap());
-            assert_eq!(retained.load_messages(std::slice::from_ref(&original_id)).unwrap(), vec![original]);
+            for original in &originals {
+                assert_eq!(retained.load_messages(std::slice::from_ref(original.id())).unwrap(), vec![original.clone()]);
+            }
             assert!(retained.read_events(None, 32).unwrap().events.iter().all(|entry| !matches!(entry.event, crate::events::types::RuntimeEvent::AttemptStarted { .. } | crate::events::types::RuntimeEvent::ToolExecutionStarted { .. } | crate::events::types::RuntimeEvent::ToolExecutionCompleted { .. })), "no fabricated execution facts");
             drop(retained); drop(access);
             client.close().await;

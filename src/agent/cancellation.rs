@@ -163,16 +163,17 @@ impl AgentCancellation {
                 .critical
                 .lock()
                 .expect("model-turn start gate poisoned");
-            let mut cause = self
-                .reason
-                .lock()
-                .expect("cancellation reason lock poisoned");
-            let first = cause.is_none();
-            if first {
-                *cause = Some(reason);
-            }
-            self.signal.cancel();
-            first
+            self.signal.cancel_with(|| {
+                let mut cause = self
+                    .reason
+                    .lock()
+                    .expect("cancellation reason lock poisoned");
+                let first = cause.is_none();
+                if first {
+                    *cause = Some(reason);
+                }
+                first
+            })
         }
     }
 

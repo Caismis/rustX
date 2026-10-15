@@ -113,7 +113,7 @@ async fn assert_child_definition(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t08_t12_t18_t19_tool_inspection_uses_real_child_live_and_cold_original_sources() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = inspection_tempdir().unwrap();
     let (parent, host) = parent_runtime_host_plane(
         &directory,
         "conv_01900000-0000-7000-8000-000000000506",
@@ -168,12 +168,13 @@ async fn t08_t12_t18_t19_tool_inspection_uses_real_child_live_and_cold_original_
         .registry
         .agent_inspection_path(&wired.accepted.child_agent_id)
         .unwrap();
-    let inspection = crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
-        socket,
-        child.host.clone(),
-        wired.accepted.subagent_id.clone(),
-    )
-    .unwrap();
+    let mut inspection =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            socket,
+            child.host.clone(),
+            wired.accepted.subagent_id.clone(),
+        )
+        .unwrap();
     let live = selected_tool_head(
         &host,
         &wired.accepted.child_agent_id,
@@ -190,7 +191,7 @@ async fn t08_t12_t18_t19_tool_inspection_uses_real_child_live_and_cold_original_
         .wait_until_settled(&wired.accepted.subagent_id)
         .await
         .unwrap();
-    inspection.shutdown().await;
+    inspection.shutdown().await.unwrap();
     child.runtime.shutdown().await.unwrap();
     let cold = selected_tool_head(
         &host,

@@ -245,14 +245,23 @@ pub(super) fn tool_result_blocks(result: &ToolExecutionResult) -> (Vec<TraceCont
 /// Projects one canonical Tool message as a request-context item.
 /// Returns None when a mandatory correlation identity exceeds the bound.
 pub(super) fn tool_result_block(message: &ToolMessageBlock) -> Option<TraceContentBlock> {
-    if !identity_fits(message.tool_call_id.as_str()) || !identity_fits(message.tool_id.as_str()) {
+    projected_tool_result_block(&message.tool_call_id, &message.tool_id, &message.result)
+}
+
+/// Render typed model-visible content without assigning execution identity or statistics.
+pub(super) fn projected_tool_result_block(
+    call_id: &crate::runtime::identity::ToolCallId,
+    tool_id: &crate::runtime::identity::ToolId,
+    result: &ToolExecutionResult,
+) -> Option<TraceContentBlock> {
+    if !identity_fits(call_id.as_str()) || !identity_fits(tool_id.as_str()) {
         return None;
     }
-    let (blocks, truncated) = tool_result_blocks(&message.result);
+    let (blocks, truncated) = tool_result_blocks(result);
     Some(TraceContentBlock::ToolResult {
-        call_id: message.tool_call_id.clone(),
-        tool_id: message.tool_id.clone(),
-        outcome: tool_outcome(&message.result.status),
+        call_id: call_id.clone(),
+        tool_id: tool_id.clone(),
+        outcome: tool_outcome(&result.status),
         blocks,
         truncated,
     })

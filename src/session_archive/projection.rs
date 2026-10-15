@@ -5,12 +5,14 @@ use serde_json::{Value, json};
 
 /// Explicit schema: new durable fields cannot silently become archive fields.
 #[derive(Serialize)]
-struct ArchiveRequestSnapshotV3<'a> {
-    upload_projection: &'a crate::model::uploads::UploadProjection,
+struct ArchiveRequestSnapshotV4<'a> {
+    exact_reconstruction: bool,
+    missing_input_components: [&'static str; 3],
+    semantic_input_fingerprint: &'a str,
     request_id: &'a crate::runtime::identity::RequestId,
     identity: &'a crate::model::snapshot::RequestIdentity,
     provisional_message_id: &'a crate::runtime::identity::MessageId,
-    surface_revision: &'a crate::conversation::SurfaceRevision,
+    canonical_frontier: &'a crate::context::resources::LedgerFrontier,
     effective_system_prompt: &'a String,
     system_sections: &'a Vec<crate::context::assembly::AcceptedSystemSection>,
     context_window_tokens: &'a u64,
@@ -44,12 +46,18 @@ pub(super) fn request(snapshot: &RequestSnapshot) -> Value {
         })
         .map(|(name, value)| (name.as_str(), value))
         .collect();
-    json!(ArchiveRequestSnapshotV3 {
-        upload_projection: &snapshot.upload_projection,
+    json!(ArchiveRequestSnapshotV4 {
+        exact_reconstruction: false,
+        missing_input_components: [
+            "complete_model_invocation",
+            "frozen_typed_input_and_image_bytes",
+            "provider_native_replay_state"
+        ],
+        semantic_input_fingerprint: &snapshot.semantic_input_fingerprint,
         request_id: &snapshot.request_id,
         identity: &snapshot.identity,
         provisional_message_id: &snapshot.provisional_message_id,
-        surface_revision: &snapshot.surface_revision,
+        canonical_frontier: &snapshot.canonical_frontier,
         effective_system_prompt: &snapshot.effective_system_prompt,
         system_sections: &snapshot.system_sections,
         context_window_tokens: &snapshot.context_window_tokens,
@@ -311,7 +319,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::ToolExecutionCancellationRequested { .. }
         | RuntimeEvent::ToolExecutionSettlementObserved { .. }
         | RuntimeEvent::ToolMessageCommitted { .. }
-        | RuntimeEvent::CompactionStarted
+        | RuntimeEvent::CompactionStarted { .. }
         | RuntimeEvent::CompactionCompleted { .. }
         | RuntimeEvent::BackgroundExecutionCommitted { .. }
         | RuntimeEvent::BackgroundTerminalPublished { .. }
@@ -338,6 +346,35 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::InteractionRequested { .. }
         | RuntimeEvent::InteractionSettled { .. } => json!(event),
     }
+}
+
+/// Export inspection bytes and scoped provenance without claiming exact native replay.
+/// No destination execution or canonical identities are invented for Derived messages.
+pub(super) fn checkpoint(checkpoint: &crate::durable::projection::ProjectionCheckpoint) -> Value {
+    use crate::context::checkpoint::CheckpointMessage;
+    use crate::message::types::AssistantContentBlock;
+    use crate::model::projected::ProjectedMessage;
+    let items=checkpoint.candidate.items.iter().map(|item| {
+        let message=match &item.message {
+            CheckpointMessage::Original(reference)=>json!({"type":"original","reference":reference}),
+            CheckpointMessage::Derived(derived)=>{
+                let body=match &derived.message {
+                    ProjectedMessage::Assistant {content}=>json!({"role":"assistant","content":content.iter().map(|block|match block {
+                        AssistantContentBlock::Reasoning(reasoning)=>json!({"type":"reasoning","text":reasoning.text,"native_replay_unavailable":true}),
+                        AssistantContentBlock::Text(_) | AssistantContentBlock::ToolCall(_) | AssistantContentBlock::Refusal(_) | AssistantContentBlock::Image(_)=>json!(block),
+                    }).collect::<Vec<_>>()}),
+                    ProjectedMessage::User {..} | ProjectedMessage::Tool {..}=>json!(derived.message),
+                };
+                json!({"type":"derived","body":body,"sources":derived.sources,"checkpoint_sources":derived.checkpoint_sources,"transformations":derived.transformations})
+            }
+        };
+        json!({"message":message,"call_sources":item.call_sources,"result_call":item.result_call})
+    }).collect::<Vec<_>>();
+    json!({"exact_reconstruction":false,"missing_input_components":["provider_native_replay_state"],
+        "checkpoint_id":checkpoint.candidate.checkpoint_id,"candidate_fingerprint":checkpoint.fingerprint,
+        "expected_head":checkpoint.candidate.expected_head,"read_cut":checkpoint.candidate.read_cut,
+        "base_frontier":checkpoint.candidate.base_frontier,"items":items,
+        "summary_metadata":checkpoint.candidate.summary_metadata,"activation":checkpoint.activation,"occupancy":checkpoint.occupancy})
 }
 
 #[cfg(test)]

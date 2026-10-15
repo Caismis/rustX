@@ -109,7 +109,9 @@ pub enum TraceFactData {
         call_id: Option<crate::runtime::identity::ToolCallId>,
         tool_id: Option<crate::runtime::identity::ToolId>,
     },
-    CompactionStart,
+    CompactionStart {
+        native_id: Option<String>,
+    },
     BackgroundStart {
         native_id: Option<String>,
         originating_tool_call_id: Option<crate::runtime::identity::ToolCallId>,
@@ -157,8 +159,6 @@ pub struct TraceTerminalHeader {
     pub failure_kind: Option<crate::model::error::ModelErrorKind>,
     pub usage: Option<crate::model::types::ModelUsage>,
     pub generation: Option<crate::model::generation_evidence::GenerationEvidence>,
-    pub summary_ledger_position: Option<u64>,
-    pub summary_message_id: Option<crate::runtime::identity::MessageId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

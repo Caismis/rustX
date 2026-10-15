@@ -71,10 +71,15 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
 /// scripted request: the mandatory M4 path is active, but no compaction or
 /// summary activity can ever trigger in these loop-contract tests.
 fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
+    runtime_for_snapshot(&support::attempt_model(model.clone(), "fake-model"))
+}
+
+fn runtime_for_snapshot(
+    snapshot: &rustx::model::AttemptModelSnapshot,
+) -> rustx::context::ContextRuntime {
     use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(DefaultTokenEstimator);
-    let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
         SessionContextPolicy {
             reserve_tokens: 0,
@@ -83,7 +88,7 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
         },
         estimator,
         Some(rustx::context::AgentStatusEngine::default()),
-        &snapshot,
+        snapshot,
         rustx::model::ModelTimeoutPolicy::default(),
         support::default_monotonic_clock(),
     )
@@ -95,16 +100,52 @@ async fn run(
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> common::DurableExecutionAudit {
+    Box::pin(run_request(
+        request("attempt-1", model),
+        tools,
+        cancellation,
+    ))
+    .await
+}
+
+fn native_request(
+    model: &std::sync::Arc<FakeModel>,
+    protocol: rustx::model::ModelProtocol,
+    stateless: bool,
+) -> AgentExecutionRequest {
+    let mut input = request("attempt-1", model);
+    let mut fixture = support::model::FixtureModel::text("fixture/fake-model", protocol)
+        .with_context_window(10_000_000)
+        .with_max_output_tokens(512);
+    if stateless {
+        fixture.compat = serde_json::json!({"responsesStorage":"stateless"});
+    }
+    input.model = support::model::fixture_session_model(
+        &[fixture],
+        "fixture/fake-model",
+        &support::model::ScriptedAdapterFactory::new(model.clone()),
+    )
+    .snapshot()
+    .unwrap();
+    input
+}
+
+async fn run_request(
+    input: AgentExecutionRequest,
+    tools: ToolRegistry,
+    cancellation: &AgentCancellation,
+) -> common::DurableExecutionAudit {
+    let context = runtime_for_snapshot(&input.model);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let publication = common::RecordingPublicationObserver::default();
     let mut execution = AgentExecution::new(
-        request("attempt-1", model),
+        input,
         capability.into_lease(),
         cancellation,
         support::default_execution_policy(),
-        runtime(model),
+        context,
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
     )
@@ -1447,7 +1488,7 @@ async fn cancellation_never_results_in_completed() {
 #[tokio::test]
 async fn continuation_state_propagates_losslessly() {
     let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"signature": "sig-1", "opaque": [1, 2, 3]}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}),
     });
     let call = ScriptedCall {
         id: "call-1",
@@ -1477,7 +1518,16 @@ async fn continuation_state_propagates_losslessly() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, tools, &cancellation).await;
+    let result = Box::pin(run_request(
+        native_request(
+            &model,
+            rustx::model::ModelProtocol::AnthropicMessages,
+            false,
+        ),
+        tools,
+        &cancellation,
+    ))
+    .await;
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
@@ -1502,15 +1552,19 @@ async fn continuation_state_propagates_losslessly() {
 /// Opaque continuation state passes through without inspection.
 #[tokio::test]
 async fn opaque_continuation_is_never_inspected() {
-    let state =
-        ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-            items: vec![serde_json::json!({
-                "type": "reasoning",
-                "id": "rs_1",
-                "summary": [],
-                "encrypted_content": "opaque-bytes"
-            })],
-        });
+    let state = ProviderContinuationState::OpenAiResponses(
+        OpenAiResponsesContinuation::Stateless {
+            items: vec![
+                serde_json::json!({
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": "opaque-bytes"
+                }),
+                serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
+            ],
+        },
+    );
     let call = ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
@@ -1538,7 +1592,12 @@ async fn opaque_continuation_is_never_inspected() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, tools, &cancellation).await;
+    let result = Box::pin(run_request(
+        native_request(&model, rustx::model::ModelProtocol::OpenAiResponses, true),
+        tools,
+        &cancellation,
+    ))
+    .await;
     assert_eq!(
         model.requests()[1].continuation,
         Some(state),
@@ -2477,14 +2536,30 @@ async fn run_with_mailbox(
     cancellation: &AgentCancellation,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
 ) -> common::DurableExecutionAudit {
+    run_with_mailbox_request(
+        request("attempt-1", model),
+        tools,
+        cancellation,
+        tool_runtime,
+    )
+    .await
+}
+
+async fn run_with_mailbox_request(
+    input: AgentExecutionRequest,
+    tools: ToolRegistry,
+    cancellation: &AgentCancellation,
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+) -> common::DurableExecutionAudit {
+    let context = runtime_for_snapshot(&input.model);
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", model),
+        input,
         capability.into_lease(),
         cancellation,
         support::default_execution_policy(),
-        runtime(model),
+        context,
         tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
     )
@@ -3200,7 +3275,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
 #[tokio::test]
 async fn continuation_retained_across_inbound_drain() {
     let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"signature": "sig-1", "opaque": [1, 2, 3]}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}),
     });
     let (release, parked) = model_release();
     let model = fake(vec![
@@ -3236,7 +3311,17 @@ async fn continuation_retained_across_inbound_drain() {
             .expect("enqueue inbound message");
         release.send(true).expect("release turn 1");
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
+    let result = run_with_mailbox_request(
+        native_request(
+            &model,
+            rustx::model::ModelProtocol::AnthropicMessages,
+            false,
+        ),
+        tools,
+        &cancellation,
+        &tool_runtime,
+    )
+    .await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.event_history);

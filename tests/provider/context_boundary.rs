@@ -18,6 +18,7 @@ const SKILL_TEXT: &str = "## Skills\n\n- pdf: Create PDF documents.\n";
 
 fn request(protocol: ModelProtocol) -> ModelRequest {
     ModelRequest {
+        continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: crate::common::invocation(protocol, "m6-test"),
         messages: vec![
@@ -117,6 +118,7 @@ async fn responses_keeps_the_prompt_across_a_continuation_boundary() {
             },
         ),
     );
+    crate::common::bind_accepted_continuation_source(&mut request, 0);
     let events = crate::common::collect_events(&adapter, request).await;
     assert!(matches!(
         events.last(),
@@ -193,13 +195,20 @@ fn effective_prompt_is_part_of_projection_measurement() {
         std::sync::Arc::new(rustx::context::DefaultTokenEstimator),
     )
     .expect("engine");
-    let state = rustx::conversation::ConversationState::new();
-    let without = engine
-        .build_projection(&state, &[], None, "")
-        .expect("projection");
-    let with_prompt = engine
-        .build_projection(&state, &[], None, SKILL_TEXT)
-        .expect("projection");
+    let without = engine.build_projection_input(
+        rustx::conversation::SurfaceRevision::INITIAL,
+        vec![],
+        &[],
+        None,
+        "",
+    );
+    let with_prompt = engine.build_projection_input(
+        rustx::conversation::SurfaceRevision::INITIAL,
+        vec![],
+        &[],
+        None,
+        SKILL_TEXT,
+    );
     assert!(with_prompt.estimated_input.input_tokens > without.estimated_input.input_tokens);
     assert_ne!(with_prompt.fingerprint(), without.fingerprint());
 }
@@ -219,13 +228,13 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
         }))
         .expect("commit historical message");
     let historical_revision = conversation.revision();
-    let snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(
         RequestIdentity {
             attempt_id: AttemptId::new("attempt-snapshot"),
             turn: TurnId::new("turn-1"),
             retry_number: 0,
         },
-        historical_revision,
+            rustx::context::resources::LedgerFrontier((historical_revision).get()),
         "## Skills\n\n<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>PDF guidance.</description>\n    <location>/workspace/.agents/skills/pdf/SKILL.md</location>\n  </skill>\n</available_skills>"
             .to_owned(),
         Vec::new(),
@@ -243,6 +252,24 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
         None,
         Vec::new(),
     );
+    snapshot
+        .freeze_input(
+            &rustx::runtime::identity::ConversationId::new(
+                "conv_5cdad274-a06f-7a35-8b6c-e0beb9470e1f",
+            ),
+            &rustx::model::ModelRequest {
+                continuation_source: None,
+                images: rustx::model::images::ResolvedImages::new(),
+                invocation: snapshot.invocation.clone(),
+                messages: rustx::model::input::canonical_input(
+                    &conversation.active_messages().unwrap(),
+                ),
+                tools: snapshot.tool_definitions.clone(),
+                effective_system_prompt: snapshot.effective_system_prompt.clone(),
+                continuation: snapshot.continuation.clone(),
+            },
+        )
+        .unwrap();
     let expected = snapshot
         .reconstruct(&conversation)
         .expect("historical request reconstructs");

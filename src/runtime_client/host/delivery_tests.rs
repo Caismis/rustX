@@ -169,11 +169,49 @@ fn assert_delivery_head(
     assert_eq!(host.checkpoint().unwrap(), *checkpoint);
 }
 
+fn create_escaped_delivery_file(root: &std::path::Path) -> String {
+    use nix::fcntl::{OFlag, openat};
+    use nix::sys::stat::{Mode, mkdirat};
+    use std::io::Write as _;
+
+    // Each syscall names one native component, preserving the long original
+    // path without depending on the platform's full-path syscall limit.
+    let component = "\u{1}".repeat(96);
+    let mut directory = std::fs::File::open(root).unwrap();
+    let mut relative = std::path::PathBuf::new();
+    for _ in 0..32 {
+        mkdirat(&directory, component.as_str(), Mode::S_IRWXU).unwrap();
+        directory = std::fs::File::from(
+            openat(
+                &directory,
+                component.as_str(),
+                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap(),
+        );
+        relative.push(&component);
+    }
+    let mut file = std::fs::File::from(
+        openat(
+            &directory,
+            "report.md",
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )
+        .unwrap(),
+    );
+    file.write_all(b"escaped original protected bytes").unwrap();
+    relative.push("report.md");
+    relative.into_os_string().into_string().unwrap()
+}
+
 #[tokio::test]
 async fn t08_t12_t14_t19_cold_host_selects_tiny_delivery_from_giant_original_tool() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("original-root");
     std::fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
     std::fs::write(
         root.join("original 水 report.md"),
         b"original protected bytes",
@@ -264,9 +302,9 @@ async fn t08_t14_t19_delivery_corruption_and_failed_tool_keep_native_authority()
     std::fs::write(directory.path().join("report.md"), b"protected bytes").unwrap();
     let conversation = ConversationId::generate();
     let path = directory.path().join("delivery-fault.sqlite");
+    let root = directory.path().canonicalize().unwrap();
     let file =
-        crate::tools::session_files::declare(directory.path(), &conversation, "report.md", None)
-            .unwrap();
+        crate::tools::session_files::declare(&root, &conversation, "report.md", None).unwrap();
     let originals;
     {
         let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
@@ -326,14 +364,9 @@ async fn t08_t14_t19_delivery_corruption_and_failed_tool_keep_native_authority()
 async fn t08_t12_t14_t19_host_reads_escaped_delivery_metadata_above_sixteen_kib() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("escaped-root");
-    let component = "\u{0001}".repeat(200);
-    let relative = std::iter::repeat_n(component, 16)
-        .chain(std::iter::once("report.md".into()))
-        .collect::<Vec<_>>()
-        .join("/");
-    let target = root.join(&relative);
-    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-    std::fs::write(&target, b"escaped original protected bytes").unwrap();
+    std::fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let relative = create_escaped_delivery_file(&root);
     let conversation = ConversationId::generate();
     let file = crate::tools::session_files::declare(&root, &conversation, &relative, None).unwrap();
     assert!(serde_json::to_vec(&file).unwrap().len() > 16_384);

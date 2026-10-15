@@ -576,9 +576,7 @@ async fn a_batch_that_cannot_hold_the_list_publishes_none() {
 /// conclusion drawn from two modules, so it is pinned end to end instead.
 #[tokio::test]
 async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
-    use rustx::durable::{CompactionCommitInput, ConversationStore};
-    use rustx::message::content::TextBlock;
-    use rustx::runtime::{TokenMeasurement, TokenMeasurementSource};
+    use rustx::durable::ConversationStore;
 
     let fixture = common::native_fixture();
     let audit = run(&fixture, &[create("call-todo-a", "Write the parser")]).await;
@@ -592,7 +590,7 @@ async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
     let store = fixture.store.as_ref();
     let head = store.load_head().expect("head");
     let active = head.active_message_ids.clone();
-    let (first, last) = (
+    let (_first, _last) = (
         active.first().expect("an active span").clone(),
         active.last().expect("an active span").clone(),
     );
@@ -612,30 +610,18 @@ async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
     );
 
     store
-        .commit_compaction(CompactionCommitInput {
-            summary: UserMessageBlock {
-                id: MessageId::new("message-todo-compaction-summary"),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: "earlier work, summarized".to_owned(),
-                })],
-                source: UserSource::Runtime,
-                kind: rustx::message::types::InboundKind::CompactionSummary(
-                    rustx::message::types::CompactionSummaryMetadata::empty(),
+        .commit_projection(
+            crate::scripted_suites::support::context::checkpoint_commit_fixture(
+                store,
+                crate::scripted_suites::support::context::checkpoint_fixture(
+                    store,
+                    "todo-checkpoint",
+                    store.projected_history().unwrap().messages.len(),
+                    "earlier work, summarized",
                 ),
-                timestamp: None,
-            },
-            span: rustx::conversation::SurfaceSpan::new(first, last),
-            expected_revision: head.revision,
-            tokens_before: TokenMeasurement {
-                input_tokens: 64,
-                source: TokenMeasurementSource::Estimated,
-            },
-            estimated_tokens_after: 8,
-            attempt_id: None,
-            turn_id: None,
-            timestamp: chrono::Utc::now(),
-            occupancy: None,
-        })
+                None,
+            ),
+        )
         .expect("compaction");
 
     let compacted = store.load_head().expect("head after compaction");

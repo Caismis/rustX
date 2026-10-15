@@ -11,6 +11,7 @@ pub enum FactScope {
     Step(AttemptId, TurnId),
     Attempt(AttemptId),
     Request(String),
+    Compaction(crate::runtime::identity::CompactionOperationId),
     ToolCall {
         call_id: String,
         attempt: Option<AttemptId>,

@@ -10,6 +10,11 @@ use serde_json::Value;
 #[cfg(test)]
 thread_local! {
     static LOOKUP_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static PROPERTY_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static LEGACY_PROPERTY_LOOKUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static STRING_KEY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GENERIC_KEY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MAP_KEY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 #[cfg(test)]
 fn lookup_work() -> (usize, usize) {
@@ -377,12 +382,131 @@ sequence!(SerializeSeq, serialize_element);
 sequence!(SerializeTuple, serialize_element);
 sequence!(SerializeTupleStruct, serialize_field);
 sequence!(SerializeTupleVariant, serialize_field);
+macro_rules! string_key_reject {
+    ($( $method:ident($($name:ident: $ty:ty),*) -> $result:ident; )*) => {$(
+        fn $method(self, $($name: $ty),*) -> Result<Self::$result, Self::Error> {
+            let _ = ($($name,)*);
+            Err(serde::ser::Error::custom("non-string key probe"))
+        }
+    )*};
+}
+// Only built-in strings use this probe; every custom/numeric key retains the
+// original finite serializer, including its callback count and error behavior.
+struct StringKey;
+impl serde::Serializer for StringKey {
+    type Ok = Option<String>;
+    type Error = serde::de::value::Error;
+    type SerializeSeq = serde::ser::Impossible<Self::Ok, Self::Error>;
+    type SerializeTuple = Self::SerializeSeq;
+    type SerializeTupleStruct = Self::SerializeSeq;
+    type SerializeTupleVariant = Self::SerializeSeq;
+    type SerializeMap = Self::SerializeSeq;
+    type SerializeStruct = Self::SerializeSeq;
+    type SerializeStructVariant = Self::SerializeSeq;
+    fn serialize_str(self, value: &str) -> Result<Self::Ok, Self::Error> {
+        if value.len() > 256 {
+            return Ok(None);
+        }
+        let mut remaining = 256_usize;
+        for byte in value.bytes() {
+            let bytes = match byte {
+                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+                0..=0x1f => 6,
+                _ => 1,
+            };
+            let Some(left) = remaining.checked_sub(bytes) else {
+                return Ok(None);
+            };
+            remaining = left;
+        }
+        Ok(Some(value.to_owned()))
+    }
+    string_key_reject! {
+        serialize_bool(value: bool) -> Ok;
+        serialize_i8(value: i8) -> Ok;
+        serialize_i16(value: i16) -> Ok;
+        serialize_i32(value: i32) -> Ok;
+        serialize_i64(value: i64) -> Ok;
+        serialize_i128(value: i128) -> Ok;
+        serialize_u8(value: u8) -> Ok;
+        serialize_u16(value: u16) -> Ok;
+        serialize_u32(value: u32) -> Ok;
+        serialize_u64(value: u64) -> Ok;
+        serialize_u128(value: u128) -> Ok;
+        serialize_f32(value: f32) -> Ok;
+        serialize_f64(value: f64) -> Ok;
+        serialize_char(value: char) -> Ok;
+        serialize_bytes(value: &[u8]) -> Ok;
+        serialize_none() -> Ok;
+        serialize_unit() -> Ok;
+        serialize_unit_struct(name: &'static str) -> Ok;
+        serialize_unit_variant(name: &'static str, index: u32, variant: &'static str) -> Ok;
+        serialize_seq(len: Option<usize>) -> SerializeSeq;
+        serialize_tuple(len: usize) -> SerializeTuple;
+        serialize_tuple_struct(name: &'static str, len: usize) -> SerializeTupleStruct;
+        serialize_tuple_variant(name: &'static str, index: u32, variant: &'static str, len: usize) -> SerializeTupleVariant;
+        serialize_map(len: Option<usize>) -> SerializeMap;
+        serialize_struct(name: &'static str, len: usize) -> SerializeStruct;
+        serialize_struct_variant(name: &'static str, index: u32, variant: &'static str, len: usize) -> SerializeStructVariant;
+    }
+    fn serialize_some<T: Serialize + ?Sized>(self, _value: &T) -> Result<Self::Ok, Self::Error> {
+        Err(serde::ser::Error::custom("non-string key probe"))
+    }
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self,
+        _name: &'static str,
+        _value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        Err(serde::ser::Error::custom("non-string key probe"))
+    }
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _name: &'static str,
+        _index: u32,
+        _variant: &'static str,
+        _value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        Err(serde::ser::Error::custom("non-string key probe"))
+    }
+    fn collect_str<T: std::fmt::Display + ?Sized>(
+        self,
+        _value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        Err(serde::ser::Error::custom("non-string key probe"))
+    }
+}
+fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
+    let builtin_string = matches!(
+        std::any::type_name::<T>().trim_start_matches('&'),
+        "str" | "alloc::string::String"
+    );
+    #[cfg(test)]
+    let builtin_string = builtin_string && !LEGACY_PROPERTY_LOOKUP.with(std::cell::Cell::get);
+    if builtin_string {
+        #[cfg(test)]
+        STRING_KEY_WORK.with(|work| work.set(work.get() + 1));
+        if let Ok(value) = key.serialize(StringKey) {
+            return value;
+        }
+    }
+    #[cfg(test)]
+    GENERIC_KEY_WORK.with(|work| work.set(work.get() + 1));
+    super::checkpoint::bounded_bytes(key, 258)
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|key| match key {
+            Value::String(key) => Some(key),
+            Value::Number(key) => Some(key.to_string()),
+            _ => None,
+        })
+}
+
 struct Mapping<'a, S> {
     inner: S,
     schema: &'a Value,
     root: &'a Value,
     key: Option<String>,
     properties: Option<&'a serde_json::Map<String, Value>>,
+    ordered_properties: Option<serde_json::map::Iter<'a>>,
     additional: Option<&'a Value>,
     variants: [Option<&'a [Value]>; 2],
 }
@@ -394,6 +518,7 @@ impl<'a, S> Mapping<'a, S> {
             root,
             key: None,
             properties: None,
+            ordered_properties: None,
             additional: None,
             variants: [None, None],
         };
@@ -404,11 +529,13 @@ impl<'a, S> Mapping<'a, S> {
         self.schema = resolve(schema, self.root);
         if self.schema.is_null() {
             self.properties = None;
+            self.ordered_properties = None;
             self.additional = None;
             self.variants = [None, None];
             return;
         }
         self.properties = self.schema.get("properties").and_then(Value::as_object);
+        self.ordered_properties = self.properties.map(serde_json::Map::iter);
         self.additional = self
             .schema
             .get("additionalProperties")
@@ -425,6 +552,11 @@ impl<'a, S> Mapping<'a, S> {
         ];
     }
     fn field(&self, key: &str) -> &'a Value {
+        #[cfg(test)]
+        PROPERTY_WORK.with(|work| {
+            let (ordered, fallback) = work.get();
+            work.set((ordered, fallback + 1));
+        });
         if self.schema.is_null() {
             return self.schema;
         }
@@ -433,18 +565,43 @@ impl<'a, S> Mapping<'a, S> {
             .or(self.additional)
             .unwrap_or_else(|| branch_child(self.schema, self.root, Some(key)))
     }
+    fn struct_field(&mut self, key: &str) -> &'a Value {
+        #[cfg(test)]
+        if LEGACY_PROPERTY_LOOKUP.with(std::cell::Cell::get) {
+            return self.field(key);
+        }
+        // Generated schemas and native structs normally share declaration
+        // order. Skipped fields consume only borrowed schema entries. Custom
+        // or reordered serializers retain the exact keyed lookup on a miss.
+        if let Some((_, schema)) = self
+            .ordered_properties
+            .as_mut()
+            .and_then(|fields| fields.find(|(name, _)| name.as_str() == key))
+        {
+            #[cfg(test)]
+            PROPERTY_WORK.with(|work| {
+                let (ordered, fallback) = work.get();
+                work.set((ordered + 1, fallback));
+            });
+            return schema;
+        }
+        self.field(key)
+    }
 }
 impl<S: SerializeMap> SerializeMap for Mapping<'_, S> {
     type Ok = S::Ok;
     type Error = S::Error;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Self::Error> {
-        self.key = super::checkpoint::bounded_bytes(key, 258)
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .and_then(|key| match key {
-                Value::String(key) => Some(key),
-                Value::Number(key) => Some(key.to_string()),
-                _ => None,
-            });
+        let capture_key = !self.schema.is_null();
+        #[cfg(test)]
+        let capture_key = capture_key || LEGACY_PROPERTY_LOOKUP.with(std::cell::Cell::get);
+        if !capture_key {
+            self.key = None;
+            return self.inner.serialize_key(key);
+        }
+        #[cfg(test)]
+        MAP_KEY_WORK.with(|work| work.set(work.get() + 1));
+        self.key = captured_key(key);
         self.inner.serialize_key(key)
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Self::Error> {
@@ -481,7 +638,7 @@ macro_rules! mapping {
                         }
                     }
                 }
-                let schema = self.field(key);
+                let schema = self.struct_field(key);
                 self.inner.serialize_field(
                     key,
                     &Encoded {
@@ -607,6 +764,251 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type PropertyEncoding = (
+        Result<Vec<u8>, String>,
+        Vec<(Option<bool>, Option<Vec<u8>>)>,
+    );
+    fn property_encoding<T: Serialize>(
+        value: &T,
+        schema: &Value,
+        legacy: bool,
+    ) -> PropertyEncoding {
+        struct Reset(bool);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                LEGACY_PROPERTY_LOOKUP.with(|mode| mode.set(self.0));
+            }
+        }
+        let _reset = Reset(LEGACY_PROPERTY_LOOKUP.with(|mode| mode.replace(legacy)));
+        PROPERTY_WORK.with(|work| work.set((0, 0)));
+        MAP_KEY_WORK.with(|work| work.set(0));
+        let encoded = Encoded {
+            value,
+            schema,
+            root: schema,
+        };
+        let bytes = serde_json::to_vec(&encoded).map_err(|error| error.to_string());
+        let admission = [0, 32, 256, 4096, 65_536, 786_432]
+            .into_iter()
+            .map(|limit| {
+                (
+                    super::super::preflight::bounded_fit(&encoded, limit),
+                    super::super::checkpoint::bounded_bytes(&encoded, limit),
+                )
+            })
+            .collect();
+        (bytes, admission)
+    }
+
+    #[test]
+    fn t11_t14_t20_ordered_schema_properties_preserve_complete_checkpoint_bytes_and_admission() {
+        let mut checkpoint = super::super::projection::RuntimeClientProjection::new(
+            crate::runtime::identity::ConversationId::new(
+                "conv_77621431-ad5b-7155-9eca-9f21014c0bc9",
+            ),
+            Vec::new(),
+            serde_json::from_value(serde_json::json!({"configured_tools":[],"revision":1}))
+                .unwrap(),
+            None,
+            64,
+        )
+        .checkpoint_candidate()
+        .unwrap();
+        checkpoint.read_cut.through = u64::MAX;
+        checkpoint.read_cut.revision = u64::MAX;
+        checkpoint
+            .read_cut
+            .domain_revisions
+            .insert("trace".into(), u64::MAX);
+        let schema = root::<super::super::checkpoint::RuntimeClientCheckpoint>();
+        let expected = property_encoding(&checkpoint, &schema, true);
+        let (_, old_fallbacks) = PROPERTY_WORK.with(std::cell::Cell::get);
+        let actual = property_encoding(&checkpoint, &schema, false);
+        let (ordered, fallbacks) = PROPERTY_WORK.with(std::cell::Cell::get);
+        assert_eq!(actual, expected);
+        assert!(ordered > 100 && fallbacks < old_fallbacks);
+        let value: Value = serde_json::from_slice(actual.0.as_ref().unwrap()).unwrap();
+        assert_eq!(value["read_cut"]["through"], u64::MAX.to_string());
+        assert_eq!(value["read_cut"]["revision"], u64::MAX.to_string());
+    }
+
+    #[test]
+    fn t11_t20_ordered_schema_properties_keep_custom_order_missing_fields_and_tagged_branches() {
+        struct Custom;
+        impl Serialize for Custom {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut fields = serializer.serialize_struct("Custom", 4)?;
+                fields.serialize_field("third", &u64::MAX)?;
+                fields.serialize_field("first", &17_u64)?;
+                fields.serialize_field("missing", &u64::MAX)?;
+                fields.serialize_field("third", &19_u64)?;
+                fields.end()
+            }
+        }
+        #[derive(Serialize, schemars::JsonSchema)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum Tagged {
+            Record {
+                sequence: u64,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                skipped: Option<String>,
+                opaque: Value,
+            },
+            Empty,
+        }
+        let mut schema = serde_json::json!({"properties": {
+            "first": {"format":"uint64"}, "skipped": {"type":"string"},
+            "third": {"format":"uint64"}
+        },"additionalProperties":{"format":"uint64"}});
+        let expected = property_encoding(&Custom, &schema, true);
+        assert_eq!(property_encoding(&Custom, &schema, false), expected);
+        let (ordered, fallback) = PROPERTY_WORK.with(std::cell::Cell::get);
+        assert!(ordered > 0 && fallback > 0);
+        schema["properties"]["third"]["maximum"] = serde_json::json!(9_007_199_254_740_991_u64);
+        let expected = property_encoding(&Custom, &schema, true);
+        assert!(
+            expected.0.is_err(),
+            "native coordinate validation remains active"
+        );
+        assert_eq!(property_encoding(&Custom, &schema, false), expected);
+        let schema = root::<Tagged>();
+        for source in [
+            Tagged::Record {
+                sequence: u64::MAX,
+                skipped: None,
+                opaque: serde_json::json!({"unmodified": u64::MAX,"escaped":"水\n\"\\"}),
+            },
+            Tagged::Empty,
+        ] {
+            let expected = property_encoding(&source, &schema, true);
+            assert_eq!(property_encoding(&source, &schema, false), expected);
+        }
+    }
+
+    struct KeyMap<'a, K: ?Sized>(&'a K);
+    impl<K: Serialize + ?Sized> Serialize for KeyMap<'_, K> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry(self.0, &u64::MAX)?;
+            map.end()
+        }
+    }
+    fn assert_key_map_equivalence<K: Serialize + ?Sized>(key: &K) {
+        let schema = serde_json::json!({"additionalProperties":{"format":"uint64"}});
+        let expected = property_encoding(&KeyMap(key), &schema, true);
+        assert_eq!(property_encoding(&KeyMap(key), &schema, false), expected);
+    }
+    #[test]
+    fn t11_t20_string_map_keys_match_legacy_escaped_admission_without_json_roundtrips() {
+        let keys = [
+            String::new(),
+            "plain".into(),
+            "水🙂\n\"\\\u{0001}".into(),
+            "x".repeat(256),
+            "x".repeat(257),
+            "\n".repeat(128),
+            format!("{}x", "\n".repeat(128)),
+            format!("{}xxxx", "\u{0001}".repeat(42)),
+            format!("{}xxxxx", "\u{0001}".repeat(42)),
+        ];
+        for key in &keys {
+            let legacy = super::super::checkpoint::bounded_bytes(key, 258)
+                .and_then(|bytes| serde_json::from_slice::<String>(&bytes).ok());
+            assert_eq!(captured_key(key), legacy);
+            assert_key_map_equivalence(key);
+            assert_key_map_equivalence(key.as_str());
+            assert_key_map_equivalence(&key);
+            assert_key_map_equivalence(&&key);
+        }
+        for key in ["x".repeat(4 * 1024 * 1024), "\u{0001}".repeat(257)] {
+            assert!(captured_key(&key).is_none());
+            assert!(super::super::checkpoint::bounded_bytes(&key, 258).is_none());
+        }
+        STRING_KEY_WORK.with(|work| work.set(0));
+        GENERIC_KEY_WORK.with(|work| work.set(0));
+        assert_eq!(captured_key(&"exact"), Some("exact".into()));
+        assert_eq!(
+            captured_key(&&&String::from("nested")),
+            Some("nested".into())
+        );
+        assert_eq!(STRING_KEY_WORK.with(std::cell::Cell::get), 2);
+        assert_eq!(GENERIC_KEY_WORK.with(std::cell::Cell::get), 0);
+        let schema = serde_json::json!({"properties":{"native":{"format":"uint64"}}});
+        let source = std::collections::BTreeMap::from([("native", u64::MAX)]);
+        assert_eq!(
+            property_encoding(&source, &schema, false),
+            property_encoding(&source, &schema, true)
+        );
+    }
+    #[test]
+    fn t11_t19_string_key_probe_never_replays_custom_numeric_or_invalid_key_callbacks() {
+        struct DisplayKey;
+        impl Serialize for DisplayKey {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_str(&"native")
+            }
+        }
+        struct Custom<'a>(&'a std::cell::Cell<usize>);
+        impl Serialize for Custom<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.0.set(self.0.get() + 1);
+                serializer.serialize_newtype_struct("OriginalKey", "native")
+            }
+        }
+        let calls = std::cell::Cell::new(0);
+        let key = Custom(&calls);
+        let schema = serde_json::json!({"properties":{"native":{"format":"uint64"}}});
+        let expected = property_encoding(&KeyMap(&key), &schema, true);
+        let legacy_calls = calls.replace(0);
+        assert_eq!(property_encoding(&KeyMap(&key), &schema, false), expected);
+        assert_eq!(calls.get(), legacy_calls);
+        assert!(legacy_calls > 0);
+        assert_key_map_equivalence(&u64::MAX);
+        assert_key_map_equivalence(&i64::MIN);
+        assert_key_map_equivalence(&1.25_f64);
+        assert_key_map_equivalence(&f64::NAN);
+        assert_key_map_equivalence(&true);
+        assert_key_map_equivalence(&'水');
+        assert_key_map_equivalence(&());
+        assert_key_map_equivalence(&Some("native"));
+        assert_key_map_equivalence(&vec!["invalid", "compound"]);
+        assert_key_map_equivalence(&DisplayKey);
+        STRING_KEY_WORK.with(|work| work.set(0));
+        GENERIC_KEY_WORK.with(|work| work.set(0));
+        let _ = captured_key(&key);
+        assert_eq!(STRING_KEY_WORK.with(std::cell::Cell::get), 0);
+        assert_eq!(GENERIC_KEY_WORK.with(std::cell::Cell::get), 1);
+    }
+
+    #[test]
+    fn t11_t20_null_schema_map_keys_skip_only_unused_capture_and_keep_opaque_and_invalid_keys() {
+        let mut source = serde_json::json!({
+            "exact": u64::MAX, "signed": i64::MIN,
+            "nested": [{"escaped":"水\n\"\\", "raw":"{\"n\":1.000}"}]
+        });
+        source.as_object_mut().unwrap().insert(
+            "escaped\n\"\\水".repeat(64),
+            serde_json::json!({"original":"long key remains exact"}),
+        );
+        let expected = property_encoding(&source, &Value::Null, true);
+        assert!(MAP_KEY_WORK.with(std::cell::Cell::get) > 0);
+        assert_eq!(property_encoding(&source, &Value::Null, false), expected);
+        assert_eq!(MAP_KEY_WORK.with(std::cell::Cell::get), 0);
+        assert_eq!(expected.0.unwrap(), serde_json::to_vec(&source).unwrap());
+        for key in [vec![1_u64, 2], Vec::new()] {
+            let source = std::collections::BTreeMap::from([(key, "original")]);
+            let expected = property_encoding(&source, &Value::Null, true);
+            assert!(expected.0.is_err(), "compound JSON keys remain invalid");
+            assert_eq!(property_encoding(&source, &Value::Null, false), expected);
+            assert_eq!(MAP_KEY_WORK.with(std::cell::Cell::get), 0);
+        }
+        let source = std::collections::BTreeMap::from([(u64::MAX, "exact numeric key")]);
+        let schema = serde_json::json!({"additionalProperties":{"type":"string"}});
+        let expected = property_encoding(&source, &schema, true);
+        assert_eq!(property_encoding(&source, &schema, false), expected);
+        assert!(MAP_KEY_WORK.with(std::cell::Cell::get) > 0);
+    }
     #[test]
     fn t11_t20_null_schema_preserves_original_bytes_and_preflight_without_lookups() {
         #[derive(Serialize)]

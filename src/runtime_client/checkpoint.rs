@@ -3,6 +3,9 @@
 use super::{content::ContentRef, snapshot::RuntimeClientSnapshot, types::RuntimeClientCursor};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+mod prepared_trace;
+pub(super) use prepared_trace::PreparedTraceHead;
+
 pub const CHECKPOINT_TARGET_BYTES: usize = 786_432;
 pub const CHECKPOINT_PAGE_ITEMS: usize = 32;
 /// Each indexed native row includes bodies and locator metadata within16KiB.
@@ -351,11 +354,16 @@ pub(crate) fn structural_value<T: serde::Serialize + schemars::JsonSchema>(
         schema: &schema,
         root: &schema,
     };
-    let bytes = bounded_item_bytes(&encoded, CHECKPOINT_ITEM_BYTES)?;
-    serde_json::from_slice(&bytes).ok()
+    bounded_item(&encoded, CHECKPOINT_ITEM_BYTES).map(|(_, value)| value)
 }
 
 pub(crate) fn bounded_item_bytes(value: &impl Serialize, limit: usize) -> Option<Vec<u8>> {
+    bounded_item(value, limit).map(|(bytes, _)| bytes)
+}
+
+// Admission already parses the capped bytes to check every container's item
+// count. Callers needing JSON retain that same value instead of parsing twice.
+fn bounded_item(value: &impl Serialize, limit: usize) -> Option<(Vec<u8>, serde_json::Value)> {
     fn bounded(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::Array(items) => {
@@ -369,8 +377,23 @@ pub(crate) fn bounded_item_bytes(value: &impl Serialize, limit: usize) -> Option
     }
     let bytes = bounded_bytes(value, limit)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    bounded(&value).then_some(bytes)
+    bounded(&value).then_some((bytes, value))
 }
+/// One immutable DTO's existing admission and normalization, prepared once by
+/// its bounded native header owner. Both thresholds preserve later admission.
+pub(super) fn prepare_capture_item<T: Serialize + DeserializeOwned>(
+    item: &T,
+) -> Option<(T, usize, usize)> {
+    let required = super::preflight::required_budget(item, CHECKPOINT_ITEM_BYTES)?;
+    let (bytes, value) = bounded_item(item, CHECKPOINT_ITEM_BYTES)?;
+    let encoded = bytes.len();
+    Some((
+        serde_json::from_value(value).ok()?,
+        encoded,
+        required.max(encoded),
+    ))
+}
+
 pub(crate) fn bounded_clone<T: Serialize + DeserializeOwned>(value: &T, limit: usize) -> Option<T> {
     serde_json::from_slice(&bounded_item_bytes(value, limit)?).ok()
 }
@@ -443,25 +466,8 @@ fn message_json_safe(message: &crate::message::types::MessageBlock) -> bool {
 fn bounded_inbound_kind(
     kind: &crate::message::types::InboundKind,
 ) -> crate::message::types::InboundKind {
-    use crate::message::types::{CompactionSummaryMetadata, ContextKind, InboundKind};
+    use crate::message::types::{ContextKind, InboundKind};
     match kind {
-        InboundKind::CompactionSummary(metadata) => {
-            let paths = |values: &[String]| {
-                values
-                    .iter()
-                    .take(CHECKPOINT_PAGE_ITEMS)
-                    .filter(|path| path.len() <= 256)
-                    .cloned()
-                    .collect()
-            };
-            InboundKind::CompactionSummary(
-                CompactionSummaryMetadata::new(
-                    paths(metadata.read_files()),
-                    paths(metadata.modified_files()),
-                )
-                .expect("bounded subset preserves native ordered disjoint membership"),
-            )
-        }
         InboundKind::Context(ContextKind::GoalStatus(goal)) => InboundKind::Context(
             ContextKind::GoalStatus(Box::new(crate::goal::GoalSnapshot {
                 reference: goal.reference.clone(),
@@ -500,6 +506,16 @@ impl Capture {
             evicted: false,
         }
     }
+    /// Admission for an already normalized immutable display row. The
+    /// certificate belongs to that exact row, never a revision-only lookup.
+    pub(super) fn admit_prepared(&mut self, encoded: usize, required: usize) -> bool {
+        if required > CHECKPOINT_ITEM_BYTES.min(self.remaining) || encoded > required {
+            self.evicted = true;
+            return false;
+        }
+        self.remaining -= encoded;
+        true
+    }
     pub fn reserve(&mut self, item: &impl Serialize) -> bool {
         let Some(bytes) = bounded_item_bytes(item, CHECKPOINT_ITEM_BYTES.min(self.remaining))
         else {
@@ -509,26 +525,30 @@ impl Capture {
         self.remaining -= bytes.len();
         true
     }
+    /// Finite display DTOs only. Lexical JSON carriers use `bounded_clone`
+    /// instead: their deserializer requires the original capped JSON bytes.
     pub fn item<T: Serialize + DeserializeOwned>(&mut self, domain: &str, item: &T) -> Option<T> {
-        let value = bounded_item_bytes(item, CHECKPOINT_ITEM_BYTES.min(self.remaining));
+        let value = bounded_item(item, CHECKPOINT_ITEM_BYTES.min(self.remaining));
         self.evicted |= value.is_none();
         let loaded = u64::from(value.is_some());
         self.frontier(domain, 1, loaded, if loaded == 1 { None } else { Some(0) });
-        let bytes = value?;
+        let (bytes, value) = value?;
         self.remaining -= bytes.len();
-        serde_json::from_slice(&bytes).ok()
+        serde_json::from_value(value).ok()
     }
+    /// Copies only the admitted DTO head; raw lexical JSON is not a DTO page.
     pub fn page<T: Serialize + DeserializeOwned>(&mut self, domain: &str, items: &[T]) -> Vec<T> {
         let mut result = Vec::new();
         let mut advanced = 0;
         for item in items.iter().take(CHECKPOINT_PAGE_ITEMS) {
-            let Some(bytes) = bounded_item_bytes(item, CHECKPOINT_ITEM_BYTES.min(self.remaining))
+            let Some((bytes, value)) =
+                bounded_item(item, CHECKPOINT_ITEM_BYTES.min(self.remaining))
             else {
                 self.evicted = true;
                 break;
             };
             self.remaining -= bytes.len();
-            result.push(serde_json::from_slice(&bytes).expect("serialized native display value"));
+            result.push(serde_json::from_value(value).expect("serialized native display value"));
             advanced += 1;
         }
         self.frontier(
@@ -1176,7 +1196,6 @@ impl Capture {
             cursor: entry.cursor,
             item,
             response_pending: entry.response_pending,
-            compaction: bounded_clone(&entry.compaction, 1024).flatten(),
             turn_process: bounded_clone(&entry.turn_process, 2048).flatten(),
             completed_response: bounded_clone(&entry.completed_response, 2048).flatten(),
             tool_calls: self.page(&format!("{}/tool_calls", path.join("/")), &entry.tool_calls),
@@ -1690,6 +1709,9 @@ impl Capture {
 }
 
 #[cfg(test)]
+mod prepared_capability_tests;
+
+#[cfg(test)]
 mod budget_tests {
     use super::*;
 
@@ -1743,6 +1765,167 @@ mod budget_tests {
             assert!(buffer.write_all(b"x").is_err());
             assert_eq!(buffer.bytes.len(), limit);
             assert_eq!(buffer.bytes.capacity(), capacity);
+        }
+    }
+
+    #[test]
+    fn structural_item_reuses_admission_without_changing_bytes_counts_or_integer_domains() {
+        #[derive(Serialize, schemars::JsonSchema)]
+        struct Header {
+            sequence: u64,
+            opaque: serde_json::Value,
+            items: Vec<u64>,
+        }
+        let mut header = Header {
+            sequence: u64::MAX,
+            opaque: serde_json::json!({"signed": -17, "fraction": 1.5, "text": "水\n\\\""}),
+            items: (0..CHECKPOINT_PAGE_ITEMS as u64).collect(),
+        };
+        let projected = structural_value(&header).unwrap();
+        assert_eq!(projected["sequence"], u64::MAX.to_string());
+        assert_eq!(projected["opaque"], header.opaque);
+        assert_eq!(
+            projected["items"].as_array().unwrap().len(),
+            CHECKPOINT_PAGE_ITEMS
+        );
+        assert_eq!(projected["items"][31], "31");
+        header.items.push(32);
+        assert!(structural_value(&header).is_none());
+
+        let exact = "x".repeat(CHECKPOINT_ITEM_BYTES - 2);
+        assert_eq!(structural_value(&exact), Some(serde_json::json!(exact)));
+        assert!(structural_value(&(exact + "x")).is_none());
+        let opaque = serde_json::json!({"integer": u64::MAX});
+        assert!(bounded_json_value(&opaque, CHECKPOINT_ITEM_BYTES).is_none());
+        assert_eq!(
+            bounded_json_value(&header.opaque, CHECKPOINT_ITEM_BYTES),
+            Some(header.opaque)
+        );
+        let map: std::collections::BTreeMap<_, _> = (0..=CHECKPOINT_PAGE_ITEMS)
+            .map(|index| (index.to_string(), "original"))
+            .collect();
+        assert!(structural_value(&map).is_none());
+    }
+
+    fn byte_oracle_item<T: Serialize + DeserializeOwned>(
+        capture: &mut Capture,
+        domain: &str,
+        item: &T,
+    ) -> Option<T> {
+        let bytes = bounded_item_bytes(item, CHECKPOINT_ITEM_BYTES.min(capture.remaining));
+        capture.evicted |= bytes.is_none();
+        let loaded = u64::from(bytes.is_some());
+        capture.frontier(domain, 1, loaded, (loaded == 0).then_some(0));
+        let bytes = bytes?;
+        capture.remaining -= bytes.len();
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn byte_oracle_page<T: Serialize + DeserializeOwned>(
+        capture: &mut Capture,
+        domain: &str,
+        items: &[T],
+    ) -> Vec<T> {
+        let mut result = Vec::new();
+        for item in items.iter().take(CHECKPOINT_PAGE_ITEMS) {
+            let Some(bytes) =
+                bounded_item_bytes(item, CHECKPOINT_ITEM_BYTES.min(capture.remaining))
+            else {
+                capture.evicted = true;
+                break;
+            };
+            capture.remaining -= bytes.len();
+            result.push(serde_json::from_slice(&bytes).unwrap());
+        }
+        let loaded = result.len() as u64;
+        capture.frontier(
+            domain,
+            items.len() as u64,
+            loaded,
+            (loaded < items.len() as u64).then_some(loaded),
+        );
+        result
+    }
+
+    #[test]
+    fn dto_capture_value_decode_matches_original_bytes_at_every_admission_boundary() {
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Header {
+            sequence: u64,
+            opaque: serde_json::Value,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            optional: Option<String>,
+            #[serde(default, skip_serializing_if = "Vec::is_empty")]
+            defaults: Vec<u32>,
+            progress: crate::tools::types::ToolProgress,
+        }
+        let original = Header {
+            sequence: u64::MAX,
+            opaque: serde_json::json!({"signed": -17, "fraction": 1.5, "text": "水\n\\\""}),
+            optional: None,
+            defaults: Vec::new(),
+            progress: crate::tools::types::ToolProgress {
+                completed: Some(f64::NAN),
+                ..Default::default()
+            },
+        };
+        let mut unsafe_json = original.clone();
+        unsafe_json.opaque = serde_json::json!({"integer": u64::MAX});
+        let mut too_many = original.clone();
+        too_many.defaults = vec![1; CHECKPOINT_PAGE_ITEMS + 1];
+        let mut too_large = original.clone();
+        too_large.optional = Some("x".repeat(CHECKPOINT_ITEM_BYTES));
+        let cases = [original, unsafe_json, too_many, too_large];
+        for budget in [
+            0,
+            3,
+            4,
+            16,
+            256,
+            1024,
+            CHECKPOINT_ITEM_BYTES - 1,
+            CHECKPOINT_ITEM_BYTES,
+            32768,
+            CHECKPOINT_TARGET_BYTES / 8,
+        ] {
+            for header in &cases {
+                let mut actual = Capture::new(7);
+                let mut oracle = Capture::new(7);
+                actual.remaining = budget;
+                oracle.remaining = budget;
+                assert_eq!(
+                    actual.item("none", &None::<Header>),
+                    byte_oracle_item(&mut oracle, "none", &None::<Header>)
+                );
+                let value = actual.item("one", header);
+                assert_eq!(value, byte_oracle_item(&mut oracle, "one", header));
+                if let Some(value) = value {
+                    assert_eq!(value.sequence, u64::MAX);
+                    assert!(
+                        value.progress.completed.is_none(),
+                        "DTO deserialization still runs"
+                    );
+                }
+                assert_eq!(
+                    actual.page("rows", &cases),
+                    byte_oracle_page(&mut oracle, "rows", &cases)
+                );
+                let repeated = vec![cases[0].clone(); CHECKPOINT_PAGE_ITEMS + 1];
+                let loaded = actual.page("bounded_rows", &repeated);
+                assert_eq!(
+                    loaded,
+                    byte_oracle_page(&mut oracle, "bounded_rows", &repeated)
+                );
+                if budget == CHECKPOINT_TARGET_BYTES / 8 {
+                    assert_eq!(loaded.len(), CHECKPOINT_PAGE_ITEMS);
+                    assert_eq!(actual.collections.last().unwrap().next_offset, Some(32));
+                }
+                assert_eq!(actual.remaining, oracle.remaining);
+                assert_eq!(actual.collections, oracle.collections);
+                assert_eq!(actual.content, oracle.content);
+                assert_eq!(actual.evicted, oracle.evicted);
+            }
         }
     }
 
@@ -1887,3 +2070,6 @@ mod budget_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod prepared_trace_tests;
