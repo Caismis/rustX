@@ -96,6 +96,7 @@ use crate::message::types::ContributionEmission;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::generation_evidence::GenerationEvidence;
+use crate::model::snapshot::ModelRequestOwner;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
@@ -219,12 +220,16 @@ pub enum RuntimeEvent {
     /// A turn completed.
     TurnCompleted,
 
-    /// A model request was sent to an adapter.
+    /// Durable intent to execute a model request. This fact commits before
+    /// adapter invocation and does not prove the adapter was called.
     ModelRequestStarted {
-        /// The exact immutable Request Snapshot this start fact commits.
+        /// The owner of this physical request. For Agent requests, the primary
+        /// Request Snapshot remains the authority for request identity.
+        owner: ModelRequestOwner,
+        /// The exact immutable request identity this start fact commits.
         request_id: RequestId,
-        /// The model selected by the frozen invocation. This is a projection
-        /// convenience; the Request Snapshot remains the authority.
+        /// The model selected by the frozen invocation. For Agent requests,
+        /// this projection must agree with the primary Request Snapshot.
         model: String,
     },
     /// One semantic contribution emission became durable with its owning
@@ -1061,6 +1066,69 @@ mod tests {
             event: RuntimeEvent::AttemptStarted {
                 attempt_id: AttemptId::new("attempt-1"),
             },
+        }
+    }
+
+    #[test]
+    fn request_started_round_trips_explicit_tagged_owners() {
+        use crate::model::{ModelRequestOwner, RequestIdentity};
+        use crate::runtime::identity::{AuxiliaryCallId, RequestId, TurnId};
+
+        let identity = RequestIdentity {
+            attempt_id: AttemptId::new("attempt-1"),
+            turn: TurnId::new("2"),
+            retry_number: 1,
+        };
+        let owners = [
+            (
+                ModelRequestOwner::Agent {
+                    identity: identity.clone(),
+                },
+                serde_json::json!({"type": "agent", "identity": {
+                    "attempt_id": "attempt-1", "turn": "2", "retry_number": 1
+                }}),
+            ),
+            (
+                ModelRequestOwner::Auxiliary {
+                    call_id: AuxiliaryCallId::new("aux_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+                    ordinal: 2,
+                },
+                serde_json::json!({"type": "auxiliary", "call_id": "aux_36524fd8-f674-7fc2-8125-06d01fee0e18", "ordinal": 2}),
+            ),
+        ];
+        for (owner, expected) in owners {
+            let event = RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("physical-request"),
+                owner,
+                model: "model".into(),
+            };
+            let value = serde_json::to_value(&event).unwrap();
+            assert_eq!(value["owner"], expected);
+            assert_eq!(
+                serde_json::from_value::<RuntimeEvent>(value).unwrap(),
+                event
+            );
+        }
+    }
+
+    #[test]
+    fn request_started_rejects_missing_or_invalid_owner() {
+        let base = serde_json::json!({
+            "type": "model_request_started", "request_id": "request", "model": "model"
+        });
+        assert!(serde_json::from_value::<RuntimeEvent>(base.clone()).is_err());
+        for owner in [
+            serde_json::json!({"type": "unknown"}),
+            serde_json::json!({"identity": {"attempt_id": "attempt", "turn": "1", "retry_number": 0}}),
+            serde_json::json!({"type": "agent"}),
+            serde_json::json!({"type": "agent", "identity": {"attempt_id": "attempt", "turn": "1", "retry_number": 0, "extra": true}}),
+            serde_json::json!({"type": "agent", "identity": {"attempt_id": "attempt", "turn": "1", "retry_number": 0}, "extra": true}),
+            serde_json::json!({"type": "auxiliary", "call_id": "aux_36524fd8-f674-7fc2-8125-06d01fee0e18"}),
+            serde_json::json!({"type": "auxiliary", "call_id": "aux_36524fd8-f674-7fc2-8125-06d01fee0e18", "ordinal": 0, "extra": true}),
+        ] {
+            let mut value = base.clone();
+            value["owner"] = owner;
+            assert!(serde_json::from_value::<RuntimeEvent>(value).is_err());
         }
     }
 

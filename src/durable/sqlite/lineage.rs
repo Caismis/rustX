@@ -218,7 +218,9 @@ fn responses(
                 evidence.members.insert(message_id.clone());
                 evidence.closing = Some(message_id);
             }
-            RuntimeEvent::ModelRequestStarted { request_id, model } => {
+            RuntimeEvent::ModelRequestStarted {
+                request_id, model, ..
+            } => {
                 evidence.request_started(request_id, model);
             }
             RuntimeEvent::ModelRequestCompleted {

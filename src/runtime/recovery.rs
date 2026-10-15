@@ -2645,6 +2645,13 @@ mod tests {
     fn request_started(attempt_id: AttemptId, request: &str) -> RuntimeEventEnvelope {
         envelope(
             RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: attempt_id.clone(),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new(request),
                 model: "model-x".to_owned(),
             },
@@ -2815,6 +2822,13 @@ mod tests {
                 started(a.clone()),
                 envelope(
                     RuntimeEvent::ModelRequestStarted {
+                        owner: crate::model::ModelRequestOwner::Agent {
+                            identity: crate::model::RequestIdentity {
+                                attempt_id: a.clone(),
+                                turn: crate::runtime::identity::TurnId::new("1"),
+                                retry_number: 0,
+                            },
+                        },
                         request_id: request_id.clone(),
                         model: "model-x".to_owned(),
                     },

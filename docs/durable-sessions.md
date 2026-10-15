@@ -6,6 +6,12 @@ Session, resolves no configuration, and starts no runtime. A Session remains a
 graph: `Session -> SessionNode -> Conversation`. Each node has its own linear
 Conversation identity, canonical history and retained Surface operations.
 
+Each started model request has an explicit owner in its durable Journal fact.
+Agent start atomically records the Snapshot-derived owner with request Context and
+Snapshot; keyed owner reads and terminal checks reject missing or contradictory
+evidence. Ownership is not inferred from an ID prefix or absent fields. SQLite
+schema 61 rejects obsolete ownerless stores without migration.
+
 The catalog owns identity, name, timestamps, graph, Session-local `active_node`
 (the default node inside that graph), explicit settings, settings revision,
 lineage origins, and pending deletion authority. This node pointer does not

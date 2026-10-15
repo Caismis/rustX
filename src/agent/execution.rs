@@ -7029,6 +7029,13 @@ mod tests {
                 turn_id: Some(turn.clone()),
                 timestamp,
                 event: RuntimeEvent::ModelRequestStarted {
+                    owner: crate::model::ModelRequestOwner::Agent {
+                        identity: crate::model::RequestIdentity {
+                            attempt_id: attempt_id.clone(),
+                            turn: turn.clone(),
+                            retry_number: 0,
+                        },
+                    },
                     request_id: request_id.clone(),
                     model: "observer-model".to_owned(),
                 },
@@ -7616,6 +7623,13 @@ mod tests {
             },
             RuntimeEvent::TurnStarted,
             RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "scripted".to_owned(),
             },

@@ -4824,6 +4824,13 @@ mod tests {
             }),
             event_observation(RuntimeEvent::TurnStarted),
             event_observation(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "scripted".to_owned(),
             }),
@@ -4937,6 +4944,13 @@ mod tests {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "m".to_owned(),
             },

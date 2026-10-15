@@ -216,7 +216,10 @@ There is no `ConversationRecord`, full transcript table, request-message
 copy, generic repository, or second durable history. Canonical message bodies
 are stored once in the Ledger. A historical request reconstructs its exact frozen input and immutable dependencies. Checkpoint items select context independently of canonical append bookkeeping.
 
-The current SQLite development schema is 60, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Older schemas are refused without migration.
+The current SQLite development schema is 61, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Older schemas are refused without migration.
+
+`ModelRequestStarted.owner` is the authoritative request-to-owner fact. Agent starts derive it from the exact Snapshot RequestIdentity and commit it with the Snapshot and admitted Context. The existing request-ID/kind Journal index supports keyed owner lookup; no duplicate ownership table or missing-owner inference exists. Terminal and primary publication validation require agreement between owner, Snapshot and envelope. The Auxiliary owner variant defines the separate identity domain, but auxiliary starts are rejected until Call admission transactions exist.
+
 Version 51 (Issue #462) binds every Agent and Workflow to the shared Session
 workspace: ownership facts carry one absolute workspace path, and Agent
 worktree disposal, Workflow workspace ownership, Candidate invocation and

@@ -38,7 +38,7 @@ fn records(
 }
 
 #[tokio::test]
-async fn archive_v4_contract_preserves_accepted_contributions_and_journal_vocabulary() {
+async fn archive_v5_contract_preserves_accepted_contributions_and_journal_vocabulary() {
     let (directory, catalog, _) = open_catalog();
     let (conversation, session, _) = append_history(&catalog, &[]);
     let store = store_for(&catalog, &session, &conversation);
@@ -60,11 +60,11 @@ async fn archive_v4_contract_preserves_accepted_contributions_and_journal_vocabu
             .unwrap();
     let files = decode(cut).await;
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v4");
+    assert_eq!(manifest["format"], "rustx-session-archive/v5");
     assert_eq!(
         manifest["schemas"],
         serde_json::json!({
-            "journal": 2, "messages": 1, "surface": 1, "requests": 4, "projections": 1,
+            "journal": 3, "messages": 1, "surface": 1, "requests": 4, "projections": 1,
             "generations": 1, "publication_audits": 1, "inherited_responses": 1, "inherited_turns": 1,
         })
     );
@@ -77,6 +77,14 @@ async fn archive_v4_contract_preserves_accepted_contributions_and_journal_vocabu
     );
     assert!(requests[0].get("agent_status").is_none());
     let journal = records(&files, &conversation, "journal");
+    let started = journal
+        .iter()
+        .find(|row| row["event"]["type"] == "model_request_started")
+        .expect("request start remains in the archive journal");
+    assert_eq!(
+        started["event"]["owner"],
+        serde_json::json!({"type": "agent", "identity": snapshot.identity})
+    );
     assert!(
         journal
             .iter()
@@ -199,7 +207,7 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    assert_eq!(manifest["format"], "rustx-session-archive/v4");
+    assert_eq!(manifest["format"], "rustx-session-archive/v5");
     assert_eq!(manifest["conversations"].as_array().unwrap().len(), 2);
     assert!(files.contains_key(&format!("sessions/{child}/journal.jsonl")));
     assert!(!files.contains_key(&format!("sessions/{later}/journal.jsonl")));

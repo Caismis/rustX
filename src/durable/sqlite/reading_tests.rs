@@ -1142,7 +1142,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(super::SQLITE_SCHEMA_VERSION, 60);
+        assert_eq!(super::SQLITE_SCHEMA_VERSION, 61);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(
@@ -1150,7 +1150,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 56,
-                expected: 60
+                expected: 61
             }
         )
     ));
@@ -1159,7 +1159,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 56,
-                expected: 60
+                expected: 61
             }
         )
     ));

@@ -232,6 +232,13 @@ async fn text_execution_completes_with_exact_trace() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
@@ -356,6 +363,13 @@ async fn model_failure_before_content_fails_attempt() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
@@ -645,6 +659,13 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
@@ -676,6 +697,13 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("2"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
@@ -843,6 +871,13 @@ fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
@@ -1121,6 +1156,13 @@ async fn cancellation_during_generation_after_partial_text() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },

@@ -589,6 +589,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -623,6 +630,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -658,6 +672,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 model: "local/model".to_owned(),
             }),
@@ -686,6 +707,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -710,6 +738,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 model: "local/model".to_owned(),
             }),
@@ -737,6 +772,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("2"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-3"),
                 model: "local/model".to_owned(),
             }),

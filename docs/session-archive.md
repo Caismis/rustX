@@ -1,9 +1,9 @@
 # Session archive export
 
-`rustx-session-archive/v4` is a ZIP64/DEFLATE inspection archive produced by
+`rustx-session-archive/v5` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite schema 60 stores the common accepted contributions; export projects those
+an import, recovery or persistence format. SQLite schema 61 stores the common accepted contributions; export projects those
 historical records without creating a second persistence authority.
 
 In v2, request snapshots expose common accepted contribution records instead of
@@ -18,12 +18,16 @@ Native reasoning replay state is omitted explicitly; neither these records nor
 lossy request records claim exact reconstruction. The archive remains an inspection
 format, with no legacy decoder or recovery/import path.
 
+V5 requires explicit request ownership in Journal start records (Journal schema 3).
+Agent ownership is retained with the source request identity; exporting it grants no
+new execution or publication authority. Request inspection records remain schema 4.
+
 ## Logical files and authority
 
-All JSON is UTF-8. JSONL entries contain one archive-v4 logical value per
+All JSON is UTF-8. JSONL entries contain one archive-v5 logical value per
 line, ordered by the corresponding native immutable append coordinate. Mixed
 historical/private native types cross explicit archive projections, not raw serde. Empty
-histories have empty entries. Journal schema = 2 and requests schema = 4 (explicit frozen-input incompleteness). Messages, surface, generations,
+histories have empty entries. Journal schema = 3 and requests schema = 4 (explicit frozen-input incompleteness). Messages, surface, generations,
 publication_audits and inherited_responses remain at schema version 1;
 inherited_turns starts at schema version 1;
 the manifest also identifies the rustX package version and native durable schema.

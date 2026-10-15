@@ -2707,6 +2707,7 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
     store.initialize(&[]).expect("initialize");
     let request_id = start_request(&store, "1");
 
+    let before_events = event_count(&store);
     let unknown = store.append_event(envelope(
         "unknown-request",
         "1",
@@ -2721,10 +2722,12 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
         matches!(
             &unknown,
             Err(ConversationStoreError::InvalidReference(detail))
-                if detail.contains("never started")
+                if detail == "request snapshot request-never-started does not exist"
         ),
         "P must name an actually started request, got {unknown:?}"
     );
+
+    assert_eq!(event_count(&store), before_events);
 
     commit_provider_outcome(&store, "1", &request_id);
     assert!(matches!(

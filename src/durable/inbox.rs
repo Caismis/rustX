@@ -18,7 +18,7 @@ use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvel
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::snapshot::RequestSnapshot;
+use crate::model::snapshot::{ModelRequestOwner, RequestSnapshot};
 use crate::model::types::ModelRequest;
 use crate::publication::{
     PublicationAudit, PublicationFrame, PublicationStreamRecord, PublicationStreamStart,
@@ -2036,6 +2036,13 @@ pub trait ConversationStore: Send + Sync + 'static {
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
     ) -> Result<ModelTurnStartCommit, ConversationStoreError>;
+
+    /// Reads the ownership recorded by the exact request-start Journal fact.
+    /// Missing or inconsistent ownership for an existing request is an error.
+    fn load_request_owner(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<Option<ModelRequestOwner>, ConversationStoreError>;
 
     /// Reads the one pending unresolved-output source, when one exists. The
     /// pointer is durable recovery state only; its body authority remains the

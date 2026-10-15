@@ -28,6 +28,7 @@ use crate::tools::types::ModelToolDefinition;
 
 /// The identity of one actual primary request attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequestIdentity {
     /// The attempt that owns this request.
     pub attempt_id: AttemptId,
@@ -40,7 +41,8 @@ pub struct RequestIdentity {
 }
 
 /// Ownership of one actual model request; identity grants no execution permission.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelRequestOwner {
     /// A primary request owned by an Agent attempt.
     Agent { identity: RequestIdentity },
@@ -483,6 +485,26 @@ mod tests {
             )
             .unwrap();
         snapshot
+    }
+
+    #[test]
+    fn primary_snapshot_retains_request_identity_serialization() {
+        let request = crate::scripted_suites::common::simple_request(
+            crate::model::ModelProtocol::OpenAiChatCompletions,
+            "test",
+            "input",
+        );
+        let snapshot = frozen(&request);
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            value["identity"],
+            serde_json::json!({"attempt_id": "attempt-frozen", "turn": "1", "retry_number": 0})
+        );
+        assert!(value.get("owner").is_none());
+        assert_eq!(value["request_id"], "request:14:attempt-frozen:1:1:0");
+        let decoded: RequestSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, snapshot);
+        assert_eq!(decoded.request_id, decoded.identity.request_id());
     }
 
     #[test]

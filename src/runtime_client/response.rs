@@ -443,7 +443,9 @@ fn project(
                         });
                     }
                     RuntimeEvent::TurnStarted => statistics.steps += 1,
-                    RuntimeEvent::ModelRequestStarted { request_id, model } => {
+                    RuntimeEvent::ModelRequestStarted {
+                        request_id, model, ..
+                    } => {
                         evidence.request_started(request_id, model);
                         statistics.model_requests += 1;
                     }

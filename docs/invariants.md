@@ -7484,3 +7484,17 @@ when required by lineage/dependency closure; no stronger global audit is implied
   provenance and receipt readers. Other adjacent digest fields retain fixed-length
   preallocation gates and content-integrity comparison. These checks detect independent
   corruption, not coordinated forgery of authoritative facts and checksums.
+
+## Model request ownership
+
+- Every admitted Agent request start records `ModelRequestOwner::Agent` with the
+  exact Snapshot RequestIdentity in the same Context/Snapshot/start transaction.
+- Journal start facts own the relation; the request-ID/kind index only locates
+  those facts. A missing, duplicate or contradictory owner is an error, not a
+  fallback to Agent ownership. An unknown RequestId may return no owner.
+- Exact start confirmation validates the retained owner and never republishes
+  its historical events. Completion/failure and primary publication preserve
+  the same Snapshot, Attempt, Turn and request ordinal checks.
+- Auxiliary ownership has a distinct Call identity and ordinal. Until its Call
+  transactions exist, auxiliary starts are refused rather than accepted under
+  primary Snapshot validation.

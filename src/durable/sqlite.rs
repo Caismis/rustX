@@ -41,7 +41,7 @@ use crate::message::types::{
     AssistantContentBlock, ContentBlockIndex, ContributionEmission, InboundKind, MessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::snapshot::RequestSnapshot;
+use crate::model::snapshot::{ModelRequestOwner, RequestSnapshot};
 use crate::model::types::ModelRequest;
 use crate::publication::{
     PublicationAudit, PublicationAuditBlock, PublicationFrame, PublicationPayload,
@@ -324,7 +324,8 @@ fn count_conversation_store_open() {
 /// independently durable typed checkpoints, historical activations, operation
 /// receipts and exact frozen request manifests. Earlier stores are refused.
 /// Version 60 normalizes immutable activation eligibility and installed prefix authority.
-pub const SQLITE_SCHEMA_VERSION: i64 = 60;
+/// Version 61 requires explicit immutable ownership in every request-start fact.
+pub const SQLITE_SCHEMA_VERSION: i64 = 61;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1156,6 +1157,9 @@ impl SqliteConversationStore {
             event: RuntimeEvent::ModelRequestStarted {
                 request_id: snapshot.request_id.clone(),
                 model: snapshot.invocation.model.clone(),
+                owner: ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
             },
         };
         #[cfg(test)]
@@ -3018,6 +3022,7 @@ impl ConversationStore for SqliteConversationStore {
             }
             let verified = verify_committed_start_tx(
                 &transaction,
+                &self.conversation_id,
                 &json,
                 started_sequence,
                 context,
@@ -3027,6 +3032,12 @@ impl ConversationStore for SqliteConversationStore {
                 .commit()
                 .map_err(|error| storage(format!("request start retry commit: {error}")))?;
             return Ok(verified);
+        }
+        if has_request_journal_fact_tx(&transaction, &snapshot.request_id)? {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {} has Journal evidence without its request snapshot",
+                snapshot.request_id
+            )));
         }
         let projection = projection::head(&transaction)?;
         if projection.as_ref().map(|p| &p.candidate.checkpoint_id)
@@ -3055,6 +3066,31 @@ impl ConversationStore for SqliteConversationStore {
             .map_err(|error| storage(format!("request start commit: {error}")))?;
         process_death::reach("after:commit_model_turn_start");
         Ok(persisted)
+    }
+
+    fn load_request_owner(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<Option<ModelRequestOwner>, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(format!("request owner read transaction: {error}")))?;
+        let started = find_request_start_event(&transaction, request_id)?;
+        if started.is_none() && read_request_snapshot_tx(&transaction, request_id)?.is_none() {
+            if has_request_journal_fact_tx(&transaction, request_id)? {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "request {request_id} has Journal evidence without its request-start owner"
+                )));
+            }
+            return Ok(None);
+        }
+        let (_, started) =
+            verified_started_request_tx(&transaction, &self.conversation_id, request_id)?;
+        let RuntimeEvent::ModelRequestStarted { owner, .. } = started.event else {
+            unreachable!("verified request-start fact");
+        };
+        Ok(Some(owner))
     }
 
     fn latest_contribution_emission(
@@ -5142,6 +5178,7 @@ fn append_canonical_messages(
 /// event, and the sequence binding must all match exactly.
 fn verify_committed_start_tx(
     transaction: &rusqlite::Transaction<'_>,
+    conversation_id: &ConversationId,
     json: &str,
     started_sequence: Option<i64>,
     context: &[MessageBlock],
@@ -5186,12 +5223,8 @@ fn verify_committed_start_tx(
             )));
         }
     }
-    let Some(started) = find_request_start_event(transaction, &snapshot.request_id)? else {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "request snapshot {} exists without its request-start fact",
-            snapshot.request_id
-        )));
-    };
+    let (_, started) =
+        verified_started_request_tx(transaction, conversation_id, &snapshot.request_id)?;
     if seq_to_i64(started.sequence)? != started_sequence {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request snapshot {} start sequence disagrees with its event",
@@ -6342,6 +6375,44 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         "contribution_emission_heads",
         &["producer", "semantic_key"],
     )?;
+    verify_request_owner_shape(connection)?;
+    Ok(())
+}
+
+/// The schema version gates semantic Journal shapes as well as tables. Inspect
+/// owner headers in SQL so an ownerless historical fact cannot masquerade as a
+/// current store, without decoding or materializing the conversation history.
+fn verify_request_owner_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
+    let incompatible: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_kind_idx
+             WHERE json_extract(event_json, '$.event.type')='model_request_started'
+               AND NOT COALESCE((
+                 json_type(event_json, '$.event.owner')='object' AND (
+                   (json_extract(event_json, '$.event.owner.type')='agent'
+                    AND (SELECT count(*) FROM json_each(event_json, '$.event.owner'))=2
+                    AND json_type(event_json, '$.event.owner.identity')='object'
+                    AND (SELECT count(*) FROM json_each(event_json, '$.event.owner.identity'))=3
+                    AND json_type(event_json, '$.event.owner.identity.attempt_id')='text'
+                    AND json_type(event_json, '$.event.owner.identity.turn')='text'
+                    AND json_type(event_json, '$.event.owner.identity.retry_number')='integer'
+                    AND json_extract(event_json, '$.event.owner.identity.retry_number') BETWEEN 0 AND 4294967295)
+                   OR (json_extract(event_json, '$.event.owner.type')='auxiliary'
+                    AND (SELECT count(*) FROM json_each(event_json, '$.event.owner'))=3
+                    AND json_type(event_json, '$.event.owner.call_id')='text'
+                    AND json_type(event_json, '$.event.owner.ordinal')='integer'
+                    AND json_extract(event_json, '$.event.owner.ordinal') BETWEEN 0 AND 4294967295)
+                 )
+               ),0) LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("verify request owner shape: {error}")))?;
+    if incompatible {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "request-start facts require explicit typed ownership".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -7988,34 +8059,84 @@ fn validate_attempt_start_uniqueness(
     Ok(())
 }
 
+// The existing request/kind expression index bounds this authority lookup to
+// one exact request. A second row is evidence of corruption, never a winner.
+const REQUEST_START_LOOKUP_SQL: &str =
+    "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
+    FROM events INDEXED BY events_request_id_kind_idx
+    WHERE json_extract(event_json, '$.event.request_id')=?1
+      AND json_extract(event_json, '$.event.type')='model_request_started'
+    ORDER BY sequence LIMIT 2";
+
+fn has_request_journal_fact_tx(
+    transaction: &Transaction<'_>,
+    request_id: &RequestId,
+) -> Result<bool, ConversationStoreError> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_request_id_kind_idx
+             WHERE json_extract(event_json, '$.event.request_id')=?1 LIMIT 1)",
+            [request_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("request owner orphan probe: {error}")))
+}
+
 fn find_request_start_event(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
     let mut statement = transaction
-        .prepare("SELECT event_json FROM events ORDER BY sequence")
+        .prepare(REQUEST_START_LOOKUP_SQL)
         .map_err(|error| storage(format!("request-start event probe: {error}")))?;
     let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([request_id.as_str()], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
         .map_err(|error| storage(format!("request-start event query: {error}")))?;
     let mut found = None;
     for row in rows {
-        let json = row.map_err(|error| storage(format!("request-start event row: {error}")))?;
+        if found.is_some() {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {request_id} has duplicate request-start facts"
+            )));
+        }
+        let (sequence, event_id, schema_version, conversation_id, attempt_id, turn_id, json) =
+            row.map_err(|error| storage(format!("request-start event row: {error}")))?;
         let event: RuntimeEventEnvelope = decode(&json, "request-start event")?;
-        if matches!(
+        if !matches!(
             &event.event,
             RuntimeEvent::ModelRequestStarted {
                 request_id: candidate,
                 ..
             } if candidate == request_id
         ) {
-            if found.is_some() {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "request {request_id} has duplicate request-start facts"
-                )));
-            }
-            found = Some(event);
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request-start lookup for {request_id} returned a different fact"
+            )));
         }
+        if event.sequence != sequence_from_i64(sequence)?
+            || event.event_id.as_str() != event_id
+            || event.schema_version != EVENT_SCHEMA_VERSION
+            || i64::from(event.schema_version) != schema_version
+            || event.conversation_id.as_str() != conversation_id
+            || event.attempt_id.as_ref().map(AttemptId::as_str) != attempt_id.as_deref()
+            || event.turn_id.as_ref().map(TurnId::as_str) != turn_id.as_deref()
+        {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request-start fact for {request_id} disagrees with its stored envelope"
+            )));
+        }
+        validate_event_identity(&event)?;
+        found = Some(event);
     }
     Ok(found)
 }
@@ -8081,6 +8202,16 @@ fn require_started_request_tx(
     conversation_id: &ConversationId,
     request_id: &RequestId,
 ) -> Result<(RequestSnapshot, u64), ConversationStoreError> {
+    let (snapshot, started) =
+        verified_started_request_tx(transaction, conversation_id, request_id)?;
+    Ok((snapshot, started.sequence))
+}
+
+fn verified_started_request_tx(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    request_id: &RequestId,
+) -> Result<(RequestSnapshot, RuntimeEventEnvelope), ConversationStoreError> {
     let Some((snapshot, started_sequence, _)) = read_request_snapshot_tx(transaction, request_id)?
     else {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -8108,7 +8239,7 @@ fn require_started_request_tx(
         )));
     }
     validate_request_start_metadata(&snapshot, &started)?;
-    Ok((snapshot, started_sequence))
+    Ok((snapshot, started))
 }
 
 /// Finds any already durable provider terminal for one request. Both success
@@ -8845,12 +8976,8 @@ fn validate_event_reference(
         // durable start fact.
         RuntimeEvent::ModelRequestCompleted { request_id, .. }
         | RuntimeEvent::ModelRequestFailed { request_id, .. } => {
-            let Some((snapshot, _, _)) = read_request_snapshot_tx(transaction, request_id)? else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "model request outcome references request {request_id}, which never started"
-                )));
-            };
-            let _ = require_started_request_tx(transaction, &envelope.conversation_id, request_id)?;
+            let (snapshot, _) =
+                require_started_request_tx(transaction, &envelope.conversation_id, request_id)?;
             if envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
                 || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
             {
@@ -9180,7 +9307,19 @@ fn validate_event_reference(
                 ));
             }
         }
-        RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+        RuntimeEvent::ModelRequestStarted {
+            request_id, owner, ..
+        } => {
+            if !matches!(owner, ModelRequestOwner::Agent { .. }) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "auxiliary request starts require a durable Call transaction".into(),
+                ));
+            }
+            if find_request_start_event(transaction, request_id)?.is_some() {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "request {request_id} already has a request-start fact"
+                )));
+            }
             let json: Option<String> = transaction
                 .query_row(
                     "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
@@ -9534,13 +9673,19 @@ fn validate_request_start_metadata(
     snapshot: &RequestSnapshot,
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
-    let RuntimeEvent::ModelRequestStarted { request_id, model } = &envelope.event else {
+    let RuntimeEvent::ModelRequestStarted {
+        request_id,
+        model,
+        owner,
+    } = &envelope.event
+    else {
         return Err(ConversationStoreError::InvalidReference(
             "request snapshot is paired with a non-request-start event".to_owned(),
         ));
     };
     if request_id != &snapshot.request_id
         || model != &snapshot.invocation.model
+        || !matches!(owner, ModelRequestOwner::Agent { identity } if identity == &snapshot.identity)
         || envelope.attempt_id.as_ref() != Some(&snapshot.identity.attempt_id)
         || envelope.turn_id.as_ref() != Some(&snapshot.identity.turn)
     {
@@ -10069,6 +10214,10 @@ mod tests {
     mod indexed_fact_tests {
         use super::*;
         include!("sqlite/indexed_fact_tests.rs");
+    }
+    mod request_owner_tests {
+        use super::*;
+        include!("sqlite/request_owner_tests.rs");
     }
     use super::*;
 
@@ -15233,7 +15382,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 60);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 61);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -15302,7 +15451,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 60);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 61);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
