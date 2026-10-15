@@ -777,15 +777,65 @@ async fn run(
         capability.into_lease(),
         cancellation,
         execution_policy(policy, clock.clone()),
-        context_runtime(model, clock),
+        context_runtime(model, clock.clone()),
         &tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime");
-    let result = tokio::time::timeout(GUARD, execution.run())
-        .await
-        .expect("Issue #204 execution must settle without wall-clock waiting");
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(GUARD, execution.run()).await;
+    if result.is_err() {
+        eprintln!(
+            "Issue #204 execution timeout: elapsed_us={} clock_ms={} model_requests={} model_streams_exited={} attempt_cancelled={}",
+            started.elapsed().as_micros(),
+            clock.now_millis(),
+            *model.streams_started().borrow(),
+            model.streams_exited_count(),
+            cancellation.is_cancelled(),
+        );
+        diagnose_deadline_journal(store.as_ref());
+    }
+    let result = result.expect("Issue #204 execution must settle without wall-clock waiting");
     common::durable_agent_result(result, store.as_ref())
+}
+
+/// Failure-only native evidence: one frontier and at most one original fact.
+/// A failed probe is reported without replacing the original execution failure.
+fn diagnose_deadline_journal(store: &dyn rustx::durable::ConversationStore) {
+    let frontier = store.presentation_frontier();
+    let tail = frontier.as_ref().ok().map(|through| {
+        store
+            .read_events(Some(through.saturating_sub(1)), 1)
+            .map(|page| {
+                page.events.first().map(|envelope| {
+                    let kind = match &envelope.event {
+                        RuntimeEvent::ToolExecutionStarted { .. } => "tool_started",
+                        RuntimeEvent::ToolExecutionDeadlineFired { .. } => "tool_deadline",
+                        RuntimeEvent::ToolExecutionCancellationRequested { .. } => {
+                            "tool_cancel_requested"
+                        }
+                        RuntimeEvent::ToolExecutionSettlementObserved { .. } => "tool_settled",
+                        RuntimeEvent::ToolExecutionSettlementControlFailed { .. } => {
+                            "tool_settlement_failed"
+                        }
+                        RuntimeEvent::ToolExecutionCompleted { .. } => "tool_completed",
+                        RuntimeEvent::ToolMessageCommitted { .. } => "canonical_tool",
+                        RuntimeEvent::TurnStarted => "turn_started",
+                        RuntimeEvent::ModelRequestStarted { .. } => "request_started",
+                        RuntimeEvent::ModelRequestCompleted { .. } => "request_completed",
+                        RuntimeEvent::ModelRequestFailed { .. } => "request_failed",
+                        RuntimeEvent::AssistantMessageCommitted { .. } => "canonical_assistant",
+                        RuntimeEvent::TurnCompleted => "turn_completed",
+                        RuntimeEvent::AttemptCompleted { .. } => "attempt_completed",
+                        RuntimeEvent::AttemptFailed { .. } => "attempt_failed",
+                        RuntimeEvent::AttemptCancelled { .. } => "attempt_cancelled",
+                        _ => "other",
+                    };
+                    (envelope.sequence, kind)
+                })
+            })
+    });
+    eprintln!("Issue #204 original Journal: frontier={frontier:?} tail={tail:?}");
 }
 
 fn tool_messages(audit: &common::DurableExecutionAudit) -> Vec<&ToolMessageBlock> {

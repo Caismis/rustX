@@ -13,12 +13,17 @@ semantics in [conversation reading](conversation-reading.md).
 
 ## PR #478 repair and latest-main integration
 
-Status: local validation passes on the final repaired source: **4,782 Rust tests**,
-**317 browser cases**, and the maintained client, protocol and Linux boundary
-commands below. Existing opt-in skips remain unchanged. Remote CI is reported by
-the checks attached to the pushed PR HEAD; this local ledger does not claim a
-remote result. PR #478 remains open for independent review and must not be merged
-by this task.
+Status: the final repaired source passes **4,784 Rust tests** (zero failures,
+ten existing ignores) with `RUST_TEST_THREADS=1`, including the new publication
+contention tests and corrected real-process readiness handshakes. The merged
+production/client source also passed **317 browser cases**, locally and in the
+remote Web lane. Strict Clippy, binary build and test-lane discovery pass.
+The merge macOS lane exhausted its existing 70-minute budget during harness
+compilation, before any test execution. The next run serializes Cargo compiler
+jobs while preserving all test settings; a macOS pass is not yet claimed.
+[Repair history](issue-467-repair-history.md) records every intervening failure
+and environment qualification. PR #478 remains open for independent review and
+must not be merged by this task.
 
 ### Repository and ownership
 
@@ -210,33 +215,48 @@ originally failed cases unchanged. Browser103 remains a failed historical run.
 
 ### Current validation commands
 
-Final121's complete Rust command passed **4,782 tests, zero failures, ten
-existing ignores** in 644.885 seconds: 4,101 library, 661 external-target and
-20 example-target passes. The exact original failing test also passed alone.
-Repeated in-crate boundary (237), external boundary (451) and Subagent (47)
-commands also passed; these subsets do not add distinct tests to that total.
+Final127's complete Rust command passed **4,784 tests, zero failures, ten
+existing ignores** in 2,212.844 seconds: 4,103 library, 661 external-target and
+20 example-target passes. The exact original failing test passed within the
+47-test Subagent target and had also passed alone. All 237 native and 451 external
+boundary tests are included; these subsets do not add distinct tests to the total.
+The earlier final121 run passed all 4,782 then-existing tests at four libtest
+threads before the two publication-barrier regressions were added.
 
-All Rust repair commands use `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`,
-`RUST_TEST_THREADS=4`, and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Real provider APIs
-were not invoked. Existing opt-in/credentialed ignores and client skips remain;
-none was added to obtain passing results. Build writes complete before timed
-integration execution; test budgets, workloads and filesystem are unchanged.
+Rust repair commands use `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Earlier runs used `RUST_TEST_THREADS=4`;
+final126/127 use `RUST_TEST_THREADS=1` to separate cross-test storage contention
+from each test's internal concurrency. Per-test budgets, barriers, work and
+filesystem remain unchanged. Real provider APIs were not invoked. Existing
+opt-in/credentialed ignores and client skips remain; none was added.
 
-The table records final maintained-command evidence. Focused repair107 selectors
-are additionally discovered and executed by final121's complete command; the
-opening-adoption suite is recorded after its correction. Browser108 is a
-historical focused run superseded by all 317 cases passing in browser120. Earlier
-failed commands and the two full-run liveness failures remain in the repair
-history. All six App Server cases and the parallel Tool-progress case pass in
-final121 without changed budgets, reduced workloads or semantic workarounds.
+The two new `runtime_client::host::tests::settlement_tests::` cases positively
+observe lock contention at drained-preparation and in-progress encoding before
+releasing each boundary. Both pass alone and in the full command. The exact
+cross-process ownership test also passes with serial libtest after child harnesses
+explicitly select terse output. Failure-only diagnostics retain exact request,
+publication and deadline evidence without issuing recovery operations. The
+intervening failures, direct Linux I/O wait evidence, and macOS compiler timeout
+are preserved in the repair history, not classified as proven external failures.
+
+Client/production behavior is unchanged by the final cfg-only test repairs;
+clients114 and the complete browser120 remain the local client evidence. Remote
+Web at merge HEAD also passed all 317 browser cases and 2,823 unit cases. The
+macOS compiler job now runs one Cargo compiler process at a time, retaining its
+original debug level, libtest concurrency, selectors, assertions and 70-minute
+budget. The next pushed-head CI result is required to validate that resource change.
 
 | Exact command | Result | Repair run |
 | --- | --- | --- |
-| `git diff --check` | Passed (0.015s) | final121 |
-| `cargo fmt --all -- --check` | Passed (4.537s) | final121 |
-| `cargo clippy --all-targets --all-features -- -D warnings` | Passed (73.019s) | final121 |
-| `cargo build --bins` | Passed (79.275s) | final113 |
+| `git diff --check` | Passed | final127 final inspection |
+| `cargo fmt --all -- --check` | Passed (4.530s) | final127 |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed (73.846s) | final127 |
+| `cargo build --bins` | Passed (79.229s) | final126; subsequent source changes are cfg-only |
 | `cargo test --all-targets --all-features --no-run` | Passed (147.206s) | repair107 |
+| `cargo test --lib --all-features runtime_client::host::tests::settlement_tests:: -- --nocapture` | 2 passed (160.844s including compile) | repair122; both also pass final127 |
+| `cargo test --lib --all-features scripted_suites::runtime_client::protocol:: -- --nocapture` | 14 passed (0.566s) | repair122 |
+| `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::model_selection_noop:: -- --nocapture` | 6 passed (1.379s) | repair122 |
+| `cargo test --lib --all-features local_runtime::session::tests::deletion_tests::deletion_cross_process_parent_death_preserves_nested_ownership -- --exact --nocapture` | 1 passed (164.542s including compile; 0.58s execution) | final127, serial libtest |
 | `cargo test --lib --all-features runtime_client::endpoint::retirement_tests:: -- --nocapture` | Passed (160.112s) | repair107 |
 | `cargo test --lib --all-features local_runtime::live_inspection::shutdown_tests:: -- --nocapture` | Passed (0.273s) | repair107 |
 | `cargo test --lib --all-features t20_real_unix_shutdown_ -- --nocapture` | Passed (0.479s) | repair107 |
@@ -244,13 +264,13 @@ final121 without changed budgets, reduced workloads or semantic workarounds.
 | `cargo test --lib --all-features trace_preview_tests:: -- --nocapture` | Passed (0.313s) | repair107 |
 | `cargo test --lib --all-features runtime_client::response::tests:: -- --nocapture` | Passed (58.444s) | repair112 |
 | `cargo test --lib --all-features scripted_suites::agent::tool_progress:: -- --nocapture` | Passed (164.508s) | final121 |
-| `cargo test --all-targets --all-features` | Passed (644.885s) | final121 |
+| `cargo test --all-targets --all-features` | Passed (2,212.844s), 4,784 tests | final127, serial libtest |
 | `cargo test --all-features --test subagent definitions::skill_version_identity_is_frozen_across_the_boundary -- --exact --nocapture` | Passed (0.843s) | remaining117 |
 | `cargo test --all-features --test subagent` | Passed (35.549s) | remaining117 |
 | `cargo test --lib --all-features -- boundary_suites::` | Passed (80.332s) | remaining117 |
 | `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output` | Passed (149.023s) | remaining117 |
-| `cargo run --all-features --example check_test_lanes` | Passed (15.733s) | final121 |
-| `pnpm --dir protocol/app-server check` | Passed (1.635s) | final121 |
+| `cargo run --all-features --example check_test_lanes` | Passed (16.182s) | final127 |
+| `pnpm --dir protocol/app-server check` | Passed (79.945s including generator compile) | final127 |
 | `uv run --frozen pytest` | Passed (0.359s) | remaining117 |
 | `pnpm --dir protocol/app-server typecheck` | Passed (0.873s) | clients114 |
 | `pnpm --dir dev typecheck` | Passed (1.400s) | clients114 |

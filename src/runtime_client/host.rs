@@ -230,13 +230,20 @@ impl ClientInner {
     /// without new input — every observation folded, none awaiting its
     /// source release, and the read domains installed. Public reads remain
     /// pure; this barrier waits for the existing worker's publication before
-    /// the test chooses its baseline. The condition is checked under raw
-    /// now and after every later worker turn.
+    /// the test chooses its baseline. Join preparation and publication in
+    /// their existing lock order before checking raw state: an empty queue
+    /// alone does not prove its drained observation has been installed.
     pub(crate) async fn projection_settled(&self) {
         let mut turns = self.worker_turns.subscribe();
         loop {
             turns.borrow_and_update();
             {
+                let _preparation = self
+                    .publication_gate
+                    .settlement_lock(&self.observation_preparation);
+                let _publication = self
+                    .publication_gate
+                    .settlement_lock(&self.publication_gate.order);
                 let guard = self
                     .state
                     .lock()
@@ -749,9 +756,32 @@ struct PublicationGate {
     progress: (Mutex<u64>, std::sync::Condvar),
     #[cfg(test)]
     encoding_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    preparation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    settlement_contention_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl PublicationGate {
+    #[cfg(test)]
+    fn settlement_lock<'a>(&self, boundary: &'a Mutex<()>) -> MutexGuard<'a, ()> {
+        match boundary.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let hook = self.settlement_contention_hook.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+                boundary
+                    .lock()
+                    .expect("test settlement publication boundary")
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                panic!("test settlement publication boundary poisoned");
+            }
+        }
+    }
+
     fn generation(&self) -> u64 {
         *self.progress.0.lock().expect("native publication progress")
     }
@@ -861,7 +891,15 @@ fn prepared_lock<'a>(
     workflows: Option<&crate::runtime::workflow::read_model::WorkflowReadModel>,
 ) -> MutexGuard<'a, ClientState> {
     let _preparation = preparation.lock().expect("projection preparation mutex");
-    apply_prepared_observations(state, publication, pending.drain(), store, false, true);
+    let observations = pending.drain();
+    #[cfg(test)]
+    if !observations.is_empty() {
+        let hook = publication.preparation_hook.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+    apply_prepared_observations(state, publication, observations, store, false, true);
     if let Some(workflows) = workflows
         && !pending.has_unpublished()
     {
@@ -5934,6 +5972,9 @@ mod tests {
     }
     mod source_recovery_tests {
         include!("host/source_recovery_tests.rs");
+    }
+    mod settlement_tests {
+        include!("host/settlement_tests.rs");
     }
     mod member_tests {
         include!("host/member_tests.rs");

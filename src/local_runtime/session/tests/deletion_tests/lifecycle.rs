@@ -362,6 +362,7 @@ fn deletion_process_death_after_commit_and_mid_cleanup_converges_without_discove
                 "--exact",
                 "local_runtime::session::tests::deletion_tests::lifecycle::deletion_process_child",
                 "--nocapture",
+                "--format=terse",
             ])
             .env("RUSTX_255_ROOT", dir.path())
             .env("RUSTX_255_GATE", boundary)

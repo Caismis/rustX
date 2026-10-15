@@ -69,7 +69,13 @@ async fn published_activation(host: &crate::runtime_client::RuntimeClientHost) {
     reader.detach();
 }
 
-async fn assert_noop(f: &Fixture) {
+async fn assert_noop(f: &Fixture, stage: Option<&std::cell::Cell<&'static str>>) {
+    let mark = |label| {
+        if let Some(stage) = stage {
+            stage.set(label);
+        }
+    };
+    mark("no-op settings baseline");
     let id = &f.sessions[0].id;
     let runtime = f.manager.configuration_runtime(id).unwrap();
     let host = f.manager.configuration_host(id).unwrap();
@@ -95,7 +101,9 @@ async fn assert_noop(f: &Fixture) {
     let resources = runtime.runtime_resources();
     let view = runtime.model_view();
     let configuration = runtime.configuration_view().unwrap();
+    mark("no-op baseline publication");
     host.projection_settled().await;
+    mark("no-op parked baseline");
     host.inner.park_projection_worker();
     let checkpoint = host.checkpoint().unwrap();
     let (projection, cursor) = (checkpoint.snapshot, checkpoint.cursor);
@@ -109,6 +117,7 @@ async fn assert_noop(f: &Fixture) {
         .unwrap();
     let subscription = reader.subscribe_events(cursor).unwrap();
 
+    mark("no-op model selection");
     assert_eq!(
         f.manager.set_model(id, selection).await.unwrap(),
         (view.clone(), settings.0)
@@ -138,6 +147,7 @@ async fn assert_noop(f: &Fixture) {
     assert_eq!(runtime.model_view(), view);
     assert_eq!(runtime.configuration_view().unwrap(), configuration);
     host.inner.unpark_projection_worker();
+    mark("no-op subsequent publication");
     host.projection_settled().await;
     let checkpoint = host.checkpoint().unwrap();
     let (after, after_cursor) = (checkpoint.snapshot, checkpoint.cursor);
@@ -184,8 +194,8 @@ async fn edit_instructions(f: &Fixture) {
 async fn identical_explicit_selection_is_inert_while_idle() {
     bounded(async {
         let f = fixture().await;
-        assert_noop(&f).await;
-        assert_noop(&f).await;
+        assert_noop(&f, None).await;
+        assert_noop(&f, None).await;
         f.close().await;
     })
     .await;
@@ -194,11 +204,13 @@ async fn identical_explicit_selection_is_inert_while_idle() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn identical_explicit_selection_is_inert_during_an_attempt() {
     let stage = std::cell::Cell::new("fixture");
+    let mut diagnostic_host = None;
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         let f = fixture().await;
         stage.set("idle projection settled");
         let runtime = f.manager.configuration_runtime(&f.sessions[0].id).unwrap();
         let host = f.manager.configuration_host(&f.sessions[0].id).unwrap();
+        diagnostic_host = Some(host.clone());
         host.projection_settled().await;
         let baseline = host.checkpoint().unwrap();
         assert_eq!(
@@ -234,7 +246,7 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
         reader.detach();
         drop(host);
         stage.set("assert noop");
-        assert_noop(&f).await;
+        assert_noop(&f, Some(&stage)).await;
         stage.set("provider gate");
         drop(execution_release);
         f.gates[0].wait_entered().await;
@@ -243,9 +255,19 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
         let receipt = runtime.child_attempt_settlement(after).await;
         assert_eq!(receipt.ordinal, after + 1);
         stage.set("close");
+        diagnostic_host = None;
         f.close().await;
     })
     .await;
+    if result.is_err()
+        && let Some(host) = diagnostic_host
+    {
+        eprintln!(
+            "no-op liveness at {}: {}",
+            stage.get(),
+            host.inner.projection_source_debug()
+        );
+    }
     assert!(result.is_ok(), "test liveness at {}", stage.get());
 }
 
@@ -256,7 +278,7 @@ async fn identical_explicit_selection_preserves_the_ready_candidate() {
         edit_instructions(&f).await;
         let ready = super::configuration::settled(&f, 0).await;
         let candidate = ready.candidate.unwrap();
-        assert_noop(&f).await;
+        assert_noop(&f, None).await;
         f.manager
             .adopt_configuration(
                 &f.sessions[0].id,
@@ -289,7 +311,7 @@ async fn identical_explicit_selection_is_inert_during_source_publication() {
         probe.before_catalog_publication.arm();
         edit_instructions(&f).await;
         probe.before_catalog_publication.entered().await;
-        assert_noop(&f).await;
+        assert_noop(&f, None).await;
         probe.before_catalog_publication.release();
         assert!(
             super::configuration::settled(&f, 0)
@@ -332,7 +354,7 @@ async fn inherited_current_selection_commits_explicit_intent_then_becomes_inert(
             binding
         );
         published_activation(&f.manager.configuration_host(id).unwrap()).await;
-        assert_noop(&f).await;
+        assert_noop(&f, None).await;
         f.close().await;
     })
     .await;
@@ -346,7 +368,7 @@ async fn identical_explicit_selection_is_inert_after_reload() {
         f.load(0).await.unwrap().unwrap();
         super::configuration::settled(&f, 0).await;
         published_activation(&f.manager.configuration_host(&f.sessions[0].id).unwrap()).await;
-        assert_noop(&f).await;
+        assert_noop(&f, None).await;
         f.close().await;
     })
     .await;

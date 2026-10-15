@@ -399,8 +399,56 @@ impl crate::agent::PreToolPolicy for AskPolicy {
     }
 }
 
+/// Records only the existing fixture operation when its caller drops it.
+struct CallDiagnostic {
+    id: i64,
+    method: std::mem::Discriminant<Method>,
+    stage: &'static str,
+    started: std::time::Instant,
+    stage_started: std::time::Instant,
+    schema_was_ready: bool,
+    schema_init_us: Option<u128>,
+    schema_validation_us: Option<u128>,
+    complete: bool,
+}
+impl CallDiagnostic {
+    fn enter(&mut self, stage: &'static str) {
+        self.stage = stage;
+        self.stage_started = std::time::Instant::now();
+    }
+}
+impl Drop for CallDiagnostic {
+    fn drop(&mut self) {
+        if !self.complete {
+            eprintln!(
+                "incomplete fixture call: id={} method={:?} stage={} elapsed_us={} stage_us={} schema_was_ready={} schema_init_us={:?} schema_validation_us={:?}",
+                self.id,
+                self.method,
+                self.stage,
+                self.started.elapsed().as_micros(),
+                self.stage_started.elapsed().as_micros(),
+                self.schema_was_ready,
+                self.schema_init_us,
+                self.schema_validation_us,
+            );
+        }
+    }
+}
+
 pub(super) async fn call(connection: &AppServerConnection, id: i64, call: Method) -> MethodResult {
     static SCHEMA: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
+    let started = std::time::Instant::now();
+    let mut diagnostic = CallDiagnostic {
+        id,
+        method: std::mem::discriminant(&call),
+        stage: "handle response",
+        started,
+        stage_started: started,
+        schema_was_ready: SCHEMA.get().is_some(),
+        schema_init_us: None,
+        schema_validation_us: None,
+        complete: false,
+    };
     let configuration_target = match &call {
         Method::ConfigurationGet { target } => Some(target.clone()),
         _ => None,
@@ -412,20 +460,25 @@ pub(super) async fn call(connection: &AppServerConnection, id: i64, call: Method
             call,
         })
         .await;
+    diagnostic.enter("schema initialization");
     let validator = SCHEMA.get_or_init(|| {
         jsonschema::validator_for(&crate::app_server::schema::protocol_schema()).unwrap()
     });
+    diagnostic.schema_init_us = Some(diagnostic.stage_started.elapsed().as_micros());
+    diagnostic.enter("schema validation");
     let wire = serde_json::to_value(&response).unwrap();
     assert!(
         validator.is_valid(&wire),
         "{:?}",
         validator.iter_errors(&wire).collect::<Vec<_>>()
     );
+    diagnostic.schema_validation_us = Some(diagnostic.stage_started.elapsed().as_micros());
     let Response::Success(response) = response else {
         panic!("{response:?}")
     };
     assert_eq!(response.id, RequestId::Integer(id));
     if let MethodResult::Attached { target, .. } = &response.result {
+        diagnostic.enter("attached checkpoint");
         let checkpoint_response = connection
             .handle_request(Request {
                 jsonrpc: JsonRpcVersion::V2,
@@ -442,6 +495,7 @@ pub(super) async fn call(connection: &AppServerConnection, id: i64, call: Method
         let MethodResult::Checkpoint { checkpoint } = checkpoint.result else {
             panic!("checkpoint")
         };
+        diagnostic.enter("subscribe");
         assert!(matches!(
             connection
                 .handle_request(Request {
@@ -456,10 +510,15 @@ pub(super) async fn call(connection: &AppServerConnection, id: i64, call: Method
             Response::Success(_)
         ));
     }
+    diagnostic.enter("selected fixture read");
     let result = materialize_source_fixture(connection, id, response.result).await;
-    if let Some(target) = configuration_target {
-        return materialize_configuration_fixture(connection, id, target, result).await;
-    }
+    let result = if let Some(target) = configuration_target {
+        diagnostic.enter("configuration fixture read");
+        materialize_configuration_fixture(connection, id, target, result).await
+    } else {
+        result
+    };
+    diagnostic.complete = true;
     result
 }
 
@@ -5025,6 +5084,36 @@ struct AttemptCompletion {
     runtime: crate::runtime::ConversationRuntime,
     after: u64,
     target: AttachmentTarget,
+    host: std::sync::Weak<crate::runtime_client::host::ClientInner>,
+}
+
+struct AttemptCompletionDiagnostic<'a> {
+    completion: &'a AttemptCompletion,
+    started: std::time::Instant,
+    stage: &'static str,
+    receipt_ordinal: Option<u64>,
+    last_cursor: Option<crate::runtime_client::RuntimeClientCursor>,
+    complete: bool,
+}
+impl Drop for AttemptCompletionDiagnostic<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            let source = self.completion.host.upgrade().map_or_else(
+                || "host released".into(),
+                |host| host.projection_source_debug(),
+            );
+            eprintln!(
+                "incomplete fixture attempt: stage={} elapsed_us={} captured_after={} current_ordinal={} has_current_attempt={} receipt_ordinal={:?} last_cursor={:?} source={source:.4096}",
+                self.stage,
+                self.started.elapsed().as_micros(),
+                self.completion.after,
+                self.completion.runtime.settlement_ordinal_for_test(),
+                self.completion.runtime.has_current_attempt(),
+                self.receipt_ordinal,
+                self.last_cursor,
+            );
+        }
+    }
 }
 
 impl AttemptCompletion {
@@ -5037,10 +5126,23 @@ impl AttemptCompletion {
             after: runtime.settlement_ordinal_for_test(),
             runtime,
             target: target.clone(),
+            host: fixture
+                .manager
+                .configuration_host(&target.session_id)
+                .unwrap()
+                .weak_inner(),
         }
     }
 
     async fn observed(self, connection: &AppServerConnection, expected: &AttachmentTarget) {
+        let mut diagnostic = AttemptCompletionDiagnostic {
+            completion: &self,
+            started: std::time::Instant::now(),
+            stage: "native handoff",
+            receipt_ordinal: None,
+            last_cursor: None,
+            complete: false,
+        };
         assert_eq!(expected.session_id, self.target.session_id);
         assert_eq!(expected.conversation_id, self.target.conversation_id);
         assert_eq!(
@@ -5048,6 +5150,8 @@ impl AttemptCompletion {
             self.target.runtime_incarnation
         );
         let receipt = self.runtime.child_attempt_settlement(self.after).await;
+        diagnostic.receipt_ordinal = Some(receipt.ordinal);
+        diagnostic.stage = "display publication";
         assert_eq!(receipt.ordinal, self.after + 1, "exact next native handoff");
         let mut last_cursor = None;
         loop {
@@ -5078,6 +5182,7 @@ impl AttemptCompletion {
                 continue;
             }
             last_cursor = Some(cursor);
+            diagnostic.last_cursor = last_cursor;
             if event.facts().iter().any(|fact| match fact {
                 RuntimeClientEvent::AttemptSettled { attempt_id, .. } => {
                     *attempt_id == receipt.attempt_id
@@ -5093,6 +5198,7 @@ impl AttemptCompletion {
                 }
                 _ => false,
             }) {
+                diagnostic.complete = true;
                 return;
             }
         }

@@ -269,9 +269,13 @@ jobs:
     env:
       # Job-local build metadata only: assertions, overflow checks, unwind,
       # optimization and release profiles retain their Cargo defaults.
-      # rust-cache hashes the CARGO prefix, including both settings.
+      # rust-cache hashes the CARGO prefix, including these settings.
       CARGO_PROFILE_DEV_DEBUG: "1"
       CARGO_PROFILE_TEST_DEBUG: "1"
+      # Ordinary and cfg(test) rustX units overlap in Cargo's native timing
+      # report. Serialize compiler processes on this runner; libtest keeps
+      # its existing concurrency, assertions, selectors, and deadlines.
+      CARGO_BUILD_JOBS: "1"
 
     steps:
       - name: Checkout
@@ -307,6 +311,7 @@ jobs:
             echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
             echo "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG"
             echo "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG"
+            echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
             echo 'Cargo HTML reports separate build units; /usr/bin/time -l records wall time and peak RSS per phase.'
             echo 'Ordinary libraries, cfg(test) libraries, real binaries and binary test harnesses remain distinct Cargo units.'
           } >> "$GITHUB_STEP_SUMMARY"

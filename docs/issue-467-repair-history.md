@@ -966,3 +966,120 @@ The final diagnostics report typed observation interruptions immediately and
 retain failure-only phase timings; no speculative production optimization was
 introduced to chase the liveness result. Earlier failures remain recorded and
 are not classified as proven infrastructure faults.
+
+## Pushed merge CI: publication barrier follow-up
+
+Merge HEAD `b8a961eb14760fda2bfa652f032ba493ef1301c4` integrates main
+`8cb41624eb2dc2ca87e4409961f42553ceb029cf`. Run
+[38800243633](https://github.com/Caismis/rustX/actions/runs/38800243633)
+passed Linux boundary suites: 237 native boundary tests and 451 external tests,
+including `definitions::skill_version_identity_is_frozen_across_the_boundary`.
+Its deterministic lane failed `snapshot_dto_round_trips` (Unavailable instead of
+Eligible) and `identical_explicit_selection_is_inert_during_an_attempt` (the
+existing 30-second no-op liveness guard). This is not classified as infrastructure
+failure; the previously passing local full run does not override the CI result.
+
+The cfg-only `projection_settled` barrier checked an empty pending queue under raw
+state alone. The worker can drain activation before installing its transition;
+publication can also release raw state during encoding before installing the
+candidate. The barrier now joins preparation, publication order, then raw state,
+matching the existing worker-park lock order. It releases every lock before
+waiting for another worker turn. Deterministic regressions hold each actual
+boundary and observe the waiter's real `try_lock` contention before releasing it.
+They preserve the original Eligible/model assertions and prove no model work.
+The no-op fixture additionally reports its exact internal stage and bounded
+projection state on failure; its gates, assertions, and time budget are unchanged.
+Validation of this follow-up is recorded separately once executed.
+
+`repair122`: both new settlement regressions, all 14 runtime protocol tests, all
+6 no-op tests, formatting and strict Clippy passed. Its full Rust library run
+passed 4,097 tests but reproduced the six 30-second boundary-fixture timeouts
+previously seen in `final113` (five App Server file-read scenarios and the Child
+model-selection scenario). The original CI two failures both passed within this
+run. No SourceUnavailable/Resync/Closed diagnostic was emitted; the exact stalled
+phase was not observable in that binary. The full command stopped at this library
+failure, so its later external targets and planned lane/drift checks did not run.
+
+The shared test helpers now retain cancellation-only phase diagnostics: native
+handoff versus display publication, original/current settlement ordinal, last
+matching cursor and existing bounded source state; request handling versus schema
+initialization/validation versus checkpoint/subscription. They add no RPC, repair,
+wait, or deadline change. The host diagnostic reference is weak. `diagnose123`
+ran the exact six boundary tests together: all six passed in 3.43 seconds after
+compilation. No process-wide environment mutation or earlier global-hook
+contamination was found; this does not establish an infrastructure cause.
+
+`diagnose124` full run passed all six App Server boundaries but failed three
+`tool_deadlines` cases at their existing 5-second whole-execution guard:
+`issue204_admitted_executions_obey_their_own_frozen_policy`,
+`issue204_hard_deadline_bounds_a_hung_executor`, and
+`issue204_idle_deadline_cancels_a_silent_execution` (4,100 passed, three failed,
+five existing ignores). Inspection confirms the absolute deadline is frozen
+before the executor's started signal; no missing clock-registration ordering was
+found. These fixtures use an inert Runtime Client lifecycle. Failure-only bounded
+clock/model/native-tail diagnostics now retain the exact phase evidence without
+changing timers or deadline semantics.
+
+At 21:17 UTC on October 15, host `/proc/pressure/io` reported approximately 85%
+full I/O stall pressure while no task-owned test/build was running; memory stall
+pressure was zero. This is environment context, not proof of the failures' cause.
+`diagnose125` ran the complete 19-test Tool deadline module under `strace` at four
+libtest threads: 19 passed in 4.41 seconds. The selected read/write/fsync trace had
+137,336 calls, 3.093 aggregate syscall seconds, and no observed call above 5.753ms.
+It did not reproduce the failure. Final local validation therefore also records a
+serial-libtest run to separate cross-test I/O contention from the concurrency
+inside each test. Per-test clocks, original guard budgets, workload and assertions
+remain unchanged; CI's original concurrency and selectors remain unchanged.
+
+The merge's macOS job `116647081973` ultimately ended cancelled. Its GitHub
+annotation states `The job has exceeded the maximum execution time of 1h10m0s`.
+It never reached native test execution; the active phase was harness compilation.
+Latest main's job `116236434966` had completed that phase in 728.84 seconds
+(`/usr/bin/time -l` peak RSS 3,116,613,632 bytes), with overlapping ordinary and
+cfg(test) rustX compiler units. The merge's real-binary phase took 427 seconds
+versus main's 287.57 seconds, but its harness phase exceeded an hour. Current
+compiler logs/timing artifacts were unavailable after cancellation; memory
+exhaustion, swapping, and external infrastructure failure are **not** established.
+
+The macOS job now sets only `CARGO_BUILD_JOBS=1` to prevent overlapping compiler
+processes, retaining `debug=1`, feature sets, all test selectors, original libtest
+concurrency, assertions, overflow checks, and the 70-minute limit. Existing Cargo
+HTML timings and `/usr/bin/time -l` remain the measurement authority. This is a
+bounded compiler-resource change, not a test exclusion or a claim that the
+resource diagnosis has already been proven. The next actual macOS run must
+compile and execute the unchanged test suite before the lane can be closed.
+
+`final126` passed diff, format, strict Clippy and binary build. Its serial full run
+was deliberately interrupted after locating an existing child-harness handshake
+bug in `deletion_cross_process_parent_death_preserves_nested_ownership`; no test
+failure was suppressed or counted as a pass. Parent and child were both blocked
+in `pipe_read`. Under `RUST_TEST_THREADS=1`, default libtest output prefixes the
+child's readiness line with `test <name> ... `, but the parent requires exact
+`OWNERSHIP_COMMITTED`. A fresh real-process reproduction confirmed the prefixed
+line; the same subprocess with `--format=terse` emits the exact standalone marker
+and exits successfully when released. Readiness-handshake child harnesses now
+select terse output explicitly, retaining exact markers and every ownership
+assertion. This avoids depending on the invoking libtest thread count; it changes
+only test-harness presentation, not production storage or runtime behavior.
+
+During `final127`, direct thread-state inspection caught native test threads in
+Linux `rq_qos_wait` and `jbd2_log_wait_commit`, followed by normal test completion.
+The saved 25-sample `/tmp/478-io-stall-final127.jsonl` includes the latter at
+2026-10-15T21:46:49Z with full I/O pressure around 75%; `/proc/.../syscall` access
+was denied. This establishes real storage waiting on this host, not the exact
+cause of each historical timeout. No fsync, storage exclusion or timeout was
+weakened. The original six App Server boundary cases, 19 Tool deadline tests,
+new publication contention tests and original storage-lock test all passed in
+the serial full run; final totals are recorded after the command completes.
+
+Final127 completed successfully: `cargo test --all-targets --all-features`
+passed 4,784 tests (zero failures, ten unchanged ignores), 2,212.844 seconds at
+one libtest thread. Library: 4,103; external targets: 661; examples: 20. Full
+Subagent: 47 passes, including the original CI storage-lock regression. Strict
+Clippy (73.846s), formatting (4.530s), test-lane discovery (16.182s), and protocol
+generation/drift (79.945s including compile) passed. The exact readiness-handshake
+regression passed alone in 0.58 seconds and again within the full run. Final126's
+binary build passed (79.229s); subsequent Rust changes are cfg-only tests.
+Main was fetched again and remains `8cb41624eb2dc2ca87e4409961f42553ceb029cf`.
+The follow-up retains all original CI test selectors and budgets and awaits its
+own remote results; the earlier macOS cancellation is not counted as a pass.
