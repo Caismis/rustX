@@ -563,3 +563,42 @@ final semantic input undergoes complete adapter translation/replay preflight aft
 media materialization and continuation coverage reconciliation, before exact Snapshot
 freeze and cancellation-versus-start arbitration. Ordinary transient retries reuse
 that validated frozen input without contributor, upload, image or preflight resampling.
+
+## Bounded historical activation eligibility
+
+SQLite schema 60 stores immutable activation identity, checkpoint identity, activation
+Ledger frontier, destination-visible Journal position and installation identity as small
+normalized coordinates. This is the durable eligibility representation, cross-checked
+against committed Journal/installation anchors; JSON is selected content, never an alternate
+selector. The coordinate checksum is independent of activation JSON/payload integrity.
+Local visibility is anchored in the existing indexed committed CompactionCompleted fact;
+inherited visibility is anchored in the immutable bootstrap projection-prefix count/digest,
+not the source completion Journal. Both anchors publish atomically with their records.
+
+Journal selection seeks one eligible completion through the existing event-kind index.
+Ledger selection uses monotone publication coordinates and the required Ledger index.
+Activation ordering defines a contiguous eligible prefix: each page reads exact consecutive
+IDs and verifies predecessor identity rather than filtering fetched bodies. Frontier, boundary
+successor and requested-page metadata checks have finite work; no whole-timeline JSON scan
+or future payload hashing/decoding occurs. For page size p (at most 64), scalar validation
+and selected payload/fact reads are O(p), with indexed seeks rather than a timeline scan.
+Selected checkpoint materialization retains the existing cumulative byte budget.
+One short SQLite snapshot covers selection, materialization and cursor derivation,
+including detail and Clone/Fork reads. Resource checkpoint reads validate their entire
+frozen cut before size checks and content loading.
+A cut proves publication coordinates, not the payload integrity of an unrelated activation.
+Keyed immutable canonical reads therefore never decode the current projection payload;
+selected checkpoint content is validated at its own read boundary.
+
+Selected payloads are size-gated, decoded and digest/coordinate checked. Local activations
+must agree with committed completion identity, scope and position; inherited activations must belong
+to the destination installation prefix. Write-side completion reference validation uses the
+same content validator and the transaction's pending Journal slot, since that completion fact
+has not yet been inserted. COMMIT remains the sole durable linearization point.
+
+Checksums detect independent scalar/payload corruption; they are not cryptographic signatures
+against a database writer who forges coordinates and recomputes integrity metadata. Missing
+requested predecessors, hidden boundary successors, publication/installation disagreements
+and selected payload corruption fail explicitly. Reads do not authenticate every untouched
+ancestor or globally audit all rows. Complete lineage export checks its entire selected closure
+under its existing cumulative budget, while ordinary pages validate only their bounded scope.

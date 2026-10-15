@@ -44,7 +44,7 @@ physical occurrence dependencies in addition to the bounded canonical working se
 
 ## Durable and request contracts
 
-Development SQLite schema **59** adds `projection_checkpoints`,
+Development SQLite schema **60** includes `projection_checkpoints`,
 `projection_activations`, `projection_head` and `compaction_operations`, with required
 column, uniqueness and dependency checks. It also indexes outstanding canonical
 Tool occurrences. Earlier development stores are rejected, without migration.
@@ -350,3 +350,13 @@ lineage owners remain unchanged. Eight new deterministic owner tests and the com
 local matrix passed; exact commands, counts, intermediate repairs and proofs are in
 [the existing architecture repair record](pr-477-architecture-review-repairs.md#settled-f1f4-local-validation).
 Exact pushed-HEAD CI is reported in PR #477 independently of local validation.
+
+
+### Bounded activation-header repair (N1)
+
+Schema 60 adds normalized publication coordinates and immutable inherited-prefix authority.
+App Server v49 and Runtime Client v70 remain unchanged. Historical page/detail, lineage and
+Resource Read Cut boundary validation share durable eligibility before payload access. No
+Agent, provider, wire-correlation, token-estimator or media/search behavior changes.
+The bounded integrity contract and deterministic coverage are recorded in
+[the existing review repair record](pr-477-architecture-review-repairs.md).

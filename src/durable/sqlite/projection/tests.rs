@@ -1490,3 +1490,442 @@ fn published_history_cut_excludes_future_bodies_before_hydration() {
         2
     );
 }
+
+#[test]
+fn n1_future_activation_payloads_cannot_poison_a_published_history_cut() {
+    let root = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &root.path().join("activation-history.sqlite"),
+    )
+    .unwrap();
+    store.initialize(&[message(1)]).unwrap();
+    let mut cut = 0;
+    for n in 1..=4 {
+        let receipt = store
+            .commit_projection(commit_input(
+                &store,
+                &format!("O{n}"),
+                candidate(&store, &format!("P{n}"), vec![summary("history")]),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        if n == 2 {
+            cut = receipt.checkpoint.activation.origin.completed_journal.0;
+        }
+    }
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projection_activations SET activation_json='not-json' WHERE activation=3",
+            [],
+        )
+        .unwrap();
+    store.lock().unwrap().execute(
+        "UPDATE projection_activations SET activation_json=zeroblob(2097152) WHERE activation=4", [],
+    ).unwrap();
+    store.lock().unwrap().execute("UPDATE projection_activations SET activation_digest='corrupt-payload-digest' WHERE activation=3",[]).unwrap();
+    take_header_work();
+    take_candidate_decodes();
+    let first = store
+        .projection_timeline_at_journal_cut(cut, ProjectionActivationId(0), 1)
+        .unwrap();
+    assert_eq!(first.records[0].candidate.checkpoint_id.as_str(), "P1");
+    assert_eq!(first.next_activation, Some(ProjectionActivationId(1)));
+    let second = store
+        .projection_timeline_at_journal_cut(cut, ProjectionActivationId(1), 1)
+        .unwrap();
+    assert_eq!(second.records[0].candidate.checkpoint_id.as_str(), "P2");
+    assert_eq!(second.next_activation, None);
+    assert_eq!(take_candidate_decodes(), 2);
+    assert_eq!(take_header_work().1, 2);
+    assert_eq!(
+        store
+            .projection_at_journal_cut(cut)
+            .unwrap()
+            .unwrap()
+            .candidate
+            .checkpoint_id
+            .as_str(),
+        "P2"
+    );
+    take_header_work();
+    take_candidate_decodes();
+    assert!(
+        store
+            .projection_checkpoint_at_journal_cut(cut, &CheckpointId::new("P3"))
+            .is_err()
+    );
+    assert!(store.projection_head().is_err());
+    assert_eq!(take_candidate_decodes(), 0);
+    let mut inconsistent = store.compaction_resource_cut().unwrap();
+    inconsistent.journal = JournalFrontier(cut);
+    take_header_work();
+    assert!(
+        store
+            .compaction_checkpoint_at(
+                &inconsistent,
+                &CheckpointId::new("P3"),
+                ResourceLimits::default()
+            )
+            .is_err()
+    );
+    assert_eq!(take_header_work().1, 0);
+    assert_eq!(take_candidate_decodes(), 0);
+    assert!(
+        store
+            .projection_checkpoint(&CheckpointId::new("P3"))
+            .is_err()
+    );
+    assert!(
+        store
+            .projection_timeline_at_journal_cut(
+                store.presentation_frontier().unwrap(),
+                ProjectionActivationId(0),
+                4
+            )
+            .is_err()
+    );
+}
+
+fn n1_file_history(count: u64) -> (tempfile::TempDir, SqliteConversationStore, u64) {
+    let root = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &root.path().join("history.sqlite"),
+    )
+    .unwrap();
+    store.initialize(&[message(1)]).unwrap();
+    let mut cut = 0;
+    for n in 1..=count {
+        let receipt = store
+            .commit_projection(commit_input(
+                &store,
+                &format!("O{n}"),
+                candidate(&store, &format!("P{n}"), vec![summary("history")]),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        if n == 2 {
+            cut = receipt.checkpoint.activation.origin.completed_journal.0;
+        }
+    }
+    (root, store, cut)
+}
+
+#[test]
+fn n1_header_work_is_bounded_by_the_historical_page_not_future_timeline() {
+    let (_root, store, cut) = n1_file_history(4);
+    let measured = || {
+        take_header_work();
+        take_candidate_decodes();
+        let page = store
+            .projection_timeline_at_journal_cut(cut, ProjectionActivationId(0), 1)
+            .unwrap();
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.next_activation, Some(ProjectionActivationId(1)));
+        let work = take_header_work();
+        assert_eq!(work.1, 1, "only the requested activation JSON is decoded");
+        assert_eq!(take_candidate_decodes(), 1);
+        work.0
+    };
+    let short = measured();
+    for n in 5..=132 {
+        store
+            .commit_projection(commit_input(
+                &store,
+                &format!("O{n}"),
+                candidate(&store, &format!("P{n}"), vec![summary("history")]),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+    }
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projection_activations SET activation_json='not-json' WHERE activation>2",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        measured(),
+        short,
+        "future growth adds no header validations"
+    );
+    assert!(
+        short <= 8,
+        "one page has only constant frontier/header work"
+    );
+    let plan:String = store.lock().unwrap().query_row(
+        "EXPLAIN QUERY PLAN SELECT event_json FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=2 ORDER BY sequence DESC LIMIT 1",[],|r|r.get(3),
+    ).unwrap();
+    assert!(plan.contains("SEARCH") && plan.contains("events_kind_idx"));
+}
+
+#[test]
+fn n1_eligible_payload_and_selector_corruption_fail_without_hiding_predecessors() {
+    for defect in [
+        "payload",
+        "payload_digest",
+        "ledger_exclusion",
+        "journal_exclusion",
+        "journal_inclusion",
+        "checkpoint",
+        "missing_predecessor",
+        "missing_completion",
+        "completion_scope",
+    ] {
+        let (_root, store, cut) = n1_file_history(4);
+        let sql = match defect {
+            "payload" => {
+                "UPDATE projection_activations SET activation_json='not-json' WHERE activation=1"
+            }
+            "payload_digest" => {
+                "UPDATE projection_activations SET activation_digest=printf('%064d',0) WHERE activation=1"
+            }
+            "ledger_exclusion" => {
+                "UPDATE projection_activations SET ledger_frontier=100 WHERE activation=1"
+            }
+            "journal_exclusion" => {
+                "UPDATE projection_activations SET visible_journal=100 WHERE activation=2"
+            }
+            "journal_inclusion" => {
+                "UPDATE projection_activations SET visible_journal=1 WHERE activation=3"
+            }
+            "checkpoint" => {
+                "UPDATE projection_activations SET checkpoint_id='P4' WHERE activation=1"
+            }
+            "missing_predecessor" => "DELETE FROM projection_activations WHERE activation=1",
+            "missing_completion" => "DELETE FROM events WHERE sequence=2",
+            "completion_scope" => {
+                "UPDATE events SET event_json=json_set(event_json,'$.conversation_id','foreign') WHERE sequence=2"
+            }
+            _ => unreachable!(),
+        };
+        // Duplicate checkpoint identities are rejected at the normalized schema boundary.
+        let changed = store.lock().unwrap().execute(sql, []);
+        if defect == "checkpoint" {
+            assert!(changed.is_err());
+            continue;
+        }
+        changed.unwrap();
+        assert!(
+            store
+                .projection_timeline_at_journal_cut(cut, ProjectionActivationId(0), 2)
+                .is_err(),
+            "{defect}"
+        );
+        if defect == "completion_scope" {
+            assert!(
+                store
+                    .projection_timeline_at_journal_cut(cut, ProjectionActivationId(0), 1)
+                    .is_err()
+            );
+        }
+        if defect == "ledger_exclusion" {
+            assert!(
+                store
+                    .read_projection_lineage_cut(LedgerFrontier(1), ProjectionActivationId(2))
+                    .is_err()
+            );
+        }
+    }
+    // Even a recomputed selector checksum cannot override a committed Journal coordinate.
+    let (_root, store, cut) = n1_file_history(4);
+    let connection = store.lock().unwrap();
+    let mut header = eligibility_header(&connection, 2).unwrap();
+    header.journal = 100;
+    connection.execute("UPDATE projection_activations SET visible_journal=100,header_digest=?1 WHERE activation=2",[header_digest(&header).unwrap()]).unwrap();
+    drop(connection);
+    assert!(
+        store
+            .projection_timeline_at_journal_cut(cut, ProjectionActivationId(0), 1)
+            .is_err()
+    );
+}
+
+#[test]
+fn n1_pagination_is_contiguous_exhausted_and_frozen_across_append() {
+    let (root, store, cut) = n1_file_history(2);
+    let first = store
+        .projection_timeline_at_journal_cut(cut, ProjectionActivationId(0), 1)
+        .unwrap();
+    assert_eq!(
+        first.records[0].activation.activation,
+        ProjectionActivationId(1)
+    );
+    let writer = SqliteConversationStore::open(
+        store.conversation_id().clone(),
+        &root.path().join("history.sqlite"),
+    )
+    .unwrap();
+    writer
+        .commit_projection(commit_input(
+            &writer,
+            "O3",
+            candidate(&writer, "P3", vec![summary("later")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    let second = store
+        .projection_timeline_at_journal_cut(cut, first.next_activation.unwrap(), 1)
+        .unwrap();
+    assert_eq!(
+        second.records[0].activation.activation,
+        ProjectionActivationId(2)
+    );
+    assert_eq!(second.next_activation, None);
+    assert_eq!(
+        store
+            .projection_timeline_at_journal_cut(cut, ProjectionActivationId(1), 1)
+            .unwrap()
+            .records,
+        second.records
+    );
+    let empty = store
+        .projection_timeline_at_journal_cut(cut, ProjectionActivationId(2), 1)
+        .unwrap();
+    assert!(empty.records.is_empty());
+    assert_eq!(empty.next_activation, None);
+    let current = store
+        .projection_timeline_at_journal_cut(
+            store.presentation_frontier().unwrap(),
+            ProjectionActivationId(1),
+            2,
+        )
+        .unwrap();
+    assert_eq!(
+        current
+            .records
+            .iter()
+            .map(|p| p.activation.activation.0)
+            .collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+    assert_eq!(current.next_activation, None);
+    assert!(
+        current
+            .records
+            .iter()
+            .all(|p| p.activation.ledger == LedgerFrontier(1))
+    );
+}
+
+#[test]
+fn n1_inherited_j0_boundary_cannot_be_hidden_by_rewritten_selector_metadata() {
+    let (source_root, source, _) = n1_file_history(2);
+    let selected = source
+        .read_projection_lineage_cut(LedgerFrontier(1), ProjectionActivationId(2))
+        .unwrap();
+    let mut inherited = selected.projections;
+    for checkpoint in &mut inherited {
+        checkpoint.activation.destination_installation = Some(
+            crate::runtime::identity::LineageInstallationId::new("installed"),
+        );
+        checkpoint.candidate.read_cut.journal = JournalFrontier(0);
+        checkpoint.candidate.read_cut.transcript = crate::durable::TranscriptCursor::new(0);
+        checkpoint.fingerprint = checkpoint.candidate.fingerprint();
+    }
+    let destination_root = tempfile::tempdir().unwrap();
+    let destination = SqliteConversationStore::open(
+        source.conversation_id().clone(),
+        &destination_root.path().join("destination.sqlite"),
+    )
+    .unwrap();
+    destination
+        .initialize_lineage(
+            &crate::durable::LineageSeed::history(vec![message(1)])
+                .with_projections(inherited)
+                .unwrap(),
+        )
+        .unwrap();
+    drop(source);
+    source_root.close().unwrap();
+    let page = destination
+        .projection_timeline_at_journal_cut(0, ProjectionActivationId(0), 2)
+        .unwrap();
+    assert_eq!(page.records.len(), 2);
+    assert_eq!(page.next_activation, None);
+    assert!(
+        page.records
+            .iter()
+            .all(|p| p.activation.origin.completed_journal.0 > 0)
+    );
+    let connection = destination.lock().unwrap();
+    let mut header = eligibility_header(&connection, 2).unwrap();
+    header.journal = 100;
+    header.installation = None;
+    connection.execute("UPDATE projection_activations SET visible_journal=100,installation_id=NULL,header_digest=?1 WHERE activation=2",[header_digest(&header).unwrap()]).unwrap();
+    drop(connection);
+    assert!(
+        destination
+            .projection_timeline_at_journal_cut(0, ProjectionActivationId(0), 1)
+            .is_err()
+    );
+    assert!(destination.projection_at_journal_cut(0).is_err());
+}
+
+#[test]
+fn n1_original_detail_does_not_validate_an_unrelated_future_activation_payload() {
+    let root = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &root.path().join("original-detail.sqlite"),
+    )
+    .unwrap();
+    store.initialize(&[message(1)]).unwrap();
+    let mut cut = 0;
+    for n in 1..=4 {
+        let items = if n == 1 {
+            vec![CheckpointItem {
+                message: CheckpointMessage::Original(CanonicalMessageRef::of(
+                    store.conversation_id(),
+                    &message(1),
+                )),
+                call_sources: Vec::new(),
+                result_call: None,
+            }]
+        } else {
+            vec![summary("history")]
+        };
+        let receipt = store
+            .commit_projection(commit_input(
+                &store,
+                &format!("O{n}"),
+                candidate(&store, &format!("P{n}"), items),
+                &CancellationSignal::new(),
+            ))
+            .unwrap();
+        if n == 2 {
+            cut = receipt.checkpoint.activation.origin.completed_journal.0;
+        }
+    }
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projection_activations SET activation_json='not-json' WHERE activation=4",
+            [],
+        )
+        .unwrap();
+    take_header_work();
+    take_candidate_decodes();
+    let detail = crate::runtime_client::projection_history::detail(
+        &store,
+        cut,
+        &CheckpointId::new("P1"),
+        0,
+        1,
+    )
+    .unwrap();
+    assert_eq!(detail.items.len(), 1);
+    assert_eq!(detail.next_item, None);
+    assert_eq!(
+        take_header_work().1,
+        1,
+        "only P1 activation content is decoded"
+    );
+    assert_eq!(take_candidate_decodes(), 1);
+}

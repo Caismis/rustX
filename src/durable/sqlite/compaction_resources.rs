@@ -57,18 +57,15 @@ pub(super) fn validate(
             "foreign or future compaction Resource Read Cut".into(),
         ));
     }
+    // Cut authority is normalized publication metadata. Canonical source reads
+    // must not decode an unrelated current projection payload.
     if expected.projection_activation.0 > 0 {
-        let activation =
-            super::projection::activation_at(connection, expected.projection_activation)?;
-        if activation.ledger > expected.ledger
-            || (activation.destination_installation.is_none()
-                && (activation.origin.conversation_id != *conversation
-                    || activation.origin.completed_journal > expected.journal))
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "inconsistent compaction Resource Read Cut activation".into(),
-            ));
-        }
+        super::projection::validate_activation_boundary(
+            connection,
+            expected.projection_activation,
+            expected.ledger,
+            expected.journal,
+        )?;
     }
     Ok(())
 }

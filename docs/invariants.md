@@ -7448,3 +7448,22 @@ transmitted stored results use actual accepted native IDs. Stateless/full replay
 match the adapter's relevant wire segment, independent of covered historical occurrences.
 Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
 This required observation change advances App Server to v49 and Runtime Client to v70.
+
+## PR #477 bounded activation header integrity
+
+Historical eligibility never parses activation JSON. SQLite schema 60 normalizes publication
+coordinates with bounded scalar reads and an independent checksum. Existing committed Journal
+completion facts anchor local activation selection; immutable installation prefix metadata
+anchors destination J0 visibility. Source Journal positions remain origin metadata.
+
+Page IDs form a contiguous prefix through the eligible frontier. Exact-ID reads, immediate
+predecessor checks, indexed frontier/boundary checks and immutable payload cross-checks reject
+hidden or missing required records without scanning the whole timeline. A later malformed or
+oversized activation JSON, or a damaged payload digest, is not read/hashed/decoded by an earlier
+historical observation. Page content and continuation share one short native SQLite snapshot.
+
+Integrity is scoped: accidental selector changes, selected content/digest mismatches, missing
+requested predecessors and independently inconsistent completion/installation facts fail
+closed. Checksums do not prove authenticity against coordinated modification/rechecksumming
+of authoritative metadata. Untouched out-of-page ancestors are validated when requested or
+when required by lineage/dependency closure; no stronger global audit is implied by one page.

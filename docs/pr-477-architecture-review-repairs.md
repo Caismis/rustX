@@ -931,3 +931,154 @@ under the neutral accounting policy, not a claim of a provider's proprietary tok
 Remote checks are verified separately on the exact pushed repair HEAD and recorded
 in PR #477 and the final engineering report. Starting-HEAD checks are not evidence for
 this repair. The PR remains open for independent review, without merge or auto-merge.
+
+## N1: bounded activation-header historical eligibility
+
+Starting HEAD: `47d508a35da8d8f8f9a00ed58f9c7efb71217af7`. Latest integrated main:
+`97096020d64ea00218493a0a99b9b805821eeb28`. The clean dedicated worktree already
+contained all F1–F4 repairs; this repair does not modify their owners or v49/v70.
+
+The reviewed defect was reproduced red in a real SQLite file: after P2's Journal
+cut, corrupt P3 activation JSON and an oversized P4 payload caused the old pre-page
+`json_extract`/digest scan to reject the earlier page (0 passes, 1 failure). A second
+red regression used properly committed Original P1 plus a malformed future P4 head:
+Runtime Client detail at the P2 cut failed because canonical Resource Read Cut validation
+decoded P4. Cut validation now checks publication coordinates only, while selected
+checkpoint readers retain payload validation. Both counterexamples are green.
+
+Schema **60** removes JSON from activation eligibility. Small immutable normalized
+coordinates carry activation/checkpoint identity, Ledger, destination-visible Journal
+and installation identity, with an independent coordinate checksum. Payload JSON/digest
+is accessed only after eligibility. The existing indexed committed completion Journal
+anchors local selection independently of selectors; immutable bootstrap projection count
+and checksum anchor inherited destination J0. Publication/install writes these fields
+inside the existing transaction. Earlier development schemas are refused, not migrated.
+The new Ledger/checkpoint indexes are mandatory schema shape, not optional tuning.
+
+Monotone activation publication produces a contiguous eligible prefix. Indexed Journal
+and Ledger seeks plus constant frontier/successor checks establish its endpoint. Pages
+read exact activation IDs, check immediate predecessor identity/ordering, size-gate records,
+and validate only selected JSON/digests. Continuation compares the last returned activation
+with that frozen endpoint. Page/detail and current historical selection use short native
+SQLite snapshots; Clone/Fork and Resource Read Cut boundaries share the same selector.
+Resource checkpoint reads validate their complete cut in the same short snapshot before
+size checks/content access. Resource-cut validation checks normalized coordinates only; a historical Original detail
+read cannot be poisoned by an unrelated current activation payload. Selected checkpoint
+reads still verify their own payload integrity. No all-timeline activation-header scan remains. Write-side completion validation checks
+payload and the pending Journal slot; read-side checks require the committed completion.
+COMMIT, receipt precedence, execution fencing and cancellation grants remain unchanged.
+
+Integrity is deliberately scoped. Independent coordinate, digest and selected-body damage;
+missing requested/boundary predecessors; forged Journal position; and a hidden inherited
+installation prefix fail explicitly. A coordinate checksum is not a signature against a
+writer who jointly forges authoritative Ledger metadata and recomputes checksums. No page
+claims to globally authenticate all untouched ancestors or detect arbitrary coordinated
+changes to the Journal, bootstrap anchors and payloads. Complete lineage exports validate
+all selected predecessors under the existing finite closure budget. Required selector
+metadata that is itself corrupt can fail a boundary check; provably ineligible payloads
+and their payload digests are never hydrated/hashed/validated.
+
+### N1 deterministic evidence mapping
+
+| Requirement | Owner regressions and assertions |
+| --- | --- |
+| T1 future malformed JSON | `n1_future_activation_payloads_cannot_poison_a_published_history_cut`: P1/P2 pages and head/detail admission succeed, P3 JSON is never decoded, current reads requiring P3 fail; an inconsistent Resource Read Cut fails with zero activation/candidate decodes. Genuine red then green. `n1_original_detail_does_not_validate_an_unrelated_future_activation_payload` additionally exercises Runtime Client Original detail through canonical resource reads with a malformed future head. |
+| T2 future oversized header | Same fixture: P4 is a 2 MiB activation blob, outside the cut and never decoded/charged; its required current read fails. A future damaged payload digest is independently excluded. |
+| T3 eligible corruption | `n1_eligible_payload_and_selector_corruption_fail_without_hiding_predecessors`: selected malformed payload, bad digest, missing predecessor, missing completion and foreign completion scope fail explicitly. |
+| T4 selector integrity | Same test: false inclusion/exclusion, checksum mismatch, duplicate checkpoint identity constraint, Ledger-hidden predecessor and rechecksummed false Journal position fail. `n1_inherited_j0_boundary_cannot_be_hidden_by_rewritten_selector_metadata` proves the independent installation anchor also rejects a rechecksummed fake local selector. |
+| T5 bounded work | `n1_header_work_is_bounded_by_the_historical_page_not_future_timeline`: grow 4 to 132 activations, corrupt every future JSON; the same one-item page has identical scalar-validation count (at most 8), exactly one activation decode and one candidate decode. SQLite EXPLAIN confirms indexed Journal seek. No timing assertion. |
+| T6 pagination | `n1_pagination_is_contiguous_exhausted_and_frozen_across_append`: size 1, overlap, final/empty page, same-Ledger activations; first observation completes before a separate writable connection commits P3, and the second read at old C still ends at P2. New C includes P3. Each short read snapshot is its observation linearization point. |
+| T7 inherited closure | New inherited-J0 test deletes the source file and retains destination reads before injecting selector corruption. Existing `projection_activation_closure_survives_clone_fork_clone_again_and_source_deletion` proves real repeated product Clone/Fork closure; `same_ledger_frontier_retains_both_activation_boundaries` and installation-coordinate regressions remain intact. |
+| T8 prior contracts | Existing `early_lineage_selection_never_hydrates_later_large_checkpoints`, `corrupted_eligibility_header_cannot_hide_a_required_historical_projection`, `historical_selection_rejects_missing_eligible_checkpoint_closure`, cut/provenance/receipt/atomicity/fencing owners and exact request reconstruction run in the existing suites. No issue-specific test framework. |
+
+T8 also runs the named existing owners
+`dependency_free_checkpoint_rejects_every_future_resource_cut_atomically`,
+`operation_receipts_are_idempotent_conflicting_and_never_rewind_a_newer_head`,
+`unknown_commit_outcome_recovers_the_same_operation_without_reexecution`,
+`cancellation_before_grant_prevents_commit_and_after_grant_preserves_authorized_durability`,
+`execution_owner_transition_fences_a_prepared_checkpoint_grant`,
+`death_inside_the_projection_commit_is_atomic_and_repairs_exactly`,
+`delayed_older_receipt_installs_current_projection_head`,
+`committed_checkpoint_hot_reconciliation_never_starts_from_stale_input`, and
+`frozen_derived_input_reconstructs_without_dynamic_selection`.
+
+Implementation stays in SQLite schema/projection/lineage/resource owners and their tests.
+Only current schema assertions/docs advance to 60; protocols, generated wire artifacts,
+WebUI state, Agent Loop, adapters, token/media/search policy and CI definitions are unchanged.
+Final validation results are recorded below after the complete settled-source matrix.
+
+
+### N1 final-source local validation
+
+The final source passed the complete required matrix below. Counts are libtest/runner
+results, not a claim that fixture entries or repeated runs are independent proofs.
+The focused `cargo test --lib -- n1_ --test-threads=2` run additionally passed all
+16 matching regressions (six new durable regressions plus prior Context/Agent owners).
+Notification/signing checks (`python3 -m unittest discover -s .github/scripts -p
+'test_*.py' -v`) passed all 15 tests.
+
+| Exact command | Final outcome |
+| --- | --- |
+| `cargo test --lib -- durable::sqlite::projection:: --test-threads=2` | PASS — 31 passed |
+| `cargo test --lib -- projection_activation_closure_survives_clone_fork_clone_again_and_source_deletion --test-threads=2` | PASS — 1 passed |
+| `git diff --check` | PASS |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | PASS |
+| `cargo build --bins --example document_artifact_fixture --locked` | PASS |
+| `cargo test --workspace -- --test-threads=2` | PASS — 4,203 passed; 8 existing ignored |
+| `cargo build --bins --all-features --locked` | PASS |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites:: --test-threads=2` | PASS — 3,513 passed; 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features -- --test-threads=2` | PASS — 208 passed; 5 existing live-provider ignored |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=2` | PASS — 200 passed |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output -- --test-threads=2` | PASS — 432 passed |
+| `cargo run --all-features --example check_test_lanes -- --job rust-contracts` | PASS |
+| `cargo run --all-features --example check_test_lanes -- --job rust-boundaries` | PASS |
+| `uv run --project test-support/fake-provider --frozen pytest` | PASS — 54 passed |
+| `pnpm --dir protocol/app-server check` | PASS |
+| `pnpm --dir protocol/app-server typecheck` | PASS |
+| `cargo build --bins --example document_artifact_fixture --locked` | PASS |
+| `pnpm --dir dev typecheck` | PASS |
+| `pnpm --dir dev test` | PASS — 41 passed |
+| `pnpm --dir tui typecheck` | PASS |
+| `pnpm --dir tui test` | PASS — 1,025 passed; 1 existing skipped |
+| `pnpm --dir web-console typecheck` | PASS |
+| `pnpm --dir web-console test` | PASS — 2,585 passed; 4 existing skipped |
+| `pnpm --dir web-console build` | PASS |
+| `pnpm --dir web-console check:i18n` | PASS |
+| `pnpm --dir web-console check:provenance` | PASS |
+| `node web-console/scripts/check-office-sandbox.ts` | PASS |
+| `bash web-console/scripts/browser-tests.sh test/e2e/compaction.spec.ts test/e2e/trajectory-integration.spec.ts` | Startup blocked by occupied 5173/5174; unchanged tests passed on supported isolated ports (5 passed) |
+
+Native/process/emulator tests used the established isolated environment
+`TMPDIR=/run/user/1000/r466-477 RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. These are real
+SQLite files and SIGKILL/restart boundaries; this is not physical power-loss testing.
+No real model API or K3 infrastructure was used.
+
+The initial pinned browser attempt ran zero tests: Playwright refused occupied
+`127.0.0.1:5173`, whose listening PID and Vite path belonged to the independently
+running Issue #467 worktree (5174 was also occupied). That process was left intact.
+The same pinned browser image, test selectors, assertions and references passed with
+existing `RUSTX_E2E_PREVIEW_PORT=5183 RUSTX_E2E_FIXTURE_PORT=5184` configuration.
+The exact successful rerun was:
+
+```sh
+RUSTX_E2E_PREVIEW_PORT=5183 RUSTX_E2E_FIXTURE_PORT=5184 \
+  bash web-console/scripts/browser-tests.sh \
+  test/e2e/compaction.spec.ts test/e2e/trajectory-integration.spec.ts
+```
+
+Two intermediate full-matrix attempts were intentionally stopped before completion
+while the resource checkpoint cut guard and then the demonstrated Original-detail
+coupling were corrected. They are not counted as final-source passes. During owner
+implementation, pending completion validation was separated from read validation
+because the completion fact is inserted later in the same transaction; stale schema
+59 assertions were updated to 60, and one Clippy declaration-order warning was fixed.
+No existing assertion, timeout, lane selector, golden, host quota or CI workflow was
+weakened. Existing ignored Rust cases are two measurements, one fixture generator,
+and five opt-in live-provider tests (which were not run). Linux TUI skips the native
+macOS ACL test; Linux WebUI skips four real macOS engine/Seatbelt cases. These platform
+cases remain covered by their existing macOS CI lanes. No skip was introduced.
+
+Source was frozen for the final complete matrix. New pushed-HEAD CI is independent
+of these local results and is recorded in PR #477 and the final engineering report.

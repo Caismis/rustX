@@ -216,7 +216,7 @@ There is no `ConversationRecord`, full transcript table, request-message
 copy, generic repository, or second durable history. Canonical message bodies
 are stored once in the Ledger. A historical request reconstructs its exact frozen input and immutable dependencies. Checkpoint items select context independently of canonical append bookkeeping.
 
-The current SQLite development schema is 59, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Older schemas are refused without migration.
+The current SQLite development schema is 60, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Older schemas are refused without migration.
 Version 51 (Issue #462) binds every Agent and Workflow to the shared Session
 workspace: ownership facts carry one absolute workspace path, and Agent
 worktree disposal, Workflow workspace ownership, Candidate invocation and

@@ -109,15 +109,12 @@ fn selected_projections(
         i64::MAX as u64,
     ));
     if let Some(selected) = activation.filter(|a| a.0 > 0) {
-        let selected = super::projection::activation_at(connection, selected)?;
-        if selected.ledger > ledger
-            || (selected.destination_installation.is_none()
-                && selected.origin.completed_journal.0 > journal)
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "incompatible historical projection boundary".into(),
-            ));
-        }
+        super::projection::validate_activation_boundary(
+            connection,
+            selected,
+            ledger,
+            crate::context::resources::JournalFrontier(journal),
+        )?;
     }
     let mut projections = Vec::new();
     let mut previous_checkpoint = None;

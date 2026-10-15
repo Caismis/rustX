@@ -76,12 +76,13 @@ fn candidate(
     ),
     ConversationStoreError,
 > {
-    let row: Option<(String, Option<String>, String)> = connection.query_row(
-        "SELECT candidate_fingerprint,CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,occupancy_json FROM projection_checkpoints WHERE checkpoint_id=?1", [id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+    let row: Option<(String, Option<String>, Option<String>)> = connection.query_row(
+        "SELECT candidate_fingerprint,CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,CASE WHEN octet_length(occupancy_json)<=1048576 THEN occupancy_json END FROM projection_checkpoints WHERE checkpoint_id=?1", [id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional().map_err(|e| storage(e.to_string()))?;
     let (fingerprint, json, occupancy) =
         row.ok_or_else(|| invalid(format!("missing checkpoint {id}")))?;
     let json = json.ok_or_else(|| invalid("oversized checkpoint"))?;
+    let occupancy = occupancy.ok_or_else(|| invalid("oversized checkpoint occupancy"))?;
     #[cfg(test)]
     CANDIDATE_DECODES.with(|n| n.set(n.get() + 1));
     let value: CheckpointCandidate = decode(&json, "checkpoint content")?;
@@ -96,21 +97,341 @@ fn candidate(
     ))
 }
 
+/// Small immutable publication coordinates, committed with the activation.
+/// Integrity covers these coordinates independently of activation payload bytes.
+struct EligibilityHeader {
+    id: u64,
+    checkpoint: String,
+    ledger: u64,
+    journal: u64,
+    installation: Option<String>,
+}
+fn header_digest(header: &EligibilityHeader) -> Result<String, ConversationStoreError> {
+    Ok(digest(&encode(
+        &(
+            header.id,
+            &header.checkpoint,
+            header.ledger,
+            header.journal,
+            &header.installation,
+        ),
+        "projection eligibility header",
+    )?))
+}
+#[cfg(test)]
+thread_local! {
+    static HEADER_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ACTIVATION_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+fn take_header_work() -> (usize, usize) {
+    (
+        HEADER_READS.with(|n| n.replace(0)),
+        ACTIVATION_DECODES.with(|n| n.replace(0)),
+    )
+}
+fn eligibility_header(
+    connection: &Connection,
+    id: u64,
+) -> Result<EligibilityHeader, ConversationStoreError> {
+    type Row = (
+        Option<String>,
+        u64,
+        u64,
+        Option<String>,
+        bool,
+        Option<String>,
+    );
+    #[cfg(test)]
+    HEADER_READS.with(|n| n.set(n.get() + 1));
+    let row: Option<Row> = connection.query_row(
+        "SELECT CASE WHEN octet_length(checkpoint_id)<=1024 THEN checkpoint_id END,ledger_frontier,visible_journal,CASE WHEN octet_length(installation_id)<=1024 THEN installation_id END,installation_id IS NOT NULL,CASE WHEN octet_length(header_digest)=64 THEN header_digest END FROM projection_activations WHERE activation=?1",
+        [seq_to_i64(id)?], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)),
+    ).optional().map_err(|e|storage(e.to_string()))?;
+    let (checkpoint, ledger, journal, installation, installed, integrity) =
+        row.ok_or_else(|| invalid("missing historical projection predecessor"))?;
+    let header = EligibilityHeader {
+        id,
+        checkpoint: checkpoint
+            .ok_or_else(|| invalid("oversized projection checkpoint identity"))?,
+        ledger,
+        journal,
+        installation,
+    };
+    if id == 0
+        || header.checkpoint.is_empty()
+        || installed != header.installation.is_some()
+        || (installed && journal != 0)
+        || (!installed && journal == 0)
+        || Some(header_digest(&header)?) != integrity
+    {
+        return Err(invalid("corrupted projection eligibility header"));
+    }
+    Ok(header)
+}
+fn persist_activation(
+    connection: &Connection,
+    activation: &ProjectionActivation,
+) -> Result<(), ConversationStoreError> {
+    if activation.checkpoint_id.as_str().len() > 1024
+        || activation
+            .destination_installation
+            .as_ref()
+            .is_some_and(|id| id.as_str().len() > 1024)
+    {
+        return Err(invalid("projection header identity exceeds bound"));
+    }
+    let json = encode(activation, "projection activation")?;
+    let header = EligibilityHeader {
+        id: activation.activation.0,
+        checkpoint: activation.checkpoint_id.to_string(),
+        ledger: activation.ledger.0,
+        journal: if activation.destination_installation.is_some() {
+            0
+        } else {
+            activation.origin.completed_journal.0
+        },
+        installation: activation
+            .destination_installation
+            .as_ref()
+            .map(ToString::to_string),
+    };
+    connection.execute(
+        "INSERT INTO projection_activations(activation,checkpoint_id,ledger_frontier,visible_journal,installation_id,activation_json,activation_digest,header_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![seq_to_i64(header.id)?,header.checkpoint,seq_to_i64(header.ledger)?,seq_to_i64(header.journal)?,header.installation,json,digest(&json),header_digest(&header)?],
+    ).map_err(|e|storage(e.to_string()))?;
+    Ok(())
+}
+fn inherited_count_digest(history: &str, count: u64) -> String {
+    digest(&format!(
+        "rustx-installed-projection-prefix\n{history}\n{count}"
+    ))
+}
+fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreError> {
+    let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row(
+        "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END,projection_count,CASE WHEN octet_length(projection_digest)=64 THEN projection_digest END FROM bootstrap_identity WHERE id=1", [],
+        |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+    ).optional().map_err(|e|storage(e.to_string()))?;
+    let Some((history, count, integrity)) = row else {
+        return Ok(0);
+    };
+    let history = history.ok_or_else(|| invalid("invalid installed history digest"))?;
+    if integrity.as_deref() != Some(inherited_count_digest(&history, count).as_str()) {
+        return Err(invalid("corrupted installed projection boundary"));
+    }
+    Ok(count)
+}
+fn completion_at(
+    connection: &Connection,
+    through: u64,
+) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
+    let json: Option<Option<String>> = connection.query_row(
+        "SELECT CASE WHEN octet_length(event_json)<=1048576 THEN event_json END FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1",
+        [seq_to_i64(through)?], |r|r.get(0),
+    ).optional().map_err(|e|storage(e.to_string()))?;
+    json.map(|body| {
+        let event: RuntimeEventEnvelope = decode(
+            &body.ok_or_else(|| invalid("oversized projection completion fact"))?,
+            "projection completion fact",
+        )?;
+        let local: bool = connection
+            .query_row(
+                "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
+                [event.conversation_id.as_str()],
+                |r| r.get(0),
+            )
+            .map_err(|e| storage(e.to_string()))?;
+        if !local || event.schema_version != EVENT_SCHEMA_VERSION {
+            return Err(invalid(
+                "foreign or incompatible projection completion fact",
+            ));
+        }
+        Ok(event)
+    })
+    .transpose()
+}
+/// The Journal and immutable installation count anchor visibility independently
+/// of selector columns. Neither query reads future activation payloads.
+fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, ConversationStoreError> {
+    let inherited = inherited_count(connection)?;
+    let id = if let Some(event) = completion_at(connection, through)? {
+        let RuntimeEvent::CompactionCompleted {
+            activation_id,
+            checkpoint_id,
+            ..
+        } = event.event
+        else {
+            return Err(invalid("invalid projection completion authority"));
+        };
+        if activation_id.0 <= inherited || event.sequence > through {
+            return Err(invalid("inconsistent local projection publication"));
+        }
+        let header = eligibility_header(connection, activation_id.0)?;
+        if header.journal != event.sequence
+            || header.installation.is_some()
+            || header.checkpoint != checkpoint_id.as_str()
+            || event.schema_version != EVENT_SCHEMA_VERSION
+        {
+            return Err(invalid(
+                "projection selector disagrees with committed completion",
+            ));
+        }
+        activation_id.0
+    } else {
+        inherited
+    };
+    if id > 0 {
+        let header = eligibility_header(connection, id)?;
+        if id <= inherited && (header.journal != 0 || header.installation.is_none()) {
+            return Err(invalid(
+                "projection selector disagrees with inherited installation",
+            ));
+        }
+    }
+    let last: u64 = connection
+        .query_row(
+            "SELECT coalesce(max(activation),0) FROM projection_activations",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| storage(e.to_string()))?;
+    if last > id {
+        let next = eligibility_header(connection, id + 1)?;
+        if next.journal <= through || next.installation.is_some() {
+            return Err(invalid(
+                "missing eligible projection completion or installation",
+            ));
+        }
+    }
+    Ok(id)
+}
+/// Monotone Ledger publication makes the eligible set one contiguous prefix.
+/// Validate the indexed boundary and its successor, never the entire timeline.
+fn selected_frontier(
+    connection: &Connection,
+    selection: Option<(LedgerFrontier, JournalFrontier, ProjectionActivationId)>,
+) -> Result<u64, ConversationStoreError> {
+    let (ledger, journal, activation) = selection.unwrap_or((
+        LedgerFrontier(i64::MAX as u64),
+        JournalFrontier(i64::MAX as u64),
+        ProjectionActivationId(i64::MAX as u64),
+    ));
+    let journal_head = journal_frontier(connection, journal.0)?;
+    let through = journal_head.min(activation.0);
+    if through == 0 {
+        return Ok(0);
+    }
+    let head = eligibility_header(connection, through)?;
+    if head.ledger <= ledger.0 {
+        return Ok(through);
+    }
+    let id: Option<u64> = connection.query_row(
+        "SELECT activation FROM projection_activations INDEXED BY projection_ledger_idx WHERE ledger_frontier<=?1 ORDER BY ledger_frontier DESC,activation DESC LIMIT 1",
+        [seq_to_i64(ledger.0)?],|r|r.get(0),
+    ).optional().map_err(|e|storage(e.to_string()))?;
+    let id = id.unwrap_or(0);
+    if id >= through {
+        return Err(invalid("nonmonotone projection Ledger eligibility"));
+    }
+    if id > 0 {
+        eligibility_header(connection, id)?;
+    }
+    let next = eligibility_header(connection, id + 1)?;
+    if next.ledger <= ledger.0 {
+        return Err(invalid("hidden eligible projection predecessor"));
+    }
+    Ok(id)
+}
+
+pub(super) fn validate_activation_boundary(
+    connection: &Connection,
+    id: ProjectionActivationId,
+    ledger: LedgerFrontier,
+    journal: JournalFrontier,
+) -> Result<(), ConversationStoreError> {
+    if id.0 > 0 && selected_frontier(connection, Some((ledger, journal, id)))? != id.0 {
+        return Err(invalid("incompatible historical projection boundary"));
+    }
+    Ok(())
+}
+
+fn activation_content(
+    connection: &Connection,
+    id: ProjectionActivationId,
+) -> Result<ProjectionActivation, ConversationStoreError> {
+    let header = eligibility_header(connection, id.0)?;
+    let (json,payload_digest): (Option<String>,Option<String>) = connection.query_row(
+        "SELECT CASE WHEN octet_length(activation_json)<=1048576 THEN activation_json END,CASE WHEN octet_length(activation_digest)=64 THEN activation_digest END FROM projection_activations WHERE activation=?1",[seq_to_i64(id.0)?],|r|Ok((r.get(0)?,r.get(1)?)),
+    ).map_err(|e|storage(e.to_string()))?;
+    let json = json.ok_or_else(|| invalid("oversized expected projection activation"))?;
+    #[cfg(test)]
+    ACTIVATION_DECODES.with(|n| n.set(n.get() + 1));
+    let activation: ProjectionActivation = decode(&json, "projection activation")?;
+    if Some(digest(&json)) != payload_digest
+        || activation.activation != id
+        || activation.checkpoint_id.as_str() != header.checkpoint
+        || activation.ledger.0 != header.ledger
+        || activation
+            .destination_installation
+            .as_ref()
+            .map(ToString::to_string)
+            != header.installation
+        || (header.installation.is_none()
+            && activation.origin.completed_journal.0 != header.journal)
+    {
+        return Err(invalid("corrupted projection activation coordinates"));
+    }
+    Ok(activation)
+}
 pub(super) fn activation_at(
     connection: &Connection,
     id: ProjectionActivationId,
 ) -> Result<ProjectionActivation, ConversationStoreError> {
-    let (checkpoint_id, ledger, json, integrity): (String, u64, String, String) = connection
-        .query_row("SELECT checkpoint_id,ledger_frontier,activation_json,activation_digest FROM projection_activations WHERE activation=?1 AND octet_length(activation_json)<=1048576", [seq_to_i64(id.0)?], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-        .optional().map_err(|e| storage(e.to_string()))?
-        .ok_or_else(|| invalid("missing or oversized expected projection activation"))?;
-    let activation: ProjectionActivation = decode(&json, "projection activation")?;
-    if digest(&json) != integrity
-        || activation.activation != id
-        || activation.checkpoint_id.as_str() != checkpoint_id
-        || activation.ledger.0 != ledger
+    let activation = activation_content(connection, id)?;
+    if activation.destination_installation.is_none() {
+        let journal = activation.origin.completed_journal.0;
+        let event = completion_at(connection, journal)?
+            .ok_or_else(|| invalid("missing projection completion fact"))?;
+        if event.sequence != journal
+            || event.schema_version != EVENT_SCHEMA_VERSION
+            || event.conversation_id != activation.origin.conversation_id
+            || !matches!(event.event,RuntimeEvent::CompactionCompleted {activation_id,checkpoint_id,..} if activation_id==id && checkpoint_id==activation.checkpoint_id)
+        {
+            return Err(invalid(
+                "activation disagrees with committed completion fact",
+            ));
+        }
+    } else if id.0 > inherited_count(connection)? {
+        return Err(invalid("activation is outside immutable inherited prefix"));
+    }
+    Ok(activation)
+}
+/// Write-side reference validation precedes insertion of this very completion
+/// fact. It checks the same payload plus the transaction's allocated Journal slot;
+/// read-side validation instead requires the already committed fact.
+pub(super) fn completion_activation(
+    connection: &Connection,
+    id: &CheckpointId,
+) -> Result<ProjectionActivation, ConversationStoreError> {
+    let activation = activation_content(
+        connection,
+        ProjectionActivationId(activation_number(connection, id.as_str())?),
+    )?;
+    candidate(connection, id)?;
+    let (next, scope): (u64, String) = connection
+        .query_row(
+            "SELECT next_event_sequence+1,conversation_id FROM rustx_store WHERE id=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| storage(e.to_string()))?;
+    if activation.destination_installation.is_some()
+        || activation.origin.completed_journal.0 != next
+        || activation.origin.conversation_id.as_str() != scope
     {
-        return Err(invalid("corrupted projection activation coordinates"));
+        return Err(invalid(
+            "activation does not own the pending completion slot",
+        ));
     }
     Ok(activation)
 }
@@ -191,28 +512,25 @@ pub(super) fn timeline_at_journal_cut(
     after: ProjectionActivationId,
     limit: usize,
 ) -> Result<crate::durable::projection::ProjectionTimelinePage, ConversationStoreError> {
-    let records = timeline_page(
+    let frontier = selected_frontier(
+        connection,
+        Some((
+            LedgerFrontier(i64::MAX as u64),
+            JournalFrontier(through),
+            ProjectionActivationId(i64::MAX as u64),
+        )),
+    )?;
+    let records = timeline_prefix(
         connection,
         after,
         limit,
-        Some((
-            LedgerFrontier(u64::try_from(i64::MAX).expect("positive SQLite coordinate maximum")),
-            JournalFrontier(through),
-            ProjectionActivationId(
-                u64::try_from(i64::MAX).expect("positive SQLite coordinate maximum"),
-            ),
-        )),
+        frontier,
         ResourceLimits::default().total_bytes,
     )?;
-    let next_activation = if let Some(last) = records.last() {
-        let last = last.activation.activation;
-        let more: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM projection_activations WHERE activation>?1 AND (json_type(activation_json,'$.destination_installation')!='null' OR json_extract(activation_json,'$.origin.completed_journal')<=?2))",
-            params![seq_to_i64(last.0)?, seq_to_i64(through)?], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
-        more.then_some(last)
-    } else {
-        None
-    };
+    let next_activation = records
+        .last()
+        .map(|p| p.activation.activation)
+        .filter(|last| last.0 < frontier);
     Ok(crate::durable::projection::ProjectionTimelinePage {
         records,
         next_activation,
@@ -224,12 +542,12 @@ pub(super) fn checkpoint_at_journal_cut(
     through: u64,
     id: &CheckpointId,
 ) -> Result<ProjectionCheckpoint, ConversationStoreError> {
-    let activation: Option<u64> = connection.query_row(
-        "SELECT activation FROM projection_activations WHERE checkpoint_id=?1 AND (json_type(activation_json,'$.destination_installation')!='null' OR json_extract(activation_json,'$.origin.completed_journal')<=?2)",
-        params![id.as_str(), seq_to_i64(through)?], |r| r.get(0)).optional().map_err(|e| storage(e.to_string()))?;
-    let activation =
-        activation.ok_or_else(|| invalid("projection is not installed at the published cut"))?;
-    activated(connection, activation)
+    let frontier = journal_frontier(connection, through)?;
+    let activation: Option<u64> = connection.query_row("SELECT activation FROM projection_activations WHERE checkpoint_id=?1 AND activation<=?2",params![id.as_str(),seq_to_i64(frontier)?],|r|r.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+    activated(
+        connection,
+        activation.ok_or_else(|| invalid("projection is not installed at the published cut"))?,
+    )
 }
 
 pub(super) fn timeline_page(
@@ -239,40 +557,36 @@ pub(super) fn timeline_page(
     selection: Option<(LedgerFrontier, JournalFrontier, ProjectionActivationId)>,
     budget: usize,
 ) -> Result<Vec<ProjectionCheckpoint>, ConversationStoreError> {
+    let frontier = selected_frontier(connection, selection)?;
+    timeline_prefix(connection, after, limit, frontier, budget)
+}
+fn timeline_prefix(
+    connection: &Connection,
+    after: ProjectionActivationId,
+    limit: usize,
+    frontier: u64,
+    budget: usize,
+) -> Result<Vec<ProjectionCheckpoint>, ConversationStoreError> {
     if limit == 0 || limit > 64 {
         return Err(invalid("projection timeline page exceeds bound"));
     }
-    let (ledger, journal, through) =
-        selection.map_or((i64::MAX, i64::MAX, i64::MAX), |(l, j, a)| {
-            (
-                i64::try_from(l.0).unwrap_or(i64::MAX),
-                i64::try_from(j.0).unwrap_or(i64::MAX),
-                i64::try_from(a.0).unwrap_or(i64::MAX),
-            )
-        });
-    // Eligibility headers are immutable authority too. Validate an eligible
-    // header before its scalar coordinates can hide a required checkpoint.
-    let corrupt: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM projection_activations WHERE activation<=?1 AND (ledger_frontier<=?2 OR json_extract(activation_json,'$.ledger')<=?2) AND (octet_length(activation_json)>1048576 OR activation_digest!=rustx_content_digest(activation_json) OR activation!=json_extract(activation_json,'$.activation') OR checkpoint_id!=json_extract(activation_json,'$.checkpoint_id') OR ledger_frontier!=json_extract(activation_json,'$.ledger')))",
-        params![through, ledger], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
-    if corrupt {
-        return Err(invalid(
-            "corrupted historical projection eligibility header",
-        ));
-    }
-    let mut query = connection.prepare("SELECT activation FROM projection_activations WHERE activation>?1 AND activation<=?3 AND ledger_frontier<=?4 AND (json_type(activation_json,'$.destination_installation')!='null' OR json_extract(activation_json,'$.origin.completed_journal')<=?5) ORDER BY activation LIMIT ?2").map_err(|e| storage(e.to_string()))?;
-    let ids = query
-        .query_map(
-            params![seq_to_i64(after.0)?, limit, through, ledger, journal],
-            |r| r.get::<_, u64>(0),
-        )
-        .map_err(|e| storage(e.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| storage(e.to_string()))?;
     let mut page = Vec::new();
     let mut remaining = budget;
-    for id in ids {
-        let bytes: usize = connection.query_row("SELECT octet_length(candidate_json)+octet_length(activation_json)+octet_length(occupancy_json) FROM projection_activations a JOIN projection_checkpoints p ON a.checkpoint_id=p.checkpoint_id WHERE activation=?1", [id], |r| r.get(0)).map_err(|e| storage(e.to_string()))?;
+    let end = after.0.saturating_add(limit as u64).min(frontier);
+    for id in after.0.saturating_add(1)..=end {
+        let header = eligibility_header(connection, id)?;
+        let predecessor = if id > 1 {
+            Some(eligibility_header(connection, id - 1)?)
+        } else {
+            None
+        };
+        if predecessor
+            .as_ref()
+            .is_some_and(|p| p.ledger > header.ledger || p.journal > header.journal)
+        {
+            return Err(invalid("nonmonotone projection predecessor coordinates"));
+        }
+        let bytes:usize = connection.query_row("SELECT octet_length(candidate_json)+octet_length(activation_json)+octet_length(occupancy_json) FROM projection_activations a JOIN projection_checkpoints p ON a.checkpoint_id=p.checkpoint_id WHERE activation=?1",[seq_to_i64(id)?],|r|r.get(0)).map_err(|e|storage(e.to_string()))?;
         if bytes > remaining && !page.is_empty() {
             break;
         }
@@ -282,12 +596,21 @@ pub(super) fn timeline_page(
             ));
         }
         let value = activated(connection, id)?;
-        let charged = crate::context::resources::bounded_encoded_len(&value, remaining)?;
-        remaining -= charged;
+        if value
+            .candidate
+            .expected_head
+            .as_ref()
+            .map(CheckpointId::as_str)
+            != predecessor.as_ref().map(|p| p.checkpoint.as_str())
+        {
+            return Err(invalid("missing historical projection predecessor"));
+        }
+        remaining -= crate::context::resources::bounded_encoded_len(&value, remaining)?;
         page.push(value);
     }
     Ok(page)
 }
+
 pub(super) fn receipt(
     connection: &Connection,
     id: &CompactionOperationId,
@@ -528,8 +851,7 @@ pub(super) fn commit(
         },
         destination_installation: None,
     };
-    let activation_json = encode(&activation, "projection activation")?;
-    transaction.execute("INSERT INTO projection_activations(activation,checkpoint_id,ledger_frontier,activation_json,activation_digest) VALUES(?1,?2,?3,?4,?5)",params![next,input.candidate.checkpoint_id.as_str(),seq_to_i64(activation.ledger.0)?,activation_json,digest(&activation_json)]).map_err(|e|storage(e.to_string()))?;
+    persist_activation(transaction, &activation)?;
     stage(super::CompactionFaultOperation::AfterActivationInsert)?;
     transaction.execute("INSERT INTO projection_head(id,activation) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET activation=excluded.activation",[next]).map_err(|e|storage(e.to_string()))?;
     stage(super::CompactionFaultOperation::AfterHeadTransition)?;
@@ -758,6 +1080,19 @@ pub(super) fn install_lineage(
     scope: &ConversationId,
     checkpoints: &[ProjectionCheckpoint],
 ) -> Result<(), ConversationStoreError> {
+    let history: String = transaction
+        .query_row(
+            "SELECT history_digest FROM bootstrap_identity WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| storage(e.to_string()))?;
+    transaction
+        .execute(
+            "UPDATE bootstrap_identity SET projection_count=0,projection_digest=?1 WHERE id=1",
+            [inherited_count_digest(&history, 0)],
+        )
+        .map_err(|e| storage(e.to_string()))?;
     let mut last = None;
     let mut previous_checkpoint = None;
     let mut previous_ledger = LedgerFrontier(0);
@@ -788,8 +1123,23 @@ pub(super) fn install_lineage(
         let json = encode(candidate, "inherited checkpoint")?;
         transaction.execute("INSERT INTO projection_checkpoints(checkpoint_id,candidate_fingerprint,candidate_json,occupancy_json) VALUES(?1,?2,?3,?4)", params![candidate.checkpoint_id.as_str(),checkpoint.fingerprint,json,encode(&checkpoint.occupancy,"inherited occupancy")?]).map_err(|e|storage(e.to_string()))?;
         let activation = &checkpoint.activation;
-        let json = encode(activation, "inherited activation")?;
-        transaction.execute("INSERT INTO projection_activations(activation,checkpoint_id,ledger_frontier,activation_json,activation_digest) VALUES(?1,?2,?3,?4,?5)",params![seq_to_i64(activation.activation.0)?,candidate.checkpoint_id.as_str(),seq_to_i64(activation.ledger.0)?,json,digest(&json)]).map_err(|e|storage(e.to_string()))?;
+        persist_activation(transaction, activation)?;
+        let history: String = transaction
+            .query_row(
+                "SELECT history_digest FROM bootstrap_identity WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| storage(e.to_string()))?;
+        transaction
+            .execute(
+                "UPDATE bootstrap_identity SET projection_count=?1,projection_digest=?2 WHERE id=1",
+                params![
+                    seq_to_i64(activation.activation.0)?,
+                    inherited_count_digest(&history, activation.activation.0)
+                ],
+            )
+            .map_err(|e| storage(e.to_string()))?;
         last = Some(activation.activation);
         previous_checkpoint = Some(candidate.checkpoint_id.clone());
         previous_ledger = activation.ledger;
@@ -870,10 +1220,12 @@ fn activation_at_journal_cut(
     connection: &Connection,
     through: u64,
 ) -> Result<Option<ProjectionActivation>, ConversationStoreError> {
-    // Inherited Source.J is never compared with the destination Journal.
-    let id:Option<u64> = connection.query_row("SELECT activation FROM projection_activations WHERE json_type(activation_json,'$.destination_installation') != 'null' OR json_extract(activation_json,'$.origin.completed_journal')<=?1 ORDER BY activation DESC LIMIT 1",[seq_to_i64(through)?],|r|r.get(0)).optional().map_err(|e|storage(e.to_string()))?;
-    id.map(|id| activation_at(connection, ProjectionActivationId(id)))
-        .transpose()
+    let id = journal_frontier(connection, through)?;
+    if id == 0 {
+        Ok(None)
+    } else {
+        activation_at(connection, ProjectionActivationId(id)).map(Some)
+    }
 }
 
 /// Validate selection without repeating any dynamic semantic transformation.

@@ -323,7 +323,8 @@ fn count_conversation_store_open() {
 /// Version 59 replaces canonical summary/Surface replacement ownership with
 /// independently durable typed checkpoints, historical activations, operation
 /// receipts and exact frozen request manifests. Earlier stores are refused.
-pub const SQLITE_SCHEMA_VERSION: i64 = 59;
+/// Version 60 normalizes immutable activation eligibility and installed prefix authority.
+pub const SQLITE_SCHEMA_VERSION: i64 = 60;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -2481,7 +2482,11 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         through: u64,
     ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        projection::at_journal_cut(&*self.lock()?, through)
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::at_journal_cut(&transaction, through)
     }
     fn compaction_checkpoint_at(
         &self,
@@ -2496,7 +2501,11 @@ impl ConversationStore for SqliteConversationStore {
             ));
         }
         let connection = self.lock()?;
-        let bytes:Option<u64>=connection.query_row(
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        compaction_resources::validate(&transaction, &self.conversation_id, cut, limits)?;
+        let bytes:Option<u64>=transaction.query_row(
             "SELECT octet_length(c.candidate_json)+octet_length(a.activation_json)+coalesce(octet_length(c.occupancy_json),0) FROM projection_checkpoints c JOIN projection_activations a ON a.checkpoint_id=c.checkpoint_id WHERE c.checkpoint_id=?1 AND a.activation<=?2",
             params![id.as_str(),seq_to_i64(cut.projection_activation.0)?],|row|row.get(0),
         ).optional().map_err(|e|storage(e.to_string()))?;
@@ -2510,7 +2519,7 @@ impl ConversationStore for SqliteConversationStore {
                 "checkpoint record exceeds resource materialization bound",
             ));
         }
-        projection::checkpoint(&connection, id)
+        projection::checkpoint(&transaction, id)
     }
     fn compaction_request(
         &self,
@@ -2558,7 +2567,11 @@ impl ConversationStore for SqliteConversationStore {
         after: crate::context::checkpoint::ProjectionActivationId,
         limit: usize,
     ) -> Result<Vec<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        projection::timeline(&*self.lock()?, after, limit)
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::timeline(&transaction, after, limit)
     }
     fn projection_timeline_at_journal_cut(
         &self,
@@ -5732,7 +5745,9 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 turn_count INTEGER NOT NULL CHECK(turn_count>=0),
                 response_count INTEGER NOT NULL CHECK(response_count>=0),
                 provenance_digest TEXT NOT NULL,
-                inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0)
+                inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0),
+                projection_count INTEGER NOT NULL DEFAULT 0 CHECK(projection_count>=0),
+                projection_digest TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
                 ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
@@ -5773,10 +5788,16 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE TABLE IF NOT EXISTS projection_activations (
                 activation INTEGER PRIMARY KEY CHECK(activation>0),
                 checkpoint_id TEXT NOT NULL REFERENCES projection_checkpoints(checkpoint_id),
-                ledger_frontier INTEGER NOT NULL,
+                ledger_frontier INTEGER NOT NULL CHECK(ledger_frontier>=0),
+                visible_journal INTEGER NOT NULL CHECK(visible_journal>=0),
+                installation_id TEXT,
+                header_digest TEXT NOT NULL,
                 activation_json TEXT NOT NULL,
-                activation_digest TEXT NOT NULL
+                activation_digest TEXT NOT NULL,
+                CHECK((installation_id IS NULL AND visible_journal>0) OR (installation_id IS NOT NULL AND visible_journal=0))
             );
+            CREATE INDEX IF NOT EXISTS projection_ledger_idx ON projection_activations(ledger_frontier,activation);
+            CREATE UNIQUE INDEX IF NOT EXISTS projection_checkpoint_idx ON projection_activations(checkpoint_id);
             CREATE TABLE IF NOT EXISTS projection_head (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 activation INTEGER NOT NULL REFERENCES projection_activations(activation)
@@ -5917,6 +5938,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "response_count",
             "provenance_digest",
             "inherited_transcript_through",
+            "projection_count",
+            "projection_digest",
         ]
     {
         return Err(ConversationStoreError::IncompatibleSchema(
@@ -5924,6 +5947,30 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ));
     }
 
+    for (name, sql) in [
+        (
+            "projection_ledger_idx",
+            "CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)",
+        ),
+        (
+            "projection_checkpoint_idx",
+            "CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)",
+        ),
+    ] {
+        let actual: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
+                [name],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| storage(e.to_string()))?;
+        if actual.as_deref() != Some(sql) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid projection index {name}"
+            )));
+        }
+    }
     for (name, expression) in PRESENTATION_INDEXES {
         let sql: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
         if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events({expression})").as_str()) {
@@ -6029,6 +6076,9 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "activation",
                 "checkpoint_id",
                 "ledger_frontier",
+                "visible_journal",
+                "installation_id",
+                "header_digest",
                 "activation_json",
                 "activation_digest",
             ],
@@ -6094,6 +6144,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "occupancy_json",
                 "occupancy_digest",
                 "inherited_transcript_through",
+                "projection_count",
+                "projection_digest",
             ],
         ),
         (
@@ -9117,9 +9169,8 @@ fn validate_event_reference(
             generation,
             ..
         } => {
-            let checkpoint = projection::checkpoint(transaction, checkpoint_id)?;
-            if checkpoint.activation.activation != *activation_id || *generation != activation_id.0
-            {
+            let activation = projection::completion_activation(transaction, checkpoint_id)?;
+            if activation.activation != *activation_id || *generation != activation_id.0 {
                 return Err(ConversationStoreError::InvalidReference(
                     "compaction completion differs from atomic projection activation".into(),
                 ));
@@ -15082,7 +15133,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 59);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 60);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -15151,7 +15202,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 59);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 60);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
