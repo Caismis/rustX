@@ -52,7 +52,10 @@ pub(super) fn owner(
 }
 
 #[cfg(test)]
-thread_local! { static CANDIDATE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+thread_local! {
+    static FINGERPRINT_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CANDIDATE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 #[cfg(test)]
 pub(super) fn take_candidate_decodes() -> usize {
     CANDIDATE_DECODES.with(|n| n.replace(0))
@@ -63,6 +66,19 @@ thread_local! { static METADATA_DECODES: std::cell::Cell<usize> = const { std::c
 #[cfg(test)]
 fn take_metadata_decodes() -> usize {
     METADATA_DECODES.with(|n| n.replace(0))
+}
+
+/// SQL admits only the fixed lowercase SHA-256 encoding before this owned read.
+fn admitted_fingerprint(
+    row: &rusqlite::Row<'_>,
+    column: usize,
+) -> rusqlite::Result<Option<String>> {
+    let value: Option<String> = row.get(column)?;
+    #[cfg(test)]
+    if value.is_some() {
+        FINGERPRINT_MATERIALIZATIONS.with(|n| n.set(n.get() + 1));
+    }
+    Ok(value)
 }
 
 fn candidate(
@@ -76,11 +92,16 @@ fn candidate(
     ),
     ConversationStoreError,
 > {
-    let row: Option<(String, Option<String>, Option<String>)> = connection.query_row(
-        "SELECT candidate_fingerprint,CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,CASE WHEN octet_length(occupancy_json)<=1048576 THEN occupancy_json END FROM projection_checkpoints WHERE checkpoint_id=?1", [id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+    let row: Option<(Option<String>, Option<String>, Option<String>)> = connection.query_row(
+        "SELECT CASE WHEN octet_length(candidate_fingerprint)=64 THEN CASE WHEN typeof(candidate_fingerprint)='text' AND length(candidate_fingerprint)=64 AND candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN candidate_fingerprint END END,CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,CASE WHEN octet_length(occupancy_json)<=1048576 THEN occupancy_json END FROM projection_checkpoints WHERE checkpoint_id=?1", [id.as_str()], |row| {
+            let fingerprint = admitted_fingerprint(row, 0)?;
+            Ok((fingerprint, row.get(1)?, row.get(2)?))
+        })
         .optional().map_err(|e| storage(e.to_string()))?;
     let (fingerprint, json, occupancy) =
         row.ok_or_else(|| invalid(format!("missing checkpoint {id}")))?;
+    let fingerprint =
+        fingerprint.ok_or_else(|| invalid("invalid checkpoint fingerprint encoding"))?;
     let json = json.ok_or_else(|| invalid("oversized checkpoint"))?;
     let occupancy = occupancy.ok_or_else(|| invalid("oversized checkpoint occupancy"))?;
     #[cfg(test)]
@@ -471,20 +492,17 @@ pub(super) fn head(
         )
         .optional()
         .map_err(|e| storage(e.to_string()))?;
-    if n.is_none() {
-        let exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM projection_activations)",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| storage(e.to_string()))?;
-        if exists {
-            return Err(invalid("missing expected Projection Head"));
-        }
+    // Publication authority is the committed Journal plus the immutable
+    // inherited installation prefix. A valid historical activation alone cannot
+    // authorize the current pointer (including a rollback to an older head).
+    let published = journal_frontier(connection, i64::MAX as u64)?;
+    let selected = n.map(|n| nonnegative(n, "projection head")).transpose()?;
+    if selected != (published > 0).then_some(published) {
+        return Err(invalid(
+            "Projection Head disagrees with latest durable publication",
+        ));
     }
-    n.map(|n| activated(connection, nonnegative(n, "projection head")?))
-        .transpose()
+    selected.map(|n| activated(connection, n)).transpose()
 }
 pub(super) fn checkpoint(
     connection: &Connection,
@@ -567,7 +585,9 @@ fn timeline_prefix(
     frontier: u64,
     budget: usize,
 ) -> Result<Vec<ProjectionCheckpoint>, ConversationStoreError> {
-    if limit == 0 || limit > 64 {
+    const ENVELOPE_BYTES: usize =
+        b"{\"candidate\":,\"fingerprint\":\"\",\"activation\":,\"occupancy\":}".len();
+    if limit == 0 || limit > 64 || budget > ResourceLimits::default().total_bytes {
         return Err(invalid("projection timeline page exceeds bound"));
     }
     let mut page = Vec::new();
@@ -586,7 +606,13 @@ fn timeline_prefix(
         {
             return Err(invalid("nonmonotone projection predecessor coordinates"));
         }
-        let bytes:usize = connection.query_row("SELECT octet_length(candidate_json)+octet_length(activation_json)+octet_length(occupancy_json) FROM projection_activations a JOIN projection_checkpoints p ON a.checkpoint_id=p.checkpoint_id WHERE activation=?1",[seq_to_i64(id)?],|r|r.get(0)).map_err(|e|storage(e.to_string()))?;
+        // Count the complete persisted record encoding, including field names,
+        // punctuation and the quoted fingerprint. The writer stores compact
+        // serde JSON; no body or second encoded copy is needed for admission.
+        let columns: usize = connection.query_row("SELECT octet_length(candidate_json)+octet_length(candidate_fingerprint)+octet_length(activation_json)+octet_length(occupancy_json) FROM projection_activations a JOIN projection_checkpoints p ON a.checkpoint_id=p.checkpoint_id WHERE activation=?1",[seq_to_i64(id)?],|r|r.get(0)).map_err(|e|storage(e.to_string()))?;
+        let bytes = columns
+            .checked_add(ENVELOPE_BYTES)
+            .ok_or_else(|| invalid("projection record byte overflow"))?;
         if bytes > remaining && !page.is_empty() {
             break;
         }
@@ -605,7 +631,12 @@ fn timeline_prefix(
         {
             return Err(invalid("missing historical projection predecessor"));
         }
-        remaining -= crate::context::resources::bounded_encoded_len(&value, remaining)?;
+        // Fail explicitly for a damaged noncanonical encoding; never use a
+        // different representation for admission and cumulative deduction.
+        if crate::context::resources::bounded_encoded_len(&value, bytes)? != bytes {
+            return Err(invalid("inconsistent projection record encoding length"));
+        }
+        remaining -= bytes;
         page.push(value);
     }
     Ok(page)
@@ -616,17 +647,19 @@ pub(super) fn receipt(
     id: &CompactionOperationId,
     fingerprint: &str,
 ) -> Result<Option<ProjectionCommitReceipt>, ConversationStoreError> {
-    let row: Option<(String,Option<String>,String)> = connection.query_row("SELECT candidate_fingerprint,CASE WHEN octet_length(receipt_json)<=16777216 THEN receipt_json END,receipt_digest FROM compaction_operations WHERE operation_id=?1",[id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|storage(e.to_string()))?;
+    let row: Option<(Option<String>,Option<String>,Option<String>)> = connection.query_row("SELECT CASE WHEN octet_length(candidate_fingerprint)=64 THEN CASE WHEN typeof(candidate_fingerprint)='text' AND length(candidate_fingerprint)=64 AND candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN candidate_fingerprint END END,CASE WHEN octet_length(receipt_json)<=16777216 THEN receipt_json END,CASE WHEN octet_length(receipt_digest)=64 THEN receipt_digest END FROM compaction_operations WHERE operation_id=?1",[id.as_str()],|r|Ok((admitted_fingerprint(r,0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|storage(e.to_string()))?;
     let Some((stored, json, integrity)) = row else {
         return Ok(None);
     };
+    let stored =
+        stored.ok_or_else(|| invalid("invalid compaction receipt fingerprint encoding"))?;
     if stored != fingerprint {
         return Err(invalid(
             "CompactionOperationId reused with different candidate",
         ));
     }
     let json = json.ok_or_else(|| invalid("oversized compaction receipt"))?;
-    if digest(&json) != integrity {
+    if Some(digest(&json)) != integrity {
         return Err(invalid("corrupted compaction receipt"));
     }
     let receipt: ProjectionCommitReceipt = decode(&json, "compaction receipt")?;
@@ -1080,13 +1113,14 @@ pub(super) fn install_lineage(
     scope: &ConversationId,
     checkpoints: &[ProjectionCheckpoint],
 ) -> Result<(), ConversationStoreError> {
-    let history: String = transaction
+    let history: Option<String> = transaction
         .query_row(
-            "SELECT history_digest FROM bootstrap_identity WHERE id=1",
+            "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END FROM bootstrap_identity WHERE id=1",
             [],
             |r| r.get(0),
         )
         .map_err(|e| storage(e.to_string()))?;
+    let history = history.ok_or_else(|| invalid("invalid installed history digest"))?;
     transaction
         .execute(
             "UPDATE bootstrap_identity SET projection_count=0,projection_digest=?1 WHERE id=1",
@@ -1124,13 +1158,6 @@ pub(super) fn install_lineage(
         transaction.execute("INSERT INTO projection_checkpoints(checkpoint_id,candidate_fingerprint,candidate_json,occupancy_json) VALUES(?1,?2,?3,?4)", params![candidate.checkpoint_id.as_str(),checkpoint.fingerprint,json,encode(&checkpoint.occupancy,"inherited occupancy")?]).map_err(|e|storage(e.to_string()))?;
         let activation = &checkpoint.activation;
         persist_activation(transaction, activation)?;
-        let history: String = transaction
-            .query_row(
-                "SELECT history_digest FROM bootstrap_identity WHERE id=1",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| storage(e.to_string()))?;
         transaction
             .execute(
                 "UPDATE bootstrap_identity SET projection_count=?1,projection_digest=?2 WHERE id=1",
@@ -1172,7 +1199,13 @@ pub(super) fn verify_lineage(
 /// immutable provenance dependency, not an instruction to replay its historical
 /// selection or hydrate its retired Originals. Lineage installation validates
 /// each retained historical checkpoint independently for subsequent forks.
-type ProvenanceHeader = (String, Option<String>, Option<String>, Option<u64>, u64);
+type ProvenanceHeader = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<u64>,
+    u64,
+);
 pub(super) fn validate_current_dependencies(
     connection: &Connection,
     scope: &ConversationId,
@@ -1184,12 +1217,12 @@ pub(super) fn validate_current_dependencies(
                 if source.conversation_id != *scope {
                     return Err(invalid("foreign checkpoint provenance"));
                 }
-                let row:Option<ProvenanceHeader> = connection.query_row("SELECT candidate_fingerprint,CASE WHEN octet_length(candidate_json)<=8388608 THEN rustx_content_digest(candidate_json) END,json_extract(CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,'$.read_cut.conversation_id'),json_extract(CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,'$.base_frontier'),a.activation FROM projection_checkpoints p JOIN projection_activations a ON a.checkpoint_id=p.checkpoint_id WHERE p.checkpoint_id=?1",[source.checkpoint_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(|e|storage(e.to_string()))?;
+                let row:Option<ProvenanceHeader> = connection.query_row("SELECT CASE WHEN octet_length(candidate_fingerprint)=64 THEN CASE WHEN typeof(candidate_fingerprint)='text' AND length(candidate_fingerprint)=64 AND candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN candidate_fingerprint END END,CASE WHEN octet_length(candidate_json)<=8388608 THEN rustx_content_digest(candidate_json) END,CASE WHEN octet_length(json_extract(CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,'$.read_cut.conversation_id'))<=1024 THEN json_extract(CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,'$.read_cut.conversation_id') END,json_extract(CASE WHEN octet_length(candidate_json)<=8388608 THEN candidate_json END,'$.base_frontier'),a.activation FROM projection_checkpoints p JOIN projection_activations a ON a.checkpoint_id=p.checkpoint_id WHERE p.checkpoint_id=?1",[source.checkpoint_id.as_str()],|r|Ok((admitted_fingerprint(r,0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(|e|storage(e.to_string()))?;
                 let Some((fingerprint, digest, parent_scope, base, activation)) = row else {
                     return Err(invalid("missing immutable checkpoint provenance"));
                 };
-                if fingerprint != source.content_digest
-                    || digest.as_ref() != Some(&fingerprint)
+                if fingerprint.as_deref() != Some(source.content_digest.as_str())
+                    || digest != fingerprint
                     || parent_scope.as_deref() != Some(scope.as_str())
                     || base.is_none_or(|base| base > value.base_frontier.0)
                     || activation > value.read_cut.projection_activation.0

@@ -602,3 +602,21 @@ requested predecessors, hidden boundary successors, publication/installation dis
 and selected payload corruption fail explicitly. Reads do not authenticate every untouched
 ancestor or globally audit all rows. Complete lineage export checks its entire selected closure
 under its existing cumulative budget, while ordinary pages validate only their bounded scope.
+
+Current selection is stricter than historical eligibility. The current Projection Head
+must equal the latest Journal-published activation or, before local publication, the
+immutable destination installation prefix endpoint. A valid older activation cannot
+authorize current selection. The durable head reader compares these authorities in one
+short SQLite snapshot; request-start admission uses that same reader inside its write
+transaction. Historical pages and detail continue to select their own eligible prefix
+without consulting the current pointer.
+
+Timeline byte admission counts the complete compact stored `ProjectionCheckpoint`
+encoding: candidate, fingerprint, activation, occupancy, field names and punctuation.
+SQLite byte lengths establish the charge before any candidate body is loaded. The
+selected value is checked with an allocation-free encoding counter against that charge;
+admission and deduction cannot use different representations. A later non-fitting record
+ends a valid partial page; a first non-fitting record fails explicitly. Noncanonical stored
+encoding lengths fail integrity validation. Fingerprints are admitted as exactly 64
+lowercase hexadecimal text bytes before owned Rust materialization, including parent
+provenance and operation receipts. Existing payload and cumulative limits remain in force.

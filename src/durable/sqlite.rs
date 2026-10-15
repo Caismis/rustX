@@ -2554,7 +2554,11 @@ impl ConversationStore for SqliteConversationStore {
     fn projection_head(
         &self,
     ) -> Result<Option<super::projection::ProjectionCheckpoint>, ConversationStoreError> {
-        projection::head(&*self.lock()?)
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|e| storage(e.to_string()))?;
+        projection::head(&transaction)
     }
     fn projection_checkpoint(
         &self,
@@ -12379,6 +12383,102 @@ mod tests {
         assert_eq!(
             stored, 32,
             "neither runtime nor management opening migrates"
+        );
+    }
+
+    #[test]
+    fn stale_projection_head_rejects_request_start_without_snapshot_or_context_admission() {
+        use crate::scripted_suites::support::context::{
+            checkpoint_commit_fixture, checkpoint_fixture,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let store = SqliteConversationStore::open(
+            ConversationId::generate(),
+            &root.path().join("start.sqlite"),
+        )
+        .unwrap();
+        store.initialize(&[user_message("a", "original")]).unwrap();
+        store
+            .commit_projection(checkpoint_commit_fixture(
+                &store,
+                checkpoint_fixture(&store, "P1", 1, "first"),
+                None,
+            ))
+            .unwrap();
+        let context = request_context_message("ctx-1", "request-scoped context");
+        let mut snapshot = context_start_snapshot(
+            store.load_head().unwrap().revision.next(),
+            vec![MessageId::new("ctx-1")],
+        );
+        freeze_test_input(&store, &mut snapshot, std::slice::from_ref(&context));
+        store
+            .commit_projection(checkpoint_commit_fixture(
+                &store,
+                checkpoint_fixture(&store, "P2", 1, "second"),
+                None,
+            ))
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute("UPDATE projection_head SET activation=1", [])
+            .unwrap();
+        let before = store.load_canonical().unwrap();
+        let events = store.read_events(None, 64).unwrap().events;
+        let error = store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+            .unwrap_err();
+        assert!(error.to_string().contains("Projection Head"), "{error}");
+        assert_eq!(store.load_canonical().unwrap(), before);
+        let after = store.read_events(None, 64).unwrap().events;
+        assert_eq!(after, events);
+        assert_eq!(
+            after
+                .iter()
+                .filter(|e| matches!(e.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .count(),
+            0
+        );
+        let snapshots: u64 = store
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM request_snapshots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(snapshots, 0);
+        // Correcting only the injected damage proves the snapshot/context fixture
+        // is otherwise valid: the obsolete input is rejected, while freezing
+        // current history lets this actual-request identity start exactly once.
+        store
+            .lock()
+            .unwrap()
+            .execute("UPDATE projection_head SET activation=2", [])
+            .unwrap();
+        store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+            .unwrap_err();
+        let mut current = snapshot;
+        freeze_test_input(&store, &mut current, std::slice::from_ref(&context));
+        store
+            .commit_model_turn_start(std::slice::from_ref(&context), &current, Utc::now())
+            .unwrap();
+        assert_eq!(
+            store
+                .read_events(None, 64)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|e| matches!(e.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM request_snapshots", [], |r| r
+                    .get::<_, u64>(0))
+                .unwrap(),
+            1
         );
     }
 

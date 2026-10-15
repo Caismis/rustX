@@ -7467,3 +7467,20 @@ requested predecessors and independently inconsistent completion/installation fa
 closed. Checksums do not prove authenticity against coordinated modification/rechecksumming
 of authoritative metadata. Untouched out-of-page ancestors are validated when requested or
 when required by lineage/dependency closure; no stronger global audit is implied by one page.
+
+### Current projection publication and page admission
+
+- `projection_head` is a selection pointer. Current reads and new request-start
+  transactions require exact agreement with the latest committed completion Journal
+  authority and immutable inherited installation prefix, using bounded indexed reads.
+  A stale, missing, future or corrupt pointer fails; the store never repairs it or
+  substitutes another checkpoint. Historical eligibility remains independent of it.
+- Timeline admission and cumulative deduction count the same complete compact stored
+  record encoding, including its envelope and fingerprint. A later record that cannot
+  fit is deferred without body decoding; a first record that cannot fit fails. A streaming
+  length cross-check rejects inconsistent stored encodings without a second JSON copy.
+- Checkpoint fingerprints are fixed 64-byte lowercase hexadecimal text. SQL gates
+  their length and encoding before allocating owned metadata in candidate, parent
+  provenance and receipt readers. Other adjacent digest fields retain fixed-length
+  preallocation gates and content-integrity comparison. These checks detect independent
+  corruption, not coordinated forgery of authoritative facts and checksums.

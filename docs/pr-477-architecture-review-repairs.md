@@ -1082,3 +1082,132 @@ cases remain covered by their existing macOS CI lanes. No skip was introduced.
 
 Source was frozen for the final complete matrix. New pushed-HEAD CI is independent
 of these local results and is recorded in PR #477 and the final engineering report.
+
+## Current-head integrity, complete-record page budgets and metadata admission
+
+Starting HEAD: `b8e171e9a2ba3e629cc5765c2717d7d670d201f6`. Integrated main:
+`97096020d64ea00218493a0a99b9b805821eeb28` (already an ancestor; no merge needed).
+This bounded repair retains SQLite schema 60, App Server v49 and Runtime Client v70.
+
+### Findings and durable ownership
+
+**F1:** Validating the pointed-to activation established historical integrity but did
+not establish that it was the latest publication. P1 remained individually valid after
+P2 committed. `head()` now compares the pointer against `journal_frontier()` before
+loading the selected content. The existing indexed committed completion and immutable
+inherited prefix establish that frontier; a maximum activation alone does not authorize
+selection. Missing, stale, future and corrupt pointers fail explicitly. The public head
+read uses one short SQLite snapshot. Existing current-history compilation, checkpoint
+CAS and fresh request-start admission reuse this owner inside their existing transactions.
+Historical page/detail and matching historical receipts retain their independent authority.
+No pointer repair, additional durable authority or Agent/provider changes were introduced.
+
+**F2:** The old page admitted raw candidate/activation/occupancy bytes but deducted a
+larger encoded Rust value, so a second record could invalidate an otherwise valid page.
+`timeline_prefix()` now admits the complete compact stored record encoding using SQL
+column lengths plus the fingerprint and fixed JSON envelope. It deducts exactly that
+charge after an allocation-free full-value length cross-check. Stored values are emitted
+by the existing compact serde writer; inconsistent encoding lengths fail explicitly.
+A non-fitting later record ends a partial page before its body is loaded. A non-fitting
+first record fails. The caller's cursor remains the last admitted activation. Page size,
+16 MiB cumulative bound, per-column payload limits, eligibility-before-hydration and short
+native snapshots remain unchanged. Lineage's full-value cumulative accounting agrees with
+the validated complete-record charge. Work is bounded by admitted page records plus one
+next-record scalar admission check; no second large encoded copy or timeline scan is made.
+
+**F3:** `candidate()` previously allocated an unchecked fingerprint. Candidate, receipt
+and parent-provenance SQL now gate its exact 64-byte lowercase hexadecimal text encoding
+before an owned string is read. Embedded NUL, non-hex, uppercase, short, oversized and
+non-text values cannot pass the gate. Correctly encoded but incorrect fingerprints still
+fail content-integrity validation. Adjacent receipt digests and inherited history digests
+are length-gated before allocation; bounded activation/header identifiers and digest gates
+remain intact. Parent scope extraction is bounded before owned materialization. Receipt
+lookup still precedes current-head/CAS/fence revalidation; commit and cancellation/start
+linearization points are unchanged.
+
+### Deterministic red/green evidence
+
+Before changing production behavior, three file-backed owner regressions failed (0 pass,
+3 fail): stale P1 was accepted; a later record caused `cumulative compaction bytes exceeded`
+instead of a partial page; and a 2 MiB fingerprint incremented the owned-materialization
+counter. A separate native request-admission regression failed (0 pass, 1 fail): the stale
+P1 request actually committed `ModelRequestStarted`. The identical assertions pass after
+the repair. Extra cases extend the same fixtures without sleeps or timing thresholds.
+
+| Regression | Contract established |
+| --- | --- |
+| `current_head_rejects_stale_missing_and_nonexistent_pointers_without_changing_history` | P2 remains publication authority when the pointer is rolled back, deleted or points nowhere; historical P1 remains readable. |
+| `stale_projection_head_rejects_request_start_without_snapshot_or_context_admission` | Corrupted selection admits zero snapshots, start events or request Context; a fresh freeze against restored P2 starts exactly once. |
+| `inherited_publication_then_local_commit_has_one_authoritative_current_head` | Destination J0 history survives source deletion; local P3 supersedes inherited P2 without erasing J0 semantics; rollback fails. |
+| `current_head_validation_is_bounded_by_publication_not_timeline_length` | 66 activations require at most four normalized header reads and one selected candidate/activation decode; a stale pointer fails before either payload decode. |
+| `timeline_complete_record_budget_returns_a_partial_page_before_decoding_the_next_record` | Exact encoded byte counts reproduce the raw/full-size gap; exact fit, one byte short, first/later overflow, deferred-record zero decode and exhausted pages. |
+| `bounded_record_pages_preserve_same_ledger_order_and_frozen_cut_across_append` | Complete-record budgets return ordered P1/P2 without duplicates or omissions, despite a separate connection appending P3 between observations. |
+| `checkpoint_fingerprints_are_admitted_before_owned_materialization_and_body_decode` | Oversized, short, invalid hexadecimal, uppercase and NUL encodings create no owned fingerprint or candidate decode; a valid-encoding content mismatch is verified and rejected. |
+| `receipt_and_parent_provenance_fingerprints_share_preallocation_admission` | Parent/receipt metadata cannot bypass fingerprint admission; an oversized receipt digest is rejected. |
+
+The existing future malformed/oversized activation and candidate isolation, bounded header
+work, same-Ledger cuts, complete Clone/Fork closure, receipt recovery, transaction-stage
+fault, execution fencing, cancellation and exact frozen-request regressions remain required.
+Checksums are not authentication against coordinated database forgery. This repair does
+not claim a global integrity audit of untouched historical ancestors or future payloads.
+
+### Final local validation
+
+All 32 commands below completed successfully on the final Rust source. Native/process
+checks ran sequentially with `TMPDIR=/run/user/1000/r466-477` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Browser acceptance used the existing pinned container
+runner with `RUSTX_E2E_PREVIEW_PORT=5183 RUSTX_E2E_FIXTURE_PORT=5184`; no browser settings,
+deadlines, golden references or host quotas were changed. All provider traffic used
+scripted/local fixtures. The eight new regressions are included in the normal owner lanes.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --lib -- durable::sqlite::projection:: --test-threads=2` | Pass — 38 passed |
+| `cargo test --lib -- stale_projection_head_rejects_request_start_without_snapshot_or_context_admission --test-threads=2` | Pass — 1 passed |
+| `cargo test --lib -- projection_activation_closure_survives_clone_fork_clone_again_and_source_deletion --test-threads=2` | Pass — 1 passed |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Pass |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Pass |
+| `cargo build --bins --example document_artifact_fixture --locked` | Pass |
+| `cargo test --workspace -- --test-threads=2` | Pass — 4,211 passed; 8 existing ignored |
+| `cargo build --bins --all-features --locked` | Pass |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites:: --test-threads=2` | Pass — 3,521 passed; 3 existing ignored |
+| `cargo test --test contracts --test provider --all-features -- --test-threads=2` | Pass — 208 passed; 5 live-provider ignored |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=2` | Pass — 200 passed |
+| `cargo test --all-features --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output -- --test-threads=2` | Pass — 432 passed |
+| `cargo run --all-features --example check_test_lanes -- --job rust-contracts` | Pass |
+| `cargo run --all-features --example check_test_lanes -- --job rust-boundaries` | Pass |
+| `uv run --project test-support/fake-provider --frozen pytest` | Pass — 54 passed |
+| `pnpm --dir protocol/app-server check` | Pass |
+| `pnpm --dir protocol/app-server typecheck` | Pass |
+| `cargo build --bins --example document_artifact_fixture --locked` | Pass |
+| `pnpm --dir dev typecheck` | Pass |
+| `pnpm --dir dev test` | Pass — 41 passed |
+| `pnpm --dir tui typecheck` | Pass |
+| `pnpm --dir tui test` | Pass — 1,025 passed; 1 macOS ACL skip |
+| `pnpm --dir web-console typecheck` | Pass |
+| `pnpm --dir web-console test` | Pass — 2,585 passed; 4 platform skips |
+| `pnpm --dir web-console build` | Pass |
+| `pnpm --dir web-console check:i18n` | Pass |
+| `pnpm --dir web-console check:provenance` | Pass |
+| `node web-console/scripts/check-office-sandbox.ts` | Pass |
+| `bash web-console/scripts/browser-tests.sh test/e2e/compaction.spec.ts test/e2e/trajectory-integration.spec.ts` | Pass — 5 passed |
+| `python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v` | Pass — 15 passed |
+
+Cargo counts are the standard aggregate suite reports, including fixture entry points;
+they are not a claim that every reported case independently proves a runtime invariant.
+The existing Rust ignores are two measurements, one fixture generator and five opt-in
+live-provider tests. Client platform skips remain unchanged. No new skip was introduced.
+
+The first broad attempt caught Clippy `items_after_statements` on the new envelope
+constant. Moving the declaration to the function start corrected it without suppressing
+the lint; the complete matrix above was then rerun and passed. There were no unresolved
+environmental failures in that final run. Pinned browser acceptance includes real
+compaction/Projection History presentation and historical Trace. Protocol generation
+reported no drift; no generated files or lockfiles changed. A final fetch confirmed main
+remains the integrated SHA above and the remote PR head still matched the starting HEAD.
+
+Exact pushed-HEAD GitHub check results are recorded on PR #477; older-head CI is not
+evidence for this repair. The PR remains open for independent review and must not be
+merged or have auto-merge enabled by this task.

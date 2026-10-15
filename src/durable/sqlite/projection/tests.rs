@@ -1929,3 +1929,416 @@ fn n1_original_detail_does_not_validate_an_unrelated_future_activation_payload()
     );
     assert_eq!(take_candidate_decodes(), 1);
 }
+
+#[test]
+fn current_head_rejects_stale_missing_and_nonexistent_pointers_without_changing_history() {
+    for mutation in [
+        "UPDATE projection_head SET activation=1",
+        "UPDATE projection_head SET activation=99",
+        "DELETE FROM projection_head",
+    ] {
+        let (_root, store, cut) = n1_file_history(2);
+        assert_eq!(
+            store
+                .projection_head()
+                .unwrap()
+                .unwrap()
+                .activation
+                .activation
+                .0,
+            2
+        );
+        store
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys=OFF; {mutation}; PRAGMA foreign_keys=ON;"
+            ))
+            .unwrap();
+        let historical = store
+            .projection_checkpoint_at_journal_cut(cut, &CheckpointId::new("P1"))
+            .unwrap();
+        assert_eq!(historical.activation.activation.0, 1);
+        assert!(store.projection_head().is_err(), "{mutation}");
+        assert!(store.projected_history().is_err(), "{mutation}");
+    }
+}
+
+#[test]
+fn timeline_complete_record_budget_returns_a_partial_page_before_decoding_the_next_record() {
+    let (_root, store, _) = n1_file_history(2);
+    let first = store
+        .projection_checkpoint(&CheckpointId::new("P1"))
+        .unwrap();
+    let second = store
+        .projection_checkpoint(&CheckpointId::new("P2"))
+        .unwrap();
+    let first_bytes = serde_json::to_vec(&first).unwrap().len();
+    let second_bytes = serde_json::to_vec(&second).unwrap().len();
+    let connection = store.lock().unwrap();
+    let raw_second: usize = connection.query_row(
+        "SELECT octet_length(candidate_json)+octet_length(activation_json)+octet_length(occupancy_json) FROM projection_checkpoints p JOIN projection_activations a USING(checkpoint_id) WHERE a.activation=2", [], |r| r.get(0)).unwrap();
+    assert!(raw_second < second_bytes);
+    take_candidate_decodes();
+    let page = timeline_page(
+        &connection,
+        ProjectionActivationId(0),
+        2,
+        None,
+        first_bytes + second_bytes - 1,
+    )
+    .unwrap();
+    assert_eq!(page, vec![first.clone()]);
+    assert_eq!(
+        take_candidate_decodes(),
+        1,
+        "the deferred record is not decoded"
+    );
+    assert_eq!(
+        timeline_page(
+            &connection,
+            ProjectionActivationId(1),
+            2,
+            None,
+            second_bytes
+        )
+        .unwrap(),
+        vec![second]
+    );
+    assert_eq!(
+        timeline_page(&connection, ProjectionActivationId(0), 2, None, first_bytes).unwrap(),
+        vec![first]
+    );
+    assert!(
+        timeline_page(
+            &connection,
+            ProjectionActivationId(0),
+            2,
+            None,
+            first_bytes - 1
+        )
+        .is_err()
+    );
+    assert_eq!(
+        timeline_page(
+            &connection,
+            ProjectionActivationId(0),
+            2,
+            None,
+            first_bytes + second_bytes
+        )
+        .unwrap()
+        .len(),
+        2
+    );
+    assert!(
+        timeline_page(&connection, ProjectionActivationId(2), 2, None, 1)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn checkpoint_fingerprints_are_admitted_before_owned_materialization_and_body_decode() {
+    for corrupt in [
+        "x".repeat(2 * 1024 * 1024),
+        "a".repeat(63),
+        "z".repeat(64),
+        "A".repeat(64),
+        format!("{}\0{}", "a".repeat(32), "a".repeat(31)),
+        "0".repeat(64),
+    ] {
+        let (_root, store, _) = n1_file_history(2);
+        store.lock().unwrap().execute("UPDATE projection_checkpoints SET candidate_fingerprint=?1 WHERE checkpoint_id='P2'", [&corrupt]).unwrap();
+        FINGERPRINT_MATERIALIZATIONS.with(|n| n.set(0));
+        take_candidate_decodes();
+        assert!(store.projection_head().is_err());
+        let materializations = FINGERPRINT_MATERIALIZATIONS.with(|n| n.replace(0));
+        if corrupt.len() != 64
+            || !corrupt
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            assert_eq!(
+                materializations, 0,
+                "invalid digest encoding must not become an owned String"
+            );
+            assert_eq!(take_candidate_decodes(), 0);
+        } else {
+            assert_eq!(materializations, 1);
+            assert_eq!(
+                take_candidate_decodes(),
+                1,
+                "well-formed but wrong digests need content verification"
+            );
+        }
+    }
+    let (_root, store, _) = n1_file_history(2);
+    assert!(store.projection_head().unwrap().is_some());
+}
+
+#[test]
+fn inherited_publication_then_local_commit_has_one_authoritative_current_head() {
+    let (source_root, source, _) = n1_file_history(2);
+    let mut inherited = source
+        .read_projection_lineage_cut(LedgerFrontier(1), ProjectionActivationId(2))
+        .unwrap()
+        .projections;
+    for checkpoint in &mut inherited {
+        checkpoint.activation.destination_installation = Some(
+            crate::runtime::identity::LineageInstallationId::new("installed"),
+        );
+        checkpoint.candidate.read_cut.journal = JournalFrontier(0);
+        checkpoint.candidate.read_cut.transcript = crate::durable::TranscriptCursor::new(0);
+        checkpoint.fingerprint = checkpoint.candidate.fingerprint();
+    }
+    let root = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        source.conversation_id().clone(),
+        &root.path().join("destination.sqlite"),
+    )
+    .unwrap();
+    store
+        .initialize_lineage(
+            &crate::durable::LineageSeed::history(vec![message(1)])
+                .with_projections(inherited)
+                .unwrap(),
+        )
+        .unwrap();
+    drop(source);
+    source_root.close().unwrap();
+    assert_eq!(
+        store
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .activation
+            .activation
+            .0,
+        2
+    );
+    let local = store
+        .commit_projection(commit_input(
+            &store,
+            "local",
+            candidate(&store, "P3", vec![summary("local")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    assert_eq!(local.checkpoint.activation.activation.0, 3);
+    assert_eq!(store.projection_head().unwrap().unwrap(), local.checkpoint);
+    assert!(
+        local
+            .checkpoint
+            .activation
+            .destination_installation
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .projection_at_journal_cut(0)
+            .unwrap()
+            .unwrap()
+            .activation
+            .activation
+            .0,
+        2
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute("UPDATE projection_head SET activation=2", [])
+        .unwrap();
+    assert!(store.projection_head().is_err());
+    assert_eq!(
+        store
+            .projection_at_journal_cut(0)
+            .unwrap()
+            .unwrap()
+            .activation
+            .activation
+            .0,
+        2
+    );
+}
+
+#[test]
+fn bounded_record_pages_preserve_same_ledger_order_and_frozen_cut_across_append() {
+    let (root, store, cut) = n1_file_history(2);
+    let records = store
+        .projection_timeline(ProjectionActivationId(0), 2)
+        .unwrap();
+    let budget = records
+        .iter()
+        .map(|p| serde_json::to_vec(p).unwrap().len())
+        .max()
+        .unwrap();
+    let selection = Some((
+        LedgerFrontier(1),
+        JournalFrontier(cut),
+        ProjectionActivationId(2),
+    ));
+    let first = timeline_page(
+        &store.lock().unwrap(),
+        ProjectionActivationId(0),
+        64,
+        selection,
+        budget,
+    )
+    .unwrap();
+    assert_eq!(first, records[..1]);
+    let writer = SqliteConversationStore::open(
+        store.conversation_id().clone(),
+        &root.path().join("history.sqlite"),
+    )
+    .unwrap();
+    writer
+        .commit_projection(commit_input(
+            &writer,
+            "O3",
+            candidate(&writer, "P3", vec![summary("later")]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    let second = timeline_page(
+        &store.lock().unwrap(),
+        first.last().unwrap().activation.activation,
+        64,
+        selection,
+        budget,
+    )
+    .unwrap();
+    assert_eq!(second, records[1..]);
+    assert_eq!(
+        timeline_page(
+            &store.lock().unwrap(),
+            ProjectionActivationId(1),
+            64,
+            selection,
+            budget
+        )
+        .unwrap(),
+        second
+    );
+    assert!(
+        timeline_page(
+            &store.lock().unwrap(),
+            ProjectionActivationId(2),
+            64,
+            selection,
+            budget
+        )
+        .unwrap()
+        .is_empty()
+    );
+    assert_eq!(
+        first
+            .into_iter()
+            .chain(second)
+            .map(|p| p.activation.activation.0)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(
+        store
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .activation
+            .activation
+            .0,
+        3
+    );
+}
+
+#[test]
+fn receipt_and_parent_provenance_fingerprints_share_preallocation_admission() {
+    let (_root, store, _) = n1_file_history(2);
+    let parent = store
+        .projection_checkpoint(&CheckpointId::new("P1"))
+        .unwrap();
+    let second = store
+        .projection_checkpoint(&CheckpointId::new("P2"))
+        .unwrap();
+    let mut child = candidate(&store, "P3", vec![summary("from parent")]);
+    let CheckpointMessage::Derived(body) = &mut child.items[0].message else {
+        unreachable!()
+    };
+    body.sources.clear();
+    body.checkpoint_sources
+        .push(crate::model::projected::CheckpointSourceRef {
+            conversation_id: store.conversation_id().clone(),
+            checkpoint_id: parent.candidate.checkpoint_id,
+            content_digest: parent.fingerprint,
+        });
+    validate_current_dependencies(&store.lock().unwrap(), store.conversation_id(), &child).unwrap();
+    for value in ["f".repeat(2 * 1024 * 1024), "a".repeat(63), "z".repeat(64)] {
+        store.lock().unwrap().execute("UPDATE projection_checkpoints SET candidate_fingerprint=?1 WHERE checkpoint_id='P1'", [&value]).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE compaction_operations SET candidate_fingerprint=?1 WHERE operation_id='O2'",
+                [&value],
+            )
+            .unwrap();
+        FINGERPRINT_MATERIALIZATIONS.with(|n| n.set(0));
+        assert!(
+            validate_current_dependencies(&store.lock().unwrap(), store.conversation_id(), &child)
+                .is_err()
+        );
+        assert!(
+            store
+                .projection_receipt(&CompactionOperationId::new("O2"), &second.fingerprint)
+                .is_err()
+        );
+        assert_eq!(FINGERPRINT_MATERIALIZATIONS.with(|n| n.replace(0)), 0);
+    }
+    store.lock().unwrap().execute("UPDATE compaction_operations SET candidate_fingerprint=?1,receipt_digest=zeroblob(2097152) WHERE operation_id='O2'", [&second.fingerprint]).unwrap();
+    assert!(
+        store
+            .projection_receipt(&CompactionOperationId::new("O2"), &second.fingerprint)
+            .is_err()
+    );
+}
+
+#[test]
+fn current_head_validation_is_bounded_by_publication_not_timeline_length() {
+    let (_root, store, _) = n1_file_history(66);
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projection_activations SET activation_json='not-json' WHERE activation=1",
+            [],
+        )
+        .unwrap();
+    take_header_work();
+    take_candidate_decodes();
+    assert_eq!(
+        store
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .activation
+            .activation
+            .0,
+        66
+    );
+    let (headers, activations) = take_header_work();
+    assert!(headers <= 4);
+    assert_eq!(activations, 1);
+    assert_eq!(take_candidate_decodes(), 1);
+    store
+        .lock()
+        .unwrap()
+        .execute("UPDATE projection_head SET activation=1", [])
+        .unwrap();
+    assert!(store.projection_head().is_err());
+    assert_eq!(take_candidate_decodes(), 0);
+    assert_eq!(
+        take_header_work().1,
+        0,
+        "the pointer mismatch fails before either candidate body"
+    );
+}
