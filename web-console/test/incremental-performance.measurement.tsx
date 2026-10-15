@@ -1,10 +1,11 @@
+import { contentAdvance, utf8Length } from './fixture';
 import { writeFileSync } from 'node:fs';
 import { act, cleanup, render, fireEvent } from '@testing-library/react';
 import { Profiler } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server, snapshot } from './fixture';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../protocol/app-server/v46';
+import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../protocol/app-server/v48';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 it('fixed 420 long response measurement', async () => {
@@ -25,11 +26,11 @@ it('fixed 420 long response measurement', async () => {
   });
   await act(async () => { resize(); flush(); });
   const emit = async (event: RuntimeClientEvent, next: RuntimeClientSnapshot = s.snapshots.get('A')!) => {
-    if (next.attempt?.in_flight && (event.type === 'tool_call_started' || event.type === 'tool_call_arguments_delta' || event.type === 'tool_call_assembled')) {
+    if (next.attempt?.in_flight && (event.type === 'tool_call_started' || event.type === 'block_content_advanced' && event.kind === 'tool_call_arguments' || event.type === 'tool_call_assembled')) {
       const blocks = [...next.attempt.in_flight.blocks ?? []];
       if (event.type === 'tool_call_started') blocks.push({ type: 'tool_call', block_index: event.block_index, call_id: event.call.id, tool_id: event.call.tool_id, name: event.call.name, arguments: '' });
-      else { const index = blocks.findIndex(b => b.block_index === event.block_index); const block = blocks[index]; if (block?.type === 'tool_call') blocks[index] = { ...block, arguments: event.type === 'tool_call_assembled' ? JSON.stringify(event.call.arguments) : block.arguments + event.arguments_delta }; }
-      const foreground = blocks.flatMap(block => block.type === 'tool_call' ? [{ message_id: next.attempt!.in_flight!.message_id, block_index: block.block_index, call_id: block.call_id, tool_id: block.tool_id, name: block.name, state: { type: 'assembled' as const, arguments: block.arguments } }] : []);
+      else { const index = blocks.findIndex(b => b.block_index === event.block_index); const block = blocks[index]; if (block?.type === 'tool_call') blocks[index] = { ...block, arguments: event.type === 'tool_call_assembled' ? event.arguments_json : event.type === 'block_content_advanced' ? block.arguments + (event.inline_delta ?? '') : block.arguments }; }
+      const foreground = blocks.flatMap(block => block.type === 'tool_call' ? [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:next.attempt!.in_flight!.message_id},block_index:block.block_index},assembly_complete:true, message_id: next.attempt!.in_flight!.message_id, block_index: block.block_index, call_id: block.call_id, tool_id: block.tool_id, name: block.name, state: { type: 'assembled' as const, arguments: block.arguments } }] : []);
       next = { ...next, attempt: { ...next.attempt, foreground, in_flight: { ...next.attempt.in_flight, blocks } } };
     }
     s.snapshots.set('A', next); s.cursor++;
@@ -47,7 +48,7 @@ it('fixed 420 long response measurement', async () => {
   await emit({ type: 'assistant_message_started', attempt_id, message_id }, next);
   const reasoning = { type: 'reasoning' as const, block_index: 1, text: 'Reasoning before the long response.' };
   next = { ...next, attempt: { ...next.attempt!, in_flight: { message_id, blocks: [reasoning] } } };
-  await emit({ type: 'assistant_reasoning_delta', attempt_id, message_id, block_index: 1, delta: reasoning.text }, next);
+  await emit(contentAdvance({attempt_id:attempt_id,message_id:message_id,block_index:1,kind:'reasoning',delta:reasoning.text}, 0, 1), next);
   let text = '';
   let seat: Element | null = null, replacements = 0;
   const startWrites = writes;
@@ -55,23 +56,24 @@ it('fixed 420 long response measurement', async () => {
     const delta = `paragraph ${i}: ${'fixed deterministic long response. '.repeat(8)}\n`;
     text += delta;
     next = { ...next, attempt: { ...next.attempt!, in_flight: { message_id, blocks: [{ type: 'text', block_index: 0, text }, reasoning] } } };
-    await emit({ type: 'assistant_text_delta', attempt_id, message_id, block_index: 0, delta }, next);
+    await emit(contentAdvance({attempt_id:attempt_id,message_id:message_id,block_index:0,kind:'text',delta:delta}, utf8Length(text) - utf8Length(delta), i + 1), next);
     height += 10;
     await act(async () => { for (let n = 0; n < 10; n++) resize(); flush(); });
     const row = ui.container.querySelector('[data-chat-anchor-key="message:answer"]');
     if (seat && row !== seat) replacements++; seat = row;
     if (i === 99) { top = 210; fireEvent.scroll(el); }
   }
-  await emit({ type: 'tool_call_started', attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash' } });
-  for (const arguments_delta of ['{"command":', '"printf test"', '}']) await emit({ type: 'tool_call_arguments_delta', attempt_id, message_id, block_index: 2, call_id: 'call', arguments_delta });
-  await emit({ type: 'tool_call_assembled', arguments_json: '{"command":"printf test"}', attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash', arguments: { command: 'printf test' } } });
+  await emit({ type: 'tool_call_started', position: 2, foreground_position: 0, attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash' } });
+  let rawPrefix = '';
+  for (const arguments_delta of ['{"command":', '"printf test"', '}']) { await emit(contentAdvance({attempt_id,message_id,block_index:2,kind:'tool_call_arguments',delta:arguments_delta}, utf8Length(rawPrefix), utf8Length(rawPrefix) + 1)); rawPrefix += arguments_delta; }
+  await emit({ type: 'tool_call_assembled', position: 2, foreground_position: 0, arguments_json: '{"command":"printf test"}', attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash', arguments: { command: 'printf test' } } });
   height += 123; await act(async () => { resize(); flush(); });
   next = s.snapshots.get('A')!;
   const message = { role: 'assistant' as const, id: message_id, content: [{ type: 'text' as const, text: 'Canonical final content.' }, { type: 'reasoning' as const, text: reasoning.text }, { type: 'tool_call' as const, id: 'call', tool_id: 'bash', name: 'bash', arguments: { command: 'printf test' } }] };
   await emit({ type: 'message_committed', attempt_id, message, transcript_cursor: '1' }, { ...next, messages: [message], attempt: { ...next.attempt!, in_flight: null }, transcript: { entries: [{ cursor: '1', item: { type: 'message', message }, tool_calls: next.attempt?.foreground }] } });
   if (ui.container.querySelector('[data-chat-anchor-key="message:answer"]') !== seat) replacements++;
   await act(async () => { flush(); });
-  const measurement = { fixture: '200-long-reasoning-tool-v3', snapshots: s.requests.filter(x => x.request.method === 'session/snapshot').length, commits, automaticWrites: writes - startWrites, bottomWrites, anchorWrites, rowReplacements: replacements };
+  const measurement = { fixture: '200-long-reasoning-tool-v3', snapshots: s.requests.filter(x => x.request.method === 'session/checkpoint').length, commits, automaticWrites: writes - startWrites, bottomWrites, anchorWrites, rowReplacements: replacements };
   if (process.env.RUSTX_PERFORMANCE_OUTPUT) writeFileSync(process.env.RUSTX_PERFORMANCE_OUTPUT, JSON.stringify(measurement, null, 2));
 
   expect(s.client.getSnapshot().views.A.cursor).toBe(String(s.cursor));

@@ -61,6 +61,7 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
                 .read_lineage_cut(store.load_head().unwrap().revision)
                 .map(|cut| cut.turns)
                 .unwrap(),
+            &[],
         )
         .unwrap();
         let child = SqliteConversationStore::open(id.clone(), &path).unwrap();
@@ -109,7 +110,10 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         let inherited = tails(&projected);
         assert_eq!(inherited.len(), 2);
         let b = inherited[1];
-        assert_eq!(b.closing_message_id, message_id_of(&seed.canonical()[3]));
+        assert_eq!(
+            b.closing_message_id,
+            Some(message_id_of(&seed.canonical()[3]))
+        );
         assert_eq!(
             b.retry_message_id,
             Some(message_id_of(&seed.canonical()[2]))
@@ -119,7 +123,15 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         assert_eq!(b.usage, original_b.usage);
         assert_eq!(b.timing, original_b.timing);
         assert_eq!(b.timing.as_ref().unwrap().generation_ms, Some(1280));
-        assert!(is_completed_response(&child, &b.closing_message_id).unwrap());
+        assert!(
+            is_completed_response(
+                &child,
+                b.closing_message_id
+                    .as_ref()
+                    .expect("bounded fixture identity")
+            )
+            .unwrap()
+        );
         assert_eq!(projected.statistics, Some(inherited_totals.clone()));
         assert_eq!(child.presentation_frontier().unwrap(), 0);
         assert!(child.read_events(None, 128).unwrap().events.is_empty());
@@ -195,10 +207,10 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
     assert_eq!(totals.completed_responses, 3);
     assert_eq!(totals.model_requests, 3);
     assert_eq!(totals.reported_usage.unwrap().total_tokens, 360);
-    assert_eq!(
-        totals.latest_turn.unwrap().attempt_id,
-        AttemptId::new("local")
-    );
+    let clock = totals.latest_turn.unwrap();
+    assert_eq!(clock.attempt_id, Some(AttemptId::new("local")));
+    assert!(!clock.attempt_id_deferred);
+    assert!(clock.attempt_id_source.is_none());
 }
 
 #[test]
@@ -229,6 +241,7 @@ fn remapping_drops_missing_retry_input_and_bootstrap_rejects_invalid_response_ad
             .read_lineage_cut(source.load_head().unwrap().revision)
             .map(|cut| cut.turns)
             .unwrap(),
+        &[],
     )
     .unwrap();
     assert_eq!(seed.completed_responses()[0].retry_message_id, None);
@@ -302,6 +315,7 @@ fn interrupted_process_content_retains_native_origin_outcome_and_destination_loc
             .read_lineage_cut(source.load_head().unwrap().revision)
             .map(|cut| cut.turns)
             .unwrap(),
+        &[],
     )
     .unwrap();
     let directory = tempfile::tempdir().unwrap();
@@ -318,7 +332,8 @@ fn interrupted_process_content_retains_native_origin_outcome_and_destination_loc
             .iter()
             .filter_map(|entry| entry.turn_process.as_ref())
             .all(|turn| turn.conversation_id == *source.conversation_id()
-                && turn.attempt_id == AttemptId::new("stopped")
+                && turn.attempt_id == Some(AttemptId::new("stopped"))
+                && turn.attempt_id_source.is_none()
                 && turn.outcome == TurnProcessOutcome::Cancelled)
     );
     // The cancelled turn's own recorded execution travels with it.
@@ -422,6 +437,7 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
                 .read_lineage_cut(store.load_head().unwrap().revision)
                 .map(|cut| cut.turns)
                 .unwrap(),
+            &[],
         )
         .unwrap();
         let id = ConversationId::generate();
@@ -470,7 +486,7 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
         ];
         for (index, turn) in outline.turns.iter().enumerate() {
             let read = child
-                .conversation_window(
+                .read_window_headers(
                     &crate::durable::reading::ConversationWindowAt::Older {
                         cut: None,
                         before: crate::durable::TranscriptCursor::new(
@@ -480,12 +496,13 @@ fn lineage_preserves_success_failed_and_terminal_only_turns_in_native_order() {
                     1,
                 )
                 .unwrap();
-            assert_eq!(read.page.entries[0].cursor, turn.cursor.unwrap());
-            let mut projected = transcript_page_view(read.page).unwrap();
-            decorate_window(&child, &mut projected, read.cut.journal).unwrap();
+            assert_eq!(read.page.headers[0].cursor, turn.cursor.unwrap());
+            let mut projected = crate::runtime_client::snapshot::transcript_header_view(read.page);
+            decorate_window(&child, &mut projected, read.cut.read.journal).unwrap();
             let owner = projected.entries[0].turn_process.as_ref().unwrap();
             assert_eq!(owner.conversation_id, turn.id.conversation_id);
-            assert_eq!(owner.attempt_id, turn.id.attempt_id);
+            assert_eq!(owner.attempt_id.as_ref(), Some(&turn.id.attempt_id));
+            assert_eq!(owner.attempt_id_source, None);
             assert_eq!(owner.outcome, outcomes[index]);
             assert_eq!(owner.control_cursor.get(), turn.cursor.unwrap().get());
         }

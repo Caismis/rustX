@@ -21,11 +21,11 @@ it('search and keyboard selection retain exact model identities across live loca
   expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'model', model: 'vLLM/Qwen3.6' });
   expect(chosen).toHaveBeenCalledOnce();
 });
-it('choosing the current model preserves its configured profile without another mutation', async () => {
+it('choosing the current default delegates the gesture instead of deciding a native NoOp', async () => {
   const choose = vi.fn(async () => true), chosen = vi.fn(), close = vi.fn();
   render(<ModelPicker state={{ choices, current: 'DeepSeek/flash', disabled: false, loading: false, choose }} close={close} chosen={chosen}/>);
   await act(async () => fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }));
-  expect(choose).not.toHaveBeenCalled(); expect(chosen).toHaveBeenCalledOnce();
+  expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'model-default', model: 'DeepSeek/flash' }); expect(chosen).toHaveBeenCalledOnce();
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
   expect(close).toHaveBeenCalledOnce();
 });
@@ -46,28 +46,28 @@ it('a pinned Profile is the configured row; the Model row keeps it and the defau
   render(<ModelPicker state={{ choices: profiled, current: 'example/chat', profile: 'fast', effectiveProfile: 'fast', disabled: false, loading: false, choose }} close={() => {}} chosen={chosen}/>);
   expect(screen.getAllByRole('option').map(row => row.getAttribute('aria-label'))).toEqual(['example/chat', 'example/chat / Model default profile (balanced)', 'example/chat / balanced', 'example/chat / fast']);
   expect(screen.getByRole('option', { selected: true }).getAttribute('aria-label')).toBe('example/chat / fast');
-  // Enter on the configured row is a genuine no-op.
+  // Enter on the configured row still delegates the explicit gesture.
   await act(async () => fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }));
-  expect(choose).not.toHaveBeenCalled(); expect(chosen).toHaveBeenCalledTimes(1);
+  expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'profile', model: 'example/chat', profile: 'fast' }); expect(chosen).toHaveBeenCalledTimes(1);
   // The Model row does not clear the pinned Profile.
   for (let i = 0; i < 3; i++) fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowUp' });
   expect(screen.getByRole('option', { selected: true }).getAttribute('aria-label')).toBe('example/chat');
   await act(async () => fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }));
-  expect(choose).not.toHaveBeenCalled(); expect(chosen).toHaveBeenCalledTimes(2);
+  expect(choose).toHaveBeenNthCalledWith(2, { kind: 'model', model: 'example/chat' }); expect(chosen).toHaveBeenCalledTimes(2);
   // Returning to the Model default is its own explicit row.
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' });
   await act(async () => fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }));
-  expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'model-default', model: 'example/chat' });
+  expect(choose).toHaveBeenNthCalledWith(3, { kind: 'model-default', model: 'example/chat' });
   expect(chosen).toHaveBeenCalledTimes(3);
 });
-it('following the default, pinning the current default Profile is a change and choosing the default again is not, by pointer', async () => {
+it('following the default, both reselecting it and pinning its current Profile delegate explicit pointer gestures', async () => {
   const choose = vi.fn(async () => true), chosen = vi.fn();
   render(<ModelPicker state={{ choices: profiled, current: 'example/chat', effectiveProfile: 'balanced', disabled: false, loading: false, choose }} close={() => {}} chosen={chosen}/>);
   expect(screen.getByRole('option', { selected: true }).getAttribute('aria-label')).toBe('example/chat / Model default profile (balanced)');
   await act(async () => fireEvent.click(screen.getByRole('option', { name: 'example/chat / Model default profile (balanced)' })));
-  expect(choose).not.toHaveBeenCalled(); expect(chosen).toHaveBeenCalledTimes(1);
+  expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'model-default', model: 'example/chat' }); expect(chosen).toHaveBeenCalledTimes(1);
   await act(async () => fireEvent.click(screen.getByRole('option', { name: 'example/chat / balanced' })));
-  expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'profile', model: 'example/chat', profile: 'balanced' });
+  expect(choose).toHaveBeenNthCalledWith(2, { kind: 'profile', model: 'example/chat', profile: 'balanced' });
   expect(chosen).toHaveBeenCalledTimes(2);
   // Search reaches the default row in either locale's wording.
   act(() => localeController.setLocale('zh'));
@@ -93,11 +93,11 @@ it('a stale pinned Profile on a Model without Profiles is cleared by its own def
   expect(screen.getByRole('option', { selected: true }).getAttribute('aria-label')).toBe('example/chat');
   expect(screen.getByRole('status').textContent).toBe('Profile fast is unavailable for example/chat in this Workspace.');
   await act(async () => fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }));
-  expect(choose).not.toHaveBeenCalled(); expect(chosen).toHaveBeenCalledTimes(1);
+  expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'model', model: 'example/chat' }); expect(chosen).toHaveBeenCalledTimes(1);
   fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown' });
   expect(screen.getByRole('option', { selected: true }).getAttribute('aria-label')).toBe('example/chat / Use model defaults');
   await act(async () => fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' }));
-  expect(choose).toHaveBeenCalledExactlyOnceWith({ kind: 'model-default', model: 'example/chat' });
+  expect(choose).toHaveBeenNthCalledWith(2, { kind: 'model-default', model: 'example/chat' });
   expect(chosen).toHaveBeenCalledTimes(2);
 });
 it('the stale-Profile recovery row is searchable and pointer-selectable in either locale, and absent once nothing is pinned', async () => {

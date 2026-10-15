@@ -318,12 +318,12 @@ use crate::model::{ModelRequest, RequestIdentity, invocation::ModelInvocationErr
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::{
-    ConversationInboundMailbox, FreshInboundTurn, InboundBatch, InboundItem, InboundObserver,
-    InboundSequence, InitialTurnTrigger, MailboxError,
+    ConversationInboundMailbox, FreshInboundTurn, InboundItem, InboundObserver, InboundSequence,
+    InitialTurnTrigger, MailboxError,
 };
 use crate::runtime::interaction::{
     InteractionCoordinator, InteractionObserver, InteractionOutcome, InteractionRef,
-    InteractionRequest, InteractionRoute, RoutedInteraction, RoutedInteractionError, route_error,
+    InteractionRoute, RoutedInteractionError, route_error,
 };
 use crate::runtime::monotonic::{MonotonicClock, SystemMonotonicClock};
 use crate::runtime::observation::{
@@ -807,6 +807,44 @@ struct AdmissionDurabilityCycle {
     pending_retry: Option<PendingDurabilityRetry>,
 }
 
+/// A read-only receipt of the coordinator's existing execution handoff.
+/// The ordinal is the already-admitted attempt count, not an observation cursor.
+#[derive(Debug, Clone)]
+pub(crate) struct NativeAttemptSettlement {
+    pub ordinal: u64,
+    pub attempt_id: AttemptId,
+    pub outcome: NativeAttemptOutcome,
+}
+
+/// Finite classification borrowed from the authoritative Agent execution result.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum NativeAttemptOutcome {
+    Completed,
+    Cancelled,
+    TimedOut,
+    LimitExceeded,
+    ModelFailed,
+    RuntimeFailed,
+}
+
+impl NativeAttemptOutcome {
+    fn from_execution(outcome: &crate::events::types::AttemptOutcome) -> Self {
+        use crate::events::types::{AttemptFailure, AttemptOutcome};
+        match outcome {
+            AttemptOutcome::Completed { .. } => Self::Completed,
+            AttemptOutcome::Cancelled { .. } => Self::Cancelled,
+            AttemptOutcome::TimedOut => Self::TimedOut,
+            AttemptOutcome::LimitExceeded { .. } => Self::LimitExceeded,
+            AttemptOutcome::Failed {
+                error: AttemptFailure::Model { .. },
+            } => Self::ModelFailed,
+            AttemptOutcome::Failed {
+                error: AttemptFailure::Runtime { .. },
+            } => Self::RuntimeFailed,
+        }
+    }
+}
+
 /// The one synchronized coordinator state (the admission linearization
 /// owner).
 #[allow(clippy::struct_excessive_bools)] // Independent admission, lifecycle, and maintenance facts share one lock.
@@ -863,6 +901,8 @@ struct CoordinatorState {
     /// slot and the durable pending inbox, by
     /// [`ConversationRuntime::seal_parent_guidance`].
     admitted_attempts: u64,
+    /// Latest handoff; child turn permits prevent admission past an unconsumed receipt.
+    latest_settlement: Option<NativeAttemptSettlement>,
     /// Native child turn permits are released only after parent lifecycle admission.
     parent_turn_permits: Option<u64>,
     /// Whether this conversation's parent-authored guidance admission is
@@ -1185,6 +1225,20 @@ impl DrainCompletion {
 pub(crate) struct CoordinatorProbe {
     /// Parks the next admission when armed.
     pub(crate) admission_gate: Option<Arc<Gate>>,
+    /// Signals only after admission proves the coordinator lock is held by
+    /// a competitor. Consumed once, immediately before normal lock acquisition.
+    pub(crate) admission_contended: Option<Arc<tokio::sync::Notify>>,
+    /// Parks after admission freezes and publishes its invocation while the
+    /// coordinator lock is still held.
+    pub(crate) admission_committed_gate: Option<Arc<Gate>>,
+    /// Parks an admitted Attempt after releasing the coordinator, before its
+    /// execution task can publish further observations.
+    pub(crate) attempt_execution_gate: Option<Arc<Gate>>,
+    /// Signals only after model selection proves the coordinator lock is held
+    /// by a competitor. Consumed once before normal lock acquisition.
+    pub(crate) selection_contended: Option<Arc<tokio::sync::Notify>>,
+    /// Parks model selection after taking the coordinator lock and before commit.
+    pub(crate) selection_locked_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
     /// Parks after durable terminal publication, before restoring conversation state.
@@ -1341,6 +1395,7 @@ impl Drop for GateRelease {
 /// The shared state of one conversation runtime.
 pub(crate) struct RuntimeInner {
     configuration_owner: Arc<()>,
+    model_selection_owner: ModelSelectionOwner,
     conversation_id: ConversationId,
     agent_id: AgentId,
     context: ConversationContextConfig,
@@ -1530,7 +1585,7 @@ impl RuntimeInner {
         {
             return Err(Busy::Inbound);
         }
-        if !self.interaction.pending_snapshot().is_empty() {
+        if self.interaction.pending_count() != 0 {
             return Err(Busy::Interaction);
         }
         if self.tool_runtime.background().owns_idle_work() {
@@ -2064,8 +2119,22 @@ impl RuntimeInner {
     /// observation this runtime ever emits.
     #[allow(clippy::needless_pass_by_value)] // observer callers construct owned observations
     fn observe(&self, observation: ConversationObservation) {
+        if let ConversationObservation::CanonicalCommitted { receipt, .. } = &observation
+            && (receipt.ordinal.checked_add(1) != Some(receipt.observation.count)
+                || receipt.observation.journal_range.is_some())
+        {
+            // J-backed canonical writes belong to the same-commit native batch.
+            // Its callback installs C, pending and lifecycle facts together and
+            // releases their source readiness only after that complete CPU fold.
+            return;
+        }
         if let Some(pending) = self.pending.get() {
-            pending.push(&observation);
+            match pending.push(&observation) {
+                Some(crate::runtime::observation::NativeReceiptInstallation::Unavailable) => {
+                    pending.source_failed();
+                }
+                _ => observation.publish_journal_source(self.store.as_ref(), pending),
+            }
         }
     }
 
@@ -2215,21 +2284,62 @@ impl RuntimeInner {
                 conversation_id: self.conversation_id.clone(),
             });
         }
-        // Read the native durable bootstrap before installing any observer
-        // seam. A corrupt/unavailable Pending Inbound or Surface authority
-        // must fail explicitly and leave the runtime unbridged.
-        let head = self
-            .store
-            .load_head()
-            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
-        let messages = self
-            .store
-            .load_messages(&head.active_message_ids)
-            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
-        let transcript = self
-            .store
-            .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
-            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        // Display indexes are derived read layouts. Their failure fences the
+        // observation seed without rejecting the native runtime's activation.
+        let mut source_failure = None;
+        let observation_cut = match self.store.observation_read_cut() {
+            Ok(cut) => Some(cut),
+            Err(error) if client_projection => {
+                source_failure = Some(error.to_string());
+                None
+            }
+            Err(error) => return Err(RuntimeBootstrapError::Durable(error.to_string())),
+        };
+        let (messages, transcript) = if client_projection {
+            let headers = observation_cut.as_ref().and_then(|cut| {
+                match self.store.message_header_page(
+                    cut,
+                    None,
+                    crate::durable::observation::HEADER_PAGE_MAX,
+                ) {
+                    Ok(page) => Some(page),
+                    Err(error) => {
+                        source_failure.get_or_insert(error.to_string());
+                        None
+                    }
+                }
+            });
+            (
+                headers.map_or_else(Vec::new, |page| {
+                    page.headers
+                        .into_iter()
+                        .filter_map(|header| header.display)
+                        .collect()
+                }),
+                TranscriptPage {
+                    inherited_through: observation_cut.as_ref().map_or_else(
+                        || crate::durable::TranscriptCursor::new(0),
+                        |cut| cut.inherited_through,
+                    ),
+                    entries: Vec::new(),
+                    next_cursor: None,
+                },
+            )
+        } else {
+            let head = self
+                .store
+                .load_head()
+                .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+            let messages = self
+                .store
+                .load_messages(&head.active_message_ids)
+                .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+            let transcript = self
+                .store
+                .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
+                .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+            (messages, transcript)
+        };
         // ---- T0: the coordinator-owned facts ----
         //
         // An inactive runtime never moved its conversation state into an
@@ -2238,7 +2348,10 @@ impl RuntimeInner {
         // The observation bridge is installed only before activation, so its
         // shutdown projection seed is necessarily false.
         let shutting_down = false;
-        let model = state.model.view();
+        let model = state
+            .model
+            .read_source()
+            .at_binding_revision(state.binding_revision);
         // The resource generation is part of the same freeze as every other
         // seeded fact: a client attaching before the first configuration application still sees
         // exactly which project instruction files the runtime loaded.
@@ -2249,40 +2362,88 @@ impl RuntimeInner {
         // it still participates in the same bootstrap cut as every other
         // live projection fact. Installing the observer here means all later
         // pending/settled transitions enter the one observation queue.
-        let mut pending_interactions: Vec<RoutedInteraction> = self
-            .interaction
-            .pending_snapshot()
-            .into_iter()
-            .map(RoutedInteraction::primary)
+        let pending_primary = self.interaction.observation_head();
+        let mut pending_interactions: Vec<_> = pending_primary
+            .head
+            .iter()
+            .map(|(sequence, source)| {
+                let mut header = source.header().clone();
+                header.source_offset = sequence.checked_mul(2).expect("pending source offset");
+                header
+            })
             .collect();
-        let child_pending_interactions = self
+        let child_pending = self
             .subagents
             .as_ref()
-            .map(crate::runtime::subagent::SubagentRegistry::pending_interaction_projection)
-            .unwrap_or_default();
+            .map(crate::runtime::subagent::SubagentRegistry::pending_interaction_head);
+        let child_pending_interactions = child_pending
+            .as_ref()
+            .map_or_else(Vec::new, |proof| proof.head.clone());
         // The list is not a live subsystem with an observer of its own: it
         // is a derivation of canonical tool results, and it moves only when
         // one of those commits. Reading the committed list inside the same
         // freeze keeps the seed and the live stream on one cut.
-        let todos = self.tool_runtime.todo_snapshot();
-        let goal = self
+        let todos = if client_projection {
+            self.tool_runtime.todos().map(|_| {
+                observation_cut
+                    .as_ref()
+                    .and_then(|cut| match self.store.todo_observation_head(cut) {
+                        Ok(head) => head.map(|head| head.snapshot),
+                        Err(error) => {
+                            source_failure.get_or_insert(error.to_string());
+                            None
+                        }
+                    })
+                    .unwrap_or_default()
+            })
+        } else {
+            self.tool_runtime.todo_snapshot()
+        };
+        let goal = match self
             .tool_runtime
             .goal()
-            .map(crate::goal::GoalDomain::view)
+            .map(crate::goal::GoalDomain::observation_view)
             .transpose()
-            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        {
+            Ok(goal) => goal,
+            Err(error) if client_projection => {
+                source_failure.get_or_insert(error.to_string());
+                None
+            }
+            Err(error) => return Err(RuntimeBootstrapError::Durable(error.to_string())),
+        };
+        let native_journal_seed = match self.store.presentation_frontier() {
+            Ok(frontier) => frontier,
+            Err(error) if client_projection => {
+                source_failure.get_or_insert(error.to_string());
+                0
+            }
+            Err(error) => return Err(RuntimeBootstrapError::Durable(error.to_string())),
+        };
+        queue.bind_journal(&self.store, native_journal_seed);
         let journal_through = if client_projection {
-            let through = self
-                .store
-                .observe_journal(queue.clone())
-                .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+            let through = match self.store.observe_journal(queue.clone()) {
+                Ok(through) => through,
+                Err(error) => {
+                    source_failure.get_or_insert(error.to_string());
+                    native_journal_seed
+                }
+            };
+            queue.bind_journal(&self.store, through);
             let workflow_observer = observer.clone();
             self.tool_runtime
                 .workflows()
                 .install_publication_observer(Arc::new(move |snapshot, sequence| {
                     workflow_observer.push(ConversationObservation::Published {
                         journal_sequence: sequence,
-                        observation: Box::new(ConversationObservation::Workflow(snapshot)),
+                        observation: Box::new(ConversationObservation::Workflow(
+                            snapshot
+                                .into_iter()
+                                .map(
+                                    crate::runtime_client::workflow_source::WorkflowReadSource::new,
+                                )
+                                .collect(),
+                        )),
                     });
                 }));
             through
@@ -2292,28 +2453,60 @@ impl RuntimeInner {
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
-        let inbound_pending = self
-            .mailbox
-            .install_observer_and_pending(observer.clone())
-            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        let inbound_pending = if client_projection {
+            let page = observation_cut.as_ref().and_then(|cut| {
+                match self.store.pending_header_page(
+                    &cut.read,
+                    None,
+                    crate::durable::observation::HEADER_PAGE_MAX,
+                ) {
+                    Ok(page) => Some(page),
+                    Err(error) => {
+                        source_failure.get_or_insert(error.to_string());
+                        None
+                    }
+                }
+            });
+            let pending = page.map_or_else(Vec::new, |page| {
+                page.headers
+                    .into_iter()
+                    .filter_map(|header| match header.message.display {
+                        Some(MessageBlock::User(message)) => {
+                            Some(InboundItem::from_observation_header(
+                                header.revision,
+                                header.sequence,
+                                message,
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            });
+            self.mailbox.install_observer(observer.clone());
+            pending
+        } else {
+            self.mailbox
+                .install_observer_and_pending(observer.clone())
+                .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?
+        };
         if let Some(domain) = self.tool_runtime.goal() {
             domain.install_observer(observer.clone());
         }
         // ---- T2: the background registry (frozen: the registry refuses
         //          commits while its mailbox is bound inactive) ----
-        let background = self
+        let (background, background_cut) = self
             .tool_runtime
             .background()
             .install_observer_and_snapshots(observer.clone());
         // ---- T2b: the subagent registry (frozen by the same inactive
         //           mailbox binding) ----
-        let agents = self
+        let (agents, agents_cut) = self
             .subagents
             .as_ref()
             .map(|subagents| subagents.install_observer_and_agent_snapshots(observer.clone()))
             .unwrap_or_default();
         pending_interactions.extend(child_pending_interactions);
-        pending_interactions.sort_by(|left, right| left.interaction.cmp(&right.interaction));
+        pending_interactions.sort_by_key(|header| header.source_offset);
         // No fallible subsystem has been mutated after the pending read. The
         // pre-check above and the coordinator lock make this set infallible;
         // keep the explicit branch as a defensive invariant assertion.
@@ -2331,6 +2524,8 @@ impl RuntimeInner {
             self.capability.install_observer_and_snapshot(observer);
         drop(state);
         Ok(RuntimeBootstrapSnapshot {
+            source_failure,
+            observation_cut,
             journal_through,
             conversation_id: self.conversation_id.clone(),
             shutting_down,
@@ -2340,8 +2535,12 @@ impl RuntimeInner {
             approval_mode,
             inbound_pending,
             background,
+            background_cut,
             agents,
+            agents_cut,
             pending_interactions,
+            pending_primary_cut: pending_primary.cut,
+            pending_children_cut: child_pending.map_or_else(Default::default, |proof| proof.cut),
             todos,
             goal,
             capabilities,
@@ -2350,18 +2549,15 @@ impl RuntimeInner {
         })
     }
 
-    /// Adds one bounded local consumer to the already-installed observation
-    /// stream before activation.
-    ///
-    /// This is intentionally not another Runtime Client bootstrap path. The
-    /// Runtime Client host owns the primary queue and its coherent seed; the
-    /// returned queue is for an existing local observation surface that needs
-    /// the same post-bootstrap semantic stream. Requiring the runtime to be
-    /// inactive makes the subscription linearize before the activation cut,
-    /// so it cannot miss a live observation and does not need a second seed.
-    fn subscribe_observations(
+    /// Reads only the source-owned maximum Human timestamp and first User
+    /// preview, independently of the Runtime Client event queue. Inactive
+    /// admission prevents an opening commit from slipping past installation.
+    fn session_observation_metadata(
         &self,
-    ) -> Result<Arc<PendingObservations>, RuntimeObservationSubscriptionError> {
+    ) -> Result<
+        tokio::sync::watch::Receiver<crate::runtime::observation::SessionObservationMetadata>,
+        RuntimeObservationSubscriptionError,
+    > {
         let _state = self.lock_state();
         if self.lifecycle.is_activated() {
             return Err(
@@ -2375,7 +2571,7 @@ impl RuntimeInner {
                 conversation_id: self.conversation_id.clone(),
             });
         };
-        Ok(fanout.subscribe())
+        Ok(fanout.session_metadata())
     }
 
     /// Spawns the admission worker: admits the next attempt whenever the
@@ -2610,10 +2806,12 @@ impl RuntimeInner {
     fn publish_manual_compaction_event(
         &self,
         state: &mut CoordinatorState,
-        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        request_id: Option<&crate::runtime::identity::ManualCompactionRequestId>,
         event: RuntimeEvent,
     ) -> Result<(), ManualCompactionError> {
         let envelope = crate::events::types::RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: crate::runtime::identity::EventId::new(""),
             sequence: 0,
@@ -2625,13 +2823,7 @@ impl RuntimeInner {
         };
         match self.store.append_event(envelope) {
             Ok(persisted) => {
-                self.observe(ConversationObservation::Published {
-                    journal_sequence: persisted.sequence,
-                    observation: Box::new(ConversationObservation::ManualCompactionEvent {
-                        request_id,
-                        event: persisted.event,
-                    }),
-                });
+                self.publish_manual_compaction_receipt(request_id, &persisted);
                 Ok(())
             }
             Err(error) => {
@@ -2713,6 +2905,43 @@ impl RuntimeInner {
         }
     }
 
+    fn publish_manual_compaction_receipt(
+        &self,
+        request: Option<&crate::runtime::identity::ManualCompactionRequestId>,
+        persisted: &crate::events::types::RuntimeEventEnvelope,
+    ) {
+        let Some(fanout) = self.pending.get() else {
+            return;
+        };
+        let batch = persisted.observation.as_deref();
+        if !fanout
+            .native_manual_compaction(request, batch)
+            .is_installed()
+        {
+            fanout.source_failed();
+            return;
+        }
+        let Some(batch) = batch else {
+            fanout.source_failed();
+            return;
+        };
+        if let Some(canonical) = &batch.canonical
+            && self
+                .store
+                .mark_canonical_transcript_ready(canonical.first_position, canonical.last_position)
+                .is_err()
+        {
+            fanout.source_failed();
+            return;
+        }
+        if let Some((first, last)) = batch.journal_range {
+            match self.store.mark_observation_direct(first, last) {
+                Ok(()) => fanout.source_ready(last),
+                Err(_) => fanout.source_failed(),
+            }
+        }
+    }
+
     /// Restores the sole conversation state, records any durable failure,
     /// clears the maintenance slot, and hands pending inbound back to the one
     /// admission path.
@@ -2720,7 +2949,7 @@ impl RuntimeInner {
         self: &Arc<Self>,
         task: ManualCompactionTaskResult,
         completion: &ManualCompactionCompletion,
-        request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        request_id: Option<&crate::runtime::identity::ManualCompactionRequestId>,
     ) {
         let ManualCompactionTaskResult {
             conversation,
@@ -2749,18 +2978,10 @@ impl RuntimeInner {
                     // live completion is published only after coordinator
                     // ownership is restored and the maintenance slot is
                     // clear. Neither observation has an attempt identity.
-                    self.observe(ConversationObservation::Committed {
-                        attempt_id: None,
-                        block: success.completed.summary_block,
-                        transcript_cursor: Some(success.completed.transcript_cursor),
-                    });
-                    self.observe(ConversationObservation::Published {
-                        journal_sequence: success.completed.persisted_event.sequence,
-                        observation: Box::new(ConversationObservation::ManualCompactionEvent {
-                            request_id,
-                            event: success.completed.persisted_event.event,
-                        }),
-                    });
+                    self.publish_manual_compaction_receipt(
+                        request_id,
+                        &success.completed.persisted_event,
+                    );
                     Ok(success.outcome)
                 }
                 Err(error) => self
@@ -2826,6 +3047,14 @@ impl RuntimeInner {
             // (its in-memory content stayed consistent with the durable
             // Ledger: the failed commit installed nothing).
             let durable_failure = result.durable_failure.clone();
+            state.latest_settlement = Some(NativeAttemptSettlement {
+                ordinal: state.admitted_attempts,
+                attempt_id: attempt_id.clone(),
+                outcome: NativeAttemptOutcome::from_execution(&result.outcome),
+            });
+            if let Some(fanout) = self.pending.get() {
+                fanout.child_settled();
+            }
             state.conversation = Some(result.conversation);
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {
@@ -2849,7 +3078,7 @@ impl RuntimeInner {
             {
                 state.current_attempt = None;
             }
-            self.settlement.notify_one();
+            self.settlement.notify_waiters();
             // Test-only gate: the conversation state is restored and the
             // current-attempt slot is cleared, but the next-admission
             // handoff has not run yet. An enqueue during this park
@@ -2926,6 +3155,20 @@ impl RuntimeInner {
         #[cfg(test)]
         if let Some(gate) = admission_gate {
             gate.enter();
+        }
+        #[cfg(test)]
+        if let Some(contended) = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_mut()
+            .and_then(|probe| probe.admission_contended.take())
+        {
+            assert!(matches!(
+                self.state.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            contended.notify_one();
         }
         let mut state = self.lock_state();
         if !self.lifecycle.is_running()
@@ -3104,6 +3347,7 @@ impl RuntimeInner {
             }
         };
         let adoption = adopted.adoption;
+        let canonical_receipts = adopted.canonical_receipts;
         let adopted = adopted.items;
         if adopted.is_empty() {
             Self::complete_admission_cycle(&mut state);
@@ -3163,25 +3407,30 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        for (prepared, item) in prepared_commits.into_iter().zip(&adopted) {
+        for ((prepared, _item), receipt) in prepared_commits
+            .into_iter()
+            .zip(&adopted)
+            .zip(canonical_receipts)
+        {
             // Infallible: every adopted identity was validated by
             // `prepare_commit` above under exclusive ownership.
-            let block = prepared.message().clone();
             conversation.install_prepared(prepared);
-            self.observe(ConversationObservation::Committed {
+            self.observe(ConversationObservation::CanonicalCommitted {
                 attempt_id: None,
-                block,
-                transcript_cursor: item.transcript_cursor(),
+                receipt,
             });
         }
         // The adoption fact is published after its canonical messages, with
         // its exact Journal sequence, releasing the receipt the observation
         // queue is holding for it.
-        if let Some(adoption) = adoption {
-            self.observe(ConversationObservation::Published {
-                journal_sequence: adoption.sequence,
-                observation: Box::new(ConversationObservation::InboundAdopted),
-            });
+        if let Some(adoption) = adoption
+            && let Some(fanout) = self.pending.get()
+        {
+            if let Some(receipt) = adoption.observation.as_deref() {
+                RuntimeObserver::publish_native_batch(self, fanout, receipt, adoption.sequence);
+            } else {
+                fanout.source_failed();
+            }
         }
         self.publish_attempt(state, conversation, Some(fresh), provenance);
     }
@@ -3314,9 +3563,8 @@ impl RuntimeInner {
                 });
         let approval_mode = state.effective_approval_mode;
         let resources = state.resources.clone();
-        let lease = self
-            .capability
-            .acquire_attempt_lease_for(resources.capability().clone());
+        let capability = resources.capability().clone();
+        let lease = self.capability.acquire_attempt_lease_for(capability);
         self.observe(ConversationObservation::AttemptAdmitted {
             read_image_active: resources
                 .capability()
@@ -3326,10 +3574,12 @@ impl RuntimeInner {
                 .iter()
                 .any(|tool| tool.id.as_str() == "tool-read-image"),
             attempt_id: attempt_id.clone(),
-            model: Box::new(model.view()),
+            model: crate::model::session::AttemptModelReadSource::new(model.clone()),
             resource_revision: resources.revision(),
             approval_mode,
         });
+        #[cfg(test)]
+        self.enter_probe_gate(|probe| probe.admission_committed_gate.clone());
         // The attempt **task** is a runtime-owned operation in its own
         // right, distinct from the current-attempt slot it settles into
         // (Issue #12, M9c). `finish_attempt` clears the slot and then still
@@ -3343,6 +3593,8 @@ impl RuntimeInner {
             .try_enter_running()
             .expect("the coordinator lock owns the attempt admission boundary");
         drop(state);
+        #[cfg(test)]
+        self.enter_probe_gate(|probe| probe.attempt_execution_gate.clone());
         let inner = Arc::clone(self);
         self.executor.spawn(async move {
             let result = inner
@@ -3364,6 +3616,20 @@ impl RuntimeInner {
             inner.finish_attempt(attempt_id, result);
             drop(attempt_admission);
         });
+    }
+
+    #[cfg(test)]
+    fn enter_probe_gate(&self, select: impl FnOnce(&CoordinatorProbe) -> Option<Arc<Gate>>) {
+        let gate = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(select);
+        // Never retain the probe lock while parking a coordinator participant.
+        if let Some(gate) = gate {
+            gate.enter();
+        }
     }
 }
 
@@ -3471,6 +3737,14 @@ pub struct ConversationRuntime {
     pub(crate) inner: Arc<RuntimeInner>,
 }
 
+/// Chosen at composition, before either runtime or client authority is exposed.
+/// A durable Session can only change selection through its native Session owner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelSelectionOwner {
+    Conversation,
+    Session,
+}
+
 impl core::fmt::Debug for ConversationRuntime {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConversationRuntime")
@@ -3494,6 +3768,11 @@ impl ConversationRuntime {
     /// composition may now optionally bind a `RuntimeClientHost` over it, and
     /// must then call [`ConversationRuntime::activate`] before semantic
     /// execution can begin. A headless composition simply activates directly.
+    ///
+    /// This low-level constructor has no durable Session selection owner. Its
+    /// model selection can be replaced in memory through [`Self::model_set`].
+    /// Local Session composition uses a separate immutable owner boundary and
+    /// rejects that direct control, including through Runtime Client handles.
     ///
     /// # One conversation authority
     ///
@@ -3534,7 +3813,15 @@ impl ConversationRuntime {
     /// runtime's background plane already holds prepared or committed
     /// background work.
     pub fn new(config: RuntimeConversationConfig) -> Result<Self, ConversationRuntimeError> {
-        Self::new_with_monotonic_clock(config, None)
+        Self::new_with_monotonic_clock(config, None, ModelSelectionOwner::Conversation)
+    }
+
+    /// Durable local roots delegate every selection mutation to their Session
+    /// owner. This ownership is immutable and shared by all runtime/client clones.
+    pub(crate) fn new_session_owned(
+        config: RuntimeConversationConfig,
+    ) -> Result<Self, ConversationRuntimeError> {
+        Self::new_with_monotonic_clock(config, None, ModelSelectionOwner::Session)
     }
 
     /// Creates a runtime with one explicitly supplied monotonic clock for a
@@ -3547,13 +3834,18 @@ impl ConversationRuntime {
         config: RuntimeConversationConfig,
         monotonic_clock: Arc<dyn MonotonicClock>,
     ) -> Result<Self, ConversationRuntimeError> {
-        Self::new_with_monotonic_clock(config, Some(monotonic_clock))
+        Self::new_with_monotonic_clock(
+            config,
+            Some(monotonic_clock),
+            ModelSelectionOwner::Conversation,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
     fn new_with_monotonic_clock(
         config: RuntimeConversationConfig,
         injected_monotonic_clock: Option<Arc<dyn MonotonicClock>>,
+        model_selection_owner: ModelSelectionOwner,
     ) -> Result<Self, ConversationRuntimeError> {
         // The one conversation authority at this boundary: every identity
         // this runtime publishes or derives comes from the tool runtime it
@@ -3840,6 +4132,7 @@ impl ConversationRuntime {
         let durability_gate = Arc::new(DurabilityGate::new());
         let inner = Arc::new(RuntimeInner {
             configuration_owner: Arc::new(()),
+            model_selection_owner,
             conversation_id,
             agent_id: config.agent_id,
             context: config.context,
@@ -3874,6 +4167,7 @@ impl ConversationRuntime {
                 manual_compaction: None,
                 next_attempt_seq,
                 admitted_attempts: 0,
+                latest_settlement: None,
                 parent_turn_permits: None,
                 parent_guidance_sealed: false,
                 one_shot_cancel: None,
@@ -4037,6 +4331,32 @@ impl ConversationRuntime {
     }
 
     #[cfg(test)]
+    pub(crate) fn install_attempt_execution_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .expect("probe lock")
+            .get_or_insert_with(CoordinatorProbe::default)
+            .attempt_execution_gate = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_model_selection_race_probe(
+        &self,
+        admission_contended: Option<Arc<tokio::sync::Notify>>,
+        admission_committed: Option<Arc<Gate>>,
+        selection_contended: Option<Arc<tokio::sync::Notify>>,
+        selection_locked: Option<Arc<Gate>>,
+    ) {
+        let mut probe = self.inner.probe.lock().expect("probe lock");
+        let probe = probe.get_or_insert_with(CoordinatorProbe::default);
+        probe.admission_contended = admission_contended;
+        probe.admission_committed_gate = admission_committed;
+        probe.selection_contended = selection_contended;
+        probe.selection_locked_gate = selection_locked;
+    }
+
+    #[cfg(test)]
     pub(crate) fn install_activation_gate(&self, gate: Arc<Gate>) {
         self.inner
             .probe
@@ -4143,6 +4463,34 @@ impl ConversationRuntime {
         .await
     }
 
+    pub(crate) fn pending_interaction_page(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<
+        crate::runtime::interaction::PendingHeadProof,
+        crate::runtime::identity::ObservationCollectionReadError,
+    > {
+        self.inner.interaction.observation_page(cut, after, limit)
+    }
+    pub(crate) fn pending_interaction_source_at(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        sequence: u64,
+    ) -> Result<
+        Arc<crate::runtime::interaction::PendingInteractionSource>,
+        crate::runtime::identity::ObservationCollectionReadError,
+    > {
+        self.inner.interaction.observation_source_at(cut, sequence)
+    }
+    pub(crate) fn pending_interaction_source(
+        &self,
+        interaction: &crate::runtime::interaction::InteractionRef,
+    ) -> Option<Arc<crate::runtime::interaction::source::PendingInteractionSource>> {
+        self.inner.interaction.observation_source(interaction)
+    }
+
     #[cfg(test)]
     pub(crate) fn interaction_test_owner(
         &self,
@@ -4187,7 +4535,10 @@ impl ConversationRuntime {
     /// coordinator. The route receives only already-authoritative semantic
     /// request/settlement facts and no interaction ownership state.
     pub(crate) fn install_interaction_route(&self, route: Arc<dyn InteractionRoute>) {
-        self.inner.interaction.install_route(route);
+        self.inner.interaction.install_route(route.clone());
+        if let Some(registry) = &self.inner.subagents {
+            registry.install_upstream_interaction_route(route);
+        }
     }
 
     /// Installs the root Runtime Client's synchronized publication-admission
@@ -4253,6 +4604,17 @@ impl ConversationRuntime {
         self.inner.install_observation_bridge(queue, false)
     }
 
+    pub(crate) fn install_publication_projection(
+        &self,
+        projection: Arc<dyn crate::runtime::observation::PublicationProjectionCommit>,
+    ) {
+        self.inner
+            .pending
+            .get()
+            .expect("native bridge installed before activation")
+            .install_publication_projection(projection);
+    }
+
     /// Runtime Client composition additionally stages durable publication receipts.
     /// Native/headless consumers retain ordinary semantic observation delivery.
     pub(crate) fn install_client_observation_bridge(
@@ -4262,17 +4624,15 @@ impl ConversationRuntime {
         self.inner.install_observation_bridge(queue, true)
     }
 
-    /// Adds a bounded local consumer to the Runtime Client observation
-    /// stream before this runtime is activated.
-    ///
-    /// The Runtime Client host remains the primary projection owner. This
-    /// seam exists so an existing local observation surface can consume the
-    /// same runtime-owned observations without turning the parent into a
-    /// transcript authority or stealing the host's queue.
-    pub(crate) fn subscribe_observations(
+    /// Reads the native maximum Human activity and first User boundary slot
+    /// before activation; this does not allocate an observation FIFO.
+    pub(crate) fn session_observation_metadata(
         &self,
-    ) -> Result<Arc<PendingObservations>, RuntimeObservationSubscriptionError> {
-        self.inner.subscribe_observations()
+    ) -> Result<
+        tokio::sync::watch::Receiver<crate::runtime::observation::SessionObservationMetadata>,
+        RuntimeObservationSubscriptionError,
+    > {
+        self.inner.session_observation_metadata()
     }
 
     /// Test-only: the observation bridge installed through
@@ -4502,7 +4862,6 @@ impl ConversationRuntime {
         }
         Ok(
             crate::local_runtime::configuration::application::PreparedConfiguration {
-                selection_only: false,
                 owner: self.inner.configuration_owner.clone(),
                 baseline,
                 preview,
@@ -4568,7 +4927,6 @@ impl ConversationRuntime {
         &self,
         capture: &crate::local_runtime::configuration::ProspectiveSessionConfig,
         models: crate::model::invocation::ModelBindingRegistry,
-        selection: Option<crate::model::session::SessionModelConfig>,
     ) -> Result<crate::local_runtime::configuration::application::PreparedConfiguration, String>
     {
         let (baseline, old, old_model) = {
@@ -4579,13 +4937,10 @@ impl ConversationRuntime {
                 state.model.clone(),
             )
         };
-        // An explicit selection must resolve; the Session's own carried
-        // selection may be one the new catalog no longer admits.
-        let model = match selection {
-            Some(selection) => SessionModelState::new(models.clone(), selection),
-            None => old_model.carry(models.clone(), old_model.config().clone()),
-        }
-        .map_err(|error| error.to_string())?;
+        // Context adoption carries Session intent; it cannot choose a model.
+        let model = old_model
+            .carry(models.clone(), old_model.config().clone())
+            .map_err(|error| error.to_string())?;
         validate_model_context(&capture.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         let preview = Arc::new(old.with_context_binding(capture, models)?);
@@ -4606,7 +4961,6 @@ impl ConversationRuntime {
         }
         Ok(
             crate::local_runtime::configuration::application::PreparedConfiguration {
-                selection_only: false,
                 owner: self.inner.configuration_owner.clone(),
                 baseline,
                 preview,
@@ -4692,11 +5046,7 @@ impl ConversationRuntime {
             return Err(AdoptionError::Conflict);
         }
         let candidate = prepared.take().expect("checked candidate");
-        let revision = if candidate.selection_only {
-            state.resources.revision()
-        } else {
-            state.resources.revision().next()
-        };
+        let revision = state.resources.revision().next();
         let (resources, availability) = if let Some(capability) = candidate.capability {
             let committed = self
                 .inner
@@ -4733,20 +5083,27 @@ impl ConversationRuntime {
             .binding_revision
             .checked_add(1)
             .expect("Session binding revision exhausted");
-        if candidate.selection_only {
-            state.explicit_model = true;
-            self.inner
-                .observe(ConversationObservation::SessionModelChanged {
-                    model: Box::new(state.model.view()),
-                });
-        } else {
-            self.inner.observe(ConversationObservation::Resources {
-                model: Box::new(state.model.view()),
-                approval_mode: state.effective_approval_mode,
-                snapshot: resources,
+        self.inner.observe(ConversationObservation::Resources {
+            model: state
+                .model
+                .read_source()
+                .at_binding_revision(state.binding_revision),
+            approval_mode: state.effective_approval_mode,
+            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
+                &resources,
+            )),
+            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
+                Arc::clone(resources.capability()),
                 availability,
-            });
-        }
+                state
+                    .model
+                    .read_source()
+                    .at_binding_revision(state.binding_revision)
+                    .capabilities()
+                    .cloned(),
+            ),
+            snapshot: resources,
+        });
         if reopens {
             // Work accepted before the selection became unavailable was held,
             // not dropped; this commit is what admits it.
@@ -4833,9 +5190,24 @@ impl ConversationRuntime {
         state.model = model;
         state.resources = resources.clone();
         self.inner.observe(ConversationObservation::Resources {
-            model: Box::new(state.model.view()),
+            model: state
+                .model
+                .read_source()
+                .at_binding_revision(state.binding_revision),
             approval_mode: state.effective_approval_mode,
-            availability: resources.capability_availability().clone(),
+            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
+                &resources,
+            )),
+            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
+                Arc::clone(resources.capability()),
+                resources.capability_availability().clone(),
+                state
+                    .model
+                    .read_source()
+                    .at_binding_revision(state.binding_revision)
+                    .capabilities()
+                    .cloned(),
+            ),
             snapshot: resources,
         });
         Ok(true)
@@ -4861,9 +5233,24 @@ impl ConversationRuntime {
         state.effective_approval_mode = desired.approval_mode;
         state.resources = resources.clone();
         self.inner.observe(ConversationObservation::Resources {
-            model: Box::new(state.model.view()),
+            model: state
+                .model
+                .read_source()
+                .at_binding_revision(state.binding_revision),
             approval_mode: state.effective_approval_mode,
-            availability: resources.capability_availability().clone(),
+            display: crate::runtime_client::resource_source::ResourceReadSource::new(Arc::clone(
+                &resources,
+            )),
+            capability: crate::runtime_client::capability_source::CapabilityReadSource::new(
+                Arc::clone(resources.capability()),
+                resources.capability_availability().clone(),
+                state
+                    .model
+                    .read_source()
+                    .at_binding_revision(state.binding_revision)
+                    .capabilities()
+                    .cloned(),
+            ),
             snapshot: resources,
         });
         Ok(true)
@@ -5005,7 +5392,7 @@ impl ConversationRuntime {
                 })?;
             self.inner.publish_manual_compaction_event(
                 &mut state,
-                request_id.clone(),
+                request_id.as_ref(),
                 RuntimeEvent::CompactionStarted,
             )?;
             let conversation = state
@@ -5054,7 +5441,7 @@ impl ConversationRuntime {
                         gate.enter();
                     }
                 }
-                inner.finish_manual_compaction(task, &completion_for_task, request_id);
+                inner.finish_manual_compaction(task, &completion_for_task, request_id.as_ref());
                 drop(admission);
             });
             completion
@@ -5195,6 +5582,48 @@ impl ConversationRuntime {
     pub(crate) fn gate_child_turns(&self) {
         let mut state = self.inner.lock_state();
         state.parent_turn_permits = Some(0);
+    }
+
+    pub(crate) fn child_activity(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::runtime::subagent::activity::SubagentObservation> {
+        self.inner
+            .pending
+            .get()
+            .expect("native observation bridge")
+            .child_activity()
+    }
+
+    /// Test capture of the existing retained execution receipt; no display cursor.
+    #[cfg(test)]
+    pub(crate) fn settlement_ordinal_for_test(&self) -> u64 {
+        self.inner
+            .lock_state()
+            .latest_settlement
+            .as_ref()
+            .map_or(0, |receipt| receipt.ordinal)
+    }
+
+    /// Waits for the native execution handoff independently of display publication.
+    /// Only the child driver uses this receipt: its existing turn permit/seal
+    /// protocol prevents a later admission from overwriting an unconsumed result.
+    pub(crate) async fn child_attempt_settlement(&self, after: u64) -> NativeAttemptSettlement {
+        loop {
+            let notified = self.inner.settlement.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(receipt) = self
+                .inner
+                .lock_state()
+                .latest_settlement
+                .as_ref()
+                .filter(|receipt| receipt.ordinal > after)
+                .cloned()
+            {
+                return receipt;
+            }
+            notified.await;
+        }
     }
 
     pub(crate) fn release_child_turn(&self) {
@@ -5570,9 +5999,13 @@ impl ConversationRuntime {
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?
             .map_err(|rejection| {
-                serde_json::to_string(&rejection).expect("Goal rejection serializes")
+                let refusal=serde_json::json!({"reason":rejection.reason,"current":crate::runtime_client::goal::RuntimeClientGoalView::from_native(rejection.current.as_ref()).current});
+                crate::runtime_client::checkpoint::bounded_bytes(&refusal,16_384).and_then(|bytes|String::from_utf8(bytes).ok()).unwrap_or_else(||"Goal control refused; read the current Goal state".into())
             })?;
-        let view = domain.view().map_err(|error| error.to_string())?;
+        let phase = committed.phase;
+        let view = crate::goal::GoalView {
+            current: Some(committed),
+        };
         drop(state);
         // Issue #351: a successful Create or Resume commits durable
         // authorization to continue, so the ordinary admission owner is woken
@@ -5582,7 +6015,7 @@ impl ConversationRuntime {
         // eligible idle boundary. This wake is a liveness notification only:
         // every eligibility question is re-answered under the coordinator
         // lock against durable state.
-        if committed.phase == crate::goal::GoalPhase::Active {
+        if phase == crate::goal::GoalPhase::Active {
             self.inner.wake.notify.notify_one();
         }
         Ok(view)
@@ -5635,7 +6068,11 @@ impl ConversationRuntime {
         self.inner.lock_state().effective_approval_mode
     }
 
-    /// Replaces the authoritative session model configuration.
+    /// Replaces a standalone conversation's in-memory model configuration.
+    ///
+    /// Durable local Sessions must select through their native Session owner,
+    /// which commits catalog settings, retained binding, and runtime authority
+    /// together. Every runtime clone retains that construction-time ownership.
     ///
     /// # Lifecycle
     ///
@@ -5648,9 +6085,10 @@ impl ConversationRuntime {
     ///
     /// # Linearization
     ///
-    /// The whole operation — resolution, validation, and state replacement
-    /// — happens under the one coordinator lock that also owns attempt
-    /// admission. An update therefore either linearizes before an admission
+    /// Resolution and validation use an immutable published capture off the
+    /// coordinator lock. Revision/resource validation and replacement happen
+    /// under the coordinator lock that also owns attempt admission. An update
+    /// therefore either linearizes before an admission
     /// (and that attempt observes it) or after it (and only later attempts
     /// observe it). There is no third possibility and no timing assumption.
     ///
@@ -5661,7 +6099,8 @@ impl ConversationRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ModelUpdateError::Inactive`] before activation,
+    /// Returns [`ModelUpdateError::SessionOwned`] for a durable Session runtime,
+    /// [`ModelUpdateError::Inactive`] before activation,
     /// [`ModelUpdateError::DurabilityFailed`] while the runtime's durable
     /// authority is in the explicit failed state, and
     /// [`ModelUpdateError::InvalidConfiguration`] when the configuration
@@ -5671,51 +6110,167 @@ impl ConversationRuntime {
         &self,
         config: SessionModelConfig,
     ) -> Result<SessionModelView, ModelUpdateError> {
-        use crate::local_runtime::configuration::application::PreparedConfiguration;
-        let (baseline, resources, mut candidate) = {
-            let state = self.inner.lock_state();
-            if !self.inner.lifecycle.is_running() {
-                return Err(ModelUpdateError::Inactive);
-            }
-            if let Some(failure) = self.inner.durability_gate.failure() {
-                return Err(ModelUpdateError::DurabilityFailed {
-                    message: failure.diagnostic,
-                });
-            }
-            (
-                state.binding_revision,
-                state.resources.clone(),
-                state.model.clone(),
-            )
-        };
+        if self.inner.model_selection_owner == ModelSelectionOwner::Session {
+            return Err(ModelUpdateError::SessionOwned);
+        }
+        let candidate = self.prepare_model_selection(config)?;
+        self.commit_model_selection(candidate, |_| Ok(false))
+            .map(|commit| commit.view)
+    }
+
+    /// Resolve against the exact published authority, off the admission lock.
+    /// Resources are retained, never prepared or replaced by model selection.
+    pub(crate) fn prepare_model_selection(
+        &self,
+        config: SessionModelConfig,
+    ) -> Result<PreparedModelSelection, ModelUpdateError> {
+        self.resolve_model_selection(self.capture_model_selection()?, config)
+    }
+
+    /// Cheap immutable capture; the Session owner calls this under its source fence.
+    pub(crate) fn capture_model_selection(
+        &self,
+    ) -> Result<PreparedModelSelection, ModelUpdateError> {
+        let state = self.inner.lock_state();
+        self.check_model_selection_lifecycle()?;
+        Ok(PreparedModelSelection {
+            owner: self.inner.configuration_owner.clone(),
+            baseline: state.binding_revision,
+            resources: state.resources.clone(),
+            model: state.model.clone(),
+        })
+    }
+
+    pub(crate) fn resolve_model_selection(
+        &self,
+        mut candidate: PreparedModelSelection,
+        config: SessionModelConfig,
+    ) -> Result<PreparedModelSelection, ModelUpdateError> {
         candidate
+            .model
             .apply(config)
             .map_err(|error| invalid_model(&error))?;
-        let policy = resources
+        let policy = candidate
+            .resources
             .configuration()
             .map_or(self.inner.context.policy, |generation| {
                 generation.config.context_policy()
             });
-        validate_model_context(&policy, &candidate)
+        validate_model_context(&policy, &candidate.model)
             .map_err(|error| ModelUpdateError::InvalidConfiguration(error.message))?;
-        let view = candidate.view();
-        let mut prepared = Some(PreparedConfiguration {
-            selection_only: true,
-            owner: self.inner.configuration_owner.clone(),
-            baseline,
-            preview: resources,
-            model: candidate,
-            capability: None,
-            resources: None,
-            impact: crate::model::request_shape::CacheImpact::Unproven,
-        });
-        self.adopt_configuration(&mut prepared, baseline, true, || Ok(()))
-            .map_err(|rejection| ModelUpdateError::ConfigurationAdoption { rejection })?;
-        Ok(view)
+        Ok(candidate)
+    }
+
+    fn check_model_selection_lifecycle(&self) -> Result<(), ModelUpdateError> {
+        if !self.inner.lifecycle.is_running() {
+            return Err(ModelUpdateError::Inactive);
+        }
+        if let Some(failure) = self.inner.durability_gate.failure() {
+            return Err(ModelUpdateError::DurabilityFailed {
+                message: failure.diagnostic,
+            });
+        }
+        Ok(())
+    }
+
+    /// Selection's sole publication boundary, shared with independent Attempt
+    /// admission and retirement. The native Session owner holds its source and
+    /// settings fences and persists/retains in `commit` before this infallible
+    /// publication. An already-admitted Attempt owns its old snapshot and leases.
+    /// No idle or physical-resource replacement is involved.
+    /// `commit` returns whether durable authority changed; the outcome reports
+    /// either that change or a changed runtime selection, never mere success.
+    pub(crate) fn commit_model_selection(
+        &self,
+        candidate: PreparedModelSelection,
+        commit: impl FnOnce(u64) -> Result<bool, ModelUpdateError>,
+    ) -> Result<ModelSelectionCommit, ModelUpdateError> {
+        #[cfg(test)]
+        let (contended, locked_gate) = {
+            let mut probe = self
+                .inner
+                .probe
+                .lock()
+                .expect("coordinator probe lock poisoned");
+            probe.as_mut().map_or((None, None), |probe| {
+                (
+                    probe.selection_contended.take(),
+                    probe.selection_locked_gate.clone(),
+                )
+            })
+        };
+        #[cfg(test)]
+        if let Some(contended) = contended {
+            assert!(matches!(
+                self.inner.state.try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            ));
+            contended.notify_one();
+        }
+        let mut state = self.inner.lock_state();
+        #[cfg(test)]
+        if let Some(gate) = locked_gate {
+            gate.enter();
+        }
+        self.check_model_selection_lifecycle()?;
+        if state.binding_revision != candidate.baseline
+            || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
+            || !Arc::ptr_eq(&candidate.resources, &state.resources)
+        {
+            return Err(ModelUpdateError::Conflict);
+        }
+        let unchanged = state.explicit_model && state.model.view() == candidate.model.view();
+        let revision = if unchanged {
+            state.binding_revision
+        } else {
+            state
+                .binding_revision
+                .checked_add(1)
+                .expect("Session binding revision exhausted")
+        };
+        // Even an unchanged live invocation must visit its durable owner:
+        // a loaded default may not yet be an explicit persisted selection.
+        let persisted = commit(revision)?;
+        if unchanged {
+            return Ok(ModelSelectionCommit {
+                view: state.model.view(),
+                changed: persisted,
+            });
+        }
+        let reopens = state.model.unavailable().is_some();
+        state.model = candidate.model;
+        state.explicit_model = true;
+        state.binding_revision = revision;
+        let view = state.model.view();
+        self.inner
+            .observe(ConversationObservation::SessionModelChanged {
+                model: state
+                    .model
+                    .read_source()
+                    .at_binding_revision(state.binding_revision),
+                capability: None,
+            });
+        if reopens {
+            self.inner.mailbox.wake().notify_one();
+        }
+        Ok(ModelSelectionCommit {
+            view,
+            changed: true,
+        })
     }
 
     pub(crate) fn model_is_frozen(&self) -> bool {
         self.inner.lock_state().model.registry().is_none()
+    }
+
+    /// Immutable native read evidence for transport boundary tests.
+    #[cfg(test)]
+    pub(crate) fn model_read_source(&self) -> crate::model::session::SessionModelReadSource {
+        let state = self.inner.lock_state();
+        state
+            .model
+            .read_source()
+            .at_binding_revision(state.binding_revision)
     }
 
     /// The authoritative session model view.
@@ -6110,6 +6665,25 @@ impl ConversationRuntime {
             .cancel_with_reason(execution_id, reason)
     }
 
+    /// Commit bounded Job cancellation intent without cloning result or command presentation.
+    pub(crate) fn background_cancel_intent(
+        &self,
+        execution_id: &ToolExecutionId,
+    ) -> Result<Option<ToolExecutionId>, crate::runtime::inbound::MailboxError> {
+        let reason = if matches!(
+            self.inner.lifecycle.state(),
+            ConversationLifecycleState::Draining | ConversationLifecycleState::Quiescent
+        ) {
+            CancellationReason::RuntimeShutdown
+        } else {
+            CancellationReason::UserRequested
+        };
+        self.inner
+            .tool_runtime
+            .background()
+            .cancel_intent(execution_id, reason)
+    }
+
     /// The authoritative lifecycle state of this runtime.
     #[must_use]
     pub fn lifecycle_state(&self) -> ConversationLifecycleState {
@@ -6279,8 +6853,10 @@ impl std::error::Error for RuntimeBootstrapError {}
 /// Every one of those facts arrives through the live observation stream.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBootstrapSnapshot {
+    pub observation_cut: Option<crate::durable::observation::ObservationReadCut>,
+    pub source_failure: Option<String>,
     pub journal_through: u64,
-    pub goal: Option<crate::goal::GoalView>,
+    pub goal: Option<crate::runtime_client::goal::RuntimeClientGoalView>,
     /// The conversation identity.
     pub conversation_id: ConversationId,
     /// Whether runtime drain has begun and new admission is closed.
@@ -6294,7 +6870,7 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// result for the Runtime Client bootstrap.
     pub transcript: TranscriptPage,
     /// The authoritative session model view.
-    pub model: SessionModelView,
+    pub model: crate::model::session::SessionModelReadSource,
     /// The authoritative effective/desired `ApprovalMode` state at the cut.
     pub approval_mode: ApprovalMode,
     /// The currently pending inbound items, in mailbox sequence order.
@@ -6310,6 +6886,8 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// observer, so the handshake is one coherent cut for whatever state
     /// exists.
     pub background: Vec<BackgroundExecutionSnapshot>,
+    pub background_cut: crate::runtime::identity::ObservationCollectionCut,
+    pub agents_cut: crate::runtime::identity::ObservationCollectionCut,
     /// Durable Agent owner state and its exact latest committed activation,
     /// captured together under the registry lock. Recovered activation history
     /// never determines the latest Agent by iteration order.
@@ -6325,7 +6903,9 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// The immutable runtime resource generation current at the cut.
     pub resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
-    pub pending_interactions: Vec<crate::runtime::interaction::RoutedInteraction>,
+    pub pending_primary_cut: crate::runtime::identity::ObservationCollectionCut,
+    pub pending_children_cut: crate::runtime::identity::ObservationCollectionCut,
+    pub pending_interactions: Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
     /// The conversation's committed task list at the cut, when this runtime
     /// composes the Todo extension (Issue #259).
     ///
@@ -6533,13 +7113,72 @@ impl core::fmt::Display for ManualCompactionError {
 
 impl std::error::Error for ManualCompactionError {}
 
+/// Complete selection resolved from one published authority, with the identities
+/// needed to reject any intervening binding or policy/resource publication.
+pub(crate) struct PreparedModelSelection {
+    owner: Arc<()>,
+    pub(crate) baseline: u64,
+    resources: Arc<RuntimeResourceSnapshot>,
+    model: SessionModelState,
+}
+
+impl PreparedModelSelection {
+    pub(crate) fn catalog_selection(
+        &self,
+        choice: &crate::model::session::CatalogModelSelection,
+    ) -> Result<SessionModelConfig, ModelUpdateError> {
+        if self.baseline != choice.binding_revision {
+            return Err(ModelUpdateError::Conflict);
+        }
+        if choice.model_position > 9_007_199_254_740_991
+            || choice
+                .profile_position
+                .is_some_and(|ordinal| ordinal > 9_007_199_254_740_991)
+        {
+            return Err(ModelUpdateError::InvalidConfiguration(
+                "catalog position exceeds protocol bounds".into(),
+            ));
+        }
+        let source = self.model.read_source().catalog_source();
+        let row = source.model_at(choice.model_position).ok_or_else(|| {
+            ModelUpdateError::InvalidConfiguration("catalog model position is unavailable".into())
+        })?;
+        let mut config = SessionModelConfig::of(row.model.clone());
+        // Catalog defaults replace primary-owned parameters only. Summary is
+        // independently configured and must survive deferred observation.
+        config.summary_model = self.model.config().summary_model.clone();
+        if let Some(position) = choice.profile_position {
+            config.profile = Some(
+                source
+                    .profile_at(choice.model_position, position)
+                    .ok_or_else(|| {
+                        ModelUpdateError::InvalidConfiguration(
+                            "catalog profile position is unavailable".into(),
+                        )
+                    })?
+                    .id
+                    .clone(),
+            );
+        }
+        Ok(config)
+    }
+}
+
+/// Whether a completed selection changed Session authority. A successful
+/// validation of an already explicit selection is not an application change.
+pub(crate) struct ModelSelectionCommit {
+    pub(crate) view: SessionModelView,
+    pub(crate) changed: bool,
+}
+
 /// A session model update failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelUpdateError {
-    /// Explicit model selection uses the same idle and baseline fences as adoption.
-    ConfigurationAdoption {
-        rejection: crate::local_runtime::configuration::application::AdoptionError,
-    },
+    /// A durable Session owns this selection. Runtime-only mutation cannot
+    /// update its catalog and retained binding, so it is not a supported control.
+    SessionOwned,
+    /// The published binding or resource snapshot changed during preparation.
+    Conflict,
     /// The runtime has not been activated: a live semantic mutation of an
     /// inert conversation is refused and consumes nothing.
     Inactive,
@@ -6688,6 +7327,66 @@ pub(crate) struct RuntimeObserver {
 }
 
 impl RuntimeObserver {
+    fn publish_native_batch(
+        inner: &RuntimeInner,
+        fanout: &crate::runtime::observation::ObservationFanout,
+        receipt: &crate::durable::observation::NativeObservationBatch,
+        journal_sequence: u64,
+    ) {
+        // No member releases its ready bit before the complete shared
+        // family has installed one native transition.
+        if receipt
+            .journal_range
+            .is_some_and(|(_, last)| last != journal_sequence)
+        {
+            return;
+        }
+        if !fanout.native_batch(receipt).is_installed() {
+            fanout.source_failed();
+            return;
+        }
+        let release = || -> Result<(), crate::durable::ConversationStoreError> {
+            if let Some(canonical) = &receipt.canonical {
+                inner.store.mark_canonical_transcript_ready(
+                    canonical.first_position,
+                    canonical.last_position,
+                )?;
+            }
+            match &receipt.transition {
+                crate::durable::observation::NativeObservationTransition::Single(witness)
+                | crate::durable::observation::NativeObservationTransition::Adoption(witness)
+                | crate::durable::observation::NativeObservationTransition::Compaction(witness) => {
+                    if let Some(cursor) = witness.transcript_cursor {
+                        inner
+                            .store
+                            .mark_observation_transcript_ready(cursor.get())?;
+                    }
+                }
+                crate::durable::observation::NativeObservationTransition::WorkflowTerminal {
+                    terminal,
+                    output,
+                } => {
+                    for witness in [terminal, output] {
+                        if let Some(cursor) = witness.transcript_cursor {
+                            inner
+                                .store
+                                .mark_observation_transcript_ready(cursor.get())?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some((first, last)) = receipt.journal_range {
+                inner.store.mark_observation_direct(first, last)?;
+                fanout.source_ready(last);
+            }
+            Ok(())
+        };
+        if release().is_err() {
+            fanout.source_failed();
+        }
+    }
+
     /// Creates the non-owning observer of one runtime.
     ///
     /// Installed by [`RuntimeInner::install_observation_bridge`] on behalf
@@ -6700,11 +7399,59 @@ impl RuntimeObserver {
         }
     }
 
-    /// Appends one observation to the leaf queue, without acquiring the
-    /// coordinator lock or the Runtime Client projection lock.
-    ///
-    /// This is the only shape legal from a subsystem observer that fires
-    /// while its authoritative lock is held.
+    /// Source and owner receipts already exist at this callback boundary.
+    /// Nothing is re-read or retained as a growing lifecycle handle queue.
+    fn publish_owner(
+        &self,
+        observation: &ConversationObservation,
+        committed: &crate::events::types::RuntimeEventEnvelope,
+    ) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        let Some(fanout) = inner.pending.get() else {
+            return;
+        };
+        let batch = committed.observation.as_deref();
+        if !fanout.native_owner(observation, batch).is_installed() {
+            fanout.source_failed();
+            return;
+        }
+        let Some(batch) = batch else {
+            fanout.source_failed();
+            return;
+        };
+        if let Some(canonical) = &batch.canonical
+            && inner
+                .store
+                .mark_canonical_transcript_ready(canonical.first_position, canonical.last_position)
+                .is_err()
+        {
+            fanout.source_failed();
+            return;
+        }
+        if let crate::durable::observation::NativeObservationTransition::Single(witness) =
+            &batch.transition
+            && let Some(cursor) = witness.transcript_cursor
+            && inner
+                .store
+                .mark_observation_transcript_ready(cursor.get())
+                .is_err()
+        {
+            fanout.source_failed();
+            return;
+        }
+        if let Some((first, last)) = batch.journal_range {
+            match inner.store.mark_observation_direct(first, last) {
+                Ok(()) => fanout.source_ready(last),
+                Err(_) => fanout.source_failed(),
+            }
+        }
+    }
+
+    /// Publishes an immutable owner receipt through the existing native sink.
+    /// Disposable activity keeps its finite latest-value lane; exact lifecycle
+    /// and capability receipts publish synchronously without owner re-entry.
     pub(crate) fn push(&self, observation: ConversationObservation) {
         let Some(inner) = self.inner.upgrade() else {
             return;
@@ -6714,64 +7461,157 @@ impl RuntimeObserver {
 }
 
 impl crate::goal::GoalObserver for RuntimeObserver {
-    fn changed(&self, view: crate::goal::GoalView) {
-        self.push(ConversationObservation::GoalChanged(view));
+    fn changed(&self, receipt: Option<&Arc<crate::durable::inbox::GoalObservationReceipt>>) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        let Some(fanout) = inner.pending.get() else {
+            return;
+        };
+        let Some(receipt) = receipt else {
+            fanout.source_failed();
+            return;
+        };
+        if !fanout.native_goal(receipt).is_installed() {
+            fanout.source_failed();
+            return;
+        }
+        let Some(native) = &receipt.native else {
+            fanout.source_failed();
+            return;
+        };
+        if let Some(header) = receipt
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.selected.as_ref())
+            && let Some(cursor) = header.message.transcript_cursor
+            && inner
+                .store
+                .mark_observation_transcript_ready(cursor.get())
+                .is_err()
+        {
+            fanout.source_failed();
+            return;
+        }
+        if let Some((first, last)) = native.journal_range {
+            if inner.store.mark_observation_direct(first, last).is_ok() {
+                fanout.source_ready(last);
+            } else {
+                fanout.source_failed();
+            }
+        }
     }
 }
 
 impl AgentExecutionObserver for RuntimeObserver {
-    fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent, journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        journal_sequence: u64,
+        tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
+        receipt: Option<&crate::durable::observation::NativeObservationBatch>,
+    ) {
+        if let Some(inner) = self.inner.upgrade()
+            && let Some(fanout) = inner.pending.get()
+        {
+            fanout.observe_tool_execution(event, tool_occurrence);
+            if let Some(receipt) = receipt {
+                Self::publish_native_batch(&inner, fanout, receipt, journal_sequence);
+                return;
+            }
+        }
         self.push(ConversationObservation::Published {
             journal_sequence,
-            observation: Box::new(ConversationObservation::Event {
-                attempt_id: attempt_id.clone(),
-                event: event.clone(),
-            }),
+            observation: Box::new(ConversationObservation::JournalSourceReady),
         });
     }
 
     fn observe_committed(
         &self,
         attempt_id: &AttemptId,
-        block: &MessageBlock,
-        transcript_cursor: Option<crate::durable::TranscriptCursor>,
+        _block: &MessageBlock,
+        receipt: &crate::durable::inbox::TranscriptCommitReceipt,
     ) {
-        self.push(ConversationObservation::Committed {
+        self.push(ConversationObservation::CanonicalCommitted {
             attempt_id: Some(attempt_id.clone()),
-            block: block.clone(),
-            transcript_cursor,
+            receipt: receipt.clone(),
         });
     }
 
-    fn observe_status(&self, observation: &AgentStatusObservation) {
-        self.push(ConversationObservation::Status(observation.clone()));
+    fn observe_status(
+        &self,
+        observation: &AgentStatusObservation,
+        source: Option<&crate::durable::inbox::StatusObservationSource>,
+    ) {
+        self.push(ConversationObservation::Status(
+            crate::runtime_client::projection::prepared_status_view(observation, source),
+        ));
+    }
+
+    fn observe_contribution_status(
+        &self,
+        contribution: &crate::context::contribution::ContributionStart,
+        _attempt: &AttemptId,
+        _turn: u32,
+        source: Option<&crate::durable::inbox::StatusObservationSource>,
+    ) {
+        if contribution.presentation.is_none() {
+            return;
+        }
+        // The closed RequestStart receipt publishes this prepared status at
+        // its exact C/J cut. Missing receipt evidence fences only observation.
+        if source.is_none()
+            && let Some(inner) = self.inner.upgrade()
+            && let Some(fanout) = inner.pending.get()
+        {
+            fanout.source_failed();
+        }
     }
 
     fn observe_publication_opened(&self, attempt_id: &AttemptId, start: &PublicationStreamStart) {
-        self.push(ConversationObservation::PublicationOpened {
-            attempt_id: attempt_id.clone(),
-            start: start.clone(),
-        });
+        if let Some(inner) = self.inner.upgrade()
+            && let Some(fanout) = inner.pending.get()
+        {
+            fanout.publication_opened(attempt_id, start);
+        }
     }
 
-    fn observe_publication(&self, attempt_id: &AttemptId, frame: &PublicationFrame) {
-        self.push(ConversationObservation::Publication {
-            attempt_id: attempt_id.clone(),
-            frame: frame.clone(),
-        });
+    fn observe_publication(
+        &self,
+        attempt_id: &AttemptId,
+        frame: &PublicationFrame,
+        receipt: &crate::publication::PublicationFrameReceipt,
+    ) {
+        if let Some(inner) = self.inner.upgrade()
+            && let Some(fanout) = inner.pending.get()
+        {
+            fanout.publication_frame(attempt_id, frame, receipt);
+        }
     }
 
     fn observe_publication_settled(
         &self,
         attempt_id: &AttemptId,
-        audit: &PublicationAudit,
-        transcript_cursor: crate::durable::TranscriptCursor,
+        _audit: &PublicationAudit,
+        receipt: &crate::durable::inbox::PublicationAuditReceipt,
     ) {
-        self.push(ConversationObservation::PublicationSettled {
-            attempt_id: attempt_id.clone(),
-            audit: Box::new(audit.clone()),
-            transcript_cursor,
-        });
+        if let Some(inner) = self.inner.upgrade()
+            && let Some(fanout) = inner.pending.get()
+        {
+            fanout.native_audit(attempt_id, receipt);
+            // Physical source readiness follows CPU-only display publication.
+            // It is not a client ACK, nor release of unrelated Journal rows.
+            if inner
+                .store
+                .mark_observation_transcript_ready(receipt.transcript_cursor.get())
+                .is_err()
+            {
+                fanout.source_failed();
+            } else {
+                fanout.source_ready(receipt.read_cut.read.journal);
+            }
+        }
     }
 
     // The loop fires this while the tool still executes; a leaf push into
@@ -6788,7 +7628,19 @@ impl AgentExecutionObserver for RuntimeObserver {
             attempt_id: attempt_id.clone(),
             tool_call_id: tool_call_id.clone(),
             tool_id: tool_id.clone(),
-            progress: progress.clone(),
+            progress: crate::tools::types::ToolProgress {
+                message: progress.message.as_deref().map(|message| {
+                    let mut end = message
+                        .len()
+                        .min(crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES);
+                    while !message.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    message[..end].to_owned()
+                }),
+                completed: progress.completed,
+                total: progress.total,
+            },
         });
     }
 }
@@ -6801,87 +7653,157 @@ impl AgentExecutionObserver for RuntimeObserver {
 // the same publication linearization point whether or not any observer is
 // installed.
 impl InboundObserver for RuntimeObserver {
-    fn on_enqueued(&self, item: &InboundItem) {
-        self.push(ConversationObservation::InboundEnqueued(item.clone()));
-    }
-
-    fn on_pending_changed(&self, items: Vec<InboundItem>) {
-        self.push(ConversationObservation::PendingInboundChanged(items));
-    }
-
-    fn on_drained(&self, batch: &InboundBatch) {
-        self.push(ConversationObservation::InboundDrained(batch.clone()));
+    fn on_pending(
+        &self,
+        receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+        cut: &crate::durable::reading::ConversationReadCut,
+    ) {
+        if let Some(inner) = self.inner.upgrade()
+            && let Some(fanout) = inner.pending.get()
+        {
+            fanout.native_pending(receipt, cut);
+            // Removal owns the retired T position too. Marking that exact
+            // position wakes source preparation even though its row is gone.
+            if let Some(receipt) = receipt
+                && let Some(cursor) = receipt
+                    .selected
+                    .as_ref()
+                    .and_then(|header| header.message.transcript_cursor)
+                    .or(receipt.removed_transcript)
+                && inner
+                    .store
+                    .mark_observation_transcript_ready(cursor.get())
+                    .is_err()
+            {
+                fanout.source_failed();
+            }
+        }
     }
 }
 
-// The registry fires `on_snapshot` while the registry lock is held. Push
-// only, so no `coordinator -> registry` ordering discipline is ever
-// required of a caller.
+// Registry -> fan-out dispatch -> native publication gate -> raw Projection.
+// Immutable headers and same-append receipts need no Registry re-entry, Store
+// reads, socket readiness or await inside the native display boundary.
 impl BackgroundObserver for RuntimeObserver {
-    fn on_committed(&self, snapshot: &BackgroundExecutionSnapshot, sequence: u64) {
-        self.push(ConversationObservation::Published {
-            journal_sequence: sequence,
+    fn on_committed(
+        &self,
+        snapshot: &BackgroundExecutionSnapshot,
+        committed: &crate::events::types::RuntimeEventEnvelope,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
+    ) {
+        self.publish_owner(
+            &ConversationObservation::CollectionProof {
+                owner: "jobs",
+                cut,
+                ordinal,
+                observation: Box::new(ConversationObservation::Background(snapshot.clone())),
+            },
+            committed,
+        );
+    }
+    fn on_snapshot(
+        &self,
+        snapshot: &BackgroundExecutionSnapshot,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
+    ) {
+        self.push(ConversationObservation::CollectionProof {
+            owner: "jobs",
+            cut,
+            ordinal,
             observation: Box::new(ConversationObservation::Background(snapshot.clone())),
         });
     }
-    fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot) {
-        self.push(ConversationObservation::Background(snapshot.clone()));
-    }
 }
 
-// Same leaf contract as the background observer: the registry fires under
-// its lock, so this only pushes into the queue. Lifecycle/identity
-// publications are reliable; live-activity publications are disposable and
-// land in the coalescing latest-value lane.
+// The same native owner lock order applies to Child lifecycle receipts.
+// Lifecycle facts use the synchronous owner sink; disposable Activity keeps
+// its existing finite coalescing lane and cannot retire execution authority.
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
     fn on_committed(
         &self,
         agent: Option<&crate::runtime::subagent::AgentSnapshot>,
         snapshot: &crate::runtime::subagent::SubagentSnapshot,
-        sequence: u64,
+        committed: &crate::events::types::RuntimeEventEnvelope,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
     ) {
-        self.push(ConversationObservation::Published {
-            journal_sequence: sequence,
+        self.publish_owner(
+            &ConversationObservation::CollectionProof {
+                owner: "agents",
+                cut,
+                ordinal,
+                observation: Box::new(ConversationObservation::SubagentLifecycle {
+                    agent: agent.cloned().map(Box::new),
+                    snapshot: snapshot.clone(),
+                }),
+            },
+            committed,
+        );
+    }
+    fn on_snapshot(
+        &self,
+        agent: Option<&crate::runtime::subagent::AgentSnapshot>,
+        snapshot: &crate::runtime::subagent::SubagentSnapshot,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
+    ) {
+        self.push(ConversationObservation::CollectionProof {
+            owner: "agents",
+            cut,
+            ordinal,
             observation: Box::new(ConversationObservation::SubagentLifecycle {
                 agent: agent.cloned().map(Box::new),
                 snapshot: snapshot.clone(),
             }),
         });
     }
-    fn on_snapshot(
+
+    fn on_activity(
         &self,
-        agent: Option<&crate::runtime::subagent::AgentSnapshot>,
         snapshot: &crate::runtime::subagent::SubagentSnapshot,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
     ) {
-        self.push(ConversationObservation::SubagentLifecycle {
-            agent: agent.cloned().map(Box::new),
-            snapshot: snapshot.clone(),
+        self.push(ConversationObservation::CollectionProof {
+            owner: "agents",
+            cut,
+            ordinal,
+            observation: Box::new(ConversationObservation::SubagentActivity(snapshot.clone())),
         });
     }
 
-    fn on_activity(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
-        self.push(ConversationObservation::SubagentActivity(snapshot.clone()));
+    fn on_interaction_pending(
+        &self,
+        interaction: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        proof: &crate::runtime::subagent::ChildPendingHeadProof,
+    ) {
+        self.push(ConversationObservation::ObservationBatch(vec![
+            ConversationObservation::InteractionPending {
+                interaction: interaction.clone(),
+                audit: None,
+            },
+            child_pending_head_observation(proof),
+        ]));
     }
-
-    fn on_interaction_pending(&self, interaction: &RoutedInteraction) {
-        self.push(ConversationObservation::InteractionPending {
-            interaction: interaction.clone(),
-            audit: None,
-        });
+    fn on_interaction_settled(
+        &self,
+        interaction: &InteractionRef,
+        outcome: &InteractionOutcome,
+        proof: &crate::runtime::subagent::ChildPendingHeadProof,
+    ) {
+        self.push(ConversationObservation::ObservationBatch(vec![
+            ConversationObservation::InteractionSettled {
+                interaction: interaction.clone(),
+                outcome: outcome.clone(),
+                audit: None,
+            },
+            child_pending_head_observation(proof),
+        ]));
     }
-
-    fn on_interaction_settled(&self, interaction: &InteractionRef, outcome: &InteractionOutcome) {
-        self.push(ConversationObservation::InteractionSettled {
-            interaction: interaction.clone(),
-            outcome: outcome.clone(),
-            audit: None,
-        });
-    }
-
-    fn on_interaction_removed(&self, interaction: &InteractionRef) {
-        self.push(ConversationObservation::InteractionRemoved {
-            interaction: interaction.clone(),
-        });
+    fn on_interaction_head(&self, proof: &crate::runtime::subagent::ChildPendingHeadProof) {
+        self.push(child_pending_head_observation(proof));
     }
 }
 
@@ -6894,13 +7816,45 @@ impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
 impl CapabilityObserver for RuntimeObserver {
     fn on_snapshot(
         &self,
-        snapshot: &CapabilitySnapshot,
+        snapshot: &Arc<CapabilitySnapshot>,
         availability: &crate::capabilities::CapabilityAvailability,
     ) {
         self.push(ConversationObservation::Capability {
-            snapshot: Arc::new(snapshot.clone()),
-            availability: availability.clone(),
+            source: crate::runtime_client::capability_source::CapabilityReadSource::new(
+                Arc::clone(snapshot),
+                availability.clone(),
+                None,
+            ),
         });
+    }
+}
+
+fn child_pending_head_observation(
+    proof: &crate::runtime::subagent::ChildPendingHeadProof,
+) -> ConversationObservation {
+    ConversationObservation::PendingHead {
+        owner: "pending_children",
+        cut: proof.cut,
+        head: proof.head.clone(),
+    }
+}
+
+fn pending_head_observation(
+    proof: &crate::runtime::interaction::PendingHeadProof,
+) -> ConversationObservation {
+    let head = proof
+        .head
+        .iter()
+        .map(|(sequence, source)| {
+            let mut header = source.header().clone();
+            header.source_offset = sequence.checked_mul(2).expect("pending source offset");
+            header
+        })
+        .collect();
+    ConversationObservation::PendingHead {
+        owner: "pending_primary",
+        cut: proof.cut,
+        head,
     }
 }
 
@@ -6912,14 +7866,18 @@ impl CapabilityObserver for RuntimeObserver {
 impl InteractionObserver for RuntimeObserver {
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &Arc<crate::runtime::interaction::source::PendingInteractionSource>,
         audit: &crate::events::types::RuntimeEventEnvelope,
         transcript_cursor: crate::durable::TranscriptCursor,
+        proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
-        self.push(ConversationObservation::InteractionPending {
-            interaction: RoutedInteraction::primary(request.clone()),
-            audit: Some((audit.clone(), transcript_cursor)),
-        });
+        self.push(ConversationObservation::ObservationBatch(vec![
+            ConversationObservation::InteractionPending {
+                interaction: source.header().clone(),
+                audit: Some((audit.clone(), transcript_cursor)),
+            },
+            pending_head_observation(proof),
+        ]));
     }
 
     fn on_settled(
@@ -6930,20 +7888,49 @@ impl InteractionObserver for RuntimeObserver {
             crate::events::types::RuntimeEventEnvelope,
             crate::durable::TranscriptCursor,
         )>,
+        proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
         let Some(inner) = self.inner.upgrade() else {
             return;
         };
-        self.push(ConversationObservation::InteractionSettled {
-            interaction: InteractionRef::new(inner.conversation_id.clone(), interaction_id.clone()),
-            outcome: outcome.clone(),
-            audit: audit.cloned(),
-        });
+        self.push(ConversationObservation::ObservationBatch(vec![
+            ConversationObservation::InteractionSettled {
+                interaction: InteractionRef::new(
+                    inner.conversation_id.clone(),
+                    interaction_id.clone(),
+                ),
+                outcome: outcome.clone(),
+                audit: audit.cloned(),
+            },
+            pending_head_observation(proof),
+        ]));
     }
 }
 
 #[cfg(test)]
 impl ConversationRuntime {
+    /// Execution-boundary fixtures observe original Journal facts after
+    /// native receipt notice, without pretending to install a client cut.
+    fn install_fixture_observation_bridge(
+        &self,
+        queue: &Arc<PendingObservations>,
+    ) -> Result<RuntimeBootstrapSnapshot, RuntimeBootstrapError> {
+        let seed = self.install_observation_bridge(queue.clone())?;
+        let through = self
+            .inner
+            .store
+            .presentation_frontier()
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        let recorder = crate::scripted_suites::support::native_journal::NativeJournalRecorder::bind(
+            self,
+            &self.inner.store,
+            queue,
+            through,
+        );
+        queue.bind_fixture_journal(recorder, through);
+        Ok(seed)
+    }
+
     /// Runs the ordinary coordinator admission boundary synchronously in a test.
     pub(crate) fn admit_now_for_test(&self) {
         self.inner.admit_next_attempt();
@@ -7138,8 +8125,8 @@ mod tests {
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::{EventDelivery, RuntimeClientHost, RuntimeClientHostConfig};
     use crate::runtime_client::types::{
-        RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientError, RuntimeClientProtocolEvent,
-        RuntimeClientRequest, RuntimeClientResult,
+        RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientError, RuntimeClientRequest,
+        RuntimeClientResult,
     };
     use crate::scripted_suites::support::fake::{
         FakeModel, FakeStep, FakeTool, model_release, success_result,
@@ -8001,7 +8988,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -8133,7 +9120,7 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         authority: crate::runtime::subagent::DurableAgentAuthority {
-                            title: "Explore task".to_owned(),
+                            title: "Explore task".into(),
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
@@ -8281,7 +9268,7 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
-                        title: "Explore task".to_owned(),
+                        title: "Explore task".into(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
@@ -8364,7 +9351,7 @@ mod tests {
         let (runtime, model) = headless_runtime(&dir, vec![one_turn_script()], None, probe).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("first bridge install");
         // The bridge installed over the inert runtime; activation is the
         // cut, exactly as in the interactive composition.
@@ -8439,7 +9426,7 @@ mod tests {
         // The canonical conversation committed the inbound message and the
         // assistant reply: the same real AgentExecution path an interactive
         // runtime uses.
-        let ledger = await_settled_ledger(&fixture.runtime).await;
+        let ledger = await_settled_ledger(&fixture.runtime, 0).await;
         let roles: Vec<&str> = ledger
             .iter()
             .map(|message| match message {
@@ -8495,7 +9482,7 @@ mod tests {
         runtime
             .submit_inbound(text_content("first attempt"))
             .expect("first inbound accepted");
-        let first_ledger = await_settled_ledger(&runtime).await;
+        let first_ledger = await_settled_ledger(&runtime, 0).await;
         assert_eq!(
             seam.capture_count(crate::context::AgentStatusModuleId::Time),
             1,
@@ -8516,7 +9503,7 @@ mod tests {
         runtime
             .submit_inbound(text_content("second attempt"))
             .expect("second inbound accepted");
-        let second_ledger = await_settled_ledger(&runtime).await;
+        let second_ledger = await_settled_ledger(&runtime, 1).await;
         assert_eq!(
             seam.capture_count(crate::context::AgentStatusModuleId::Time),
             2,
@@ -8558,21 +9545,22 @@ mod tests {
             None,
         )
         .await;
-        let pending = Arc::new(PendingObservations::new());
-        runtime
-            .install_observation_bridge(pending.clone())
-            .expect("bridge");
+        let host = crate::runtime_client::host::RuntimeClientHost::new(
+            crate::runtime_client::host::RuntimeClientHostConfig {
+                runtime: runtime.clone(),
+                replay_limit: None,
+            },
+        )
+        .expect("native client source owner");
         runtime.activate();
         let history = text_content(&"important history ".repeat(512));
+        let settled = runtime.settlement_signal();
+        let notification = settled.notified();
+        tokio::pin!(notification);
+        notification.as_mut().enable();
         runtime.submit_inbound(history).expect("accepted");
-        let _ = await_observation(&pending, |observation| {
-            matches!(
-                observation,
-                ConversationObservation::Event { event, .. } if is_terminal_event(event)
-            )
-        })
-        .await;
-        let _ = await_settled_ledger(&runtime).await;
+        notification.await;
+        assert!(runtime.coordinator_ledger().is_some());
 
         let release_gate = Arc::new(Gate::default());
         let _release_guard = release_gate.arm_scoped();
@@ -8605,20 +9593,24 @@ mod tests {
                 .compaction_generation,
             1
         );
-        // Adoption eligibility is runtime state the admission worker publishes
-        // on its own schedule; the semantic stream before release is exact.
-        let before_release: Vec<_> = pending
-            .drain()
-            .into_iter()
-            .filter(|observation| {
-                !matches!(observation, ConversationObservation::AdoptionEligibility(_))
-            })
-            .collect();
-        assert!(
-            matches!(before_release.as_slice(), [ConversationObservation::ManualCompactionEvent {
-            request_id: Some(id), event: RuntimeEvent::CompactionStarted,
-        }] if id.as_str() == "manual-request-435")
+        let before_release = host
+            .checkpoint()
+            .expect("frozen native compaction-start cut");
+        let manual = before_release
+            .snapshot
+            .context
+            .manual_compaction
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            manual.request_id.as_ref().unwrap().as_str(),
+            "manual-request-435"
         );
+        assert!(
+            !manual.released,
+            "display completion cannot precede coordinator ownership return"
+        );
+        assert!(before_release.snapshot.context.latest_compaction.is_none());
         release_gate.release();
         let outcome = request.await.unwrap().expect("manual compaction");
         assert_eq!(outcome.generation, 1);
@@ -8662,32 +9654,36 @@ mod tests {
         let detail = trace.detail(&row.id).unwrap().unwrap();
         assert_eq!(detail.messages.len(), 1);
 
-        // The released compaction admission restores eligibility on the
-        // worker's schedule; the semantic completion is still the last fact.
-        let observations: Vec<_> = pending
-            .drain()
-            .into_iter()
-            .filter(|observation| {
-                !matches!(observation, ConversationObservation::AdoptionEligibility(_))
-            })
-            .collect();
-        assert!(observations.iter().any(|observation| {
-            matches!(
-                observation,
-                ConversationObservation::Committed {
-                    attempt_id: None,
-                    block: MessageBlock::User(user),
-                    ..
-                } if user.id == outcome.summary_message_id
-            )
-        }));
-        assert!(matches!(
-            observations.last(),
-            Some(ConversationObservation::ManualCompactionEvent {
-                request_id: Some(id),
-                event: RuntimeEvent::CompactionCompleted { generation: 1, .. }
-            }) if id.as_str() == "manual-request-435"
-        ));
+        let completed = host.checkpoint().expect("native compaction completion cut");
+        let manual = completed
+            .snapshot
+            .context
+            .manual_compaction
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            manual.request_id.as_ref().unwrap().as_str(),
+            "manual-request-435"
+        );
+        assert!(manual.released);
+        assert_eq!(
+            completed
+                .snapshot
+                .context
+                .latest_compaction
+                .as_ref()
+                .unwrap()
+                .generation,
+            1
+        );
+        assert!(
+            completed
+                .snapshot
+                .message_descriptors
+                .iter()
+                .any(|header| header.identity.as_ref() == Some(&outcome.summary_message_id))
+        );
+        assert!(completed.cursor > before_release.cursor);
     }
 
     /// Manual admission freezes capability-derived Skill guidance as
@@ -8853,7 +9849,7 @@ mod tests {
         runtime
             .submit_inbound(text_content("works after rejected compaction"))
             .expect("accepted after failure");
-        let _ = await_settled_ledger(&runtime).await;
+        let _ = await_settled_ledger(&runtime, 0).await;
         assert!(!runtime.has_current_attempt());
     }
 
@@ -8897,7 +9893,7 @@ mod tests {
         );
         assert!(runtime.has_current_attempt());
         release_sender.send(true).expect("release provider");
-        let _ = await_settled_ledger(&runtime).await;
+        let _ = await_settled_ledger(&runtime, 0).await;
         assert!(!runtime.has_current_attempt());
     }
 
@@ -8929,7 +9925,7 @@ mod tests {
         let accepted = runtime
             .submit_inbound(text_content("one durable authority"))
             .expect("accepted");
-        let ledger = await_settled_ledger(&runtime).await;
+        let ledger = await_settled_ledger(&runtime, 0).await;
 
         assert!(ledger.iter().any(|message| {
             matches!(message, MessageBlock::User(user) if user.id == accepted.message_id)
@@ -9059,7 +10055,7 @@ mod tests {
         // Deterministic settlement handoff: the settlement signal fires
         // once when the authoritative ConversationState returns to the
         // runtime.
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
         let ledger = runtime.coordinator_ledger().expect("settled");
 
         // The real tool executed exactly once under the canonical ToolCall
@@ -9156,7 +10152,7 @@ mod tests {
 
         // No client command: the runtime wake gate admits exactly one
         // attempt.
-        fixture.runtime.settlement_signal().notified().await;
+        fixture.runtime.child_attempt_settlement(0).await;
         assert_eq!(
             fixture.model.requests().len(),
             1,
@@ -9198,6 +10194,7 @@ mod tests {
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
             subagent_failure_published_gate: None,
+            ..CoordinatorProbe::default()
         }))
         .await;
         gate.arm();
@@ -9223,16 +10220,24 @@ mod tests {
 
         // Release: one admission drains both messages in mailbox order.
         gate.release();
+        let mut terminal_seen = false;
+        let mut adoption_seen = false;
         let observations = await_observation(
             fixture
                 .pending
                 .as_ref()
                 .expect("the bridged fixture carries its queue"),
             |observation| {
-                matches!(
+                terminal_seen |= matches!(
                     observation,
                     ConversationObservation::Event { event, .. } if is_terminal_event(event)
-                )
+                );
+                adoption_seen |= matches!(
+                    observation,
+                    ConversationObservation::PendingReceipt(receipt)
+                        if receipt.adopted_through.is_some()
+                );
+                terminal_seen && adoption_seen
             },
         )
         .await;
@@ -9242,7 +10247,7 @@ mod tests {
             1,
             "at most one active attempt"
         );
-        let ledger = await_settled_ledger(&fixture.runtime).await;
+        let ledger = await_settled_ledger(&fixture.runtime, 0).await;
         let inbound: Vec<&str> = ledger
             .iter()
             .filter_map(|message| match message {
@@ -9259,12 +10264,20 @@ mod tests {
         let drained: Vec<_> = observations
             .iter()
             .filter_map(|observation| match observation {
-                ConversationObservation::InboundDrained(batch) => Some(batch),
+                ConversationObservation::PendingReceipt(receipt)
+                    if receipt.adopted_through.is_some() =>
+                {
+                    Some(receipt)
+                }
                 _ => None,
             })
             .collect();
         assert_eq!(drained.len(), 1, "one finite inbound batch");
-        assert_eq!(drained[0].items().len(), 2, "both messages in one batch");
+        assert_eq!(
+            drained[0].adopted_count,
+            Some(2),
+            "both messages in one native adoption"
+        );
     }
 
     /// Durable pending inbound accepted before the runtime exists (for
@@ -9313,7 +10326,7 @@ mod tests {
         // itself, without any new submit.
         let (runtime, model) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
         runtime.activate();
-        let ledger = await_settled_ledger(&runtime).await;
+        let ledger = await_settled_ledger(&runtime, 0).await;
         let inbound: Vec<&str> = ledger
             .iter()
             .filter_map(|message| match message {
@@ -9348,7 +10361,7 @@ mod tests {
     ) -> Vec<ConversationObservation> {
         let mut folded = Vec::new();
         loop {
-            for observation in pending.drain() {
+            while let Some(observation) = pending.next_fixture_fact() {
                 let matched = predicate(&observation);
                 folded.push(observation);
                 if matched {
@@ -9361,8 +10374,11 @@ mod tests {
 
     /// Waits for the settlement handoff (the runtime-owned settlement
     /// signal) and returns the authoritative ledger.
-    async fn await_settled_ledger(runtime: &ConversationRuntime) -> Vec<MessageBlock> {
-        runtime.settlement_signal().notified().await;
+    async fn await_settled_ledger(runtime: &ConversationRuntime, after: u64) -> Vec<MessageBlock> {
+        // Original terminal Journal commitment can precede this physical
+        // coordinator handoff. Its retained native receipt prevents a lost
+        // Notify edge when the execution settles before the assertion waits.
+        runtime.child_attempt_settlement(after).await;
         runtime
             .coordinator_ledger()
             .expect("the settlement handoff restored the conversation state")
@@ -9401,7 +10417,7 @@ mod tests {
         runtime_a
             .submit_inbound(text_content("historical request A"))
             .expect("request A");
-        let _ = await_settled_ledger(&runtime_a).await;
+        let _ = await_settled_ledger(&runtime_a, 0).await;
         let snapshots_a = request_snapshots(&runtime_a.request_history());
         assert_eq!(snapshots_a.len(), 1);
         assert!(
@@ -9457,7 +10473,7 @@ mod tests {
         runtime_b
             .submit_inbound(text_content("new request B"))
             .expect("request B");
-        let ledger_b = await_settled_ledger(&runtime_b).await;
+        let ledger_b = await_settled_ledger(&runtime_b, 0).await;
         let snapshots_b = request_snapshots(&runtime_b.request_history());
         assert_eq!(snapshots_b.len(), 2);
         assert_eq!(
@@ -9637,7 +10653,7 @@ mod tests {
         release
             .send(true)
             .expect("release the first provider request");
-        let _ = await_settled_ledger(&runtime).await;
+        let _ = await_settled_ledger(&runtime, 0).await;
 
         let requests = model.requests();
         assert_eq!(requests.len(), 3, "overflow, isolated summary, and retry");
@@ -10083,7 +11099,7 @@ mod tests {
         runtime
             .submit_inbound(text_content("delegated task"))
             .expect("delegated inbound");
-        let _ = await_settled_ledger(&runtime).await;
+        let _ = await_settled_ledger(&runtime, 0).await;
         assert!(
             model.requests()[0]
                 .effective_system_prompt
@@ -10405,7 +11421,7 @@ mod tests {
             .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("Runtime Client attachment");
         let cursor = match initialized {
-            RuntimeClientResult::Initialized { cursor, .. } => cursor,
+            RuntimeClientResult::Initialized { .. } => attachment.checkpoint().unwrap().cursor,
             other => panic!("unexpected initialization result: {other:?}"),
         };
         let subscription = attachment
@@ -10424,8 +11440,14 @@ mod tests {
 
         let pending = loop {
             match subscription.next().await {
-                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
-                    if let RuntimeClientEvent::InteractionPending { interaction } = event {
+                EventDelivery::Event(event) => {
+                    if let Some(interaction) = event.event.facts().iter().find_map(|fact| {
+                        if let RuntimeClientEvent::InteractionPending { interaction } = fact {
+                            Some((*interaction).clone())
+                        } else {
+                            None
+                        }
+                    }) {
                         break interaction;
                     }
                 }
@@ -10441,7 +11463,7 @@ mod tests {
                 .expect("pending interaction has an active attempt");
             (current.attempt_id.clone(), current.cancellation.clone())
         };
-        assert_eq!(pending.request.attempt_id, attempt_id);
+        assert_eq!(pending.attempt_id, attempt_id);
 
         // This is the first-winner commit. The waiter observes the signal but
         // is then parked before it can call coordinator.cancel.
@@ -10501,13 +11523,19 @@ mod tests {
 
         let settled_outcome = loop {
             match subscription.next().await {
-                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
-                    if let RuntimeClientEvent::InteractionSettled {
-                        interaction,
-                        outcome,
-                    } = event
-                        && interaction == pending.interaction
-                    {
+                EventDelivery::Event(event) => {
+                    if let Some(outcome) = event.event.facts().iter().find_map(|fact| {
+                        if let RuntimeClientEvent::InteractionSettled {
+                            interaction,
+                            outcome,
+                        } = fact
+                            && *interaction == pending.interaction
+                        {
+                            Some((*outcome).clone())
+                        } else {
+                            None
+                        }
+                    }) {
                         break outcome;
                     }
                 }
@@ -10521,7 +11549,10 @@ mod tests {
                 reason: CancellationReason::UserRequested
             }
         );
-        let (snapshot, _) = host.snapshot().expect("post-shutdown snapshot");
+        let (snapshot, _) = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .expect("post-shutdown snapshot");
         assert!(snapshot.pending_interactions.is_empty());
 
         let stale = attachment
@@ -10655,6 +11686,7 @@ mod tests {
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
             subagent_failure_published_gate: None,
+            ..CoordinatorProbe::default()
         }))
         .await;
         gate.arm();
@@ -10743,6 +11775,7 @@ mod tests {
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
             subagent_failure_published_gate: None,
+            ..CoordinatorProbe::default()
         }))
         .await;
         // Freeze admission so the worker cannot adopt the pre-shutdown item.
@@ -10962,7 +11995,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -10990,7 +12023,7 @@ mod tests {
 
         // The retry adopts the pending item exactly once and completes the
         // admission cycle (settlement completes).
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
         let ledger = runtime.coordinator_ledger().expect("settled");
         assert!(
             ledger.iter().any(|m| matches!(
@@ -11026,7 +12059,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -11090,7 +12123,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -11106,7 +12139,7 @@ mod tests {
             .expect("accepted");
         assert_eq!(admission.inbound_sequence.get(), 1);
 
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
         let ledger = runtime.coordinator_ledger().expect("settled");
         assert!(
             ledger.iter().any(|m| matches!(
@@ -11121,7 +12154,7 @@ mod tests {
         );
         // Every durability observation is published during admission,
         // strictly before the settlement handoff observed above.
-        let observations = pending.drain();
+        let observations = pending.drain_fixture_facts();
         let transient = observations
             .iter()
             .filter(|o| matches!(o, ConversationObservation::DurableFailure { .. }))
@@ -11198,13 +12231,10 @@ mod tests {
             loop {
                 match subscription.next().await {
                     crate::runtime_client::EventDelivery::Event(event)
-                        if matches!(
-                            &event.event,
-                            crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
+                        if event.event.facts().iter().any(|fact| matches!(fact, crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
                                 operation,
                                 ..
-                            } if operation == "select_pending_batch"
-                        ) =>
+                            } if operation == "select_pending_batch")) =>
                     {
                         break event;
                     }
@@ -11215,13 +12245,10 @@ mod tests {
         })
         .await
         .expect("the alternating fault sequence reaches explicit failure");
-        assert!(matches!(
-            failure.event,
-            crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
+        assert!(failure.event.facts().iter().any(|fact| matches!(fact, crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
                 operation,
                 ..
-            } if operation == "select_pending_batch"
-        ));
+            } if operation == "select_pending_batch")));
 
         // The ordered script was fully consumed, proving the intended
         // deterministic operation sequence rather than a persistent
@@ -11235,7 +12262,10 @@ mod tests {
             "select fail -> select success -> adopt fail -> select fail"
         );
 
-        let (snapshot, snapshot_cursor) = host.snapshot().expect("client snapshot");
+        let (snapshot, snapshot_cursor) = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .expect("client snapshot");
         assert_eq!(
             snapshot
                 .durability_failure
@@ -11272,10 +12302,10 @@ mod tests {
             };
             cursor += 1;
             assert_eq!(event.cursor.get(), cursor);
-            assert!(matches!(
-                event.event,
+            assert!(event.event.facts().iter().any(|fact| matches!(
+                fact,
                 crate::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. }
-            ));
+            )));
         }
         assert!(
             cursor >= snapshot_cursor.get(),
@@ -11304,7 +12334,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -11377,7 +12407,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -11463,7 +12493,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -11591,7 +12621,7 @@ mod tests {
                 call_id: ToolCallId::new(call_id),
             },
             tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_name: "bash".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };
@@ -11644,7 +12674,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         let _admission_release = admission_gate.arm_scoped();
@@ -11671,7 +12701,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -11745,7 +12775,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -11901,7 +12931,7 @@ mod tests {
     ) {
         within_liveness_guard("published adoption eligibility", async {
             loop {
-                for observation in pending.drain() {
+                for observation in pending.drain_fixture_facts() {
                     if let ConversationObservation::AdoptionEligibility(eligibility) = observation {
                         assert_ne!(
                             latest.as_ref(),
@@ -11947,16 +12977,15 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
         // A pending, ready candidate owned by this runtime at the current
-        // binding baseline (the same shape model_set commits).
+        // binding baseline. General context adoption still requires idle ownership.
         let mut prepared = {
             let state = runtime.inner.lock_state();
             Some(PreparedConfiguration {
-                selection_only: true,
                 owner: runtime.inner.configuration_owner.clone(),
                 baseline: state.binding_revision,
                 preview: state.resources.clone(),
@@ -11984,7 +13013,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -12140,7 +13169,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         let _admission_release = admission_gate.arm_scoped();
@@ -12167,7 +13196,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -12252,7 +13281,7 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
-                        title: "Explore task".to_owned(),
+                        title: "Explore task".into(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
@@ -12353,28 +13382,27 @@ mod tests {
             .unwrap();
         let expected = crate::durable::inbox::PendingInboundRef {
             sequence: item.sequence,
-            message_id: item.message_id,
             revision: 0,
         };
-        assert_eq!(
-            runtime
-                .tool_runtime()
-                .mailbox()
-                .edit_pending(&expected, "edited pending")
-                .unwrap(),
-            crate::durable::inbox::PendingMutationOutcome::Applied
-        );
-        assert_eq!(
-            runtime
-                .tool_runtime()
-                .mailbox()
-                .remove_pending(&crate::durable::inbox::PendingInboundRef {
-                    revision: 1,
-                    ..expected
-                })
-                .unwrap(),
-            crate::durable::inbox::PendingMutationOutcome::Applied
-        );
+        assert!(matches!(
+        runtime
+                        .tool_runtime()
+                        .mailbox()
+                        .edit_pending(&expected, "edited pending")
+                        .unwrap(),
+        crate::durable::inbox::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+        ));
+        assert!(matches!(
+        runtime
+                        .tool_runtime()
+                        .mailbox()
+                        .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                            revision: 1,
+                            ..expected
+                        })
+                        .unwrap(),
+        crate::durable::inbox::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+        ));
         assert_eq!(subagents.snapshot(child_id).unwrap(), before);
     }
 
@@ -12417,7 +13445,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -12515,7 +13543,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -12528,7 +13556,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -12634,7 +13662,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -12652,7 +13680,7 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         authority: crate::runtime::subagent::DurableAgentAuthority {
-                            title: "Explore task".to_owned(),
+                            title: "Explore task".into(),
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
@@ -12712,10 +13740,13 @@ mod tests {
             "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
         );
         assert!(
-            !pending.drain().iter().any(|observation| matches!(
-                observation,
-                ConversationObservation::DurabilityFailed { .. }
-            )),
+            !pending
+                .drain_fixture_facts()
+                .iter()
+                .any(|observation| matches!(
+                    observation,
+                    ConversationObservation::DurabilityFailed { .. }
+                )),
             "the health failure has not linearized while the ownership commit holds the frontier"
         );
 
@@ -12807,7 +13838,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -12834,7 +13865,7 @@ mod tests {
                 call_id: ToolCallId::new("call-rejected-bg"),
             },
             tool_id: ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_name: "bash".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };
@@ -12904,7 +13935,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -12985,7 +14016,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -13003,7 +14034,7 @@ mod tests {
                 call_id: ToolCallId::new("call-racing-bg"),
             },
             tool_id: ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_name: "bash".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };
@@ -13050,10 +14081,13 @@ mod tests {
             "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
         );
         assert!(
-            !pending.drain().iter().any(|observation| matches!(
-                observation,
-                ConversationObservation::DurabilityFailed { .. }
-            )),
+            !pending
+                .drain_fixture_facts()
+                .iter()
+                .any(|observation| matches!(
+                    observation,
+                    ConversationObservation::DurabilityFailed { .. }
+                )),
             "the health failure has not linearized while the ownership commit holds the frontier"
         );
 
@@ -13153,7 +14187,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -13166,7 +14200,7 @@ mod tests {
                 call_id: crate::runtime::identity::ToolCallId::new("call-1"),
             },
             tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_name: "bash".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };
@@ -13288,7 +14322,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         admission_gate.arm();
@@ -13315,7 +14349,7 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             authority: crate::runtime::subagent::DurableAgentAuthority {
-                                title: "Explore task".to_owned(),
+                                title: "Explore task".into(),
                                 execution_policy:
                                     crate::runtime::subagent::InheritedExecutionPolicy::default(),
                                 resolved: test_resolved_subagent("explore"),
@@ -13426,7 +14460,7 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
-                        title: "Explore task".to_owned(),
+                        title: "Explore task".into(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
@@ -13467,7 +14501,7 @@ mod tests {
                 call_id: ToolCallId::new("call-rejected-bg"),
             },
             tool_id: ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_name: "bash".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };
@@ -13517,7 +14551,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -13575,10 +14609,13 @@ mod tests {
             "the first winner stays the absorbing diagnostic"
         );
         assert!(
-            !pending.drain().iter().any(|observation| matches!(
-                observation,
-                ConversationObservation::DurabilityFailed { .. }
-            )),
+            !pending
+                .drain_fixture_facts()
+                .iter()
+                .any(|observation| matches!(
+                    observation,
+                    ConversationObservation::DurabilityFailed { .. }
+                )),
             "no second DurabilityFailed observation is published"
         );
         assert_eq!(
@@ -13796,7 +14833,7 @@ mod tests {
             headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         runtime
@@ -15020,7 +16057,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         runtime
@@ -15162,7 +16199,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -15313,7 +16350,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         let background = runtime.tool_runtime().background().clone();
@@ -15336,7 +16373,7 @@ mod tests {
         // itself, so from here the callback has provably started and
         // provably not returned.
         background_failure_gate.wait_entered();
-        let before_release = pending.drain();
+        let before_release = pending.drain_fixture_facts();
         assert!(
             !before_release.iter().any(|observation| matches!(
                 observation,
@@ -15422,10 +16459,13 @@ mod tests {
             "the record has not crossed its abandoned settlement boundary"
         );
         assert!(
-            !pending.drain().iter().any(|observation| matches!(
-                observation,
-                ConversationObservation::DurabilityFailed { .. }
-            )),
+            !pending
+                .drain_fixture_facts()
+                .iter()
+                .any(|observation| matches!(
+                    observation,
+                    ConversationObservation::DurabilityFailed { .. }
+                )),
             "the parked callback still published nothing"
         );
         assert_eq!(
@@ -15486,7 +16526,7 @@ mod tests {
         let pending_after = store.load_pending().expect("pending inbound").len();
         let record_after = runtime.background_status(&execution_id).expect("record");
         let health_after = runtime.inner.durability_failure_diagnostic();
-        let _ = pending.drain();
+        let _ = pending.drain_fixture_facts();
         assert!(
             runtime
                 .submit_inbound(text_content("after shutdown"))
@@ -15512,7 +16552,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(
-            pending.drain().is_empty(),
+            pending.drain_fixture_facts().is_empty(),
             "no conversation observation follows the settled runner"
         );
         assert_eq!(
@@ -15556,7 +16596,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(
-            pending.drain().is_empty(),
+            pending.drain_fixture_facts().is_empty(),
             "the cached failure needs no fresh supervision and triggers no callback"
         );
         assert_eq!(
@@ -15773,7 +16813,7 @@ mod tests {
         .expect("runtime");
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -15784,7 +16824,7 @@ mod tests {
                 call_id: crate::runtime::identity::ToolCallId::new("call-m9c-background"),
             },
             tool_id: crate::runtime::identity::ToolId::new("tool-m9c-background"),
-            tool_name: "background_gate".to_owned(),
+            tool_name: "background_gate".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };
@@ -15942,7 +16982,7 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
-                        title: "Explore task".to_owned(),
+                        title: "Explore task".into(),
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("reviewer"),
@@ -16083,7 +17123,7 @@ mod tests {
             .prepare(
                 &SubagentStartSpec {
                     authority: DurableAgentAuthority {
-                        title: "Explore task".to_owned(),
+                        title: "Explore task".into(),
                         resolved: test_resolved_subagent("reviewer"),
                         execution_policy: InheritedExecutionPolicy::default(),
                         approval_mode: ApprovalMode::Policy,
@@ -16173,9 +17213,10 @@ mod tests {
         let (attachment, initialized) = host
             .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
             .expect("Runtime Client attachment");
-        let RuntimeClientResult::Initialized { cursor, .. } = initialized else {
+        let RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("expected initialization");
         };
+        let cursor = attachment.checkpoint().unwrap().cursor;
         let subscription = attachment
             .subscribe_events(cursor)
             .expect("subscribe before the owner transition");
@@ -16190,7 +17231,7 @@ mod tests {
             .prepare(
                 &SubagentStartSpec {
                     authority: DurableAgentAuthority {
-                        title: "Explore task".to_owned(),
+                        title: "Explore task".into(),
                         resolved: test_resolved_subagent("reviewer"),
                         execution_policy: InheritedExecutionPolicy::default(),
                         approval_mode: ApprovalMode::Policy,
@@ -16244,15 +17285,29 @@ mod tests {
         // before the subscriber has independently received it.
         let streamed = loop {
             match subscription.next().await {
-                EventDelivery::Event(RuntimeClientProtocolEvent {
-                    event: RuntimeClientEvent::AgentUpdated { agent },
-                    ..
-                }) if agent.agent_id == admitted.child_agent_id
-                    && agent.activation_state.is_terminal() =>
-                {
-                    break agent;
+                EventDelivery::Event(event) => {
+                    if let Some(agent) = event.event.facts().iter().find_map(|fact| match fact {
+                        RuntimeClientEvent::AgentUpdated { agent, .. }
+                            if agent.agent_id == admitted.child_agent_id
+                                && agent.activation_state.is_terminal() =>
+                        {
+                            Some((*agent).clone())
+                        }
+                        RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => checkpoint
+                            .snapshot
+                            .agents
+                            .iter()
+                            .find(|agent| {
+                                agent.agent_id == admitted.child_agent_id
+                                    && agent.activation_state.is_terminal()
+                            })
+                            .cloned()
+                            .map(Box::new),
+                        _ => None,
+                    }) {
+                        break agent;
+                    }
                 }
-                EventDelivery::Event(_) => {}
                 EventDelivery::Pending => unreachable!("next never returns Pending"),
                 delivery => panic!("terminal Agent stream ended: {delivery:?}"),
             }
@@ -16271,14 +17326,17 @@ mod tests {
             agent_id: admitted.child_agent_id.clone(),
         });
         assert_eq!(status.error, None);
+        let observed: crate::runtime_client::snapshot::RuntimeClientAgent =
+            crate::scripted_suites::common::native_domain_single(
+                status.result.expect("native Agent page"),
+            );
+        assert_eq!(observed, expected);
         assert_eq!(
-            status.result,
-            Some(RuntimeClientResult::Agent {
-                agent: expected.clone()
-            })
-        );
-        assert_eq!(
-            host.snapshot().expect("fresh host snapshot").0.agents,
+            host.checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                .expect("fresh host snapshot")
+                .0
+                .agents,
             vec![expected]
         );
         let error = runtime
@@ -17134,7 +18192,7 @@ mod tests {
         let admission = runtime
             .submit_inbound(text_content("hello"))
             .expect("accepted after recovery");
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
         let ledger = runtime.coordinator_ledger().expect("settled");
         assert!(
             ledger
@@ -17258,6 +18316,8 @@ mod tests {
         event: crate::events::types::RuntimeEvent,
     ) -> crate::events::types::RuntimeEventEnvelope {
         crate::events::types::RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: crate::runtime::identity::EventId::new(event_id),
             sequence: 0,
@@ -17337,7 +18397,7 @@ mod tests {
 
         // Activation is the only trigger. Nothing submits, nothing attaches.
         runtime.activate();
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
 
         let ledger = runtime.coordinator_ledger().expect("settled");
         assert_eq!(
@@ -17427,7 +18487,7 @@ mod tests {
         );
 
         runtime.activate();
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
 
         let ledger = runtime.coordinator_ledger().expect("settled");
         assert_eq!(
@@ -17483,7 +18543,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         runtime
@@ -17665,7 +18725,7 @@ mod tests {
         let (runtime, model) = headless_runtime(&dir, vec![script], None, None).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         runtime
@@ -17827,7 +18887,7 @@ mod tests {
         .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
         runtime
@@ -18049,7 +19109,7 @@ mod tests {
         .expect("runtime");
         let pending = Arc::new(PendingObservations::new());
         runtime
-            .install_observation_bridge(pending.clone())
+            .install_fixture_observation_bridge(&pending)
             .expect("bridge");
         runtime.activate();
 
@@ -18211,7 +19271,7 @@ mod tests {
         runtime
             .submit_inbound(text_content("a new turn"))
             .expect("accepted after recovery");
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
         assert_eq!(
             model.requests().len(),
             1,
@@ -18332,7 +19392,7 @@ mod tests {
         runtime
             .submit_inbound(text_content("a new turn"))
             .expect("accepted after recovery");
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
         assert_eq!(
             model.requests().len(),
             1,
@@ -18395,7 +19455,7 @@ mod tests {
         runtime
             .submit_inbound(text_content("after restart"))
             .expect("accepted");
-        runtime.settlement_signal().notified().await;
+        runtime.child_attempt_settlement(0).await;
 
         // The durable Event Journal is the proof: the new attempt's start
         // fact carries an identity that never appeared before.

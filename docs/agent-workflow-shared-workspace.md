@@ -89,15 +89,19 @@ Git refs, worktree list and directory identity independently.
 
 ## Format and version inventory
 
-All formats break together. Old data is refused at its boundary and left
-untouched: nothing is migrated, rewritten, rehashed or deleted.
+The table records the shared-workspace integration's format changes. Old data
+is refused at its boundary and left untouched: nothing is migrated, rewritten,
+rehashed or deleted. Each version domain has its own owner and negotiation.
+Issue #467 subsequently advances SQLite to 58, Parent/Child IPC to 33, Runtime
+Client to 69, App Server to 48 and Session catalog to 16. Event envelope 1 remains
+unchanged. The current generated App Server pair is `v48.*`.
 
 | Boundary | Owner | Main before integration | PR before integration | Combined | Breaking format / rejection | Proof |
 | --- | --- | --- | --- | --- | --- | --- |
 | SQLite conversation store | `src/durable/sqlite.rs`, `SQLITE_SCHEMA_VERSION` | 55 | 51 | 57 | Shared path ownership and Candidate removal combined with canonical child history, input provenance and context checkpoints; old versions return `SchemaVersionMismatch` without writes | `pre_integration_stores_are_refused_and_left_untouched`, Workflow ownership/output atomicity tests |
 | Parent/child IPC | `src/runtime/subagent/ipc.rs`, `SUBAGENT_IPC_VERSION` | 31 | 31 | 32 | Frozen workspace path plus attachment-bearing input and inherited provenance; either v31 Hello shape fails before composition | `both_version_31_hello_formats_are_rejected_before_runtime_composition`, real child attachment and native Tool suites |
 | Runtime Client | `src/runtime_client/types.rs`, `RUNTIME_CLIENT_PROTOCOL_VERSION` | 66 | 62 | 68 | Shared Agent workspace path, no disposal/Candidate, with child Turn/Trace/history and typed attachments; negotiation rejects other versions | `attachment_request_correlation_and_version_negotiation` |
-| App Server | `src/app_server/protocol.rs`, `APP_SERVER_PROTOCOL_VERSION` | 44 | 40 | 46 | Runtime Client changes reflected in RPC and generated schemas; initialize and WebSocket negotiation reject old peers | `current_app_server_documentation_matches_negotiated_version`, generated `v46.*`, `pnpm check` |
+| App Server | `src/app_server/protocol.rs`, `APP_SERVER_PROTOCOL_VERSION` | 44 | 40 | 46 | Runtime Client changes reflected in RPC and generated schemas; initialize and WebSocket negotiation reject old peers | `current_app_server_documentation_matches_negotiated_version`, generated `v48.*`, `pnpm check` |
 | Agent definition digest | `SUBAGENT_DEFINITION_DIGEST_VERSION` | v5 | v6 | v6 | Worktree authoring removed; old frozen digests do not match | `sub258_the_profile_framing_is_versioned` and definition digest tests |
 | Execution profile digest | `SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION` | v3 | v4 | v4 | Shared binding and automatic controls; old frozen digests do not match | `sub258_the_profile_framing_is_versioned` |
 | Deletion revision token | `rustx/session-deletion-ownership` tag | v1 | v2 | v2 | No disposable workspace ownership; old tokens are stale | `deletion_never_removes_the_shared_session_workspace` |
@@ -116,8 +120,8 @@ incompatible formats; neither is accepted as IPC 32.
 
 There is no compatibility layer. After upgrading, start from a fresh Session
 store. Unsupported store and catalog versions, and older protocol peers, are
-refused explicitly; persisted data is left exactly as it was. The unchanged
-Session catalog format remains version 15. Worktrees and branches
+refused explicitly; persisted data is left exactly as it was. The shared-workspace integration retained Session catalog version 15;
+Issue #467 advances it to 16 with bounded identity metadata. Worktrees and branches
 that earlier builds created under the product root are no longer managed by
 rustX; inspect and remove them with ordinary Git commands if they are no longer
 wanted. Remove `[worktree]` tables from Agent profiles, `workspace:` keys from

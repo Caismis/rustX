@@ -1,4 +1,4 @@
-import type { AttachmentTarget, SessionFileReference } from '../../protocol/app-server/v46.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../protocol/app-server/v48.ts';
 
 export type DocumentKind = 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'html';
 export function documentKind(name: string): DocumentKind | undefined {
@@ -7,7 +7,7 @@ export function documentKind(name: string): DocumentKind | undefined {
   return extension && ['pdf', 'docx', 'pptx', 'xlsx', 'html'].includes(extension) ? extension as DocumentKind : undefined;
 }
 export type DocumentSource = { kind: 'artifact'; artifact_id: string; agent_id?: string }
-  | { kind: 'session_file'; message_id: string; delivery_index: number; agent_id?: string };
+  | { kind: 'session_file'; locator: CanonicalContentLocator; delivery_index: number; agent_id?: string };
 export interface DocumentRequest { target: AttachmentTarget; source: DocumentSource; extension: 'docx' | 'pptx' | 'xlsx'; digest: string }
 export interface WorkbookCell { address: string; value?: string; formula?: string; type: string }
 export interface WorkbookSheet { name: string; cells: WorkbookCell[]; truncated: boolean }

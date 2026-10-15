@@ -46,6 +46,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+pub(crate) mod source;
+pub(crate) use source::PendingInteractionSource;
+
 use chrono::{DateTime, Utc};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -216,12 +219,14 @@ pub struct RoutedInteraction {
     /// Root-facing source metadata.
     pub source: InteractionSource,
     /// The originating conversation's request facts.
-    pub request: InteractionRequest,
+    pub request: Arc<InteractionRequest>,
 }
 
 impl RoutedInteraction {
     /// Projects a primary-conversation request.
-    pub(crate) fn primary(request: InteractionRequest) -> Self {
+    #[cfg(test)]
+    pub(crate) fn primary(request: impl Into<Arc<InteractionRequest>>) -> Self {
+        let request = request.into();
         Self {
             interaction: request.interaction_ref(),
             source: InteractionSource::Primary,
@@ -230,12 +235,14 @@ impl RoutedInteraction {
     }
 
     /// Projects a child-conversation request with parent-owned source data.
+    #[cfg(test)]
     pub(crate) fn subagent(
         subagent_id: crate::runtime::identity::SubagentId,
         child_conversation_id: ConversationId,
         agent_name: SubagentName,
-        request: InteractionRequest,
+        request: impl Into<Arc<InteractionRequest>>,
     ) -> Self {
+        let request = request.into();
         let interaction = request.interaction_ref();
         debug_assert_eq!(interaction.conversation_id, child_conversation_id);
         Self {
@@ -604,6 +611,8 @@ fn requested_envelope(
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: interaction_requested_event_id(&request.id),
         sequence: 0,
@@ -626,6 +635,8 @@ fn settled_envelope(
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: interaction_settled_event_id(&request.id),
         sequence: 0,
@@ -768,13 +779,21 @@ impl ConversationInteractionAudit for RecordingInteractionAudit {
 /// coordinator or acquire the Runtime Client projection lock. `on_settled`
 /// runs after the terminal map transition, under a separate counted
 /// settlement admission.
+#[derive(Clone)]
+pub(crate) struct PendingHeadProof {
+    pub cut: crate::runtime::identity::ObservationCollectionCut,
+    pub head: Vec<(u64, Arc<PendingInteractionSource>)>,
+    pub next_sequence: Option<u64>,
+}
+
 pub(crate) trait InteractionObserver: Send + Sync {
     /// Publishes one newly pending request.
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &Arc<PendingInteractionSource>,
         audit: &RuntimeEventEnvelope,
         transcript_cursor: TranscriptCursor,
+        proof: &PendingHeadProof,
     );
     /// Publishes the one terminal transition for a request after the owning
     /// waiter has released its callback authority.
@@ -783,6 +802,7 @@ pub(crate) trait InteractionObserver: Send + Sync {
         interaction_id: &InteractionId,
         outcome: &InteractionOutcome,
         audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+        proof: &PendingHeadProof,
     );
 }
 
@@ -795,7 +815,9 @@ pub(crate) trait InteractionObserver: Send + Sync {
 pub(crate) enum InteractionRouteEvent {
     /// A requested fact has committed and is now being exposed at the root
     /// human-facing surface.
-    Requested(InteractionRequest),
+    Requested(Box<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>),
+    /// Physical origin loss retires observation without inventing a settlement.
+    Removed { interaction: InteractionRef },
     /// The originating coordinator selected its terminal outcome.
     Settled {
         /// The originating conversation-local identity, addressed as a pair.
@@ -900,7 +922,19 @@ pub(crate) struct InteractionTicket {
 /// has been awaited.
 struct PublishedInteraction {
     ticket: InteractionTicket,
-    request: InteractionRequest,
+    request: Arc<InteractionRequest>,
+}
+impl PublishedInteraction {
+    fn route_header(&self) -> crate::runtime_client::snapshot::RuntimeClientInteractionHeader {
+        let mut header = crate::runtime_client::checkpoint::interaction_request_header(
+            &self.request,
+            InteractionSource::Primary,
+        );
+        // The control route names the Child-owned source; Parent never receives a full body mirror.
+        header.body = None;
+        header.body_complete = false;
+        header
+    }
 }
 
 impl core::fmt::Debug for InteractionTicket {
@@ -943,12 +977,18 @@ struct SettlementNotification {
     interaction_id: InteractionId,
     outcome: InteractionOutcome,
     audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
+    proof: PendingHeadProof,
 }
 
 impl SettlementNotification {
     fn complete(&mut self) {
         if let Some(observer) = self.observer.take() {
-            observer.on_settled(&self.interaction_id, &self.outcome, self.audit.as_ref());
+            observer.on_settled(
+                &self.interaction_id,
+                &self.outcome,
+                self.audit.as_ref(),
+                &self.proof,
+            );
         }
         // Release the publication admission only after the observation
         // callback has returned. No interaction callback can begin after
@@ -970,7 +1010,9 @@ impl Drop for WaiterPayload {
 }
 
 struct PendingInteraction {
-    request: InteractionRequest,
+    sequence: Option<u64>,
+    request: Arc<InteractionRequest>,
+    source: Arc<PendingInteractionSource>,
     /// The exact durable audit subject that was committed before this prompt
     /// was released. Response validation and the settled fact both resolve
     /// against it, so the live acceptance rule and the durable settlement rule
@@ -1107,7 +1149,43 @@ impl InteractionWaitCancellationGate {
 struct CoordinatorState {
     next_ordinal_by_attempt: BTreeMap<AttemptId, u64>,
     pending: BTreeMap<InteractionId, PendingInteraction>,
+    pending_order: BTreeMap<u64, InteractionId>,
+    next_pending_sequence: u64,
+    observation_generation: u64,
     provider_available: bool,
+}
+
+impl CoordinatorState {
+    fn observation_cut(&self) -> crate::runtime::identity::ObservationCollectionCut {
+        crate::runtime::identity::ObservationCollectionCut {
+            generation: self.observation_generation,
+            total: self.pending.len() as u64,
+        }
+    }
+    fn head_proof(&self) -> PendingHeadProof {
+        PendingHeadProof {
+            cut: self.observation_cut(),
+            head: self
+                .pending_order
+                .iter()
+                .take(if self.observation_generation == u64::MAX {
+                    0
+                } else {
+                    32
+                })
+                .map(|(sequence, id)| (*sequence, self.pending[id].source.clone()))
+                .collect(),
+            next_sequence: self.pending_order.keys().nth(32).copied(),
+        }
+    }
+    fn remove_pending(&mut self, id: &InteractionId) -> Option<PendingInteraction> {
+        let pending = self.pending.remove(id)?;
+        if let Some(sequence) = pending.sequence {
+            self.pending_order.remove(&sequence);
+        }
+        self.observation_generation = self.observation_generation.saturating_add(1);
+        Some(pending)
+    }
 }
 
 /// The one conversation-owned native interaction coordinator.
@@ -1432,7 +1510,9 @@ impl InteractionCoordinator {
         let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
         if let Some(route) = route
             && let Err(error) = route
-                .publish(InteractionRouteEvent::Requested(published.request.clone()))
+                .publish(InteractionRouteEvent::Requested(Box::new(
+                    published.route_header(),
+                )))
                 .await
         {
             // The requested fact already committed after the permit. A
@@ -1488,8 +1568,9 @@ impl InteractionCoordinator {
         };
         let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
         if let Some(route) = route
-            && let Err(error) =
-                route.try_publish(InteractionRouteEvent::Requested(published.request.clone()))
+            && let Err(error) = route.try_publish(InteractionRouteEvent::Requested(Box::new(
+                published.route_header(),
+            )))
         {
             self.abandon_after_control_failure(&published.request.id, cancellation);
             return Err(error.into());
@@ -1510,6 +1591,8 @@ impl InteractionCoordinator {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::Interaction,
         );
+        let source = PendingInteractionSource::new(request);
+        let request = source.request_arc();
         let id = request.id.clone();
         let published_request = request.clone();
         let (sender, receiver) = oneshot::channel();
@@ -1528,10 +1611,21 @@ impl InteractionCoordinator {
                         Utc::now(),
                     ))
                     .map_err(|_| InteractionFailure::PublicationFailed)?;
+                let sequence = (state.next_pending_sequence < 4_503_599_627_370_495)
+                    .then_some(state.next_pending_sequence);
+                if let Some(sequence) = sequence {
+                    state.next_pending_sequence = sequence + 1;
+                    state.pending_order.insert(sequence, id.clone());
+                } else {
+                    state.observation_generation = u64::MAX;
+                }
+                state.observation_generation = state.observation_generation.saturating_add(1);
                 let previous = state.pending.insert(
                     id.clone(),
                     PendingInteraction {
+                        sequence,
                         request,
+                        source: source.clone(),
                         subject,
                         cancellation: cancellation.clone(),
                         sender,
@@ -1543,9 +1637,10 @@ impl InteractionCoordinator {
                 // client can never be shown a request the pending map does not
                 // already own.
                 self.notify_pending(
-                    &state.pending[&id].request,
+                    &state.pending[&id].source,
                     &requested_audit,
                     requested_cursor,
+                    &state.head_proof(),
                 );
                 drop(state);
                 Ok(PublishedInteraction {
@@ -1896,13 +1991,12 @@ impl InteractionCoordinator {
     /// control loss before cancelling the enclosing attempt; preserve only the
     /// historical requested facts.
     pub(crate) fn abandon_after_parent_loss(&self) {
-        let pending = std::mem::take(
-            &mut self
-                .state
-                .lock()
-                .expect("interaction state poisoned")
-                .pending,
-        );
+        let pending = {
+            let mut state = self.state.lock().expect("interaction state poisoned");
+            state.pending_order.clear();
+            state.observation_generation = state.observation_generation.saturating_add(1);
+            std::mem::take(&mut state.pending)
+        };
         for (_, pending) in pending {
             let _ = pending.sender.send(Err(InteractionFailure::ControlLost));
         }
@@ -1915,13 +2009,88 @@ impl InteractionCoordinator {
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn pending_snapshot(&self) -> Vec<InteractionRequest> {
         let state = self.state.lock().expect("interaction state poisoned");
         state
             .pending
             .values()
-            .map(|pending| pending.request.clone())
+            .map(|pending| pending.request.as_ref().clone())
             .collect()
+    }
+
+    /// Captures the exact current immutable native authority; lookup does not read a body.
+    pub(crate) fn observation_source(
+        &self,
+        interaction: &InteractionRef,
+    ) -> Option<Arc<PendingInteractionSource>> {
+        if interaction.conversation_id != self.conversation_id {
+            return None;
+        }
+        self.state
+            .lock()
+            .expect("interaction state poisoned")
+            .pending
+            .get(&interaction.interaction_id)
+            .map(|pending| pending.source.clone())
+    }
+    pub(crate) fn observation_head(&self) -> PendingHeadProof {
+        self.state
+            .lock()
+            .expect("interaction state poisoned")
+            .head_proof()
+    }
+    /// Seeks the native admission index directly; every continuation advances.
+    pub(crate) fn observation_page(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<PendingHeadProof, crate::runtime::identity::ObservationCollectionReadError> {
+        if limit == 0 || limit > 32 {
+            return Err(
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid pending head bound",
+                ),
+            );
+        }
+        let state = self.state.lock().expect("interaction state poisoned");
+        cut.validate_current(state.observation_cut())?;
+        let start = after.map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded);
+        let next_sequence = state
+            .pending_order
+            .range((start, std::ops::Bound::Unbounded))
+            .nth(limit)
+            .map(|(sequence, _)| *sequence);
+        let head = state
+            .pending_order
+            .range((start, std::ops::Bound::Unbounded))
+            .take(limit)
+            .map(|(sequence, id)| (*sequence, state.pending[id].source.clone()))
+            .collect();
+        Ok(PendingHeadProof {
+            cut,
+            head,
+            next_sequence,
+        })
+    }
+
+    pub(crate) fn observation_source_at(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        sequence: u64,
+    ) -> Result<
+        Arc<PendingInteractionSource>,
+        crate::runtime::identity::ObservationCollectionReadError,
+    > {
+        let state = self.state.lock().expect("interaction state poisoned");
+        cut.validate_current(state.observation_cut())?;
+        let id = state.pending_order.get(&sequence).ok_or(
+            crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                "pending native source unavailable",
+            ),
+        )?;
+        Ok(state.pending[id].source.clone())
     }
 
     /// Returns the number of live pending interactions.
@@ -2022,8 +2191,7 @@ impl InteractionCoordinator {
         // one mutex-protected transition.  The losing response/cancellation
         // path cannot obtain a second sender or alter the winner.
         let pending = state
-            .pending
-            .remove(interaction_id)
+            .remove_pending(interaction_id)
             .expect("pending entry existed under the same lock");
         // Durable-before-release (Issue #109): the one terminal transition is
         // committed to the audit plane before the semantic waiter is notified
@@ -2074,6 +2242,7 @@ impl InteractionCoordinator {
                 interaction_id: interaction_id.clone(),
                 outcome,
                 audit: settled_audit,
+                proof: state.head_proof(),
             }),
         };
         drop(state);
@@ -2174,8 +2343,7 @@ impl InteractionCoordinator {
             .state
             .lock()
             .expect("interaction state poisoned")
-            .pending
-            .remove(interaction_id);
+            .remove_pending(interaction_id);
         let Some(pending) = pending else {
             return;
         };
@@ -2184,9 +2352,10 @@ impl InteractionCoordinator {
 
     fn notify_pending(
         &self,
-        request: &InteractionRequest,
+        source: &Arc<PendingInteractionSource>,
         audit: &RuntimeEventEnvelope,
         transcript_cursor: TranscriptCursor,
+        proof: &PendingHeadProof,
     ) {
         if let Some(observer) = self
             .observer
@@ -2194,7 +2363,7 @@ impl InteractionCoordinator {
             .expect("interaction observer poisoned")
             .as_ref()
         {
-            observer.on_pending(request, audit, transcript_cursor);
+            observer.on_pending(source, audit, transcript_cursor, proof);
         }
         #[cfg(test)]
         self.pending_published.notify_one();
@@ -2357,6 +2526,12 @@ mod tests {
     async fn durable_interaction_request_waits_for_native_publication_in_the_snapshot_cut() {
         use crate::durable::{ConversationStore, SqliteConversationStore};
         use crate::runtime::observation::{ConversationObservation, PendingObservations};
+        struct ReleaseCommit(Arc<crate::tools::background::test_sync::CommitBoundaryHook>);
+        impl Drop for ReleaseCommit {
+            fn drop(&mut self) {
+                self.0.proceed();
+            }
+        }
         struct Audit {
             store: Arc<SqliteConversationStore>,
             gate: Arc<crate::tools::background::test_sync::CommitBoundaryHook>,
@@ -2386,39 +2561,64 @@ mod tests {
                 self.store.commit_interaction_settled(event)
             }
         }
-        struct Observer(Arc<PendingObservations>);
+        struct Observer {
+            fanout: crate::runtime::observation::ObservationFanout,
+            store: Arc<SqliteConversationStore>,
+        }
+        impl Observer {
+            fn publish(&self, sequence: u64, observation: ConversationObservation) {
+                let observation = ConversationObservation::Published {
+                    journal_sequence: sequence,
+                    observation: Box::new(observation),
+                };
+                self.fanout.push(&observation);
+                observation.publish_journal_source(self.store.as_ref(), &self.fanout);
+            }
+        }
         impl InteractionObserver for Observer {
             fn on_pending(
                 &self,
-                request: &InteractionRequest,
+                source: &Arc<PendingInteractionSource>,
                 event: &RuntimeEventEnvelope,
                 cursor: TranscriptCursor,
+                _proof: &PendingHeadProof,
             ) {
-                self.0.push(ConversationObservation::InteractionPending {
-                    interaction: RoutedInteraction::primary(request.clone()),
-                    audit: Some((event.clone(), cursor)),
-                });
+                self.publish(
+                    event.sequence,
+                    ConversationObservation::InteractionPending {
+                        interaction: source.header().clone(),
+                        audit: Some((event.clone(), cursor)),
+                    },
+                );
             }
             fn on_settled(
                 &self,
                 id: &InteractionId,
                 outcome: &InteractionOutcome,
                 audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+                _proof: &PendingHeadProof,
             ) {
-                self.0.push(ConversationObservation::InteractionSettled {
-                    interaction: InteractionRef::new(
-                        ConversationId::new("conv_d4414864-5f68-7e4e-8937-dfb61ccc4692"),
-                        id.clone(),
-                    ),
-                    outcome: outcome.clone(),
-                    audit: audit.cloned(),
-                });
+                let (event, _) = audit.expect("the actual durable settlement receipt");
+                self.publish(
+                    event.sequence,
+                    ConversationObservation::InteractionSettled {
+                        interaction: InteractionRef::new(
+                            ConversationId::new("conv_d4414864-5f68-7e4e-8937-dfb61ccc4692"),
+                            id.clone(),
+                        ),
+                        outcome: outcome.clone(),
+                        audit: audit.cloned(),
+                    },
+                );
             }
         }
         let id = ConversationId::new("conv_d4414864-5f68-7e4e-8937-dfb61ccc4692");
         let store = Arc::new(SqliteConversationStore::in_memory(id.clone()).unwrap());
         let queue = Arc::new(PendingObservations::new());
-        assert_eq!(store.observe_journal(queue.clone()).unwrap(), 0);
+        let source: Arc<dyn ConversationStore> = store.clone();
+        let initial_journal = store.observe_journal(queue.clone()).unwrap();
+        assert_eq!(initial_journal, 0);
+        queue.bind_journal(&source, initial_journal);
         let gate = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
         let lifecycle = ConversationLifecycle::new();
         assert!(lifecycle.activate());
@@ -2430,7 +2630,10 @@ mod tests {
                 gate: gate.clone(),
             }),
         ));
-        coordinator.install_observer(Arc::new(Observer(queue.clone())));
+        coordinator.install_observer(Arc::new(Observer {
+            fanout: crate::runtime::observation::ObservationFanout::new(queue.clone()),
+            store: store.clone(),
+        }));
         coordinator.set_provider_available(true);
         let mut projection = crate::runtime_client::projection::RuntimeClientProjection::new(
             id,
@@ -2446,24 +2649,44 @@ mod tests {
             None,
             64,
         );
+        let before_source_cut = store.observation_read_cut().unwrap();
+        let _release_commit = ReleaseCommit(gate.clone());
         let (_, before_cursor, before_through) = projection.snapshot_cut().unwrap();
         let publisher = coordinator.clone();
         let task = tokio::task::spawn_blocking(move || {
             publish_questionnaire(&publisher, "interaction-attempt").unwrap()
         });
         gate.wait_entered();
-        assert!(queue.has_unpublished());
+        let committed_cut = store.observation_read_cut().unwrap();
+        assert_eq!(
+            committed_cut.read.journal,
+            before_source_cut.read.journal + 1
+        );
+        assert_eq!(
+            store
+                .observation_ready_frontier(
+                    before_source_cut.read.journal,
+                    committed_cut.read.journal
+                )
+                .unwrap(),
+            before_source_cut.read.journal,
+            "original J readiness waits for actual pending-owner installation"
+        );
         assert!(queue.drain().is_empty());
         let (before, cursor, through) = projection.snapshot_cut().unwrap();
         assert_eq!(cursor, before_cursor);
         assert_eq!(through, before_through);
         assert!(before.pending_interactions.is_empty());
         assert!(
-            crate::runtime_client::trace::TraceProjection::through(store.as_ref(), through)
-                .page(None, 32)
-                .unwrap()
-                .records
-                .is_empty()
+            crate::runtime_client::trace::TraceProjection::at_cut(
+                store.as_ref(),
+                &before_source_cut
+            )
+            .unwrap()
+            .page(None, 32)
+            .unwrap()
+            .records
+            .is_empty()
         );
         gate.proceed();
         let ticket = task.await.unwrap();
@@ -2472,10 +2695,16 @@ mod tests {
         }
         let (after, cursor, through) = projection.snapshot_cut().unwrap();
         assert!(cursor > before_cursor);
-        assert_eq!(after.pending_interactions[0].request.id, ticket.id);
-        let trace = crate::runtime_client::trace::TraceProjection::through(store.as_ref(), through)
-            .page(None, 32)
-            .unwrap();
+        assert_eq!(after.pending_interactions[0].request_id, ticket.id);
+        let published_source_cut = store.observation_read_cut().unwrap();
+        assert_eq!(published_source_cut.read.journal, through);
+        let trace = crate::runtime_client::trace::TraceProjection::at_cut(
+            store.as_ref(),
+            &published_source_cut,
+        )
+        .unwrap()
+        .page(None, 32)
+        .unwrap();
         assert_eq!(trace.records.len(), 1);
         assert_eq!(
             trace.records[0].native_id.as_deref(),
@@ -2503,6 +2732,84 @@ mod tests {
                 .pending_interactions
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn t14_t18_pending_source_errors_distinguish_invalid_range_expiry_and_unavailability() {
+        use crate::runtime::identity::{ObservationCollectionCut, ObservationCollectionReadError};
+        let (owner, _audit) = audited_coordinator();
+        let cut = owner.observation_head().cut;
+        assert!(matches!(
+            owner.observation_page(cut, None, 0),
+            Err(ObservationCollectionReadError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            owner.observation_source_at(cut, 0),
+            Err(ObservationCollectionReadError::Unavailable(_))
+        ));
+        assert!(matches!(
+            owner.observation_page(
+                ObservationCollectionCut {
+                    generation: cut.generation + 1,
+                    ..cut
+                },
+                None,
+                1
+            ),
+            Err(ObservationCollectionReadError::CutExpired)
+        ));
+        owner.state.lock().unwrap().observation_generation = u64::MAX;
+        assert!(matches!(
+            owner.observation_page(owner.observation_head().cut, None, 1),
+            Err(ObservationCollectionReadError::Unavailable(_))
+        ));
+    }
+
+    #[test]
+    fn t15_t20_pending_native_head_pages_seek_sparse_sequences_and_fence_mutations() {
+        let (owner, _audit) = audited_coordinator();
+        owner.set_provider_available(true);
+        let tickets = (0..73)
+            .map(|index| publish(&owner, "head-page-attempt", &format!("head-{index}")).unwrap())
+            .collect::<Vec<_>>();
+        let first = owner.observation_head();
+        assert_eq!(first.cut.total, 73);
+        assert_eq!(first.head.len(), 32);
+        assert_eq!(first.next_sequence, Some(32));
+        let second = owner
+            .observation_page(first.cut, Some(first.head.last().unwrap().0), 32)
+            .unwrap();
+        assert_eq!(second.head.first().unwrap().0, 32);
+        assert_eq!(second.next_sequence, Some(64));
+        let third = owner
+            .observation_page(first.cut, Some(second.head.last().unwrap().0), 32)
+            .unwrap();
+        assert_eq!(third.head.len(), 9);
+        assert_eq!(third.next_sequence, None);
+        let selected = owner.observation_source_at(first.cut, 70).unwrap();
+        assert_eq!(selected.id(), &tickets[70].id);
+        owner
+            .cancel(&tickets[0].id, CancellationReason::UserRequested)
+            .unwrap();
+        assert!(owner.observation_page(first.cut, None, 32).is_err());
+        assert!(owner.observation_source_at(first.cut, 70).is_err());
+        let changed = owner.observation_head();
+        assert_eq!(changed.cut.total, 72);
+        assert_eq!(changed.head.len(), 32);
+        assert_eq!(changed.head.first().unwrap().0, 1);
+        assert_eq!(changed.head.last().unwrap().0, 32);
+        assert!(Arc::ptr_eq(
+            &selected,
+            &owner.observation_source_at(changed.cut, 70).unwrap()
+        ));
+        // Logical settlement retires only its original source; unrelated native
+        // sources stay authoritative despite projection head eviction.
+        assert!(
+            owner
+                .observation_source(&selected.request().interaction_ref())
+                .is_some()
+        );
+        drop(tickets);
     }
 
     fn facts(call: &str) -> ApprovalFacts {
@@ -2634,10 +2941,12 @@ mod tests {
     impl InteractionObserver for RecordingObserver {
         fn on_pending(
             &self,
-            request: &InteractionRequest,
+            source: &Arc<PendingInteractionSource>,
             _audit: &RuntimeEventEnvelope,
             _transcript_cursor: TranscriptCursor,
+            _proof: &PendingHeadProof,
         ) {
+            let request = source.request();
             self.pending.lock().unwrap().push(request.clone());
         }
 
@@ -2646,6 +2955,7 @@ mod tests {
             id: &InteractionId,
             outcome: &InteractionOutcome,
             _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+            _proof: &PendingHeadProof,
         ) {
             self.settled
                 .lock()
@@ -2808,10 +3118,12 @@ mod tests {
     impl InteractionObserver for PendingIdObserver {
         fn on_pending(
             &self,
-            request: &InteractionRequest,
+            source: &Arc<PendingInteractionSource>,
             _audit: &RuntimeEventEnvelope,
             _transcript_cursor: TranscriptCursor,
+            _proof: &PendingHeadProof,
         ) {
+            let request = source.request();
             if let Some(sender) = self.sender.lock().unwrap().take() {
                 let _ = sender.send(request.id.clone());
             }
@@ -2822,6 +3134,7 @@ mod tests {
             _id: &InteractionId,
             _outcome: &InteractionOutcome,
             _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+            _proof: &PendingHeadProof,
         ) {
         }
     }
@@ -3360,36 +3673,45 @@ mod tests {
         for _ in 0..2 {
             match route_rx.recv().await.expect("routed request") {
                 InteractionRouteEvent::Requested(request) => requested.push(request),
-                other @ InteractionRouteEvent::Settled { .. } => {
+                other @ (InteractionRouteEvent::Settled { .. }
+                | InteractionRouteEvent::Removed { .. }) => {
                     panic!("expected requested route event, got {other:?}")
                 }
             }
         }
         assert_eq!(requested.len(), 2);
-        assert!(
-            requested
-                .iter()
-                .any(|request| { matches!(&request.kind, InteractionKind::Approval { .. }) })
-        );
-        assert!(
-            requested
-                .iter()
-                .any(|request| { matches!(&request.kind, InteractionKind::Questionnaire { .. }) })
-        );
+        assert!(requested.iter().any(|request| {
+            matches!(
+                &request.kind,
+                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Approval
+            )
+        }));
+        assert!(requested.iter().any(|request| {
+            matches!(
+                &request.kind,
+                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+            )
+        }));
 
         // Deliberately answer in reverse publication order. The full local
         // identity addresses the coordinator entry; no focus or array order
         // participates in routing.
         for request in requested.iter().rev() {
             let response = match &request.kind {
-                InteractionKind::Approval { .. } => InteractionResponse::Approval {
-                    decision: ApprovalDecision::Allow,
-                },
-                InteractionKind::Questionnaire { .. } => single_response(0),
-                InteractionKind::Review { .. } => panic!("this fixture has no Review"),
+                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Approval => {
+                    InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    }
+                }
+                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire => {
+                    single_response(0)
+                }
+                crate::runtime_client::snapshot::RuntimeClientInteractionKind::Review => {
+                    panic!("this fixture has no Review")
+                }
             };
             coordinator
-                .respond_async(&request.id, response)
+                .respond_async(&request.request_id, response)
                 .await
                 .expect("owner accepts its typed response");
         }
@@ -3401,14 +3723,15 @@ mod tests {
                     interaction,
                     outcome,
                 } => settled.push((interaction, outcome)),
-                other @ InteractionRouteEvent::Requested(_) => {
+                other @ (InteractionRouteEvent::Requested(_)
+                | InteractionRouteEvent::Removed { .. }) => {
                     panic!("expected settled route event, got {other:?}")
                 }
             }
         }
         let requested_refs: std::collections::BTreeSet<_> = requested
             .iter()
-            .map(InteractionRequest::interaction_ref)
+            .map(|request| request.interaction.clone())
             .collect();
         let settled_refs: std::collections::BTreeSet<_> = settled
             .iter()
@@ -3452,10 +3775,10 @@ mod tests {
         for request in requested {
             assert_eq!(
                 coordinator
-                    .respond_async(&request.id, single_response(0))
+                    .respond_async(&request.request_id, single_response(0))
                     .await,
                 Err(InteractionError::NotPending {
-                    interaction_id: request.id,
+                    interaction_id: request.request_id,
                 })
             );
         }
@@ -3558,7 +3881,7 @@ mod tests {
         let InteractionRouteEvent::Requested(requested) = requested else {
             panic!("the first route event must be InteractionRequested");
         };
-        let interaction_id = requested.id.clone();
+        let interaction_id = requested.request_id.clone();
         fail_settlement.store(true, Ordering::SeqCst);
 
         assert_eq!(
@@ -3872,10 +4195,12 @@ mod tests {
         impl InteractionObserver for StateObserver {
             fn on_pending(
                 &self,
-                _request: &InteractionRequest,
+                source: &Arc<PendingInteractionSource>,
                 _audit: &RuntimeEventEnvelope,
                 _transcript_cursor: TranscriptCursor,
+                _proof: &PendingHeadProof,
             ) {
+                let _request = source.request();
             }
 
             fn on_settled(
@@ -3883,6 +4208,7 @@ mod tests {
                 _interaction_id: &InteractionId,
                 _outcome: &InteractionOutcome,
                 _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+                _proof: &PendingHeadProof,
             ) {
                 self.settled
                     .lock()
@@ -4020,10 +4346,12 @@ mod tests {
         impl InteractionObserver for AuditAtPrompt {
             fn on_pending(
                 &self,
-                _request: &InteractionRequest,
+                source: &Arc<PendingInteractionSource>,
                 _audit: &RuntimeEventEnvelope,
                 _transcript_cursor: TranscriptCursor,
+                _proof: &PendingHeadProof,
             ) {
+                let _request = source.request();
                 *self.seen.lock().unwrap() = self.audit.events();
             }
             fn on_settled(
@@ -4031,6 +4359,7 @@ mod tests {
                 _id: &InteractionId,
                 _outcome: &InteractionOutcome,
                 _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+                _proof: &PendingHeadProof,
             ) {
             }
         }

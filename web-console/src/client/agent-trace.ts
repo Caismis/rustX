@@ -1,7 +1,7 @@
-import type { TraceToolLocator } from '../../../protocol/app-server/v46';
+import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v48';
 import type { AppServerClient } from './app-server';
 import type { Observation } from './session-lifecycle/port';
-import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
+import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';
 
 /** One child Conversation's finite, read-only Trace domain. Parent attachment
  * is the access proof, not the identity of the records being inspected. */
@@ -13,7 +13,23 @@ export class AgentTraceReader {
   private dirty = false;
   private paging?: object;
   private navigation = {};
-  constructor(private client: AppServerClient, private sessionId: string, private proof: Observation, private agentId: string) {}
+  constructor(private client: AppServerClient, private sessionId: string, private proof: Observation, private scope:Pick<RuntimeClientAgent,'agent_id'|'activation_id'|'child_conversation_id'|'state'>) {}
+  private get agentId(){return this.scope.agent_id;}
+  private validateCut(cut:CheckpointReadCut){
+    const activation=this.scope.activation_id;
+    if(!this.current()||cut.conversation_id!==this.scope.child_conversation_id||(cut.activation_id??null)!==activation)throw new Error('Child Trace field scope was replaced.');
+  }
+  private fieldReader?:TraceFieldReader;
+  private get fields():TraceFieldReader {
+    if(this.fieldReader)return this.fieldReader;
+    const valid=(cut:CheckpointReadCut,owns:()=>boolean)=>{this.validateCut(cut);if(!owns())throw new Error('Child Trace view was replaced.');};
+    return this.fieldReader={
+      value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointValueRead',params:{target:this.proof.target,agent_id:this.agentId,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>this.current()&&owns());valid(cut,owns);return result.chunk;},
+      page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointPage',params:{target:this.proof.target,agent_id:this.agentId,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>this.current()&&owns());valid(cut,owns);return result.page;},
+      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source changed.');return this.client.readContent(this.proof.target,this.agentId,reference,offset,()=>this.current()&&owns());},
+    };
+  }
+  private pageCut(page:TraceCache['page']){const cut=standaloneTraceCut(page,this.scope.child_conversation_id,this.scope.activation_id);this.validateCut(cut);}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.cache;
   private current = () => this.live && this.client.isAttachmentObservationCurrent(this.sessionId, this.proof);
@@ -29,11 +45,16 @@ export class AgentTraceReader {
         this.dirty = false;
         const navigation = this.navigation;
         try {
-          const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, limit: TRACE_PAGE_SIZE, records: traceInterests(this.cache) } }, 'trace', undefined, this.current);
-          if (this.current() && this.navigation === navigation) {
-            const next = refreshTrace(this.cache, result.page, result.page.updates);
-            if (next.epoch !== this.cache.epoch) this.paging = undefined;
-            this.publish({ ...next, error: undefined, loading: !!this.paging });
+          const batches=traceInterestBatches(this.cache);
+          for(const [index,records] of batches.entries()) {
+            if(!this.current()||this.navigation!==navigation)break;
+            const result=await this.client.request({method:'agent/trace',params:{target:this.proof.target,agent_id:this.agentId,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,()=>this.current()&&this.navigation===navigation);
+            if(this.current()&&this.navigation===navigation) {
+              this.pageCut(result.page);
+              const next=refreshTrace(this.cache,result.page,result.page.updates,undefined,index>0);
+              if(next.epoch!==this.cache.epoch)this.paging=undefined;
+              this.publish({...next,fields:this.fields,error:undefined,loading:!!this.paging});
+            }
           }
         } catch (cause) {
           if (this.current() && this.navigation === navigation) this.publish({ ...this.cache, error: String(cause), loading: !!this.paging });
@@ -53,7 +74,8 @@ export class AgentTraceReader {
     const result = await this.client.request({ method: 'agent/traceLocateTool', params: { target: this.proof.target, agent_id: this.agentId, locator } }, 'trace_tool_location', undefined, current);
     if (!current()) return false;
     if (!result.location) throw new Error('This tool occurrence has no native execution record.');
-    const cache = replaceTrace(result.location.page, this.cache);
+    this.pageCut(result.location.page);
+    const cache = {...replaceTrace(result.location.page, this.cache),fields:this.fields};
     const repaired = refreshTrace({ ...cache, located: true }, result.location.page, result.location.page.updates);
     this.publish(selectTrace(repaired, result.location.record_id));
     return true;
@@ -73,18 +95,21 @@ export class AgentTraceReader {
     this.publish({ ...cache, loading: true, error: undefined });
     try {
       const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
-      if (current()) { this.paging = undefined; this.publish(prependTrace(this.cache, result.page)); await this.refresh(); }
+      if (current()) { this.pageCut(result.page);this.paging = undefined; this.publish(prependTrace(this.cache, result.page)); await this.refresh(); }
     } catch (cause) { if (current()) this.publish({ ...this.cache, loading: false, error: String(cause) }); }
     finally { if (this.paging === operation) this.paging = undefined; }
   };
   detail = async (id: string) => {
-    if (!this.current() || this.cache.details[id]?.loading || this.cache.details[id]?.detail) return;
+    if (!this.current() || this.cache.details[id]?.loading || this.cache.details[id]?.detail || this.cache.details[id]?.page) return;
     const pending = beginTraceDetail(this.cache, id), epoch = pending.epoch;
     const current = () => this.current() && this.cache.epoch === epoch && this.cache.details[id] === pending.details[id];
     this.publish(pending);
     try {
-      const result = await this.client.request({ method: 'agent/traceDetail', params: { target: this.proof.target, agent_id: this.agentId, record_id: id } }, 'trace_detail', undefined, current);
-      if (current()) this.publish(completeTraceDetail(this.cache, id, epoch, result.detail ?? undefined));
+      const result = await this.client.request({ method: 'agent/traceDetail', params: { target: this.proof.target, agent_id: this.agentId, record_id: id } }, 'domain_page', undefined, current);
+      const detail=inlineTraceDetail(result.page,id),page=retainedTraceDetailPage(result.page,id);
+      if(page)this.validateCut(page.read_cut);
+      const reader=page?bindTraceDetailReader(this.fields,page,()=>this.current()&&this.cache.epoch===epoch&&this.cache.details[id]?.page===page):undefined;
+      if (current()) this.publish(completeTraceDetail(this.cache,id,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.client.readContent(this.proof.target,this.agentId,ref,offset,()=>ownsView()&&this.current()&&this.cache.epoch===epoch),page,reader));
     } catch (cause) { if (current()) this.publish(completeTraceDetail(this.cache, id, epoch, undefined, String(cause))); }
   };
 }

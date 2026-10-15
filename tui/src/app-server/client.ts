@@ -43,6 +43,7 @@ import { transferUpload } from '../../../protocol/app-server/upload.ts';
  * never to resend.
  */
 
+import { retainSource, sourceKey } from "../presentation/source-repairs.ts";
 import { decodeProtocolMessage } from "../protocol/decoder.ts";
 
 import {
@@ -58,7 +59,7 @@ import {
   type MethodResult,
   type Notification,
   type PresentationCapabilities,
-  type RequestId,
+  type AppServerRequestId,
   type ResultOf,
   type ResultType,
   type RpcError,
@@ -71,7 +72,11 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 46;
+export const APP_SERVER_PROTOCOL_VERSION = 48;
+
+/** Notifications retained before the first subscription; level-triggered
+ * owners re-announce or reread anything beyond this. */
+const UNROUTED_NOTIFICATIONS = 64;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -114,8 +119,9 @@ export class AppServerRequestError extends Error {
  * A side-effecting request whose response was lost with the connection.
  *
  * The request may have been accepted, executed and committed. This client will
- * not resend it and will not report it as failed; the caller's only sound move
- * is to read authoritative state after reconnecting.
+ * not resend it and will not report it as failed. Readback after reconnecting
+ * restores the current projection, but does not establish this request's outcome:
+ * native work can survive its waiter and commit after the readback.
  */
 export class UncertainOutcomeError extends Error {
   readonly method: MethodName;
@@ -139,9 +145,15 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/switchNode": "side_effecting",
   "session/transcript": "read",
   "session/history": "read",
+  "session/historyContentRead": "read",
+  "session/historyPage": "read",
+  "session/historyValueRead": "read",
   "session/statistics": "read",
   "session/traceHistory": "read",
   "session/traceHistoryDetail": "read",
+  "session/tracePage": "read",
+  "session/traceValueRead": "read",
+  "session/traceContentRead": "read",
   "session/turns": "read",
   "agent/transcript": "read",
   "agent/turns": "read",
@@ -164,12 +176,15 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/uploadPrepare": "side_effecting",
   "session/uploadStatus": "read",
   "configuration/sourcesRead": "read",
-  "mcp/probe": "side_effecting",
+  "mcp/probe": "read",
   "session/effectiveConfiguration": "read",
+  "session/effectiveConfigurationValueRead": "read",
+  "session/effectiveConfigurationPage": "read",
   "configuration/sourceWrite": "side_effecting",
   "session/model": "read",
   "session/models": "read",
   "session/setModel": "side_effecting",
+  "session/selectModel": "side_effecting",
   "resources/read": "read",
   "context/compact": "side_effecting",
   "goal/control": "side_effecting",
@@ -177,14 +192,15 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "job/list": "read",
   "job/wait": "read",
   "agent/list": "read",
-  "agent/conversation": "read",
-  "agent/conversationCancel": "connection_local",
+  "agent/observe": "read",
+  "agent/observeCancel": "connection_local",
   "agent/artifactRead": "read",
   "agent/deliveryRead": "read",
   "agent/deliveryLocate": "read",
   "agent/sendMessage": "side_effecting",
-  // A retry could capture a later activation, so a lost wait is never replayed.
-  "agent/wait": "side_effecting",
+  // Waiting observes its captured activation; a lost response cannot mutate it.
+  // The client never automatically retries reads or mutations.
+  "agent/wait": "read",
   "job/cancel": "side_effecting",
   "agent/status": "read",
   "agent/interrupt": "side_effecting",
@@ -201,6 +217,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/name": "side_effecting",
   "session/tree": "read",
   "session/node": "read",
+  "session/nodeValueRead": "read",
+  "session/nodeOriginHistory": "read",
   "session/boundaries": "read",
   "session/fork": "side_effecting",
   "session/branch": "side_effecting",
@@ -209,7 +227,14 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/recoverDeletion": "side_effecting",
   "session/attach": "side_effecting",
   "session/detach": "side_effecting",
-  "session/snapshot": "read",
+  "session/checkpoint": "read",
+  "configuration/sourceValueRead": "read",
+  "configuration/sourcePage": "read",
+  "session/attachmentStatus": "read",
+  "session/editorRead": "read",
+  "conversation/contentRead": "read",
+  "conversation/checkpointPage": "read",
+  "conversation/checkpointValueRead": "read",
   "session/subscribe": "connection_local",
   "turn/start": "side_effecting",
   "turn/steer": "side_effecting",
@@ -219,7 +244,9 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "interaction/respond": "side_effecting",
   "interaction/cancel": "side_effecting",
   "session/settings": "read",
+  "session/settingsValueRead": "read",
   "session/configuration": "read",
+  "session/configurationValueRead": "read",
   "configuration/reconcile": "side_effecting",
   "session/adoptConfiguration": "side_effecting",
 } satisfies Record<MethodName, ResponseLossClass>);
@@ -230,6 +257,7 @@ export type DeliveryMethod = "delivery/read" | "delivery/locate";
 interface PendingRequest {
   readonly method: MethodName;
   readonly expect: ResultType;
+  readonly lossClass: ResponseLossClass;
   resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
 }
@@ -246,15 +274,12 @@ interface PendingRequest {
  * ordinary requests can stop a delivery's cancellation from reaching the
  * server. Cancellations wait for it in order, at most one per in-flight
  * delivery request; the server answers each at once, without awaiting work. */
-const REQUEST_CAPACITY = { wait: 4, admission: 2, control: 2, rpc: 7, cancel: 1 } as const;
+const REQUEST_CAPACITY = { observation: 8, rpc: 6, control: 2 } as const;
 function requestLane(method: MethodName): keyof typeof REQUEST_CAPACITY {
   switch (method) {
-    case "mcp/probe": case "agent/wait": case "job/wait": return "wait";
-    case "agent/sendMessage": return "admission";
-    case "agent/interrupt": case "job/cancel": case "turn/cancel":
-    case "interaction/respond": case "interaction/cancel": return "control";
-    case "delivery/cancel": return "cancel";
-    default: return "rpc";
+    case 'agent/observe': return 'observation';
+    case 'agent/observeCancel': case 'delivery/cancel': case 'turn/cancel': case 'agent/interrupt': case 'job/cancel': case 'session/detach': case 'interaction/cancel': return 'control';
+    default: return 'rpc';
   }
 }
 
@@ -271,15 +296,36 @@ export class AppServerClient {
   uploadCarrier = transferUpload;
   uploadEndpoint?: string;
   readonly #transport: AppServerTransport;
-  readonly #pending = new Map<RequestId, PendingRequest>();
+  readonly #pending = new Map<AppServerRequestId, PendingRequest>();
   /** Aborted delivery requests whose cancellation awaits the cancel slot, in
    * abort order. An entry leaves when its cancel is sent or its request
    * settles, so this never outgrows the in-flight delivery requests. */
-  readonly #cancels = new Set<RequestId>();
+  readonly #cancels = new Set<AppServerRequestId>();
   readonly #notificationListeners = new Set<NotificationListener>();
+  /**
+   * Notifications that arrived before anything subscribed, replayed to the
+   * first subscriber. A server may notify right after `initialize` answers,
+   * before the composition root has built the host that routes notifications;
+   * that gap must not lose a level-triggered notice. Finite, and retired by
+   * the first subscription.
+   *
+   * Source repair observations are kept apart, coalesced to the latest one
+   * per source — a withdrawal included — so no amount of unrelated traffic
+   * crowds them out. The server advances its per-source delivery cursor as
+   * it sends one and never sends it again, so a dropped observation would be
+   * lost for good; the latest per source is all a subscriber needs. Bounded
+   * by `retainSource`: the least recently observed Workspace goes beyond 64,
+   * as the native ledger forgets it; the User never does. A source dropped
+   * here was never observed by a subscriber, so nothing it held can go stale.
+   */
+  #unrouted: { notifications: Notification[]; sourceRepairs: Map<string, Notification> } | undefined = {
+    notifications: [],
+    sourceRepairs: new Map(),
+  };
   readonly #closeListeners = new Set<CloseListener>();
-  #nextRequestId = 1;
+  #nextAppServerRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
+  #authorityId = "";
   #closed: TransportClosedError | undefined;
 
   private constructor(transport: AppServerTransport) {
@@ -299,19 +345,29 @@ export class AppServerClient {
     options: AppServerClientOptions,
   ): Promise<AppServerClient> {
     const client = new AppServerClient(options.transport);
-    const initialized = await client.call("initialize", {
-      protocol_version: APP_SERVER_PROTOCOL_VERSION,
-      client: options.identity ?? CLIENT_IDENTITY,
-      presentation: options.presentation ?? PRESENTATION_CAPABILITIES,
-    }, "initialized");
-    if (initialized.protocol_version !== APP_SERVER_PROTOCOL_VERSION) {
-      throw new Error(
-        `the App Server negotiated protocol ${initialized.protocol_version}, this client speaks ${APP_SERVER_PROTOCOL_VERSION}`,
-      );
+    try {
+      const initialized = await client.call("initialize", {
+        protocol_version: APP_SERVER_PROTOCOL_VERSION,
+        client: options.identity ?? CLIENT_IDENTITY,
+        presentation: options.presentation ?? PRESENTATION_CAPABILITIES,
+      }, "initialized");
+      if (initialized.protocol_version !== APP_SERVER_PROTOCOL_VERSION) {
+        throw new Error(
+          `the App Server negotiated protocol ${initialized.protocol_version}, this client speaks ${APP_SERVER_PROTOCOL_VERSION}`,
+        );
+      }
+      if (!initialized.authority_id) throw new Error("The App Server supplied no process authority identity.");
+      client.#capabilities = initialized.capabilities;
+      client.#authorityId = initialized.authority_id;
+    } catch (error) {
+      await client.close();
+      throw error;
     }
-    client.#capabilities = initialized.capabilities;
     return client;
   }
+
+  /** Process authority namespaces Runtime incarnations across restarts. */
+  get authorityId(): string { return this.#authorityId; }
 
   /** The server capabilities advertised at initialization. */
   get capabilities(): ServerCapabilities | undefined {
@@ -371,6 +427,10 @@ export class AppServerClient {
    * cancel breaks this contract and ends the connection, which settles the
    * request with that terminal failure.
    */
+  async observe(params: MethodParams<'agent/observe'>, signal: AbortSignal): Promise<ResultOf<'agent_observe'>> {
+    return await this.#request('agent/observe', params, 'agent_observe', signal) as ResultOf<'agent_observe'>;
+  }
+
   async callDelivery<M extends DeliveryMethod, T extends ResultType>(
     method: M,
     params: MethodParams<M>,
@@ -384,6 +444,20 @@ export class AppServerClient {
   /** Subscribes to server notifications. Returns an unsubscribe function. */
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
+    // The first subscriber drains the buffer before anything is dispatched
+    // to it directly: a notification arriving during the replay — a newer
+    // observation of a source already buffered included — joins the buffer
+    // and is replayed after everything older, so the handoff never delivers
+    // an older observation after a newer one, and never drops or repeats one.
+    const unrouted = this.#unrouted;
+    if (unrouted !== undefined) {
+      for (;;) {
+        const next = unrouted.notifications.shift() ?? first(unrouted.sourceRepairs);
+        if (next === undefined) break;
+        listener(next);
+      }
+      this.#unrouted = undefined;
+    }
     return () => this.#notificationListeners.delete(listener);
   }
 
@@ -421,8 +495,8 @@ export class AppServerClient {
       return Promise.reject(new Error(`Client ${lane} capacity reached. Request not sent; inspect current operations before retrying.`));
     }
 
-    const id = this.#nextRequestId;
-    this.#nextRequestId += 1;
+    const id = this.#nextAppServerRequestId;
+    this.#nextAppServerRequestId += 1;
 
     return new Promise<MethodResult>((resolve, reject) => {
       const cancel = () => {
@@ -434,11 +508,12 @@ export class AppServerClient {
         signal?.removeEventListener("abort", cancel);
         this.#cancels.delete(id);
         // A settled cancel frees the slot for the next waiting one.
-        if (method === "delivery/cancel") this.#sendCancel();
+        if (requestLane(method) === "control") this.#sendCancel();
       };
       this.#pending.set(id, {
         method,
         expect,
+        lossClass: method==='goal/control' && (params as {control?:{action?:unknown}})?.control?.action==='show' ? 'read' : METHOD_RESPONSE_LOSS_CLASS[method],
         resolve: (result) => { release(); resolve(result); },
         reject: (error) => { release(); reject(error); },
       });
@@ -460,11 +535,12 @@ export class AppServerClient {
    * answer is not the outcome — the delivery request's own terminal response
    * is — but a refusal means the server dropped a cancellation it owed. */
   #sendCancel(): void {
-    if (this.#closed !== undefined || this.#occupied("cancel") >= REQUEST_CAPACITY.cancel) return;
+    if (this.#closed !== undefined || this.#occupied("control") >= REQUEST_CAPACITY.control) return;
     const [id] = this.#cancels;
     if (id === undefined) return;
     this.#cancels.delete(id);
-    this.#request("delivery/cancel", { request_id: id }, "delivery_cancel").catch((error: unknown) => {
+    const observing = this.#pending.get(id)?.method === 'agent/observe';
+    this.#request(observing ? 'agent/observeCancel' : 'delivery/cancel', { request_id: id }, observing ? 'agent_observe_cancelled' : 'delivery_cancel').catch((error: unknown) => {
       if (error instanceof AppServerRequestError) {
         this.#fail(`the App Server refused delivery/cancel for request ${String(id)}: ${error.message}`);
       }
@@ -479,11 +555,19 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v46 protocol message");
+      this.#fail("invalid App Server v48 protocol message");
       return;
     }
 
     if (isNotification(record)) {
+      if (this.#unrouted !== undefined) {
+        if (record.method === "configuration/sourceRepairChanged") {
+          retainSource(this.#unrouted.sourceRepairs, sourceKey(record.params.target), record);
+        } else if (this.#unrouted.notifications.length < UNROUTED_NOTIFICATIONS) {
+          this.#unrouted.notifications.push(record);
+        }
+        return;
+      }
       for (const listener of [...this.#notificationListeners]) {
         listener(record);
       }
@@ -548,7 +632,7 @@ export class AppServerClient {
     this.#pending.clear();
     for (const request of pending) {
       request.reject(
-        METHOD_RESPONSE_LOSS_CLASS[request.method] === "side_effecting"
+        request.lossClass === "side_effecting"
           ? new UncertainOutcomeError(request.method, error)
           : error,
       );
@@ -575,6 +659,15 @@ export function isDeliveryCancelled(error: unknown): boolean {
 /** Whether a side-effecting request's outcome is genuinely unknown. */
 export function isUncertainOutcome(error: unknown): boolean {
   return error instanceof UncertainOutcomeError;
+}
+
+/** Removes and returns the oldest entry of `entries`, if any. */
+function first<V>(entries: Map<string, V>): V | undefined {
+  for (const [key, value] of entries) {
+    entries.delete(key);
+    return value;
+  }
+  return undefined;
 }
 
 /** Whether the server asked for an authoritative projection repair. */

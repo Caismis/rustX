@@ -1,9 +1,11 @@
+import { canonicalLocatorKey } from '../../../protocol/app-server/content-identity';
+import type { CanonicalContentLocator } from '../../../protocol/app-server/v48';
 import { sameSessionFile } from '../../shared/session-file-identity.ts';
 import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
 import { sameTarget } from './app-server';
 import { ArtifactResources, isTextMime, safeArtifactMime } from './artifacts';
-import type { SessionFileReference } from '../../../protocol/app-server/v46';
+import type { SessionFileReference } from '../../../protocol/app-server/v48';
 import type { ProductHostWorkspaces } from '../workspaces/host';
 import { settlementFailureKind } from '../workspaces/host';
 import type { WorkspaceAuthority } from '../workspaces/authority';
@@ -14,14 +16,15 @@ export const SESSION_FILE_MAX_BASE64 = Math.ceil(SESSION_FILE_MAX_BYTES / 3) * 4
 export const SESSION_FILE_MAX_TRANSFERS = 2;
 export const SESSION_FILE_MAX_URLS = PREVIEW_POLICY.urls;
 export const FILE_RENDER_MAX_BYTES = 512 * 1024;
-export type PreviewSource = { kind: 'artifact'; id: string; agentId?: string } | { kind: 'session_file'; messageId: string; index: number; file: SessionFileReference; agentId?: string };
+export type PreviewSource = { kind: 'artifact'; id: string; agentId?: string } | { kind: 'session_file'; conversationId:string; owned?:()=>boolean; locator: CanonicalContentLocator; index: number; file: SessionFileReference; agentId?: string };
 export type LoadedFile = { url: string; bytes?: Uint8Array<ArrayBuffer>; text?: string; error?: string };
 
 /** Equality within a compatible Session scope; never a permission to read. */
 export function samePreviewSource(left: PreviewSource, right: PreviewSource): boolean {
   if (left.agentId !== right.agentId) return false;
+  if(left.kind==='session_file'&&right.kind==='session_file'&&left.agentId!=null&&left.owned!==right.owned)return false;
   if (left.kind === 'artifact') return right.kind === 'artifact' && left.id === right.id;
-  return right.kind === 'session_file' && left.messageId === right.messageId && left.index === right.index
+  return right.kind === 'session_file' && left.conversationId===right.conversationId && canonicalLocatorKey(left.locator) === canonicalLocatorKey(right.locator) && left.index === right.index
     && sameSessionFile(left.file, right.file);
 }
 
@@ -125,18 +128,21 @@ export class FilePreviewCoordinator {
     this.views.delete(lease);
     if (this.downloadLease === lease) this.downloadLease = undefined;
   }
+  sourceCurrent(source:PreviewSource):boolean {
+    return this.current()&&(source.kind==='artifact'||(!source.owned||source.owned())&&(source.agentId!=null?source.owned!=null:source.conversationId===this.target.conversation_id));
+  }
   async read(source: PreviewSource, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
-    if (!this.current() || signal.aborted) throw new Error('Obsolete file view');
+    if (!this.sourceCurrent(source) || signal.aborted) throw new Error('Obsolete file view');
     // Public artifact/read owns its separate ArtifactResources transfer budget;
     // it never acquires the Product Host private native read capacity.
     if (source.kind === 'artifact') return this.artifacts.readBytes(source.id, signal, source.agentId);
     return this.demand.privateReads.run(signal, async () => {
-      if (!this.current() || signal.aborted) throw new Error('Obsolete file view');
+      if (!this.sourceCurrent(source) || signal.aborted) throw new Error('Obsolete file view');
       if (!this.host.readDelivery) throw new Error('Product Host file mapping unavailable');
       const observation = this.authority.capture();
       if (!observation) throw new Error('Product Host authority unavailable');
-      const result = await this.host.readDelivery(observation.scope, { target: this.target, message_id: source.messageId, delivery_index: source.index, agent_id: source.agentId }, signal);
-      if (!this.current() || signal.aborted || !observation.current()) throw new Error('Obsolete file response');
+      const result = await this.host.readDelivery(observation.scope, { target: this.target, locator: source.locator, delivery_index: source.index, agent_id: source.agentId }, signal);
+      if (!this.sourceCurrent(source) || signal.aborted || !observation.current()) throw new Error('Obsolete file response');
       if (!sameSessionFile(result.file, source.file)) throw new Error('Delivery identity changed');
       if (result.data.length > SESSION_FILE_MAX_BASE64) throw new Error('Session file exceeds 512 KiB');
       const decoded = atob(result.data);
@@ -149,7 +155,7 @@ export class FilePreviewCoordinator {
     // Keep one read permit for its whole lifetime so Session-file Download cannot race that
     // internal reread even while the converter itself is between read phases.
     return this.demand.documents.run(signal, () => this.demand.privateReads.run(signal, async () => {
-      const current = () => { if (!this.current() || signal.aborted) throw new Error('obsolete'); };
+      const current = () => { if (!this.sourceCurrent(source) || signal.aborted) throw new Error('obsolete'); };
       current();
       if (!this.host.previewDocument) throw new Error('preview_unavailable');
       const observation = this.authority.capture();
@@ -158,7 +164,7 @@ export class FilePreviewCoordinator {
       const digest = [...new Uint8Array(hash)].map(v => v.toString(16).padStart(2, '0')).join('');
       const result = await this.host.previewDocument(observation.scope, { target: this.target, extension, digest,
         source: source.kind === 'artifact' ? { kind: 'artifact', artifact_id: source.id, agent_id: source.agentId }
-          : { kind: 'session_file', message_id: source.messageId, delivery_index: source.index, agent_id: source.agentId },
+          : { kind: 'session_file', locator: source.locator, delivery_index: source.index, agent_id: source.agentId },
       }, signal);
       current();
       if (!observation.current()) throw new Error('obsolete');

@@ -24,19 +24,26 @@ export interface CommandSpec {
  * native capabilities. Explicit /attach uploads selected bytes to the Session.
  */
 export const COMMANDS: readonly CommandSpec[] = [
+  { name: '/context-model', description: 'Inspect the original native context model in bounded byte ranges.', argumentHint: '[byte-offset]' },
   { name: "/capabilities", description: "Inspect all native Agent capabilities in a scrollable view." },
   { name: "/attach", description: "Upload a selected local file to this Session.", argumentHint: "<local-path>" },
   { name: "/queue", description: "Edit or remove exact observed queued Human input." },
   { name: "/export", description: "Export this Session archive to a client-local file.", argumentHint: "[output-path]" },
-  { name: "/settings", description: "Read, rescan, and edit User/Workspace configuration." },
+  {
+    name: "/settings",
+    description: "Read, rescan, and edit User/Workspace configuration, or inspect its automatic repairs.",
+    argumentHint: "[repairs | user … | workspace …]",
+  },
+  { name: "/content", description: "List deferred content and read one bounded byte range.", argumentHint: "[range-number] [byte-offset]" },
   { name: "/help", description: "List the available commands." },
   { name: "/goal", description: "Show, create, pause, resume, edit, or budget a persistent Goal." },
   {
     name: "/model",
     description:
-      "Open the searchable model selector, or select one directly; selection resets primary overrides and preserves summary policy.",
+      "Select a model while work runs; changing models resets primary overrides and preserves summary policy. Existing attempts stay frozen.",
     argumentHint: "[show|provider/model|profile set <id>|profile clear]",
   },
+  { name: "/model-position", description: "Select native catalog defaults from an exact model binding revision and finite model/profile ordinals.", argumentHint: "<binding-revision> <model-position> [profile-position]" },
   { name: "/new", description: "Create a new independent local session." },
   {
     name: "/resume",
@@ -108,7 +115,10 @@ export const COMMANDS: readonly CommandSpec[] = [
     description:
       "Request cancellation of the current attempt.",
   },
-  { name: "/agents", description: "List durable child Agents and their current activation." },
+  { name: "/observation", description: "Inspect a bounded native domain or finite Trace head.", argumentHint: "[domain [page-offset] | trace <native-record-id>]" },
+  { name: "/observation-value", description: "Read one byte range from a selected native domain value." },
+  { name: "/agents", description: "Read one bounded Child Agent page; follow its displayed continuation." },
+  { name: "/agent-read", description: "Observe one Child Agent by its exact id, including older Agent pages." },
   { name: "/send-message", description: "Send to an Agent; the runtime delivers or resumes atomically.", argumentHint: "<agent-id> <message>" },
   { name: "/wait-agent", description: "Wait for the Agent activation observed by the runtime.", argumentHint: "<agent-id>" },
   { name: "/interrupt-agent", description: "Interrupt the current activation; keep the Agent resumable.", argumentHint: "<agent-id>" },

@@ -1,9 +1,8 @@
 import { expect, it } from 'vitest';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v46';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v48';
 import { SessionLifecycles } from '../src/client/session-lifecycle/system';
 import { controlCurrent, type LifecycleContext } from '../src/client/session-lifecycle/machine';
 import type { Admission, Attached, FailureKind, SessionLifecyclePort } from '../src/client/session-lifecycle/port';
-import { snapshot } from './fixture';
 
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: unknown) => void;
@@ -70,7 +69,7 @@ class Harness {
       expect(this.claims.size).toBe(0); this.resident = conversation;
       const target = { session_id: 'S', conversation_id: conversation, runtime_incarnation: '1', attachment_id: String(++this.sequence) };
       if (call.generation === this.generation && this.connected) this.claims.add(target);
-      call.result.resolve({ type: 'attached', target, snapshot: { ...snapshot(), conversation_id: conversation }, cursor: '0' });
+      call.result.resolve({type:'attached', target, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
     } else if (call.kind === 'switch') {
       this.dropClaim(call.target!); this.selected = call.node!; this.resident = `conversation-${call.node}`;
       call.result.resolve({ id: 'S', active_node: call.node, active_conversation_id: this.resident });
@@ -108,11 +107,14 @@ it('transmitted obsolete Attach retains one cleanup claim until exact Detach ack
 });
 
 it('equivalent Opens share one native claim; conflicting Open cannot change admitted identity', async () => {
-  const h = new Harness(), first = h.command('open', 'A'), attach = await h.next('attach');
+  const h = new Harness(); let refreshes = 0;
+  h.port.refresh = async () => { refreshes++; };
+  const first = h.command('open', 'A'), attach = await h.next('attach');
   const repeated = Array.from({ length: 5 }, () => h.command('open', 'A'));
   await expect(h.command('open', 'B')).rejects.toThrow('branch switching');
   expect(h.facts.nodeId).toBe('A'); h.ack(attach); await Promise.all([first, ...repeated]);
   expect(h.calls).toHaveLength(1); expect(h.claims.size).toBe(1);
+  expect(refreshes).toBe(0); // No recovery can invalidate a concurrent open's following proof.
   expect(controlCurrent(h.context, h.facts.attachmentObservation)).toBe(true);
 });
 

@@ -1,3 +1,4 @@
+import { domainReceipt, compactReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
@@ -14,7 +15,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v46';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v48';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -94,30 +95,30 @@ describe('one narrow browser command grammar', () => {
 /** Scripted server owner. The browser only receives generated wire DTOs. */
 function nativeFixture() {
   const original = snapshot('A');
-  original.transcript.entries = [{ cursor: '1', completed_response: { closing_message_id: 'original-assistant', origin: { conversation_id: 'origin-conversation', closing_message_id: 'original-assistant', attempt_id: 'original-attempt' }, completed_at: '2026-09-19T08:00:00Z', surface_revision: '9007199254740997', retry_message_id: 'user-cut' }, item: { type: 'message', message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: 'Original assistant response' }] } } }];
+  original.transcript.entries = [{ cursor: '1', completed_response: {closing_locator:{type:'by_message_id',message_id:'original-assistant'},deferred_fields:[],retry_locator:{type:'by_message_id',message_id:'user-cut'}, closing_message_id: 'original-assistant', origin: {attempt_id_source:null, conversation_id: 'origin-conversation', closing_message_id: 'original-assistant', attempt_id: 'original-attempt' }, completed_at: '2026-09-19T08:00:00Z', surface_revision: '9007199254740997', retry_message_id: 'user-cut' }, item: { type: 'message', message: { id: 'original-assistant', role: 'assistant', content: [{ type: 'text', text: 'Original assistant response' }] } } }];
   const originals = structuredClone(original);
   server.snapshots.set('A', original); server.nodeSnapshots.set('node-A', original);
   const content: UserInputBlock[] = [{ type: 'text', text: 'Try this' }, { type: 'upload', session_id: 'A', batch_id: 'batch', token: 'native-receipt' }];
-  const boundary: SessionUserMessageBoundary = { surface_revision: '9007199254740997', message: { id: 'user-cut', kind: 'message', source: 'human', content: [{ type: 'text', text: 'Try this' }, { type: 'uploaded_file', batch_id: 'batch', name: 'note.txt' }] } };
-  const nodes: SessionNode[] = [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }];
+  const boundary: SessionUserMessageBoundaryObservation = { surface_revision: '9007199254740997', locator:{type:'by_message_id',message_id:'user-cut'},block_count:'2',content:[],collections:[], message: { id: 'user-cut', kind: 'message', source: 'human', content: [{ type: 'text', text: 'Try this' }, { type: 'uploaded_file', batch_id: 'batch', name: 'note.txt' }] } };
+  const nodes: SessionNodeObservation[] = [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }];
   const committed: Extract<MethodResult, { type: 'session_transition' }>[] = [];
   let model = 'fixture/first';
   const modelView = () => ({ configured: { model }, effective: { model }, summary: { mode: 'session' } }) as Extract<MethodResult, { type: 'model' }>['model'];
-  server.handlers.set('session/model', () => ({ type: 'model', model: modelView() }));
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] } } as Extract<MethodResult, { type: 'models' }>));
-  server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model; return { type: 'model', model: modelView() }; });
+  server.handlers.set('session/model', () => (domainReceipt('model',[modelView()])));
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [{ model: 'fixture/first' }, { model: 'fixture/second' }] }).models??[]) as Extract<MethodResult, { type: 'models' }>));
+  server.handlers.set('session/setModel', request => { if (request.method !== 'session/setModel') throw new Error('wrong method'); model = request.params.config.model; return {type:'model_set',settings_revision:'1'}; });
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: boundary.surface_revision, boundaries: [boundary] }));
   server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {
     if (request.method !== 'session/fork' && request.method !== 'session/branch') throw new Error('wrong method');
-    if (request.params.surface_revision !== boundary.surface_revision || !(request.params.boundary === boundary.message.id || request.method === 'session/fork' && request.params.side === 'after' && request.params.boundary === 'original-assistant')) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
+    if (request.params.surface_revision !== boundary.surface_revision || !(request.params.boundary?.type==='by_message_id' && request.params.boundary.message_id === boundary.message!.id || request.method === 'session/fork' && request.params.side === 'after' && request.params.boundary?.type==='by_message_id' && request.params.boundary.message_id === 'original-assistant')) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
     const id = request.method === 'session/fork' ? 'child' : 'A';
     const nodeId = request.method === 'session/fork' ? 'node-child' : 'branch-A';
     const conversation = request.method === 'session/fork' ? 'conversation-child' : 'conversation-branch-A';
-    nodes.push({ ordinal: String(nodes.length + 1), id: nodeId, parent: id === 'A' ? 'node-A' : null, conversation_id: conversation, origin: { type: 'fork', source_session: 'A', source_node: 'node-A', source_surface_revision: boundary.surface_revision, side: "before", source_message: boundary.message.id } });
+    nodes.push({ ordinal: String(nodes.length + 1), id: nodeId, parent: id === 'A' ? 'node-A' : null, conversation_id: conversation, origin: { type: 'fork', source_session: 'A', source_node: 'node-A', source_surface_revision: boundary.surface_revision, side: "before", source_message: boundary.message!.id } });
     if (id === 'child') server.snapshots.set(id, snapshot(id));
     server.nodeSnapshots.set(nodeId, { ...snapshot(), conversation_id: conversation });
-    const result: Extract<MethodResult, { type: 'session_transition' }> = { type: 'session_transition', session: { id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' }, editor_content: content.map(block => block.type === 'upload' ? { ...block, session_id: id, token: id === 'child' ? 'native-destination-receipt' : block.token } : block) };
+    const result: Extract<MethodResult, { type: 'session_transition' }> = { type: 'session_transition', session: { id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' }, editor:server.editor({ id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' },content.map(block => block.type === 'upload' ? { ...block, session_id: id, token: id === 'child' ? 'native-destination-receipt' : block.token } : block)) };
     committed.push(result); return result;
   };
   server.handlers.set('session/fork', transition); server.handlers.set('session/branch', transition);
@@ -126,7 +127,7 @@ function nativeFixture() {
     const result: Extract<MethodResult, { type: 'session_transition' }> = { type: 'session_transition', session: { id: 'child', active_node: 'node-child', active_conversation_id: 'conversation-child', node_count: 1, created_at: '0', updated_at: '0' } };
     committed.push(result); return result;
   });
-  server.handlers.set('context/compact', () => ({ type: 'context', context: { compaction_in_progress: false, compaction_count: 1 } }));
+  server.handlers.set('context/compact', () => (compactReceipt({ compaction_in_progress: false, compaction_count: 1 })));
   return { original, originals, content, boundary, nodes, committed, model: () => model };
 }
 async function subject() {
@@ -209,7 +210,7 @@ describe('successful command draft consumption', () => {
     server.held.add('resources/read');
     server.handlers.set('resources/read', () => {
       if (failure) throw new RpcFailure({ code: -32000, message: 'Capability read refused' });
-      return { type: 'capabilities', capabilities: { configured_tools: [], revision: '0' } };
+      return domainReceipt('capabilities',[{ configured_tools: [], revision: '0' }]);
     });
     const input = await open('/tools');
     expect(input).toHaveProperty('value', '/tools');
@@ -223,13 +224,13 @@ describe('successful command draft consumption', () => {
 describe('inbound transport frontier', () => {
   it('counts inbound already in the bounded client pipeline before a socket slot is available', async () => {
     await subject(); server.held.add('resources/read'); server.held.add('turn/start');
-    server.handlers.set('resources/read', () => ({ type: 'capabilities', capabilities: { configured_tools: [], revision: '0' } }));
-    const reads = Array.from({ length: 8 }, () => server.client.request({ method: 'resources/read', params: { target: server.client.target('A') } }, 'capabilities'));
+    server.handlers.set('resources/read', () => (domainReceipt('capabilities',[{ configured_tools: [], revision: '0' }])));
+    const reads = Array.from({ length: 6 }, () => server.client.request({ method: 'resources/read', params: { target: server.client.target('A') } }, 'domain_page'));
     const work = server.client.send('A', 'queued transport');
     expect(methods()).not.toContain('turn/start');
     expect(server.client.getSnapshot().views.A.inboundRequests).toBe(1);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
-    for (let index = 1; index <= 8; index++) server.reply(await server.waitFor('resources/read', index));
+    for (let index = 1; index <= 6; index++) server.reply(await server.waitFor('resources/read', index));
     server.reply(await server.waitFor('turn/start', 1));
     await Promise.all([...reads, work]);
     expect(server.client.getSnapshot().views.A.inboundRequests).toBe(0);
@@ -298,7 +299,7 @@ describe('inbound transport frontier', () => {
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(true);
   });
   it('Fork and Compact remain allowed while source inbound acknowledgement is held', async () => {
-    const { scope, selection } = await subject(); server.held.add('turn/start');
+    const { scope, selection } = await subject(); server.held.add('turn/start'); server.held.add('context/compact');
     const work = server.client.send('A', 'in transit');
     const request = await server.waitFor('turn/start', 1);
     server.client.compact('A');
@@ -306,6 +307,7 @@ describe('inbound transport frontier', () => {
     expect((await scope.transition('fork', selection))?.session.id).toBe('child');
     expect(methods()).not.toContain('session/switchNode');
     server.reply(request); await work;
+    server.reply(await server.waitFor('context/compact', 1));
   });
   it.each(['branch', 'retry'] as const)('%s committed before an unresolved inbound request stops before unload', async action => {
     const { scope, selection, fixture } = await subject(); server.held.add('session/branch'); server.held.add('turn/start');
@@ -481,6 +483,29 @@ describe('typed native operations and continuation fencing', () => {
     await act(() => server.update('A', { ...fixture.original, messages: [{ role: 'user', source: 'human', id: 'accepted-user', content: [{ type: 'text', text: 'accepted' }] }] }));
     expect(row).toHaveProperty('disabled', false);
   });
+  it('T11 T15 tools keep native deferred descriptors and read only selected field pages', async () => {
+    const { scope, navigation } = await subject();
+    const receipt = domainReceipt('capabilities', [null]);
+    receipt.page.items[0]!.deferred = true;
+    receipt.page.items[0]!.body_complete = false;
+    receipt.page.collections = [{ domain: 'capabilities.available_tools', revision: '0', total: '1000', loaded: '0', next_offset: '0' }];
+    server.handlers.set('resources/read', () => receipt);
+    expect(await scope.tools()).toEqual(receipt.page);
+    expect(methods()).not.toContain('conversation/checkpointValueRead');
+    server.handlers.set('conversation/checkpointPage', request => {
+      if (request.method !== 'conversation/checkpointPage') throw new Error('wrong method');
+      expect(request.params.domain).toBe('capabilities.available_tools');
+      expect(request.params.limit).toBe(32);
+      return { type: 'checkpoint_page', page: { ...receipt.page, domain: request.params.domain, total: '1000', items: [], next_offset: null } };
+    });
+    render(<CommandPanel request={{ id: 'tools' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
+    await screen.findByText('Content deferred');
+    fireEvent.click(screen.getByText('More conversation details'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'capabilities.available_tools' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Read first page' }));
+    await waitFor(() => expect(methods()).toContain('conversation/checkpointPage'));
+    expect(methods()).not.toContain('conversation/checkpointValueRead');
+  });
   it('selects native model identities without any command-string RPC', async () => {
     const { scope, fixture } = await subject();
     expect((await scope.models()).catalog.models?.map(model => model.model)).toEqual(['fixture/first', 'fixture/second']);
@@ -521,7 +546,7 @@ describe('typed native operations and continuation fencing', () => {
     const { scope, selection, navigation, fixture } = await subject();
     const method = action === 'fork' ? 'session/fork' : 'session/branch'; server.held.add(method);
     const work = scope.transition(action, selection); const request = await server.waitFor(method, 1);
-    expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: fixture.boundary.surface_revision, boundary: 'user-cut' });
+    expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: fixture.boundary.surface_revision, boundary: {type:'by_message_id',message_id:'user-cut'} });
     const response = server.commit(request); expect(fixture.committed).toHaveLength(1);
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); expect(await work).toBeUndefined();
@@ -738,12 +763,12 @@ it('UI retirement after committed Switch and before follow-up admission leaves a
 });
 it('Retry retires queued input before dispatch without replaying the committed Branch or Switch', async () => {
   const { scope, selection, navigation } = await subject(), original = server.client.sendContent.bind(server.client);
-  server.handlers.set('resources/read', () => ({ type: 'capabilities', capabilities: { configured_tools: [], revision: '0' } }));
+  server.handlers.set('resources/read', () => (domainReceipt('capabilities',[{ configured_tools: [], revision: '0' }])));
   let reads: Promise<unknown>[] = [];
   let queued!: () => void; const staged = new Promise<void>(resolve => { queued = resolve; });
   vi.spyOn(server.client, 'sendContent').mockImplementation((...args) => {
     server.held.add('resources/read');
-    const target = server.client.target('A'); reads = Array.from({length:8}, () => server.client.request({method:'resources/read',params:{target}},'capabilities'));
+    const target = server.client.target('A'); reads = Array.from({length:6}, () => server.client.request({method:'resources/read',params:{target}},'domain_page'));
     const work = original(...args); expect(methods()).not.toContain('turn/start'); navigation.invalidate(); queued(); return work;
   });
   const work = scope.transition('retry', selection), refused = expect(work).rejects.toThrow('Authority changed before dispatch');

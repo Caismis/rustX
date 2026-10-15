@@ -24,7 +24,7 @@ pub(crate) fn admit_agent(
     {
         *admitted_authority = Some(child_agent_id.clone());
         let authority = crate::runtime::subagent::DurableAgentAuthority {
-            title: "Explore task".to_owned(),
+            title: "Explore task".into(),
             resolved: crate::runtime::subagent::ResolvedSubagentSpec {
                 environment: Vec::new(),
                 generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
@@ -166,6 +166,7 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
                 source_node: node,
                 source_surface_revision: revision,
                 source_message: MessageId::new("source-user-a"),
+                source_locator: fixture_source_locator(&store, "source-user-a"),
                 side: crate::local_runtime::session::LineageSide::Before,
             },
         )
@@ -599,6 +600,8 @@ fn activity(store: &SqliteConversationStore, ordinal: u64) {
     let attempt = crate::runtime::identity::AttemptId::new(format!("ordinary-{ordinal}"));
     store
         .append_event(crate::events::types::RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: crate::runtime::identity::EventId::new(format!("ordinary-{ordinal}")),
             sequence: 0,
@@ -648,6 +651,8 @@ fn deletion_revision_ignores_unrelated_metadata_and_irrelevant_execution_history
         .unwrap();
     other_store
         .append_event(crate::events::types::RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: crate::runtime::identity::EventId::new("unrelated-tool-start"),
             sequence: 0,

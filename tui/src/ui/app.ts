@@ -1,3 +1,5 @@
+import {validateInteractionBody} from '../../../protocol/app-server/interaction.ts';
+import { displayInteraction, hasInteractionBody, type DisplayInteraction } from '../presentation/interaction-display.ts';
 /**
  * The rustX terminal application.
  *
@@ -19,9 +21,9 @@
  * ```
  *
  * No Pi class holds authoritative rustX state. Every component here is a
- * disposable render target rebuilt wholesale from the projection, so a fresh
- * `RuntimeClientSnapshot` reconstructs the entire UI without consulting
- * anything Pi remembers, and component instance continuity is never a
+ * disposable render target rebuilt from the bounded checkpoint and contiguous
+ * events, with deferred content loaded through explicit bounded reads. Rendering
+ * does not consult anything Pi remembers, and component instance continuity is never a
  * correctness requirement. Nothing resembling Pi's `AgentSession`,
  * `SessionManager`, model runtime, provider registry, tool registry, or
  * `InteractiveMode` exists here or anywhere in this package.
@@ -77,6 +79,7 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
+import type { CheckpointPage } from '../../../protocol/app-server/v48.ts';
 import { AppServerRequestError, isDeliveryCancelled } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -85,10 +88,11 @@ import type {
   SessionSettings,
   SessionDeleteResult,
   SessionSummaryView,
-  SessionUserMessageBoundaryView,
+  SessionUserMessageBoundaryObservation,
   SessionView,
   ToolCallId,
   InteractionRef,
+  RoutedInteraction,
   UserInputBlock,
 } from "../protocol/app-server.ts";
 import {
@@ -132,6 +136,8 @@ import { ResumeSelector } from "./components/resume-selector.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
+import { SourceRepairStatus } from "./components/source-repair-status.ts";
+import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
 import {
   FooterView,
   renderStartup,
@@ -141,7 +147,7 @@ import {
 import type { ConversationContext } from "./components/status.ts";
 import { renderResourceBanner } from "./components/resources.ts";
 import { renderTranscript } from "./components/transcript.ts";
-import { renderTodoPanel } from "./components/todos.ts";
+import { renderTodoPanel, deferredTodoRecords } from "./components/todos.ts";
 import {
   type PresentationPreferences,
   defaultPreferences,
@@ -160,7 +166,7 @@ import { banded } from "./components/transcript-block.ts";
 import { SubagentTranscript } from "../app-server/subagent-transcript.ts";
 import { SubagentTranscriptView } from "./components/subagent-transcript-view.ts";
 import { HumanInteractionOverlay } from "./components/hitl.ts";
-import type { InteractionResponse } from "../protocol/app-server.ts";
+import type { InteractionResponse, SourceTarget } from "../protocol/app-server.ts";
 
 export interface RustxTuiAppOptions {
   /** The App Server connection, its Session catalog, and who owns its process. */
@@ -224,6 +230,10 @@ export class RustxTuiApp {
    */
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
+  /** Newly observed configuration repairs of the current App Server
+   * authority; presentation only (Issue #464). */
+  readonly #repairStatus = new SourceRepairStatus();
+  #removeRepairListener: () => void = () => {};
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
@@ -251,6 +261,11 @@ export class RustxTuiApp {
    * picks which interaction the human-input surface shows, nothing else.
    */
   #interactionFocus: InteractionRef | undefined;
+  #interactionPage: { session: AppServerSession; stamp: string; offset: number; page: CheckpointPage; items: DisplayInteraction[] } | undefined;
+  #interactionRead = 0;
+  #interactionBody?: {session:AppServerSession;stamp:string;interaction:InteractionRef;body:RoutedInteraction};
+  #interactionBodyRead = 0;
+  #interactionArgumentRange?: {session:AppServerSession;stamp:string;interaction:InteractionRef;text:string;offset:number;next:number|null;end:number;field:"arguments"|"reason"|"tool_name";decoder:InstanceType<typeof TextDecoder>};
   /**
    * The interaction the user dismissed the human-input surface on (approval
    * Esc), plus the pending queue exactly as it stood at dismissal.
@@ -272,10 +287,11 @@ export class RustxTuiApp {
   /** True only while a focus change is installing a different Session. */
   #switching = false;
   #subagentListFocused = false;
-  #childInspection: { reader: SubagentTranscript; timer: ReturnType<typeof setInterval> } | undefined;
+  #childInspection: { reader: SubagentTranscript } | undefined;
   #reconnectChild: string | undefined;
   #selectedAgentId: string | undefined;
   #presentationEpoch = 0;
+  #contentViewEpoch = 0;
   #deletion!: SessionDeletionWorkflow;
   #resumePresentation: ResumeSelector | undefined;
   #resumeQuery: string | undefined;
@@ -317,6 +333,7 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#transcript);
     this.#tui.addChild(this.#activity);
     this.#tui.addChild(this.#transient);
+    this.#tui.addChild(this.#repairStatus);
     this.#tui.addChild(this.#todos);
     this.#tui.addChild(new Spacer(1));
     this.#tui.addChild(this.#composerContext);
@@ -324,7 +341,66 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#footer);
 
     this.#watchConnection();
+    this.#watchSourceRepairs();
     this.#bindSession(this.#session);
+  }
+
+  /**
+   * Presents source repair observations of the current connection's App
+   * Server authority: those already held by the host, then each new one. A
+   * replacement authority retires the previous one's line, and its receipts
+   * are its own. Only the current host is observed: a replaced connection's
+   * late notice or read changes nothing.
+   *
+   * A reconnect to the same authority keeps the line, and then rereads each
+   * source it still presents: the new connection observes a Workspace only
+   * once it is addressed again, so a Workspace whose receipt was withdrawn
+   * while this client was away is announced to no one until that read.
+   */
+  #watchSourceRepairs(): void {
+    this.#removeRepairListener();
+    const host = this.#host;
+    const kept = this.#repairStatus.adopt(host.authorityId);
+    const observe = (observation: SourceRepairObservation) => {
+      if (this.#host !== host || this.#quitting || this.#finished || !this.#repairStatus.observe(host.authorityId, observation)) return;
+      if (this.#started) this.#tui.requestRender();
+    };
+    for (const observation of host.sourceRepairs()) observe(observation);
+    this.#removeRepairListener = host.onSourceRepair(observe);
+    if (this.#started) this.#tui.requestRender();
+    if (kept) void this.#reconcileSourceRepairs(host);
+  }
+
+  /**
+   * Rereads, through `host`, every source the repair line still presents:
+   * each Workspace, whose read also rereads the User, and the User alone
+   * only when no Workspace read succeeded — a Workspace that can no longer
+   * be read never keeps the independent User source from its own read.
+   * Bounded by the line's finite sources, one read at a time, and read-only
+   * (`configuration/sourcesRead` never repairs, reconciles, loads a Session
+   * or reaches a model). Each result reaches the line through the host's
+   * sequence-ordered observations, so it never overwrites a newer notice.
+   * It stops once `host` is replaced, closed or the client quits. A failed
+   * read proves nothing — the entry stays until a later read or notice —
+   * and it never fails the connection.
+   */
+  async #reconcileSourceRepairs(host: AppServerHost): Promise<void> {
+    const pending = this.#repairStatus.pendingSources();
+    let userRead = false;
+    const read = async (target: SourceTarget) => {
+      if (this.#host !== host || host.client.closed !== undefined || this.#quitting || this.#finished) return false;
+      try {
+        await host.readSourceRepairs(target);
+        userRead = true;
+      } catch {
+        // Not a withdrawal; `/settings repairs` reads again explicitly.
+      }
+      return true;
+    };
+    for (const target of pending.filter(source => source.kind === "workspace")) {
+      if (!await read(target)) return;
+    }
+    if (!userRead && pending.some(source => source.kind === "user")) await read({ kind: "user" });
   }
 
   #watchConnection(): void {
@@ -364,6 +440,7 @@ export class RustxTuiApp {
     try {
       await oldHost.shutdown();
       replacement = await this.#reconnect();
+      replacement.inheritModelSelectionUncertainty(oldHost);
       let focus = focused;
       let observedDeletion: SessionDeleteResult | undefined;
       // A historical deletion target is independent of the currently focused Session.
@@ -375,7 +452,7 @@ export class RustxTuiApp {
           this.#showTransient('info', `Deletion observation: ${observed.status.replaceAll('_', ' ')}. No deletion was replayed.`);
         }
       }
-      const session = focus === undefined ? undefined : await replacement.attach(focus.sessionId, focus.nodeId);
+      const session = focus === undefined ? undefined : await replacement.attach(focus.sessionId, focus.nodeId, focus);
       if (this.#quitting || this.#finished || this.#host !== oldHost) {
         await replacement.shutdown();
         return;
@@ -384,6 +461,7 @@ export class RustxTuiApp {
       this.#dispatcher.setHost(replacement);
       this.#bindSession(session);
       this.#watchConnection();
+      this.#watchSourceRepairs();
       if (session !== undefined && this.#reconnectChild !== undefined) this.#openChildTranscript(this.#reconnectChild);
       this.#reconnectChild = undefined;
       if (session !== undefined) this.#renderState(session.state);
@@ -395,7 +473,7 @@ export class RustxTuiApp {
         this.#deletion.observeCommitted(observedDeletion,
           this.#resumePresentation?.reconciliationContext() ?? { query: "", ids: [], index: 0, loaded: 0 });
       }
-      this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent");
+      this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent\nUnanswered mutation outcomes remain unknown.");
     } catch (error) {
       await replacement?.shutdown();
       this.#showTransient("error", `reconnect failed: ${compactDiagnostic(error)}. Ctrl+R retries; Ctrl+C exits. Unanswered mutations remain unknown.`);
@@ -463,12 +541,20 @@ export class RustxTuiApp {
       this.#invalidatePresentation();
       if (child !== undefined) this.#openChildTranscript(child);
     });
+    let configurationNotice:string|undefined;
+    let observationNotice:string|undefined;
     this.#removeStateListener = session.onState((state) => {
       // Runtime state rendering follows attachment identity, not the
       // presentation epoch: the state published immediately after a snapshot
       // replacement is the authoritative state we must render.
       if (this.#session !== session || this.#finished) return;
       this.#renderState(state);
+      if (session.observationError !== observationNotice) {
+        observationNotice = session.observationError;
+        if (observationNotice) this.#showTransient("error", `Conversation observation failed: ${observationNotice}`);
+      }
+      const notice=session.configurationObservationError ? `Configuration observation unavailable: ${session.configurationObservationError}` : session.deferredConfiguration ? 'Loading deferred configuration…' : undefined;
+      if(notice!==configurationNotice){configurationNotice=notice;if(notice)this.#showTransient(session.configurationObservationError?'error':'info',notice);}
     });
     this.#removeClosedListener = session.onClosed(() => {
       // The server retired this attachment's residency. That is a statement
@@ -535,7 +621,7 @@ export class RustxTuiApp {
     if (connection) { this.#draft = new ComposerDraft(); this.#editor.setText(""); this.#renderConnecting(); }
     this.#editor.disableSubmit = changingNode;
     const host = this.#host;
-    if (connection) void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 100 }, "session_history").then(result => {
+    if (connection) void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
       if (this.#connecting !== connection || this.#host !== host || this.#finished) return;
       connection.history = historyPresentation(result.conversation_id, result.window.page);
       this.#renderConnecting();
@@ -788,7 +874,7 @@ export class RustxTuiApp {
             this.#subagentListFocused ||
             !this.#switching &&
             (state.pendingInteractions.length > 0 ||
-              (attempt !== undefined && attempt.phase.type !== "settled"))
+              (attempt !== undefined && ['admitted','running'].includes(attempt.phase.type)))
           );
           void this.#onEscape();
           return acted ? { consume: true } : undefined;
@@ -835,8 +921,14 @@ export class RustxTuiApp {
     const line = text.trim();
     if (!line && !this.#draft.blocks?.length) return;
     const command = commands && line.startsWith("/");
+    const contentView = /^\/content(?:\s|$)/.test(line) ? this.#contentViewEpoch : undefined;
     if (preserveDraft && !command) { this.#showTransient("error", "Enter a slash command; the prompt draft is unchanged."); return; }
     if (!command) {
+      if (!session.controlReady) {
+        this.#editor.setText(text);
+        this.#showTransient("error", "Session observation is not following. Request not sent; prompt draft is unchanged.");
+        return;
+      }
       let content: UserInputBlock[];
       try { content = this.#draft.submission(text); }
       catch (error) { this.#editor.setText(text); this.#showTransient("error", compactDiagnostic(error)); return; }
@@ -872,13 +964,13 @@ export class RustxTuiApp {
       const outcome = line === "/resume" && this.#deletion.state.kind !== "idle"
         ? { kind: "choose_session" as const, ...await this.#host.listSessions(query, 0), query }
         : await this.#dispatcher.submit(text);
-      if (this.#isCurrentPresentationLease(lease)) {
+      if (this.#isCurrentPresentationLease(lease) && (contentView === undefined || contentView === this.#contentViewEpoch)) {
         if (agentMessage && !preserveDraft && outcome.kind === "transient" && outcome.level === "info"
             && this.#editor.getExpandedText() === text) this.#editor.setText("");
         await this.#handleOutcome(outcome, lease);
       }
     } catch (error) {
-      if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `command: ${compactDiagnostic(error)}`);
+      if (this.#isCurrentPresentationLease(lease) && (contentView === undefined || contentView === this.#contentViewEpoch)) this.#showTransient("error", `command: ${compactDiagnostic(error)}`);
     }
   }
 
@@ -953,17 +1045,13 @@ export class RustxTuiApp {
     const reader = new SubagentTranscript(session, id);
     const current = () => this.#childInspection?.reader === reader && this.#isCurrentPresentationLease(lease);
     const view = new SubagentTranscriptView(reader,
-      () => session.state.agents.find(child => child.agent_id === id),
+      () => reader.agent,
       this.#preferences,
       () => { if (current()) this.#closeOverlay(); },
       () => { if (current()) this.#tui.requestRender(); });
     this.#showPopup(view, { width: "90%", heightPercent: 80 });
     reader.onChange = () => { if (current()) this.#tui.requestRender(); };
-    // Poll transcript authority, including inactive Agents: status is not a
-    // transcript revision and cannot establish the final history boundary.
-    const timer = setInterval(() => { void reader.refresh(); }, 1500);
-    timer.unref();
-    this.#childInspection = { reader, timer };
+    this.#childInspection = { reader };
     void reader.newest();
   }
 
@@ -1005,6 +1093,9 @@ export class RustxTuiApp {
     switch (outcome.kind) {
       case "inspect":
         this.#showInspection(outcome.title, outcome.body, lease);
+        break;
+      case 'inspect_agent':
+        this.#openChildTranscript(outcome.agentId);
         break;
       case "transient":
         this.#showTransient(outcome.level, outcome.text);
@@ -1082,7 +1173,7 @@ export class RustxTuiApp {
     if (state === undefined) return;
     const attempt = state.attempt;
     if (state.pendingInteractions.length > 0 ||
-      (attempt !== undefined && attempt.phase.type !== "settled")) {
+      (attempt !== undefined && ['admitted','running'].includes(attempt.phase.type))) {
       const lease = this.#presentationLease();
       try {
         const outcome = await this.#dispatcher.submit("/cancel");
@@ -1103,7 +1194,7 @@ export class RustxTuiApp {
     const state = this.#session?.state;
     if (state === undefined) { await this.quit(); return; }
     if (state.pendingInteractions.length > 0 ||
-      (state.attempt !== undefined && state.attempt.phase.type !== "settled")) {
+      (state.attempt !== undefined && ['admitted','running'].includes(state.attempt.phase.type))) {
       const lease = this.#presentationLease();
       try {
         const outcome = await this.#dispatcher.submit("/cancel");
@@ -1219,13 +1310,16 @@ export class RustxTuiApp {
     if (attachedSession === undefined) return;
     if (!this.#isCurrentPresentationLease(lease)) return;
     const state = attachedSession.state;
-    if (state === undefined || state.sessionModel === null) {
+    if (state === undefined) return;
+    if (state.sessionModel === null) {
+      this.#showInspection('Model catalog', `${attachedSession.catalogDeferredNotice ?? 'Session model configuration is deferred.'}\nUse /model-position for a deliberate native-defaults selection.`, lease);
       return;
     }
     const selector = new ModelSelector({
       models,
       sessionModel: state.sessionModel,
       attempt: state.attempt,
+      deferredNotice: attachedSession.catalogDeferredNotice,
     });
     const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
 
@@ -1239,6 +1333,11 @@ export class RustxTuiApp {
     };
     selector.onCancel = () => {
       if (this.#isCurrentPresentationLease(lease)) close();
+    };
+    const nextOffset=attachedSession.nextModelOffset;
+    if(nextOffset!==undefined)selector.onNextPage=()=>{
+      if(!this.#isCurrentPresentationLease(lease)||this.#overlay!==handle)return;
+      void attachedSession.modelCatalog(nextOffset).then(catalog=>{if(this.#isCurrentPresentationLease(lease)&&this.#overlay===handle)this.#showModelSelector(catalog.models??[],lease);}).catch(error=>{if(this.#isCurrentPresentationLease(lease))this.#showTransient('error',String(error));});
     };
     selector.onSelect = (model) => {
       if (!this.#isCurrentPresentationLease(lease)) return;
@@ -1354,7 +1453,7 @@ export class RustxTuiApp {
   }
 
   #showBoundarySelector(
-    boundaries: SessionUserMessageBoundaryView[],
+    boundaries: SessionUserMessageBoundaryObservation[],
     title: string,
     operation: "fork" | "tree",
     lease: PresentationLease,
@@ -1414,7 +1513,7 @@ export class RustxTuiApp {
     session: SessionView,
     nodes: import("../protocol/app-server.ts").SessionNodeView[],
     nextNodeOffset: number | undefined,
-    boundaries: SessionUserMessageBoundaryView[],
+    boundaries: SessionUserMessageBoundaryObservation[],
     nextHistoryOffset: number | undefined,
     lease: PresentationLease,
   ): void {
@@ -1523,11 +1622,20 @@ export class RustxTuiApp {
     selector.onLoadMore = () => {
       const before = selector.nextCursor;
       if (before === undefined) return;
-      void session.deliveryPage(before).then((older) => {
+      void session.deliveryPage(before, selector.readCut).then((older) => {
         if (current()) selector.appendPage(older);
       }).catch((error: unknown) => {
         if (!current()) return;
         this.#showTransient("error", `delivery history page failed: ${compactDiagnostic(error)}`);
+        selector.retryPage();
+      });
+    };
+    selector.onLoadCollection = (collection) => {
+      void session.deliveryCollection(collection).then((next) => {
+        if(current()) selector.replaceCollectionPage(next);
+      }).catch((error:unknown)=>{
+        if(!current())return;
+        this.#showTransient("error", `delivery collection failed: ${compactDiagnostic(error)}`);
         selector.retryPage();
       });
     };
@@ -1539,6 +1647,12 @@ export class RustxTuiApp {
       // action at the moment it happens.
       const effect = localEffect();
       const task = (async () => {
+        if(action === "metadata") {
+          const file = await session.deliveryMetadata(record, () => current() && !signal.aborted);
+          if(current() && !signal.aborted) selector.installMetadata(operation,record,file);
+          return "Original delivery metadata loaded";
+        }
+        if(record.file == null) throw new Error("Read original delivery metadata first.");
         if (action === "save") {
           const saved = await saveDelivery(
             () => session.readDelivery(record, signal),
@@ -1581,8 +1695,10 @@ export class RustxTuiApp {
   }
 
   #closeOverlay(replacing = false): void {
+    // A bounded byte read may finish after another view opens or closes. It
+    // retains no right to repaint that successor, even on the same attachment.
+    this.#contentViewEpoch += 1;
     if (this.#childInspection) {
-      clearInterval(this.#childInspection.timer);
       this.#childInspection.reader.dispose();
       this.#childInspection = undefined;
       this.#subagentListFocused = false;
@@ -1745,10 +1861,11 @@ export class RustxTuiApp {
   }
 
   #acknowledgeTransient(): void {
-    if (this.#transient.feedback === undefined) {
+    if (this.#transient.feedback === undefined && !this.#repairStatus.visible) {
       return;
     }
     this.#transient.acknowledge();
+    this.#repairStatus.acknowledge();
     this.#tui.requestRender();
   }
 
@@ -1797,6 +1914,18 @@ export class RustxTuiApp {
    */
   #renderState(state: PresentationState): void {
     if (this.#connecting) { this.#renderConnecting(); return; }
+    const source = this.#session;
+    const stamp = this.#interactionStamp();
+    if (this.#interactionPage && (this.#interactionPage.session !== source || this.#interactionPage.stamp !== stamp)) {
+      this.#interactionPage = undefined;
+      this.#interactionRead += 1;
+    }
+    // The viewport is presentation-only. It never replaces a native snapshot,
+    // moves Applied Cursor, or infers settlement from an omitted identity.
+    if (this.#interactionPage) state = { ...state, pendingInteractions: this.#interactionPage.items };
+    const body=this.#interactionBody;
+    if(body && body.session===source && body.stamp===stamp) state={...state,pendingInteractions:state.pendingInteractions.map(item=>sameInteractionRef(item.interaction,body.interaction)?body.body:item)};
+    else if(body) {this.#interactionBody=undefined;this.#interactionBodyRead++;}
     if (!hasSubagentSelection(state.agents, this.#selectedAgentId)) {
       this.#selectedAgentId = undefined;
       this.#subagentListFocused = false;
@@ -1867,11 +1996,12 @@ export class RustxTuiApp {
       }
     }
 
-    // The plan, derived from the same transcript the conversation is drawn
-    // from. An empty panel draws nothing at all.
+    // The native loaded task prefix and its independently advertised range.
+    // Extension absence and a deferred nonempty list remain distinct.
     this.#todos.clear();
     const todos = renderTodoPanel(selectTodos(state), {
       columns: this.#tui.terminal.columns,
+      deferredTasks: deferredTodoRecords(this.#session?.checkpoint?.collections),
     });
     if (todos.length > 0) {
       this.#todos.addChild(new Text(todos, 1, 0));
@@ -1889,6 +2019,111 @@ export class RustxTuiApp {
     this.#syncHitlOverlay(state);
     this.#syncDeletionPresentation();
     this.#tui.requestRender();
+  }
+
+  #interactionStamp(): string {
+    const cut = this.#session?.checkpoint?.read_cut;
+    return cut?.domain_revisions['pending_interactions'] ?? cut?.revision ?? '';
+  }
+
+  #interactionTotal(): bigint {
+    const frontier = this.#session?.checkpoint?.collections.find(value => value.domain === 'pending_interactions');
+    return BigInt(this.#interactionPage?.page.total ?? frontier?.total ?? this.#session?.state.pendingInteractions.length ?? 0);
+  }
+
+  #interactionPartial(): boolean {
+    return Boolean(this.#interactionPage?.offset) || this.#interactionTotal() > BigInt(this.#interactionPage?.items.length ?? this.#session?.state.pendingInteractions.length ?? 0);
+  }
+
+  #interactionPageLabel(): string | undefined {
+    if (!this.#interactionPartial()) return undefined;
+    const offset = this.#interactionPage?.offset ?? 0;
+    const total = this.#interactionTotal();
+    const end = BigInt(offset + (this.#interactionPage?.items.length ?? this.#session?.state.pendingInteractions.length ?? 0));
+    return `Pending ${offset + 1}–${end < total ? end : total} of ${total} · Ctrl+PgUp/PgDn pages`;
+  }
+
+  async #pageInteractions(direction: -1 | 1): Promise<void> {
+    const session = this.#session;
+    if (!session || typeof session.checkpointPage !== 'function') return;
+    const previous = this.#interactionPage;
+    if(direction<0 && (previous?.offset ?? 0)===0) return;
+    const offset = direction < 0 ? Math.max(0, (previous?.offset ?? 0) - 32)
+      : Number(previous?.page.next_offset ?? (previous ? previous.offset + previous.items.length : session.state.pendingInteractions.length));
+    if (!Number.isSafeInteger(offset) || offset < 0 || BigInt(offset) >= this.#interactionTotal()) return;
+    const lease = this.#presentationLease(), overlay = this.#hitlOverlay, stamp = this.#interactionStamp(), read = ++this.#interactionRead;
+    try {
+      const { page, items } = await session.checkpointPage('pending_interactions', offset, previous?.page);
+      if (!overlay || this.#hitlOverlay !== overlay || !this.#isCurrentPresentationLease(lease) || read !== this.#interactionRead || stamp !== this.#interactionStamp()) return;
+      if (page.items.length > 32) throw new Error('Pending interaction page exceeded its item bound.');
+      this.#interactionPage = { session, stamp, offset, page, items: (items as import('../../../protocol/app-server/v48.ts').RuntimeClientInteractionHeader[]).map(displayInteraction) };
+      this.#interactionFocus = this.#interactionPage.items[0]?.interaction;
+      this.#hitlDismissed = undefined;
+      this.#renderState(session.state);
+    } catch (error) {
+      if (overlay && this.#hitlOverlay === overlay && this.#isCurrentPresentationLease(lease) && read === this.#interactionRead) {
+        this.#showTransient('error', `Pending interactions unavailable: ${compactDiagnostic(error)}`);
+      }
+    }
+  }
+
+  async #readInteractionArguments(interaction: InteractionRef, next: boolean, selectedField: "arguments"|"reason"|"tool_name" = "arguments"): Promise<void> {
+    const session=this.#session, overlay=this.#hitlOverlay;
+    if(!session || !overlay) return;
+    const rows=this.#interactionPage?.items ?? session.state.pendingInteractions;
+    const index=rows.findIndex(item=>sameInteractionRef(item.interaction,interaction));
+    if(index<0) return;
+    const item=rows[index]!;
+    if(hasInteractionBody(item) || item.kind!=='approval') return;
+    const stamp=this.#interactionStamp(), old=this.#interactionArgumentRange;
+    const previous=old?.session===session && old.stamp===stamp && sameInteractionRef(old.interaction,interaction) ? old : undefined;
+    const offset=next ? previous?.next : 0;
+    const field=next ? previous?.field ?? selectedField : selectedField;
+    if(offset==null) return;
+    const lease=this.#presentationLease(), generation=++this.#interactionBodyRead;
+    const current=()=>this.#hitlOverlay===overlay && this.#isCurrentPresentationLease(lease) && generation===this.#interactionBodyRead && stamp===this.#interactionStamp() && sameInteractionRef(this.#interactionFocus ?? interaction,interaction);
+    try {
+      const chunk=await session.interactionValue(interaction,Number(this.#interactionPage?.page.items[index]?.offset ?? item.source_offset),this.#interactionPage?.page,offset,['request','kind',field]);
+      if(!current()) return;
+      if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
+      const bytes=Uint8Array.from(atob(chunk.bytes_base64),character=>character.charCodeAt(0));
+      if(bytes.length>65536 || !Number.isSafeInteger(chunk.readable_end) || offset+bytes.length>chunk.readable_end || (offset<chunk.readable_end && !bytes.length) || (chunk.next_offset ?? null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null) || (previous && next && previous.end!==chunk.readable_end)) throw new Error('Argument range frontier changed.');
+      const decoder=previous && next ? previous.decoder : new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
+      this.#interactionArgumentRange={session,stamp,interaction,text:decoder.decode(bytes,{stream:chunk.next_offset!=null}),offset,field,next:chunk.next_offset??null,end:chunk.readable_end,decoder};
+      this.#tui.requestRender();
+    } catch(error){if(current())this.#showTransient('error',`Arguments unavailable: ${compactDiagnostic(error)}`);}
+  }
+
+  async #loadInteractionBody(interaction: InteractionRef): Promise<void> {
+    const session=this.#session, overlay=this.#hitlOverlay;
+    if(!session || !overlay) return;
+    const rows=this.#interactionPage?.items ?? session.state.pendingInteractions;
+    const index=rows.findIndex(item=>sameInteractionRef(item.interaction,interaction));
+    if(index<0 || hasInteractionBody(rows[index]!)) return;
+    const selected=rows[index]!;
+    if(hasInteractionBody(selected))return;
+    const ordinal=Number(this.#interactionPage?.page.items[index]?.offset ?? selected.source_offset);
+    const lease=this.#presentationLease(), stamp=this.#interactionStamp(), generation=++this.#interactionBodyRead;
+    const current=()=>this.#hitlOverlay===overlay && this.#isCurrentPresentationLease(lease) && generation===this.#interactionBodyRead && stamp===this.#interactionStamp() && sameInteractionRef(this.#interactionFocus ?? interaction,interaction);
+    try {
+      let offset=0, total:number|undefined; const bytes:Uint8Array[]=[];
+      do {
+        const chunk=await session.interactionValue(interaction,ordinal,this.#interactionPage?.page,offset);
+        if(!current()) return;
+        if(!Number.isSafeInteger(chunk.readable_end) || chunk.readable_end>16*1024*1024 || (total!==undefined && total!==chunk.readable_end)) throw new Error('This body exceeds the selected-body cache; inspect bounded argument ranges.');
+        total=chunk.readable_end;
+        if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
+        const value=Uint8Array.from(atob(chunk.bytes_base64),character=>character.charCodeAt(0));
+        if(value.length>65536 || (offset<total && !value.length) || offset+value.length>total || (chunk.next_offset ?? null)!==(offset+value.length<total?offset+value.length:null)) throw new Error('Interaction range did not advance exactly.');
+        bytes.push(value);offset+=value.length;
+      } while(offset<total);
+      const data=new Uint8Array(total);let at=0;for(const value of bytes){data.set(value,at);at+=value.length;}
+      const body=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(data)) as RoutedInteraction;
+      const header=rows[index]!;
+      if(hasInteractionBody(header)) return;
+      validateInteractionBody(header,body);
+      this.#interactionBody={session,stamp,interaction,body};this.#renderState(session.state);
+    } catch(error) {if(current())this.#showTransient('error',`Interaction body unavailable: ${compactDiagnostic(error)}`);}
   }
 
   /**
@@ -1912,8 +2147,7 @@ export class RustxTuiApp {
     const dismissed = this.#hitlDismissed;
     if (dismissed !== undefined) {
       if (
-        findPendingInteraction(state.pendingInteractions, dismissed.interaction) ===
-        undefined
+        !this.#interactionPartial() && findPendingInteraction(state.pendingInteractions, dismissed.interaction) === undefined
       ) {
         this.#hitlDismissed = undefined;
       } else {
@@ -1933,7 +2167,7 @@ export class RustxTuiApp {
     }
     const existing = this.#hitlOverlay;
     if (existing !== undefined) {
-      existing.update(state.pendingInteractions, focused, this.#preferences);
+      existing.update(state.pendingInteractions, focused, this.#preferences, !this.#interactionPartial());
       this.#tui.requestRender();
       return;
     }
@@ -1989,8 +2223,13 @@ export class RustxTuiApp {
         this.#applyPreference({ type: "expand_interaction", interaction });
       },
       onChange: () => this.#tui.requestRender(),
+      onPage: (direction) => { void this.#pageInteractions(direction); },
+      pageLabel: () => this.#interactionPageLabel(),
+      onLoadBody: (interaction) => { void this.#loadInteractionBody(interaction); },
+      onArguments: (interaction,next,field) => {void this.#readInteractionArguments(interaction,next,field);},
+      argumentRange: (interaction) => {const range=this.#interactionArgumentRange;return range && range.session===this.#session && range.stamp===this.#interactionStamp() && sameInteractionRef(range.interaction,interaction) ? {label:`${range.field} bytes ${range.offset}–${range.next ?? range.end} of ${range.end}`,text:range.text}:undefined;},
     });
-    overlay.update(state.pendingInteractions, focused, this.#preferences);
+    overlay.update(state.pendingInteractions, focused, this.#preferences, !this.#interactionPartial());
     this.#showPopup(overlay, { width: "94%", minWidth: 44, heightPercent: 90 });
     this.#hitlOverlay = overlay;
   }
@@ -2014,6 +2253,9 @@ export class RustxTuiApp {
     if (attachedSession === undefined) return;
     void attachedSession
       .respondInteraction(interaction, response)
+      .then(() => {
+        if (this.#isCurrentPresentationLease(lease) && this.#interactionPartial()) {void attachedSession.resync().catch(error=>{if(this.#isCurrentPresentationLease(lease))this.#showTransient('error',`Interaction observation requires recovery: ${compactDiagnostic(error)}`);});}
+      })
       .catch((error: unknown) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
         if (this.#hitlOverlay === overlay) {

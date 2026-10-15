@@ -1,6 +1,6 @@
-import type { SourceSettings, EffectiveConfiguration, ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v46';
+import type { SourceSettings, EffectiveConfiguration, ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v48';
 export function cfg3Source(): SourceSettings {
-  return { absent_resource_revision: 'missing', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {},
+  return { absent_resource_revision: 'missing', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, repair_sequence: '0',
     user: { path: '/bound/rustx.toml', revision: 'user-1', authored: { providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'environment', variable: 'USER_KEY' } } }, models: {} } },
     workspace: { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: {} },
     user_resource_root: '/home/user/rustx/.agents', workspace_resource_root: '/workspace/.agents', runtime_root: '/home/user/rustx/runtime',
@@ -24,7 +24,7 @@ export function cfg3Application(): ConfigurationApplication {
   const identity = { input_revision: 'input-2', attempt: '2' };
   return { scope: 'ses_00000000-0000-7000-8000-000000000001', version: '2', desired: identity,
     sources: [{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }],
-    units: { execution_policy: { status: 'applied' }, instructions: { status: 'ready', impact: 'prefix_changed' } },
+    units: { execution_policy: { status: 'applied'}, instructions: { status: 'ready', impact: 'prefix_changed' } },
     candidate: { identity, expected_binding: '1', impact: 'prefix_changed' } };
 }
 /** A source application, exactly as native publishes one for a source scope. */
@@ -32,5 +32,5 @@ export function cfg3SourceApplication(target: SourceTarget = { kind: 'user' }): 
   return { scope: target.kind === 'user' ? 'source:user' : `source:workspace:${target.directory}`,
     version: '2', desired: { input_revision: 'input-2', attempt: '2' },
     sources: target.kind === 'user' ? [{ kind: 'user' }] : [{ kind: 'user' }, target],
-    units: { process_bindings: { status: 'applied' } }, candidate: null };
+    units: { process_bindings: { status: 'applied'} }, candidate: null };
 }

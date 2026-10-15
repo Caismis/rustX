@@ -1,6 +1,10 @@
+import { JournalSourceProvider } from './JournalValue';
+import { contentBindings } from '../../../../protocol/app-server/projection';
+import { DeferredContent } from './DeferredContent';
+import { CollectionPages } from './CollectionPages';
 import { useSubagents } from './subagent-context';
 import { ToolInspectionContext, useToolTraceNavigation } from './tool-inspection';
-import type { AppServerClient } from '../../client/app-server';
+import type { AppServerClient, SessionView } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { useModelRetryFeedback } from './ModelRetry';
 import { AgentTranscript } from './AgentTranscript';
@@ -14,14 +18,14 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v46';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v48';
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
-import { transcriptPresentation, turnAnchor } from '../../client/transcript';
+import { transcriptContent, transcriptPresentation, turnAnchor } from '../../client/transcript';
 import { type ForkOrigin, useForkPoint } from './ForkPoint';
 
 export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, onHistorical, onOpenSource, previewCurrent, onMode }: {
@@ -45,12 +49,21 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     const preview = view.attachment === 'attaching' ? view.preview : undefined;
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
-    return { id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, attempt: snapshot.attempt,
+    return { nodeId:view.nodeId,generation:state.generation,content: preview ? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt,
       transcript: snapshot.transcript, statuses: snapshot.statuses, conversation_id: snapshot.conversation_id,
       readingPreview: !!preview, history: preview?.history ?? view.history, trace: mode === 'trajectory' ? view.trace : undefined,
       safe: lineageSwitchSafe(view), disabled: disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
         || !!view.modelMutation || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure };
   }, shallowEqual);
+  const contentView = useMemo(() => Symbol('root content view'), [view?.observation, sessionId, mode, scope?.selected]);
+  const currentContentView = useRef(contentView); currentContentView.current = contentView;
+  const ownsContent = useMemo(() => () => currentContentView.current === contentView && mode === 'chat' && !scope?.selected && !!view?.observation && !!sessionId && client.isAttachmentObservationCurrent(sessionId, view.observation), [contentView, mode, scope?.selected, client, sessionId, view?.observation]);
+  const ownsHistory=()=>{
+    if(!view?.readingPreview||!view.history?.page.source_cut||currentContentView.current!==contentView||mode!=='chat'||scope?.selected)return false;
+    const state=client.getSnapshot(),current=state.views[view.id];
+    return state.generation===view.generation&&current?.nodeId===view.nodeId&&current.attachment==='attaching'
+      &&current.preview?.history.page.source_cut===view.history.page.source_cut;
+  };
   const fork = useForkPoint(client, mode === 'chat' ? view?.target : undefined, view?.history?.page.inherited_through);
   const inspect = useToolTraceNavigation(locator => view ? client.locateToolTrace(view.id, locator) : Promise.resolve(false), onMode, !!view && !view.readingPreview && !scope?.selected, `root:${sessionId}:${view?.target?.attachment_id}`);
   const readingEntries = useMemo(() => view ? transcriptPresentation(view.history, view.transcript) : [], [view?.history, view?.transcript]);
@@ -60,7 +73,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id)} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={() => void client.loadEarlierTrace(view.id).catch(() => {})}/>
-    : <ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+    : <JournalSourceProvider source={view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={`${view.id}:${view.target?.attachment_id}`} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
         const clientCurrent = () => {
@@ -74,7 +87,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
           void work.then(committed=>{if(committed)intent.commit(turnAnchor(committed.id),clientCurrent);});
         }
       }}/>}
-      latestTurn={view.attempt && view.attempt.phase.type!=='settled' ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id}) : undefined}
+      latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       historical={!!view.history?.window} onLatest={() => client.returnToLatest(view.id)} onActiveTurn={setActive}>
       {fork.error && <div role="alert"><p>{fork.error}</p><button type="button" onClick={fork.retry}>{tx('agent:fork-point.reload')}</button></div>}
       {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript requestFeedback={requestFeedback} snapshot={view} history={view.history} loadLater={() => void client.loadLater(view.id)} loadEarlier={() => void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {})} lineageSwitchSafe={view.safe} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical} forkPoint={fork.point} onOpenSource={onOpenSource ? origin => {
@@ -82,10 +95,27 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
         // cancellation in this same stack, before any browser scroll can interleave.
         onOpenSource(origin, viewport.current?.beginNavigation);
       } : undefined} sourceDisabled={!view.readable}/>}
+      {view.configurationObservation && <p role={view.configurationObservation.error?'alert':'status'}>{view.configurationObservation.error??tx('common:activity.content-deferred')}</p>}
       <ConversationActivity client={client} sessionId={view.id}/>
       <PendingMessage client={client} sessionId={view.id}/>
-    </ChatViewport></ToolInspectionContext>;
+    <ConversationCollections client={client} sessionId={view.id} owned={ownsContent}/>
+    {view?.target && view.hasCheckpoint && <DeferredContent client={client} target={view.target} bindings={view.content} owned={ownsContent}/>}
+      </ChatViewport></ToolInspectionContext></JournalSourceProvider>;
 }
+function ConversationCollections({client,sessionId,owned}:{client:AppServerClient;sessionId:string;owned:()=>boolean}) {
+  const agents = useSubagents();
+  const source=useClientSelector(client,state=>{const view=state.views[sessionId];return view?.target&&view.checkpoint?.collections.some(value=>value.next_offset!=null)?{target:view.target,checkpoint:view.checkpoint}:undefined;},shallowEqual);
+  return source?<CollectionPages client={client} target={source.target} cut={source.checkpoint.read_cut} collections={source.checkpoint.collections} owned={owned} onAgent={agents ? agent => agents.open(agent.agent_id, agent) : undefined} onModel={async(page,item,current)=>{
+    const revision=source.checkpoint.snapshot.model_status?.binding_revision;
+    if(revision==null)throw new Error('Native catalog binding is unavailable.');
+    const profile=/^model_catalog\.models\.@([0-9]+)\.profiles$/.exec(page.domain);
+    if(page.domain!=='model_catalog.models'&&!profile)throw new Error('Native catalog selection is unavailable for this field.');
+    const model_position=profile?Number(profile[1]):Number(item.offset),profile_position=profile?Number(item.offset):null;
+    if(!Number.isSafeInteger(model_position)||profile_position!==null&&!Number.isSafeInteger(profile_position))throw new Error('Native catalog position exceeds protocol bounds.');
+    await client.selectCatalogModel(sessionId,{binding_revision:revision,model_position,profile_position},current);
+  }}/>:null;
+}
+
 function ConversationActivity({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const snapshot = useClientSelector(client, state => {
     const value = state.views[sessionId]?.snapshot;
@@ -95,13 +125,17 @@ function ConversationActivity({ client, sessionId }: { client: AppServerClient; 
 }
 
 export function ConversationDocks({ client, sessionId, disabled }: { client: AppServerClient; sessionId: string; disabled: boolean }) {
+  const todoEvidence = (view: SessionView) => {
+    const frontier = view.checkpoint?.collections.find(value => value.domain === 'todos.tasks');
+    return frontier && JSON.stringify([frontier.revision, frontier.total, frontier.loaded, frontier.next_offset]);
+  };
   const view = useClientSelector(client, state => state.views[sessionId], (a, b) => a === b || !!a && !!b &&
     a.target === b.target && a.submissions === b.submissions && a.snapshot?.goal === b.snapshot?.goal && a.snapshot?.todos === b.snapshot?.todos &&
-    a.snapshot?.inbound === b.snapshot?.inbound && activeAttempt(a.snapshot) === activeAttempt(b.snapshot));
+    a.snapshot?.inbound === b.snapshot?.inbound && activeAttempt(a.snapshot) === activeAttempt(b.snapshot) && todoEvidence(a) === todoEvidence(b));
   if (!view) return null;
   return <>
-    <TodoDock state={todoDock(view.snapshot)}/>
-    <GoalDock state={goalDock(view.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={disabled} mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)}/>
+    <TodoDock state={todoDock(view.snapshot, view.checkpoint?.collections.find(value => value.domain === 'todos.tasks'))}/>
+    <GoalDock state={goalDock(view.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={disabled} mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} loadObjective={expected => client.goalObjective(view.id, expected)}/>
     <QueueDock disabled={disabled} observation={view.snapshot?.inbound} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)}/>
   </>;
 }
@@ -111,9 +145,17 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     const view = state.views[sessionId];
     // A detached or disconnected view's last reading is not current occupancy.
     const current = state.connection === 'connected' && view?.attachment === 'attached';
-    return { statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.occupancy : undefined };
+    return { preview: !current && view?.attachment === 'attaching' ? view.statisticsPreview : undefined, nodeId: view?.nodeId, generation: state.generation, target:current?view?.target:undefined, observation:current?view?.attachmentObservation:undefined, statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.occupancy : undefined };
   }, shallowEqual);
-  return <ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/>;
+  return <JournalSourceProvider source={facts.target&&facts.observation ? {
+    client,target:facts.target,cut:()=>client.getSnapshot().views[sessionId]?.checkpoint?.read_cut,
+    owned:()=>!!facts.observation&&client.isAttachmentObservationCurrent(sessionId,facts.observation),
+  }:facts.preview ? {
+    client, sessionId, nodeId:facts.preview.nodeId, cut:()=>facts.preview?.cut,
+    owned:()=>client.getSnapshot().generation===facts.generation && client.getSnapshot().views[sessionId]?.attachment==='attaching'
+      && client.getSnapshot().views[sessionId]?.statisticsPreview===facts.preview
+      && client.getSnapshot().views[sessionId]?.nodeId===facts.nodeId,
+  }:undefined}><ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/></JournalSourceProvider>;
 }
 
 function PendingMessage({ client, sessionId }: { client: AppServerClient; sessionId: string }) {

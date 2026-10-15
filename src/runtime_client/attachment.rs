@@ -32,13 +32,6 @@ use super::types::{
     RuntimeClientResult,
 };
 
-/// Native attachment admission facts, without version negotiation or RPC envelopes.
-pub struct AttachedSnapshot {
-    pub attachment: RuntimeAttachment,
-    pub snapshot: super::snapshot::RuntimeClientSnapshot,
-    pub cursor: super::types::RuntimeClientCursor,
-}
-
 macro_rules! native_control {
     ($name:ident, $write:expr $(, $argument:ident : $ty:ty)*) => {
         /// Invoke the existing native control owner through this attachment.
@@ -70,12 +63,21 @@ pub struct RuntimeAttachment {
 }
 
 impl RuntimeAttachment {
-    native_control!(job_status, false, id: &crate::runtime::identity::ToolExecutionId);
+    /// Read the first bounded page for one exact Job identity.
+    /// # Errors
+    /// Closed attachments, unavailable jobs, and expired native cuts are explicit.
+    pub fn job_status(
+        &self,
+        id: &crate::runtime::identity::ToolExecutionId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?
+            .domain_page(&format!("jobs.{id}"), 0, 32)
+    }
     /// Read the finite Job listing through the native owner.
     /// # Errors
     /// A closed attachment is explicit.
     pub fn job_list(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        Ok(self.access(false)?.job_list())
+        self.access(false)?.job_list()
     }
     native_control!(agent_status, false, id: &crate::runtime::identity::AgentId);
     native_control!(agent_list, false);
@@ -96,7 +98,7 @@ impl RuntimeAttachment {
         id: &crate::runtime::identity::AgentId,
         offset: Option<usize>,
         limit: usize,
-    ) -> Result<crate::durable::reading::ConversationTurnPage, RuntimeClientError> {
+    ) -> Result<crate::runtime_client::turn::ObservedTurnPage, RuntimeClientError> {
         self.access(false)?.agent_turns(id, offset, limit)
     }
     /// Locate one child Turn or page around its captured native cut.
@@ -118,26 +120,26 @@ impl RuntimeAttachment {
         &self,
         id: &crate::runtime::identity::ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(false)?.job_wait(id, false).await
+        self.access(false)?.job_wait(id).await
     }
-    /// Cancel this Job and await physical settlement.
+    /// Commit cancellation intent for this exact Job without awaiting physical settlement.
     /// # Errors
     /// Read-only attachments and unknown Jobs are rejected.
-    pub async fn job_cancel(
+    pub fn job_cancel(
         &self,
         id: &crate::runtime::identity::ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.job_wait(id, true).await
+        self.access(true)?.job_cancel_intent(id)
     }
     /// Read a coherent child-owned conversation cut, waiting after its cursor.
     /// # Errors
     /// Closed attachments, unknown Agents and unavailable live endpoints reject.
-    pub async fn agent_conversation(
+    pub async fn agent_observe(
         &self,
         id: &crate::runtime::identity::AgentId,
-        after: Option<super::agent_conversation::AgentConversationCursor>,
+        after: Option<super::agent_observation::AgentObservationCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(false)?.agent_conversation(id, after).await
+        self.access(false)?.agent_observe(id, after).await
     }
     /// Deliver to the active child or atomically admit its next activation.
     /// # Errors
@@ -159,22 +161,32 @@ impl RuntimeAttachment {
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(false)?.agent_wait(id, false).await
+        self.access(false)?.agent_wait(id).await
     }
-    /// Interrupt only the activation current at owner admission.
+    /// Commit interruption intent for the exact reserved/current activation at owner admission.
     /// # Errors
-    /// Read-only attachments, unknown Agents and admission reservations are rejected.
-    pub async fn agent_interrupt(
+    /// Read-only attachments, unknown Agents and unavailable native owners are rejected.
+    pub fn agent_interrupt(
         &self,
         id: &crate::runtime::identity::AgentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.agent_wait(id, true).await
+        self.access(true)?.agent_interrupt_intent(id)
     }
 
     native_control!(model_get, false);
     native_control!(model_catalog, false);
     native_control!(capability, false);
-    native_control!(model_set, true, config: crate::model::session::SessionModelConfig);
+    /// Replace a standalone conversation's in-memory model selection.
+    /// Durable Sessions require their native Session owner instead.
+    /// # Errors
+    /// Closed/read-only attachments and Session-owned runtimes are rejected;
+    /// invalid configurations leave the current selection unchanged.
+    pub fn model_set(
+        &self,
+        config: crate::model::session::SessionModelConfig,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.model_set(config)
+    }
     native_control!(goal_control, true, control: crate::goal::GoalControl);
     native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize, records: Vec<super::trace::TraceCursor>);
     native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
@@ -227,13 +239,13 @@ impl RuntimeAttachment {
         self.access(true)?.cancel_current_attempt()
     }
 
-    /// Read the linearized native projection.
+    /// Read one bounded checkpoint from the native cut owner.
     /// # Errors
-    /// Closed attachments or projection failures.
-    pub fn snapshot(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(false)?
-            .snapshot()
-            .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor })
+    /// Closed attachments, unavailable sources, and expired cuts are explicit.
+    pub fn checkpoint(
+        &self,
+    ) -> Result<super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
+        self.access(false)?.checkpoint()
     }
 
     /// Answer through the runtime-owned interaction coordinator.
@@ -297,7 +309,7 @@ impl RuntimeAttachment {
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
-        if self.read_only && request.is_mutating() {
+        if self.read_only && (request.is_mutating() || !request.is_inspection_read()) {
             return Self::error_response(
                 id,
                 RuntimeClientError::InvalidState {
@@ -315,6 +327,10 @@ impl RuntimeAttachment {
             );
         }
         let result = match request {
+            RuntimeClientRequest::Goal {
+                control: crate::goal::GoalControl::Show,
+                ..
+            } => inner.domain_page("goal", 0, 32),
             RuntimeClientRequest::Goal { control, .. } => inner.goal_control(control),
             RuntimeClientRequest::Initialize { .. } => Err(RuntimeClientError::InvalidRequest {
                 message: "the attachment is already initialized".to_owned(),
@@ -327,9 +343,19 @@ impl RuntimeAttachment {
             RuntimeClientRequest::InteractionRespond { .. } => {
                 unreachable!("interaction responses are handled asynchronously")
             }
-            RuntimeClientRequest::SnapshotGet { .. } => inner
-                .snapshot()
-                .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
+            RuntimeClientRequest::CheckpointGet { .. } => {
+                inner
+                    .checkpoint()
+                    .map(|checkpoint| RuntimeClientResult::Checkpoint {
+                        checkpoint: Box::new(checkpoint),
+                    })
+            }
+            RuntimeClientRequest::TracePageGet {
+                before,
+                limit,
+                records,
+                ..
+            } => inner.trace_page(before, limit, records),
             RuntimeClientRequest::TranscriptPageGet {
                 before_cursor,
                 limit,
@@ -344,17 +370,65 @@ impl RuntimeAttachment {
                     Err(error) => Err(error),
                 }
             }
-            RuntimeClientRequest::CapabilityGet { .. } => inner.capability(),
-            RuntimeClientRequest::ModelCatalogGet { .. } => inner.model_catalog(),
-            RuntimeClientRequest::ModelGet { .. } => inner.model_get(),
+            RuntimeClientRequest::ContentRead {
+                content_ref,
+                offset,
+                max_bytes,
+                ..
+            } => inner
+                .content_read(&content_ref, offset, max_bytes)
+                .map(|chunk| RuntimeClientResult::ContentChunk { chunk }),
+            RuntimeClientRequest::CheckpointPageGet {
+                cut,
+                domain,
+                offset,
+                limit,
+                ..
+            } => inner
+                .checkpoint_page(&cut, &domain, offset, limit)
+                .map(|page| RuntimeClientResult::CheckpointPage { page }),
+            RuntimeClientRequest::CheckpointValueRead {
+                cut,
+                domain,
+                item_offset,
+                path,
+                offset,
+                max_bytes,
+                ..
+            } => inner
+                .checkpoint_value_read(&cut, &domain, item_offset, &path, offset, max_bytes)
+                .map(|chunk| RuntimeClientResult::CheckpointValueChunk { chunk }),
+            RuntimeClientRequest::InteractionPageGet {
+                interaction,
+                path,
+                offset,
+                limit,
+                ..
+            } => inner.interaction_fields(&interaction, &path, offset, limit),
+            RuntimeClientRequest::InteractionValueRead {
+                interaction,
+                path,
+                offset,
+                max_bytes,
+                ..
+            } => inner.interaction_value_read(&interaction, &path, offset, max_bytes),
+            RuntimeClientRequest::CapabilityGet { .. } => inner.domain_page("capabilities", 0, 32),
+            RuntimeClientRequest::ModelCatalogGet { .. } => {
+                inner.domain_page("model_catalog.models", 0, 32)
+            }
+            RuntimeClientRequest::ModelGet { .. } => inner.domain_page("model", 0, 32),
             RuntimeClientRequest::ModelSet { config, .. } => inner.model_set(*config),
-            RuntimeClientRequest::JobStatus { job_id, .. } => inner.job_status(&job_id),
-            RuntimeClientRequest::JobList { .. } => Ok(inner.job_list()),
-            RuntimeClientRequest::AgentStatus { agent_id, .. } => inner.agent_status(&agent_id),
-            RuntimeClientRequest::AgentList { .. } => inner.agent_list(),
-            RuntimeClientRequest::AgentConversation { .. }
+            RuntimeClientRequest::JobStatus { job_id, .. } => inner.job_status_page(&job_id),
+            RuntimeClientRequest::JobList { .. } => inner.domain_page("jobs", 0, 32),
+            RuntimeClientRequest::AgentStatus { agent_id, .. } => {
+                inner.domain_page(&format!("agents.{agent_id}"), 0, 32)
+            }
+            RuntimeClientRequest::AgentList { .. } => inner.domain_page("agents", 0, 32),
+            RuntimeClientRequest::ObserveEvents { .. }
+            | RuntimeClientRequest::AgentObserve { .. }
             | RuntimeClientRequest::AgentStatistics { .. }
             | RuntimeClientRequest::AgentTrace { .. }
+            | RuntimeClientRequest::TraceLocateTool { .. }
             | RuntimeClientRequest::AgentTraceLocateTool { .. }
             | RuntimeClientRequest::AgentTraceDetail { .. } => {
                 unreachable!("Agent statistics are read asynchronously")
@@ -366,7 +440,9 @@ impl RuntimeAttachment {
                 ..
             } => inner
                 .agent_transcript_window(&agent_id, &at, limit)
-                .map(|window| RuntimeClientResult::TranscriptWindow { window }),
+                .map(|window| RuntimeClientResult::TranscriptWindow {
+                    window: Box::new(window),
+                }),
             RuntimeClientRequest::AgentTurns {
                 agent_id,
                 offset,
@@ -413,7 +489,7 @@ impl RuntimeAttachment {
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
-        if self.read_only && request.is_mutating() {
+        if self.read_only && (request.is_mutating() || !request.is_inspection_read()) {
             return Self::error_response(
                 id,
                 RuntimeClientError::InvalidState {
@@ -423,9 +499,39 @@ impl RuntimeAttachment {
         }
 
         let domain_result = match &request {
-            RuntimeClientRequest::AgentConversation {
+            RuntimeClientRequest::TraceLocateTool { locator, .. } => {
+                Some(inner.trace_locate_tool(locator.clone()).await)
+            }
+            RuntimeClientRequest::InteractionPageGet {
+                interaction,
+                path,
+                offset,
+                limit,
+                ..
+            } => Some(
+                inner
+                    .interaction_fields_async(interaction, path, *offset, *limit)
+                    .await,
+            ),
+            RuntimeClientRequest::InteractionValueRead {
+                interaction,
+                path,
+                offset,
+                max_bytes,
+                ..
+            } => Some(
+                inner
+                    .interaction_value_read_async(interaction, path, (*offset, *max_bytes))
+                    .await,
+            ),
+            RuntimeClientRequest::ObserveEvents { after_cursor, .. } => Some(
+                inner
+                    .observe_events(&self.attachment_id, *after_cursor)
+                    .await,
+            ),
+            RuntimeClientRequest::AgentObserve {
                 agent_id, after, ..
-            } => Some(inner.agent_conversation(agent_id, after.clone()).await),
+            } => Some(inner.agent_observe(agent_id, after.clone()).await),
             RuntimeClientRequest::AgentStatistics { agent_id, .. } => {
                 Some(inner.agent_statistics(agent_id).await)
             }
@@ -452,12 +558,8 @@ impl RuntimeAttachment {
                     .agent_trace_locate_tool(agent_id, locator.clone())
                     .await,
             ),
-            RuntimeClientRequest::JobWait { job_id, .. } => {
-                Some(inner.job_wait(job_id, false).await)
-            }
-            RuntimeClientRequest::JobCancel { job_id, .. } => {
-                Some(inner.job_wait(job_id, true).await)
-            }
+            RuntimeClientRequest::JobWait { job_id, .. } => Some(inner.job_wait(job_id).await),
+            RuntimeClientRequest::JobCancel { job_id, .. } => Some(inner.job_cancel_intent(job_id)),
             RuntimeClientRequest::AgentSendMessage {
                 agent_id,
                 message,
@@ -469,10 +571,10 @@ impl RuntimeAttachment {
                     .await,
             ),
             RuntimeClientRequest::AgentWait { agent_id, .. } => {
-                Some(inner.agent_wait(agent_id, false).await)
+                Some(inner.agent_wait(agent_id).await)
             }
             RuntimeClientRequest::AgentInterrupt { agent_id, .. } => {
-                Some(inner.agent_wait(agent_id, true).await)
+                Some(inner.agent_interrupt_intent(agent_id))
             }
             _ => None,
         };

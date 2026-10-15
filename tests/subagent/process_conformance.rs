@@ -241,10 +241,67 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         rustx::runtime::subagent::SubagentState::Failed
     );
     let detail = subagent.detail.clone().expect("the terminal detail");
-    assert!(
-        detail.contains("Timeout") || detail.contains("timed out"),
-        "the bounded diagnostic is the child's own deadline outcome: {detail}"
+    assert!(detail.len() <= 512, "the inline diagnostic remains bounded");
+    let agent_id = subagent.agent_id.clone();
+    let trace = process
+        .call(rustx::app_server::protocol::Method::AgentTrace {
+            target: process.target(),
+            agent_id: agent_id.clone(),
+            before: None,
+            limit: 32,
+            records: Vec::new(),
+        })
+        .await;
+    let Ok(rustx::app_server::protocol::MethodResult::Trace { page }) = trace else {
+        panic!("the child's original timeout evidence: {trace:?}");
+    };
+    let cut = page.read_cut.as_ref().expect("standalone Child Trace cut");
+    assert_eq!(cut.conversation_id, subagent.child_conversation_id);
+    let request = page
+        .records
+        .iter()
+        .find(|record| {
+            record.kind == rustx::runtime_client::trace::TraceKind::Request
+                && record.state == rustx::runtime_client::trace::TraceState::TimedOut
+        })
+        .expect("actual child request timeout fact");
+    let source = request
+        .fields
+        .iter()
+        .find(|field| {
+            matches!(
+                field,
+                rustx::runtime_client::trace::TraceFieldSource::Value {
+                    field: rustx::runtime_client::trace::TraceFieldKind::Failure,
+                    ..
+                }
+            )
+        })
+        .expect("original child failure selector");
+    let rustx::runtime_client::trace::TraceFieldSource::Value {
+        domain,
+        item_offset,
+        path,
+        encoded_bytes,
+        ..
+    } = source
+    else {
+        unreachable!()
+    };
+    assert!(*encoded_bytes > 0);
+    let original: rustx::model::ModelError =
+        rustx::runtime_client::checkpoint::decode_domain_value(
+            process
+                .selected_value(Some(agent_id), cut, domain, *item_offset, path)
+                .await,
+        )
+        .expect("original typed timeout reason");
+    assert_eq!(original.kind, rustx::model::ModelErrorKind::Timeout);
+    assert_eq!(
+        original.timeout_phase,
+        Some(rustx::model::ModelTimeoutPhase::ResponseStart)
     );
+    assert!(original.message.contains("deadline"), "{original:?}");
 
     // Exactly one Runtime-authored failure notice exists, and it contains
     // no child publication content (the child never produced any: every

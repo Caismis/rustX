@@ -282,6 +282,16 @@ impl GatedSink {
             .expect("the record channel stays open");
     }
 
+    /// Captures completed wire records while the gate is open.
+    fn complete_records(&self) -> Vec<String> {
+        let state = self.state.lock().expect("gate lock");
+        let text = std::str::from_utf8(&state.bytes).expect("the output stream is UTF-8");
+        text.split_inclusive('\n')
+            .filter(|record| record.ends_with('\n'))
+            .map(|record| record[..record.len() - 1].to_owned())
+            .collect()
+    }
+
     /// The number of complete records written so far.
     fn record_count(&self) -> usize {
         *self.records.borrow()
@@ -489,6 +499,91 @@ fn as_response(record: &str) -> RuntimeClientResponse {
     serde_json::from_str(record).expect("the record is a Runtime Client response")
 }
 
+/// Joins activation's actual eligibility publication before opening test I/O.
+async fn await_initial_eligibility(host: &RuntimeClientHost) {
+    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime_client::EventDelivery;
+
+    let (attachment, _) = host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("the startup observer attaches");
+    let subscription = attachment
+        .subscribe_events(RuntimeClientCursor::new(0))
+        .expect("the startup observer subscribes to native activation");
+    tokio::time::timeout(LIVENESS_GUARD, async {
+        loop {
+            let EventDelivery::Event(event) = subscription.next().await else {
+                panic!("the startup subscription retains activation's publication");
+            };
+            if event.event.facts().iter().any(|fact| match fact {
+                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
+                    *eligibility == AdoptionEligibility::Eligible
+                }
+                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                    assert_eq!(checkpoint.cursor, event.cursor);
+                    checkpoint.snapshot.configuration_adoption_eligibility
+                        == AdoptionEligibility::Eligible
+                }
+                _ => false,
+            }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("activation publishes its native eligible state");
+    assert_eq!(
+        host.checkpoint()
+            .expect("the published startup checkpoint")
+            .snapshot
+            .configuration_adoption_eligibility,
+        AdoptionEligibility::Eligible
+    );
+    drop(subscription);
+    attachment.detach();
+}
+
+/// Validates identity-only initialization and the independent wire checkpoint.
+fn bootstrap_cursor(records: &[String], conversation: &str) -> RuntimeClientCursor {
+    assert_eq!(
+        records.len(),
+        2,
+        "only bootstrap responses precede subscription"
+    );
+    let initialized = as_response(&records[0]);
+    assert_eq!(initialized.id.get(), 1);
+    assert_eq!(initialized.error, None);
+    let Some(RuntimeClientResult::Initialized {
+        conversation_id, ..
+    }) = initialized.result
+    else {
+        panic!("initialize must succeed: {initialized:?}");
+    };
+    assert_eq!(conversation_id.as_str(), conversation);
+    let response = as_response(&records[1]);
+    assert_eq!(response.id.get(), 4);
+    assert_eq!(response.error, None);
+    let Some(RuntimeClientResult::Checkpoint { checkpoint }) = response.result else {
+        panic!("the independent checkpoint must succeed: {response:?}");
+    };
+    assert_eq!(checkpoint.snapshot.conversation_id.as_str(), conversation);
+    assert_eq!(checkpoint.read_cut.conversation_id.as_str(), conversation);
+    checkpoint.cursor
+}
+
+/// Confirms the transport subscribed after exactly the captured native cursor.
+fn assert_subscribed(record: &str, cursor: RuntimeClientCursor) {
+    let response = as_response(record);
+    assert_eq!(response.id.get(), 2);
+    assert_eq!(response.error, None);
+    assert_eq!(
+        response.result,
+        Some(RuntimeClientResult::Subscribed {
+            after_cursor: cursor
+        })
+    );
+}
+
 /// Parses one captured record as a notification.
 fn as_event(record: &str) -> RuntimeClientProtocolEvent {
     serde_json::from_str(record).expect("the record is a Runtime Client notification")
@@ -521,7 +616,7 @@ async fn idle_host(conversation: &str) -> RuntimeClientHost {
 async fn coalesced_records_in_one_read_are_separated() {
     let host = idle_host("conv_c5795629-01f9-7187-9de4-8c27e7ee2e94").await;
     let mut input = initialize_record(1);
-    input.extend_from_slice(b"{\"method\":\"snapshot_get\",\"id\":2}\n");
+    input.extend_from_slice(b"{\"method\":\"checkpoint_get\",\"id\":2}\n");
     input.extend_from_slice(b"{\"method\":\"capability_get\",\"id\":3}\n");
     let outcome = run_session(host.endpoint(), &[&input], PIPE_BYTES).await;
 
@@ -559,7 +654,7 @@ async fn crlf_records_are_accepted() {
     initialize.extend_from_slice(b"\r\n");
     let outcome = run_session(
         host.endpoint(),
-        &[&initialize, b"{\"method\":\"snapshot_get\",\"id\":2}\r\n"],
+        &[&initialize, b"{\"method\":\"checkpoint_get\",\"id\":2}\r\n"],
         PIPE_BYTES,
     )
     .await;
@@ -598,8 +693,12 @@ async fn an_escaped_newline_stays_inside_one_record() {
     // Acceptance is durable and asynchronous from admission: wait for the
     // admitted attempt to settle so the committed inbound is deterministically
     // folded into the snapshot before it is read.
-    fixture.runtime.settlement_signal().notified().await;
-    let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+    fixture.runtime.child_attempt_settlement(0).await;
+    let (snapshot, _) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     let MessageBlock::User(message) = &snapshot.messages[0] else {
         panic!("the inbound message committed");
     };
@@ -622,7 +721,7 @@ async fn physical_multiline_json_is_a_framing_failure() {
         fixture.host.endpoint(),
         &[
             &initialize_record(1),
-            b"{\n  \"method\": \"snapshot_get\",\n  \"id\": 2\n}\n",
+            b"{\n  \"method\": \"checkpoint_get\",\n  \"id\": 2\n}\n",
         ],
         PIPE_BYTES,
     )
@@ -657,11 +756,11 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ("unknown-method", br#"{"method":"future_method","id":2}"#),
         (
             "unknown-field",
-            br#"{"method":"snapshot_get","id":2,"extra":true}"#,
+            br#"{"method":"checkpoint_get","id":2,"extra":true}"#,
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":68}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":69}"#,
         ),
     ];
     for (name, record) in cases {
@@ -697,7 +796,8 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         assert!(
             fixture
                 .host
-                .snapshot()
+                .checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
                 .expect("snapshot")
                 .0
                 .messages
@@ -718,7 +818,7 @@ async fn eof_distinguishes_a_boundary_from_a_truncated_record() {
 
     let host = idle_host("conv_50fbd3a1-03b4-71a2-a83f-34ded4f86c94").await;
     let mut truncated = initialize_record(1);
-    truncated.extend_from_slice(br#"{"method":"snapshot_get","id":2}"#);
+    truncated.extend_from_slice(br#"{"method":"checkpoint_get","id":2}"#);
     let outcome = run_session(host.endpoint(), &[&truncated], PIPE_BYTES).await;
     assert!(matches!(
         outcome.result,
@@ -748,7 +848,8 @@ async fn eof_distinguishes_a_boundary_from_a_truncated_record() {
 ///
 /// The interleaving is established, never timed:
 ///
-/// 1. `initialize` + `subscribe_events` make the subscription branch live;
+/// 1. `initialize`, an independent checkpoint, and its successful
+///    `subscribe_events` receipt make the subscription branch live;
 /// 2. only a prefix of the next request is fed, with no terminating LF;
 /// 3. the input stream's `(bytes taken, reader parked)` watch proves the
 ///    prefix was consumed and the reader is waiting for more bytes, which
@@ -764,13 +865,14 @@ async fn eof_distinguishes_a_boundary_from_a_truncated_record() {
 async fn a_partly_read_record_survives_an_event_winning_the_select() {
     /// The prefix of the pending request, carrying its correlation id: a
     /// response for it can only exist if these exact bytes survived.
-    const REQUEST_PREFIX: &[u8] = br#"{"method":"snapshot_get","id":7"#;
+    const REQUEST_PREFIX: &[u8] = br#"{"method":"checkpoint_get","id":7"#;
     /// The rest of that request, released only after the event was written.
     const REQUEST_SUFFIX: &[u8] = b"}\n";
 
     let fixture = RuntimeClientFixture::builder("conv_35db73dd-716a-7150-92fc-a523f3847c9d")
         .build()
         .await;
+    await_initial_eligibility(&fixture.host).await;
     let sink = CapturingSink::default();
     let input = ScriptedInput::new();
     let endpoint = fixture.host.endpoint();
@@ -780,13 +882,23 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
         async move { serve_stdio_jsonl_with_io(endpoint, input, sink).await }
     });
 
-    // 1. Attach and subscribe after the initialized cursor (activation's
-    //    eligibility publication is cursor 1), so the session selects over
-    //    both arms and nothing is pending on the subscription yet.
+    // 1. Initialization admits an identity; the independent checkpoint
+    //    supplies the actual native cursor for the subscription.
     let mut fed = input.push(&initialize_record(1));
-    fed += input.push(b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":1}\n");
+    fed += input.push(b"{\"method\":\"checkpoint_get\",\"id\":4}\n");
+    sink.await_record(|record| !is_event(record) && as_response(record).id.get() == 4)
+        .await;
+    let cursor = bootstrap_cursor(
+        &sink.complete_records(),
+        "conv_35db73dd-716a-7150-92fc-a523f3847c9d",
+    );
+    fed += input.push(
+        format!("{{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":{cursor}}}\n")
+            .as_bytes(),
+    );
     sink.await_record(|record| !is_event(record) && as_response(record).id.get() == 2)
         .await;
+    assert_subscribed(&sink.complete_records()[2], cursor);
 
     // 2/3. Feed only a prefix of the next request, then establish that the
     //      reader consumed it and is waiting for the rest: the input future
@@ -805,21 +917,23 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     // boundary, the runtime's `unavailable` eligibility: the last event.
     sink.await_record(|record| {
         is_event(record)
-            && matches!(
-                as_event(record).event,
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
-            )
+            && as_event(record).event.facts().iter().any(|fact| {
+                matches!(
+                    fact,
+                    RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
+                )
+            })
     })
     .await;
     let written = sink.complete_records();
     assert_eq!(
         written.len(),
-        4,
-        "exactly the two responses and the shutdown events: the partial \
+        5,
+        "exactly the three responses and the shutdown events: the partial \
          record was not answered, fabricated, or split, got {written:?}"
     );
     assert!(
-        is_event(&written[2]) && is_event(&written[3]),
+        is_event(&written[3]) && is_event(&written[4]),
         "the events overtook a record the transport had already partly read"
     );
 
@@ -838,13 +952,16 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     let records = sink.records();
     assert_eq!(
         records.len(),
-        5,
+        6,
         "the interrupted record produced exactly one response: {records:?}"
     );
-    let response = as_response(&records[4]);
+    let response = as_response(&records[5]);
     assert_eq!(response.id.get(), 7, "the prefix's id survived the drop");
     assert!(
-        matches!(response.result, Some(RuntimeClientResult::Snapshot { .. })),
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::Checkpoint { .. })
+        ),
         "the reassembled record decoded to the original request, got {:?}",
         response.result
     );
@@ -930,7 +1047,8 @@ async fn an_input_record_over_the_limit_is_rejected_without_dispatch() {
     assert!(
         fixture
             .host
-            .snapshot()
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
             .messages
@@ -939,13 +1057,10 @@ async fn an_input_record_over_the_limit_is_rejected_without_dispatch() {
     );
 }
 
-/// An outbound record over the limit terminates the session without
-/// truncating it and without splitting it across records.
+/// A large canonical item has a bounded identity/checkpoint read. Transport
+/// observation neither truncates its source nor closes the byte stream.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_oversized_outbound_record_terminates_without_truncating() {
-    // The seeded canonical history alone exceeds the record limit, so the
-    // `initialize` response (which carries the linearized snapshot) cannot
-    // be framed.
+async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint() {
     let huge = "y".repeat(STDIO_JSONL_MAX_RECORD_BYTES + 1024);
     let fixture = RuntimeClientFixture::builder("conv_aee41511-3bd5-7248-b7db-5be6c3a1c36f")
         .initial_messages(vec![MessageBlock::User(support::fake::inbound_message(
@@ -957,24 +1072,49 @@ async fn an_oversized_outbound_record_terminates_without_truncating() {
         .await;
     let outcome = run_session(
         fixture.host.endpoint(),
-        &[&initialize_record(1)],
+        &[
+            &initialize_record(1),
+            b"{\"method\":\"checkpoint_get\",\"id\":2}\n",
+        ],
         LARGE_PIPE_BYTES,
     )
     .await;
-
+    assert!(matches!(outcome.result, Ok(StdioSessionEnd::InputEof)));
+    assert_eq!(outcome.records.len(), 2, "one complete record per request");
+    assert!(outcome.records[0].len() < 4096, "finite identity receipt");
+    assert!(matches!(
+        as_response(&outcome.records[0]).result,
+        Some(RuntimeClientResult::Initialized { .. })
+    ));
+    assert!(outcome.records[1].len() <= STDIO_JSONL_MAX_RECORD_BYTES);
+    let Some(RuntimeClientResult::Checkpoint { checkpoint }) =
+        as_response(&outcome.records[1]).result
+    else {
+        panic!("independent bounded checkpoint");
+    };
+    assert_eq!(checkpoint.snapshot.message_descriptors.len(), 1);
     assert!(
-        matches!(
-            outcome.result,
-            Err(StdioTransportError::OutboundRecordTooLarge {
-                limit: STDIO_JSONL_MAX_RECORD_BYTES
-            })
-        ),
-        "got {:?}",
-        outcome.result
+        checkpoint.snapshot.message_descriptors[0]
+            .content
+            .iter()
+            .any(|binding| {
+                binding.deferred
+                    && binding.content_ref.representation
+                        == rustx::runtime_client::content::ContentRepresentation::Utf8Text
+                    && binding.content_ref.readable_end == huge.len() as u64
+            }),
+        "complete original content frontier remains readable"
     );
-    assert!(
-        outcome.bytes.is_empty(),
-        "nothing partial or split reached the output stream"
+    let ledger = fixture
+        .runtime
+        .durable_ledger()
+        .expect("original canonical source");
+    let MessageBlock::User(message) = &ledger[0] else {
+        panic!("original User")
+    };
+    assert_eq!(
+        message.content,
+        vec![UserContentBlock::Text(TextBlock { text: huge })]
     );
 }
 
@@ -1029,10 +1169,11 @@ async fn the_output_stream_is_protocol_only_and_ordered() {
     // captured stream is complete before EOF stops servicing.
     sink.await_record(|record| {
         is_event(record)
-            && matches!(
-                as_event(record).event,
-                RuntimeClientEvent::AttemptSettled { .. }
-            )
+            && as_event(record)
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     drop(client);
@@ -1129,7 +1270,11 @@ async fn eof_detaches_without_cancelling_the_running_attempt() {
         .await
         .expect("the model must park")
         .expect("the park channel stays open");
-    let (snapshot, cursor) = fixture.host.snapshot().expect("snapshot");
+    let (snapshot, cursor) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert!(
         !matches!(
             snapshot.attempt.as_ref().expect("an attempt exists").phase,
@@ -1169,7 +1314,10 @@ async fn eof_detaches_without_cancelling_the_running_attempt() {
             else {
                 panic!("the subscription stays open");
             };
-            if let RuntimeClientEvent::AttemptSettled { outcome, .. } = event.event {
+            if let Some(outcome) = event.event.facts().iter().find_map(|fact| match fact {
+                RuntimeClientEvent::AttemptSettled { outcome, .. } => Some(outcome.clone()),
+                _ => None,
+            }) {
                 return outcome;
             }
         }
@@ -1236,7 +1384,11 @@ async fn a_broken_output_pipe_detaches_without_retrying() {
     );
 
     // Detached, and the attempt is untouched.
-    let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+    let (snapshot, _) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert!(!matches!(
         snapshot.attempt.expect("an attempt exists").phase,
         RuntimeClientAttemptPhase::Settled { .. }
@@ -1266,7 +1418,7 @@ async fn detach_keeps_the_byte_stream_open() {
             &initialize_record(1),
             b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":0}\n",
             b"{\"method\":\"detach\",\"id\":3}\n",
-            b"{\"method\":\"snapshot_get\",\"id\":4}\n",
+            b"{\"method\":\"checkpoint_get\",\"id\":4}\n",
             &initialize_record(5),
         ],
         PIPE_BYTES,
@@ -1337,12 +1489,17 @@ async fn shutdown_does_not_close_the_transport() {
     // biased over notifications, so the remaining requests are written only
     // after this, keeping the captured stream deterministic.
     sink.await_record(|record| {
-        is_event(record) && matches!(as_event(record).event, RuntimeClientEvent::RuntimeShutdown)
+        is_event(record)
+            && as_event(record)
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::RuntimeShutdown))
     })
     .await;
 
     for record in [
-        b"{\"method\":\"snapshot_get\",\"id\":4}\n".to_vec(),
+        b"{\"method\":\"checkpoint_get\",\"id\":4}\n".to_vec(),
         br#"{"method":"submit_inbound","id":5,"content":[{"type":"text","text":"late"}]}"#.to_vec(),
         b"\n".to_vec(),
         b"{\"method\":\"capability_get\",\"id\":6}\n".to_vec(),
@@ -1377,7 +1534,7 @@ async fn shutdown_does_not_close_the_transport() {
     assert!(
         matches!(
             responses[3].result,
-            Some(RuntimeClientResult::Snapshot { .. })
+            Some(RuntimeClientResult::Checkpoint { .. })
         ),
         "reads still work after shutdown"
     );
@@ -1388,7 +1545,7 @@ async fn shutdown_does_not_close_the_transport() {
     );
     assert!(matches!(
         responses[5].result,
-        Some(RuntimeClientResult::Capability { .. })
+        Some(RuntimeClientResult::DomainPage { ref page }) if page.domain == "capabilities" && page.items.len() == 1
     ));
 
     // This idle shutdown has no attempt to cancel, so canonical history is
@@ -1396,7 +1553,8 @@ async fn shutdown_does_not_close_the_transport() {
     assert!(
         fixture
             .host
-            .snapshot()
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
             .messages
@@ -1439,6 +1597,7 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         .script(turn("second"))
         .build()
         .await;
+    await_initial_eligibility(&fixture.host).await;
     let scripted_events = 6_u64;
 
     let sink = GatedSink::new();
@@ -1449,18 +1608,30 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         async move { serve_stdio_jsonl_with_io(endpoint, session_input, sink).await }
     });
 
-    // 1. The gate is open: initialize and subscribe get their responses.
+    // 1. The open gate delivers identity admission and an independent
+    //    checkpoint before the exact-cursor subscription is admitted.
     client
         .write_all(&initialize_record(1))
         .await
         .expect("write initialize");
-    // Subscribe after the initialized cursor: activation's eligibility
-    // publication is cursor 1, so nothing is pending on the subscription.
     client
-        .write_all(b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":1}\n")
+        .write_all(b"{\"method\":\"checkpoint_get\",\"id\":4}\n")
+        .await
+        .expect("write bootstrap checkpoint");
+    sink.await_records(2).await;
+    let cursor = bootstrap_cursor(
+        &sink.complete_records(),
+        "conv_3597d6e9-eaa8-78c2-a2ec-39be7714d35b",
+    );
+    client
+        .write_all(
+            format!("{{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":{cursor}}}\n")
+                .as_bytes(),
+        )
         .await
         .expect("write subscribe");
-    sink.await_records(2).await;
+    sink.await_records(3).await;
+    assert_subscribed(&sink.complete_records()[2], cursor);
 
     // 2. Block the consumer, then send one more request. Nothing has been
     //    published since, so the input arm is the only ready one: the
@@ -1468,9 +1639,9 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
     //    blocked write of its response.
     sink.close();
     client
-        .write_all(b"{\"method\":\"snapshot_get\",\"id\":3}\n")
+        .write_all(b"{\"method\":\"checkpoint_get\",\"id\":3}\n")
         .await
-        .expect("write snapshot_get");
+        .expect("write checkpoint_get");
     sink.await_blocked().await;
 
     // 3. Submit work through the runtime harness while the transport is
@@ -1491,12 +1662,9 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         .expect("the emitted channel stays open");
     // Provider emission is not runtime settlement. Freeze the actual terminal
     // frontier before admitting the second turn or repairing a replay cursor.
-    tokio::time::timeout(
-        LIVENESS_GUARD,
-        fixture.runtime.settlement_signal().notified(),
-    )
-    .await
-    .expect("the first attempt settles while its consumer is blocked");
+    tokio::time::timeout(LIVENESS_GUARD, fixture.runtime.child_attempt_settlement(0))
+        .await
+        .expect("the first attempt settles while its consumer is blocked");
     fixture
         .host
         .submit_inbound(vec![UserContentBlock::Text(TextBlock {
@@ -1515,13 +1683,14 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
     .await
     .expect("the runtime must keep executing while the transport is stalled")
     .expect("the emitted channel stays open");
-    tokio::time::timeout(
-        LIVENESS_GUARD,
-        fixture.runtime.settlement_signal().notified(),
-    )
-    .await
-    .expect("the second attempt settles before taking a repair cursor");
-    let (progressed, _) = fixture.host.snapshot().expect("snapshot");
+    tokio::time::timeout(LIVENESS_GUARD, fixture.runtime.child_attempt_settlement(1))
+        .await
+        .expect("the second attempt settles before taking a repair cursor");
+    let (progressed, _) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert!(
         progressed.messages.len() >= 3,
         "the first attempt settled and the queued message drained while the \
@@ -1529,13 +1698,13 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         progressed.messages.len()
     );
 
-    // 5. The transport grew nothing: still exactly the two records it had
+    // 5. The transport grew nothing: still exactly the three records it had
     //    written before the block, plus the one record in flight. There is
     //    no outbound queue for a backlog to accumulate in, so a stalled
     //    consumer cannot grow transport memory.
     assert_eq!(
         sink.record_count(),
-        2,
+        3,
         "a stalled transport queues no protocol records"
     );
 
@@ -1559,14 +1728,18 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
     assert!(earliest_serviceable > after_cursor);
     assert_eq!(
         sink.record_count(),
-        3,
+        4,
         "the blocked record completed once, and nothing was queued behind it"
     );
     drop(client);
 
     // 7. Transport loss is not cancellation: the committed conversation
     //    stands and no attempt was cancelled.
-    let (final_snapshot, _) = fixture.host.snapshot().expect("snapshot");
+    let (final_snapshot, _) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert!(final_snapshot.messages.len() >= 3);
     if let RuntimeClientAttemptPhase::Settled { outcome } =
         final_snapshot.attempt.expect("an attempt exists").phase
@@ -1585,9 +1758,17 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
             id: rustx::runtime_client::RequestId::new(1),
             protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         });
-    let Some(RuntimeClientResult::Initialized { cursor, .. }) = response.result else {
+    let Some(RuntimeClientResult::Initialized { .. }) = response.result else {
         panic!("the lagged transport released its attachment");
     };
+    let response =
+        endpoint.handle_request(rustx::runtime_client::RuntimeClientRequest::CheckpointGet {
+            id: rustx::runtime_client::RequestId::new(1),
+        });
+    let Some(RuntimeClientResult::Checkpoint { checkpoint }) = response.result else {
+        panic!("explicit repair checkpoint")
+    };
+    let cursor = checkpoint.cursor;
     let response = endpoint.handle_request(
         rustx::runtime_client::RuntimeClientRequest::SubscribeEvents {
             id: rustx::runtime_client::RequestId::new(2),

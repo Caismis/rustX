@@ -50,10 +50,7 @@ use crate::events::types::SubagentOwnershipKind;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use crate::runtime::inbound::ConversationInboundMailbox;
-use crate::runtime::interaction::{
-    InteractionOutcome, InteractionRef, InteractionRequest, RoutedInteraction,
-    RoutedInteractionError,
-};
+use crate::runtime::interaction::{InteractionOutcome, InteractionRef, RoutedInteractionError};
 use crate::runtime::types::{CancellationReason, DurabilityGate};
 use crate::runtime::workflow::WorkflowId;
 use crate::runtime::{MonotonicClock, RuntimeClock};
@@ -119,7 +116,7 @@ enum Decision {
     Accepted {
         started_at: DateTime<Utc>,
         deadline_at_millis: Option<u64>,
-        journal_sequence: u64,
+        committed: Box<crate::events::types::RuntimeEventEnvelope>,
     },
     RolledBack,
     Failed(SubagentStartError),
@@ -352,14 +349,14 @@ struct SubagentRecord {
     /// The bounded terminal failure/cancellation diagnostic. A successful
     /// child's answer content never appears here: the durable terminal
     /// inbound publication is the one result channel (Issue #178).
-    detail: Option<String>,
+    detail: Option<Arc<str>>,
     /// The latest live activity projection reported by the child (Issue
     /// #178). Observation-plane state only: never a lifecycle input.
     observation: SubagentObservation,
     /// The redacted execution profile frozen at child start (Issue #178).
     /// `None` only for recovery-projected records, whose frozen launch
     /// specification no longer exists in this process.
-    profile: Option<SubagentExecutionProfile>,
+    profile: Option<Arc<SubagentExecutionProfile>>,
     /// The parent-validated Workflow output value of a successful
     /// Workflow-owned child: the live Workflow result channel, deliberately
     /// kept out of the observation snapshot.
@@ -422,8 +419,8 @@ impl SubagentRecord {
         })
     }
 
-    fn snapshot(&self) -> SubagentSnapshot {
-        let state = match self.lifecycle {
+    fn observation_state(&self) -> SubagentState {
+        match self.lifecycle {
             SubagentLifecycle::Running => SubagentState::Running,
             SubagentLifecycle::Starting | SubagentLifecycle::Stopping => SubagentState::Stopping,
             SubagentLifecycle::Cancelling => SubagentState::Cancelling,
@@ -432,7 +429,11 @@ impl SubagentRecord {
             SubagentLifecycle::Failed => SubagentState::Failed,
             SubagentLifecycle::Cancelled => SubagentState::Cancelled,
             SubagentLifecycle::Interrupted => SubagentState::Interrupted,
-        };
+        }
+    }
+
+    fn snapshot(&self) -> SubagentSnapshot {
+        let state = self.observation_state();
         SubagentSnapshot {
             ownership: self.ownership,
             parent_agent_id: self.parent_agent_id.clone(),
@@ -539,6 +540,10 @@ struct RegistryState {
     /// sequence, or a lifecycle fact.
     next_guidance_id: u64,
     agents: BTreeMap<AgentId, agents::AgentRecord>,
+    agent_observation_order: Vec<AgentId>,
+    agent_observation_index: HashMap<AgentId, usize>,
+    observation_generation: u64,
+    observation_layouts: HashMap<AgentId, crate::runtime::read_layout::ObservationLayoutCache>,
     /// Complete recovered physical obligation set, including allocations with
     /// no Reserved event, activation record or resume reservation. Reconciler
     /// completion never releases these runtime owners; only exact proof does.
@@ -556,7 +561,13 @@ struct RegistryState {
     /// projection cache only: it contains no waiter, settlement, or
     /// cancellation authority. The originating child coordinator remains the
     /// semantic owner of every entry.
-    routed_interactions: HashMap<InteractionRef, RoutedInteraction>,
+    routed_interactions:
+        HashMap<InteractionRef, crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
+    routed_order: BTreeMap<u64, InteractionRef>,
+    routed_direct: HashMap<InteractionRef, SubagentId>,
+    routed_by_child: HashMap<ConversationId, BTreeMap<u64, InteractionRef>>,
+    routed_generation: u64,
+    next_routed_sequence: u64,
     observer: Option<Arc<dyn SubagentObserver>>,
     failure_sink: Option<Arc<dyn SubagentDurabilityFailureSink>>,
     /// The owning `ConversationRuntime`'s durability frontier (Issue #60):
@@ -570,6 +581,8 @@ struct RegistryState {
     commit_hook: Option<Arc<CommitBoundaryHook>>,
     #[cfg(test)]
     control_handoff_hook: Option<Arc<ControlHandoffHook>>,
+    #[cfg(test)]
+    seal_boundary_hook: Option<Arc<CommitBoundaryHook>>,
     #[cfg(test)]
     gate_release_hook: Option<Arc<GateReleaseHook>>,
     /// Test seam: pauses the first live cancellation contender (deadline
@@ -743,14 +756,14 @@ pub struct SubagentSnapshot {
     /// A successful child's answer content never appears here (Issue #178):
     /// the durable terminal inbound publication is the one result channel,
     /// and the live observation/control projection carries diagnostics only.
-    pub detail: Option<String>,
+    pub detail: Option<Arc<str>>,
     /// The latest live activity projection reported by the child (Issue
     /// #178). Observation-plane state only: it never changes lifecycle
     /// semantics, and every terminal settlement resets it to neutral.
     pub observation: SubagentObservation,
     /// The redacted execution profile frozen at child start (Issue #178);
     /// `None` for recovery-projected records.
-    pub profile: Option<SubagentExecutionProfile>,
+    pub profile: Option<Arc<SubagentExecutionProfile>>,
     /// Terminal durability and physical containment are independent of the
     /// logical outcome in `state`. A committed terminal may remain physically
     /// unresolved; proven containment does not invent a logical outcome.
@@ -1222,18 +1235,33 @@ impl From<super::process::SpawnError> for SubagentStartError {
 /// reaches the consumer exactly once, in order — and
 /// [`on_activity`](Self::on_activity) is the **disposable** latest-value
 /// activity publication, which the consumer may coalesce or drop.
+#[derive(Clone)]
+pub struct ChildPendingHeadProof {
+    pub cut: crate::runtime::identity::ObservationCollectionCut,
+    pub head: Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
+    pub next_sequence: Option<u64>,
+}
+
 pub trait SubagentObserver: Send + Sync {
     /// One complete owner transition, captured under the registry lock.
     /// Workflow activations have no durable Agent owner.
-    fn on_snapshot(&self, agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot);
+    fn on_snapshot(
+        &self,
+        agent: Option<&AgentSnapshot>,
+        snapshot: &SubagentSnapshot,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
+    );
     /// One durable receipt releases the complete Agent and activation transition.
     fn on_committed(
         &self,
         agent: Option<&AgentSnapshot>,
         snapshot: &SubagentSnapshot,
-        _sequence: u64,
+        _committed: &crate::events::types::RuntimeEventEnvelope,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
     ) {
-        self.on_snapshot(agent, snapshot);
+        self.on_snapshot(agent, snapshot, cut, ordinal);
     }
 
     /// Called under the registry lock with each new live-activity snapshot
@@ -1244,26 +1272,37 @@ pub trait SubagentObserver: Send + Sync {
     /// activity snapshot as lifecycle evidence. The default body forwards
     /// to [`on_snapshot`](Self::on_snapshot), so an observer that does not
     /// distinguish the two classes keeps capturing everything.
-    fn on_activity(&self, snapshot: &SubagentSnapshot) {
-        self.on_snapshot(None, snapshot);
+    fn on_activity(
+        &self,
+        snapshot: &SubagentSnapshot,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
+    ) {
+        self.on_snapshot(None, snapshot, cut, ordinal);
     }
 
     /// Called under the registry lock when a child coordinator publishes a
     /// live interaction request. This is reliable semantic control, not
     /// disposable activity. Observers that only project lifecycle/activity
     /// state can leave this callback empty.
-    fn on_interaction_pending(&self, _interaction: &RoutedInteraction) {}
-
-    /// Called under the registry lock when a child coordinator settles one
-    /// routed interaction. The child audit remains in the child's own
-    /// conversation; this callback carries only root projection data.
-    fn on_interaction_settled(&self, _interaction: &InteractionRef, _outcome: &InteractionOutcome) {
+    fn on_interaction_pending(
+        &self,
+        _interaction: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        _proof: &ChildPendingHeadProof,
+    ) {
     }
 
-    /// Called under the registry lock when a child process dies before its
-    /// interaction coordinator can publish a terminal transition. This is a
-    /// presentation removal only; it must not synthesize a child settlement.
-    fn on_interaction_removed(&self, _interaction: &InteractionRef) {}
+    /// Child-owned settlement carries a finite post-removal native head.
+    fn on_interaction_settled(
+        &self,
+        _interaction: &InteractionRef,
+        _outcome: &InteractionOutcome,
+        _proof: &ChildPendingHeadProof,
+    ) {
+    }
+
+    /// Bootstrap or physical Child retirement updates observation only.
+    fn on_interaction_head(&self, _proof: &ChildPendingHeadProof) {}
 }
 
 /// The root Runtime Client's publication-admission authority.
@@ -1366,24 +1405,90 @@ impl SubagentInteractionSink {
 
     /// Applies one child-owned interaction request received over reliable
     /// control transport.
-    pub(crate) fn apply_requested(&self, request: InteractionRequest) {
-        self.registry
-            .apply_child_interaction_requested(&self.subagent_id, request);
+    pub(crate) async fn apply_requested(
+        &self,
+        request: crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+    ) -> Result<(), crate::runtime::interaction::InteractionRouteError> {
+        if let Some(header) = self
+            .registry
+            .apply_child_interaction_requested(&self.subagent_id, request)
+        {
+            self.registry
+                .relay_child_interaction(
+                    crate::runtime::interaction::InteractionRouteEvent::Requested(Box::new(header)),
+                )
+                .await?;
+        }
+        Ok(())
     }
-
-    /// Applies one child-owned terminal interaction transition received over
-    /// reliable control transport.
-    pub(crate) fn apply_settled(&self, interaction: &InteractionRef, outcome: &InteractionOutcome) {
-        self.registry
-            .apply_child_interaction_settled(&self.subagent_id, interaction, outcome);
+    pub(crate) async fn apply_settled(
+        &self,
+        interaction: &InteractionRef,
+        outcome: &InteractionOutcome,
+    ) -> Result<(), crate::runtime::interaction::InteractionRouteError> {
+        if self
+            .registry
+            .apply_child_interaction_settled(&self.subagent_id, interaction, outcome)
+        {
+            self.registry
+                .relay_child_interaction(
+                    crate::runtime::interaction::InteractionRouteEvent::Settled {
+                        interaction: interaction.clone(),
+                        outcome: outcome.clone(),
+                    },
+                )
+                .await?;
+        }
+        Ok(())
     }
-
-    /// Checks publication admission at the root authority's linearization
-    /// frontier. A successful result is only an ephemeral transport permit;
-    /// the originating child coordinator still commits and owns the request.
-    pub(crate) fn admit_publication(&self, interaction: &InteractionRef) -> bool {
+    pub(crate) async fn apply_removed(
+        &self,
+        interaction: &InteractionRef,
+    ) -> Result<(), crate::runtime::interaction::InteractionRouteError> {
+        if self
+            .registry
+            .remove_child_interaction(&self.subagent_id, interaction)
+        {
+            self.registry
+                .relay_child_interaction(
+                    crate::runtime::interaction::InteractionRouteEvent::Removed {
+                        interaction: interaction.clone(),
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
+    pub(crate) async fn retire_pending_routes(&self) {
+        loop {
+            let next = {
+                let state = self
+                    .registry
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let Some(index) = state.index.get(&self.subagent_id) else {
+                    return;
+                };
+                let cid = &state.records[*index].child_conversation_id;
+                state
+                    .routed_by_child
+                    .get(cid)
+                    .and_then(|pending| pending.values().next())
+                    .cloned()
+            };
+            let Some(interaction) = next else {
+                return;
+            };
+            if self.apply_removed(&interaction).await.is_err() {
+                return;
+            }
+        }
+    }
+    pub(crate) async fn admit_publication(&self, interaction: &InteractionRef) -> bool {
         self.registry
             .admit_child_interaction_publication(&self.subagent_id, interaction)
+            .await
     }
 }
 
@@ -1435,6 +1540,8 @@ pub struct SubagentRegistry {
     /// live root host before activation; without it, child publication fails
     /// closed even if a stale provider watch says `true`.
     publication_authority: Arc<Mutex<Option<Arc<dyn InteractionPublicationAuthority>>>>,
+    upstream_interactions:
+        Arc<Mutex<Option<Arc<dyn crate::runtime::interaction::InteractionRoute>>>>,
 }
 
 impl Clone for SubagentRegistry {
@@ -1512,6 +1619,10 @@ impl SubagentRegistry {
                 next_response_id: 1,
                 next_guidance_id: 1,
                 agents: BTreeMap::new(),
+                agent_observation_order: Vec::new(),
+                agent_observation_index: HashMap::new(),
+                observation_generation: 0,
+                observation_layouts: HashMap::new(),
                 recovery_pending: std::collections::BTreeSet::new(),
                 recovery_unreserved: std::collections::BTreeMap::new(),
                 recovery_inflight: std::collections::BTreeSet::new(),
@@ -1523,6 +1634,11 @@ impl SubagentRegistry {
                 records: Vec::new(),
                 index: HashMap::new(),
                 routed_interactions: HashMap::new(),
+                routed_order: BTreeMap::new(),
+                routed_direct: HashMap::new(),
+                routed_by_child: HashMap::new(),
+                routed_generation: 0,
+                next_routed_sequence: 0,
                 observer: None,
                 failure_sink: None,
                 durability_gate: None,
@@ -1530,6 +1646,8 @@ impl SubagentRegistry {
                 commit_hook: None,
                 #[cfg(test)]
                 control_handoff_hook: None,
+                #[cfg(test)]
+                seal_boundary_hook: None,
                 #[cfg(test)]
                 gate_release_hook: None,
                 #[cfg(test)]
@@ -1568,6 +1686,7 @@ impl SubagentRegistry {
             interaction_published: Arc::new(tokio::sync::Notify::new()),
             provider_available: tokio::sync::watch::channel(false).0,
             publication_authority: Arc::new(Mutex::new(None)),
+            upstream_interactions: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1658,11 +1777,16 @@ impl SubagentRegistry {
     pub(crate) fn install_observer_and_agent_snapshots(
         &self,
         observer: Arc<dyn SubagentObserver>,
-    ) -> Vec<(AgentSnapshot, SubagentSnapshot)> {
+    ) -> (
+        Vec<(AgentSnapshot, SubagentSnapshot)>,
+        crate::runtime::identity::ObservationCollectionCut,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let snapshots: Vec<_> = state
-            .agents
-            .keys()
+            .agent_observation_order
+            .iter()
+            .rev()
+            .take(32)
             .filter_map(|id| {
                 let agent = Self::agent_snapshot_locked(&state, id)?;
                 let activation =
@@ -1670,19 +1794,18 @@ impl SubagentRegistry {
                 Some((agent, activation))
             })
             .collect();
-        for (agent, activation) in &snapshots {
-            observer.on_snapshot(Some(agent), activation);
+        let cut = Self::observation_cut_locked(&state);
+        for (ordinal, (agent, activation)) in snapshots.iter().enumerate() {
+            observer.on_snapshot(Some(agent), activation, cut, Some(ordinal as u64));
         }
-        for record in &state.records {
+        for record in state.records.iter().rev().take(32) {
             if record.ownership == SubagentOwnershipKind::Workflow {
-                observer.on_snapshot(None, &record.snapshot());
+                observer.on_snapshot(None, &record.snapshot(), cut, None);
             }
         }
-        for interaction in state.routed_interactions.values() {
-            observer.on_interaction_pending(interaction);
-        }
+        observer.on_interaction_head(&Self::pending_interaction_head_locked(&state));
         state.observer = Some(observer);
-        snapshots
+        (snapshots, cut)
     }
 
     /// Updates the root human-provider state for all live and future child
@@ -1716,38 +1839,152 @@ impl SubagentRegistry {
     /// synchronized provider frontier. The registry lock covers the child
     /// liveness/identity check while the root authority lock defines the
     /// attach-vs-detach ordering. No child semantic state is created here.
-    pub(crate) fn admit_child_interaction_publication(
+    pub(crate) fn install_upstream_interaction_route(
+        &self,
+        route: Arc<dyn crate::runtime::interaction::InteractionRoute>,
+    ) {
+        *self
+            .upstream_interactions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(route);
+    }
+    async fn relay_child_interaction(
+        &self,
+        event: crate::runtime::interaction::InteractionRouteEvent,
+    ) -> Result<(), crate::runtime::interaction::InteractionRouteError> {
+        let route = self
+            .upstream_interactions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(route) = route {
+            route.publish(event).await?;
+        }
+        Ok(())
+    }
+    pub(crate) async fn admit_child_interaction_publication(
         &self,
         subagent_id: &SubagentId,
         interaction: &InteractionRef,
     ) -> bool {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(&index) = state.index.get(subagent_id) else {
-            return false;
+        let admitted = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.index.get(subagent_id).is_some_and(|index| {
+                let record = &state.records[*index];
+                record.lifecycle.is_active()
+                    && !record.publication_abandoned
+                    && interaction.conversation_id != self.config.conversation_id
+            })
         };
-        let record = &state.records[index];
-        if !record.lifecycle.is_active()
-            || record.publication_abandoned
-            || record.child_conversation_id != interaction.conversation_id
-        {
+        if !admitted {
             return false;
         }
-        let authority = self
-            .publication_authority
+        let upstream = self
+            .upstream_interactions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        authority.is_some_and(|authority| authority.admit(interaction))
+        if let Some(route) = upstream {
+            if route.admit_publication(interaction.clone()).await.is_err() {
+                return false;
+            }
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            return state.index.get(subagent_id).is_some_and(|index| {
+                state.records[*index].lifecycle.is_active()
+                    && !state.records[*index].publication_abandoned
+            });
+        }
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if !state.index.get(subagent_id).is_some_and(|index| {
+            state.records[*index].lifecycle.is_active()
+                && !state.records[*index].publication_abandoned
+        }) {
+            return false;
+        }
+        self.publication_authority
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|authority| authority.admit(interaction))
     }
 
     /// Returns the live child interaction projection for the Runtime Client
     /// bootstrap cut. These values are never used as recovery authority.
     #[must_use]
-    pub(crate) fn pending_interaction_projection(&self) -> Vec<RoutedInteraction> {
+    pub(crate) fn pending_interaction_head(&self) -> ChildPendingHeadProof {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut interactions: Vec<_> = state.routed_interactions.values().cloned().collect();
-        interactions.sort_by(|left, right| left.interaction.cmp(&right.interaction));
-        interactions
+        Self::pending_interaction_head_locked(&state)
+    }
+    fn pending_interaction_cut_locked(
+        state: &RegistryState,
+    ) -> crate::runtime::identity::ObservationCollectionCut {
+        crate::runtime::identity::ObservationCollectionCut {
+            generation: state.routed_generation,
+            total: state.routed_interactions.len() as u64,
+        }
+    }
+    fn pending_interaction_head_locked(state: &RegistryState) -> ChildPendingHeadProof {
+        Self::pending_interaction_page_locked(state, None, 32)
+    }
+    fn pending_interaction_page_locked(
+        state: &RegistryState,
+        after: Option<u64>,
+        limit: usize,
+    ) -> ChildPendingHeadProof {
+        let start = after.map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded);
+        ChildPendingHeadProof {
+            cut: Self::pending_interaction_cut_locked(state),
+            head: state
+                .routed_order
+                .range((start, std::ops::Bound::Unbounded))
+                .take(if state.routed_generation == u64::MAX {
+                    0
+                } else {
+                    limit
+                })
+                .map(|(_, reference)| state.routed_interactions[reference].clone())
+                .collect(),
+            next_sequence: state
+                .routed_order
+                .range((start, std::ops::Bound::Unbounded))
+                .nth(limit)
+                .map(|(sequence, _)| *sequence),
+        }
+    }
+    pub(crate) fn pending_interaction_page(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<ChildPendingHeadProof, crate::runtime::identity::ObservationCollectionReadError>
+    {
+        if limit == 0 || limit > 32 {
+            return Err(
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid Child pending page bound",
+                ),
+            );
+        }
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        cut.validate_current(Self::pending_interaction_cut_locked(&state))?;
+        Ok(Self::pending_interaction_page_locked(&state, after, limit))
+    }
+    pub(crate) fn pending_interaction_source_at(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        sequence: u64,
+    ) -> Result<
+        crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        crate::runtime::identity::ObservationCollectionReadError,
+    > {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        cut.validate_current(Self::pending_interaction_cut_locked(&state))?;
+        let reference = state.routed_order.get(&sequence).ok_or(
+            crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                "Child pending source unavailable",
+            ),
+        )?;
+        Ok(state.routed_interactions[reference].clone())
     }
 
     /// Installs the durability-failure sink.
@@ -2362,7 +2599,7 @@ impl SubagentRegistry {
                                 Ok(committed) => Decision::Accepted {
                                     started_at,
                                     deadline_at_millis: execution_deadline.map(|deadline| config.monotonic_clock.now_millis().saturating_add(deadline.as_millis())),
-                                    journal_sequence: committed.sequence,
+                                    committed: Box::new(committed),
                                 },
                                 Err(error) => Decision::Failed(SubagentStartError::Durability { detail: error.to_string() }),
                             }
@@ -2375,11 +2612,21 @@ impl SubagentRegistry {
                         .expect("exact ownership committer retains its capacity reservation");
                     if let Decision::Accepted {
                         started_at,
-                        journal_sequence,
+                        committed,
                         ..
                     } = &decision
                     {
                         if matches!(terminal, SubagentTerminalMode::Normal) {
+                            if !state.agents.contains_key(&child_agent_id) {
+                                let ordinal = state.agent_observation_order.len();
+                                state
+                                    .agent_observation_index
+                                    .insert(child_agent_id.clone(), ordinal);
+                                state.agent_observation_order.push(child_agent_id.clone());
+                                state
+                                    .observation_layouts
+                                    .insert(child_agent_id.clone(), Arc::default());
+                            }
                             state
                                 .agents
                                 .entry(child_agent_id.clone())
@@ -2388,8 +2635,8 @@ impl SubagentRegistry {
                                     agent.finish_resume(&subagent_id);
                                 })
                                 .or_insert_with(|| agents::AgentRecord {
-                                    created_sequence: *journal_sequence,
-                                    authority: authority.clone(),
+                                    created_sequence: committed.sequence,
+                                    authority: Arc::new(authority.clone()),
                                     workspace: workspace.clone(),
                                     conversation_id: child_conversation_id.clone(),
                                     latest_activation: subagent_id.clone(),
@@ -2432,7 +2679,7 @@ impl SubagentRegistry {
                             control: None,
                             detail: None,
                             observation: SubagentObservation::default(),
-                            profile: Some(profile.clone()),
+                            profile: Some(Arc::new(profile.clone())),
                             terminal_workflow_value: None,
                             pending_terminal: None,
                             publication_abandoned: false,
@@ -2446,7 +2693,7 @@ impl SubagentRegistry {
                             &mut state,
                             &self.state_version,
                             index,
-                            *journal_sequence,
+                            committed,
                         );
                     }
                     self.state_version.send_modify(|version| *version += 1);
@@ -2680,6 +2927,13 @@ impl SubagentRegistry {
         }
     }
 
+    fn observation_ordinal_locked(state: &RegistryState, id: &AgentId) -> Option<u64> {
+        state
+            .agent_observation_index
+            .get(id)
+            .map(|index| (state.agent_observation_order.len() - 1 - index) as u64)
+    }
+
     fn clone_for_task(&self) -> Self {
         Self {
             recovery_reconciliation: self.recovery_reconciliation.clone(),
@@ -2691,9 +2945,225 @@ impl SubagentRegistry {
             interaction_published: Arc::clone(&self.interaction_published),
             provider_available: self.provider_available.clone(),
             publication_authority: Arc::clone(&self.publication_authority),
+            upstream_interactions: Arc::clone(&self.upstream_interactions),
         }
     }
 
+    fn observation_cut_locked(
+        state: &RegistryState,
+    ) -> crate::runtime::identity::ObservationCollectionCut {
+        crate::runtime::identity::ObservationCollectionCut {
+            generation: state.observation_generation,
+            total: state.agent_observation_order.len() as u64,
+        }
+    }
+    /// Exercise the real native callback and capture its exact source generation
+    /// while its actual owner lock is held.
+    #[cfg(test)]
+    pub(crate) fn republish_lifecycle_for_test(
+        &self,
+        activation: &SubagentId,
+    ) -> crate::runtime::identity::ObservationCollectionCut {
+        let mut state = self.state.lock().expect("test registry owner");
+        let index = state.index[activation];
+        publish_snapshot(&mut state, &self.state_version, index);
+        Self::observation_cut_locked(&state)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observation_cut(&self) -> crate::runtime::identity::ObservationCollectionCut {
+        Self::observation_cut_locked(&self.state.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+    #[cfg(test)]
+    pub(crate) fn observation_ordinal(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        id: &AgentId,
+    ) -> Result<u64, crate::runtime::identity::ObservationCollectionReadError> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        cut.validate_current(Self::observation_cut_locked(&state))?;
+        let index = *state.agent_observation_index.get(id).ok_or(
+            crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                "native Agent source unavailable",
+            ),
+        )?;
+        Ok((state.agent_observation_order.len() - 1 - index) as u64)
+    }
+    fn observation_source_locked(state: &RegistryState, id: &AgentId) -> AgentObservationSource {
+        let agent = &state.agents[id];
+        let activation = &state.records[state.index[&agent.latest_activation]];
+        let current_activation = agent
+            .resuming
+            .as_ref()
+            .filter(|value| value.identity_persisted)
+            .map(|value| value.activation_id.clone())
+            .or_else(|| {
+                (!activation.lifecycle.is_terminal() || !activation.physical_settlement_proven)
+                    .then(|| agent.latest_activation.clone())
+            });
+        AgentObservationSource {
+            layout: state.observation_layouts[id].clone(),
+            authority: agent.authority.clone(),
+            profile: activation.profile.clone(),
+            title_agent_id: id.clone(),
+            parent_agent_id: activation.parent_agent_id.clone(),
+            activation_id: activation.subagent_id.clone(),
+            child_conversation_id: agent.conversation_id.clone(),
+            agent: activation.agent.as_str().into(),
+            definition_digest: activation.definition_digest.as_str().into(),
+            profile_digest: activation.profile_digest.as_str().into(),
+            state: Self::agent_state_locked(state, id).expect("native Agent owns an activation"),
+            current_activation,
+            activation_state: activation.observation_state(),
+            detail: activation.detail.clone(),
+            observation: activation.observation.clone(),
+            started_at: activation.started_at,
+            workspace: activation.workspace.clone(),
+        }
+    }
+    pub(crate) fn with_observation_value_by_id<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        id: &AgentId,
+        read: impl FnOnce(&AgentObservationValue<'_>) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            if !state.agents.contains_key(id) {
+                return Err(
+                    crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                        "native Agent source unavailable",
+                    ),
+                );
+            }
+            Self::observation_source_locked(&state, id)
+        };
+        Ok(source.with_value(read))
+    }
+    #[cfg(test)]
+    pub(crate) fn with_observation_value<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: u64,
+        read: impl FnOnce(&AgentObservationValue<'_>) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            let ordinal = usize::try_from(ordinal).map_err(|_| {
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid native collection ordinal",
+                )
+            })?;
+            let index = state
+                .agent_observation_order
+                .len()
+                .checked_sub(ordinal.saturating_add(1))
+                .ok_or(
+                    crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                        "native collection ordinal exceeds frontier",
+                    ),
+                )?;
+            Self::observation_source_locked(&state, &state.agent_observation_order[index])
+        };
+        Ok(source.with_value(read))
+    }
+    pub(crate) fn with_observation_source_by_id<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        id: &AgentId,
+        read: impl FnOnce(&AgentObservationSource) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            if !state.agents.contains_key(id) {
+                return Err(
+                    crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                        "native Agent source unavailable",
+                    ),
+                );
+            }
+            Self::observation_source_locked(&state, id)
+        };
+        Ok(read(&source))
+    }
+    pub(crate) fn with_observation_source<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: u64,
+        read: impl FnOnce(&AgentObservationSource) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            let ordinal = usize::try_from(ordinal).map_err(|_| {
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid native collection ordinal",
+                )
+            })?;
+            let index = state
+                .agent_observation_order
+                .len()
+                .checked_sub(ordinal.saturating_add(1))
+                .ok_or(
+                    crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                        "native collection ordinal exceeds frontier",
+                    ),
+                )?;
+            Self::observation_source_locked(&state, &state.agent_observation_order[index])
+        };
+        Ok(read(&source))
+    }
+    pub(crate) fn observation_sources_page(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        offset: u64,
+        limit: usize,
+    ) -> Result<
+        crate::runtime::identity::ObservationCollectionPage<AgentObservationSource>,
+        crate::runtime::identity::ObservationCollectionReadError,
+    > {
+        if limit == 0 || limit > 32 {
+            return Err(
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid native collection page bound",
+                ),
+            );
+        }
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        cut.validate_current(Self::observation_cut_locked(&state))?;
+        let start = usize::try_from(offset).map_err(|_| {
+            crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                "invalid native collection offset",
+            )
+        })?;
+        if start > state.agent_observation_order.len() {
+            return Err(
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "native collection offset exceeds frontier",
+                ),
+            );
+        }
+        let end = start
+            .saturating_add(limit)
+            .min(state.agent_observation_order.len());
+        Ok(crate::runtime::identity::ObservationCollectionPage {
+            cut,
+            offset,
+            items: (start..end)
+                .map(|ordinal| {
+                    Self::observation_source_locked(
+                        &state,
+                        &state.agent_observation_order
+                            [state.agent_observation_order.len() - 1 - ordinal],
+                    )
+                })
+                .collect(),
+            next_offset: (end < state.agent_observation_order.len()).then_some(end as u64),
+        })
+    }
     /// The consistency snapshot of one subagent, if the registry knows it.
     #[must_use]
     pub fn snapshot(&self, subagent_id: &SubagentId) -> Option<SubagentSnapshot> {
@@ -2775,25 +3245,64 @@ impl SubagentRegistry {
     pub(crate) fn apply_child_interaction_requested(
         &self,
         subagent_id: &SubagentId,
-        request: InteractionRequest,
-    ) {
+        mut request: crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+    ) -> Option<crate::runtime_client::snapshot::RuntimeClientInteractionHeader> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(&index) = state.index.get(subagent_id) else {
-            return;
-        };
+        let &index = state.index.get(subagent_id)?;
         let record = &state.records[index];
         if !record.lifecycle.is_active()
             || record.publication_abandoned
-            || record.child_conversation_id != request.conversation_id
+            || request.conversation_id == self.config.conversation_id
         {
-            return;
+            return None;
         }
-        let routed = RoutedInteraction::subagent(
-            record.subagent_id.clone(),
-            record.child_conversation_id.clone(),
-            record.agent.clone(),
-            request,
-        );
+        if request.interaction
+            != InteractionRef::new(request.conversation_id.clone(), request.request_id.clone())
+            || request.body.is_some()
+            || request.body_complete
+        {
+            return None;
+        }
+        let direct_cid = record.child_conversation_id.clone();
+        match &request.source {
+            crate::runtime::interaction::InteractionSource::Primary
+                if request.conversation_id == direct_cid =>
+            {
+                request.source = crate::runtime::interaction::InteractionSource::Subagent {
+                    subagent_id: record.subagent_id.clone(),
+                    child_conversation_id: direct_cid.clone(),
+                    agent_name: record.agent.clone(),
+                };
+            }
+            crate::runtime::interaction::InteractionSource::Subagent {
+                child_conversation_id,
+                ..
+            } if *child_conversation_id == request.conversation_id => {}
+            _ => return None,
+        }
+        state
+            .routed_direct
+            .insert(request.interaction.clone(), subagent_id.clone());
+        if state.routed_interactions.contains_key(&request.interaction) {
+            return None;
+        }
+        if state.next_routed_sequence < 4_503_599_627_370_495 {
+            let sequence = state.next_routed_sequence;
+            state.next_routed_sequence = sequence + 1;
+            request.source_offset = sequence * 2 + 1;
+            state
+                .routed_order
+                .insert(sequence, request.interaction.clone());
+            state
+                .routed_by_child
+                .entry(direct_cid)
+                .or_default()
+                .insert(sequence, request.interaction.clone());
+        } else {
+            state.routed_generation = u64::MAX;
+        }
+        state.routed_generation = state.routed_generation.saturating_add(1);
+        let routed = request;
         let previous = state
             .routed_interactions
             .insert(routed.interaction.clone(), routed.clone());
@@ -2802,10 +3311,12 @@ impl SubagentRegistry {
             "a live child interaction identity was reused"
         );
         if let Some(observer) = state.observer.clone() {
-            observer.on_interaction_pending(&routed);
+            observer
+                .on_interaction_pending(&routed, &Self::pending_interaction_head_locked(&state));
         }
         #[cfg(test)]
         self.interaction_published.notify_one();
+        Some(routed)
     }
 
     /// Applies one child-owned terminal interaction transition to the
@@ -2817,24 +3328,66 @@ impl SubagentRegistry {
         subagent_id: &SubagentId,
         interaction: &InteractionRef,
         outcome: &InteractionOutcome,
-    ) {
+    ) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(&index) = state.index.get(subagent_id) else {
-            return;
+            return false;
         };
         let record = &state.records[index];
-        if record.child_conversation_id != interaction.conversation_id {
-            return;
+        if state.routed_direct.get(interaction) != Some(subagent_id) {
+            return false;
         }
-        let Some(_) = state.routed_interactions.remove(interaction) else {
+        let direct_cid = record.child_conversation_id.clone();
+        let Some(header) = state.routed_interactions.remove(interaction) else {
             // Duplicate/late child route events are harmless projection
             // duplicates. The coordinator's own pending map already made the
             // semantic transition exactly once.
-            return;
+            return false;
         };
-        if let Some(observer) = state.observer.clone() {
-            observer.on_interaction_settled(interaction, outcome);
+        let sequence = header.source_offset / 2;
+        state.routed_order.remove(&sequence);
+        state.routed_direct.remove(interaction);
+        if let Some(child) = state.routed_by_child.get_mut(&direct_cid) {
+            child.remove(&sequence);
         }
+        state.routed_generation = state.routed_generation.saturating_add(1);
+        if let Some(observer) = state.observer.clone() {
+            observer.on_interaction_settled(
+                interaction,
+                outcome,
+                &Self::pending_interaction_head_locked(&state),
+            );
+        }
+        true
+    }
+
+    fn remove_child_interaction(
+        &self,
+        subagent_id: &SubagentId,
+        interaction: &InteractionRef,
+    ) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.routed_direct.get(interaction) != Some(subagent_id) {
+            return false;
+        }
+        let Some(index) = state.index.get(subagent_id).copied() else {
+            return false;
+        };
+        let direct_cid = state.records[index].child_conversation_id.clone();
+        let Some(header) = state.routed_interactions.remove(interaction) else {
+            return false;
+        };
+        let sequence = header.source_offset / 2;
+        state.routed_direct.remove(interaction);
+        state.routed_order.remove(&sequence);
+        if let Some(child) = state.routed_by_child.get_mut(&direct_cid) {
+            child.remove(&sequence);
+        }
+        state.routed_generation = state.routed_generation.saturating_add(1);
+        if let Some(observer) = state.observer.clone() {
+            observer.on_interaction_head(&Self::pending_interaction_head_locked(&state));
+        }
+        true
     }
 
     /// Forwards a root response to the live child identified by the routed
@@ -2853,13 +3406,11 @@ impl SubagentRegistry {
                 });
             }
             let control = state
-                .records
-                .iter()
-                .find(|record| {
-                    record.child_conversation_id == interaction.conversation_id
-                        && record.lifecycle.is_active()
-                        && !record.publication_abandoned
-                })
+                .routed_direct
+                .get(interaction)
+                .and_then(|activation| state.index.get(activation))
+                .map(|index| &state.records[*index])
+                .filter(|record| record.lifecycle.is_active() && !record.publication_abandoned)
                 .and_then(|record| record.control.clone());
             let Some(control) = control else {
                 return Err(RoutedInteractionError::NotPending {
@@ -3110,9 +3661,25 @@ impl SubagentRegistry {
         subagent_id: &SubagentId,
         reason: CancellationReason,
     ) -> Option<SubagentSnapshot> {
-        if self.config.mailbox.begin_settlement_admission().is_err() {
-            return self.snapshot(subagent_id);
-        }
+        self.cancel_at_cut(subagent_id, reason, SubagentRecord::snapshot)
+            .unwrap_or_else(|_| self.snapshot(subagent_id))
+    }
+
+    pub(super) fn cancel_intent(
+        &self,
+        subagent_id: &SubagentId,
+        reason: CancellationReason,
+    ) -> Result<Option<SubagentId>, crate::runtime::inbound::MailboxError> {
+        self.cancel_at_cut(subagent_id, reason, |record| record.subagent_id.clone())
+    }
+
+    fn cancel_at_cut<T>(
+        &self,
+        subagent_id: &SubagentId,
+        reason: CancellationReason,
+        project: impl FnOnce(&SubagentRecord) -> T,
+    ) -> Result<Option<T>, crate::runtime::inbound::MailboxError> {
+        let _settlement = self.config.mailbox.begin_settlement_admission()?;
         // Test-only: park the first live cancellation contender (the fired
         // deadline task or an explicit caller) immediately before the
         // registry mutex that commits `Running -> Cancelling`. The pause
@@ -3131,10 +3698,12 @@ impl SubagentRegistry {
         }
         let (snapshot, deadline_task) = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let &index = state.index.get(subagent_id)?;
+            let Some(&index) = state.index.get(subagent_id) else {
+                return Ok(None);
+            };
             let record = &mut state.records[index];
             if record.lifecycle.is_terminal() || record.publication_abandoned {
-                return Some(record.snapshot());
+                return Ok(Some(project(record)));
             }
             let deadline_task = if record.lifecycle.is_active() {
                 record.deadline_task.take()
@@ -3161,22 +3730,37 @@ impl SubagentRegistry {
                 }
                 publish_snapshot(&mut state, &self.state_version, index);
             }
-            (state.records[index].snapshot(), deadline_task)
+            (project(&state.records[index]), deadline_task)
         };
         abort_deadline_task(deadline_task);
-        Some(snapshot)
+        Ok(Some(snapshot))
     }
 
     /// Close message admission under the same mutex as `admit_guidance_locked`.
     /// The driver drains admitted FIFO messages before granting the child seal.
     fn begin_seal(&self, subagent_id: &SubagentId) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(&index) = state.index.get(subagent_id) else {
-            return;
-        };
-        if matches!(state.records[index].lifecycle, SubagentLifecycle::Running) {
+        #[cfg(test)]
+        let hook;
+        {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(&index) = state.index.get(subagent_id) else {
+                return;
+            };
+            if !matches!(state.records[index].lifecycle, SubagentLifecycle::Running) {
+                return;
+            }
             state.records[index].lifecycle = SubagentLifecycle::Stopping;
             publish_snapshot(&mut state, &self.state_version, index);
+            #[cfg(test)]
+            {
+                hook = state.seal_boundary_hook.take();
+            }
+        }
+        // The native Stop admission is committed; the driver has not granted
+        // the physical child its seal yet. The hook never holds registry locks.
+        #[cfg(test)]
+        if let Some(hook) = hook {
+            hook.wait();
         }
     }
 
@@ -3740,10 +4324,10 @@ impl SubagentRegistry {
             // Workflow output value is the separate live Workflow result
             // channel (`workflow_agent_output`), equally kept out of the
             // snapshot.
-            record.detail = candidate.diagnostic.clone().or_else(|| {
+            record.detail = candidate.diagnostic.as_deref().map(Arc::from).or_else(|| {
                 candidate
                     .reason
-                    .map(|reason| reason_text(reason).to_owned())
+                    .map(|reason| Arc::from(reason_text(reason)))
             });
             if candidate.state == TerminalState::Succeeded {
                 record
@@ -3767,19 +4351,17 @@ impl SubagentRegistry {
             return;
         };
         let child_conversation_id = state.records[index].child_conversation_id.clone();
-        let mut removed = Vec::new();
-        state.routed_interactions.retain(|interaction, _| {
-            if interaction.conversation_id == child_conversation_id {
-                removed.push(interaction.clone());
-                false
-            } else {
-                true
-            }
-        });
+        let Some(removed) = state.routed_by_child.remove(&child_conversation_id) else {
+            return;
+        };
+        for (sequence, interaction) in removed {
+            state.routed_order.remove(&sequence);
+            state.routed_interactions.remove(&interaction);
+            state.routed_direct.remove(&interaction);
+        }
+        state.routed_generation = state.routed_generation.saturating_add(1);
         if let Some(observer) = state.observer.clone() {
-            for interaction in removed {
-                observer.on_interaction_removed(&interaction);
-            }
+            observer.on_interaction_head(&Self::pending_interaction_head_locked(&state));
         }
     }
 
@@ -3920,7 +4502,6 @@ impl SubagentRegistry {
                 self.config
                     .mailbox
                     .accept_subagent_terminal(notice, draft, event)
-                    .map(|event| event.sequence)
                     .map_err(|error| error.to_string())
             }
             Append::Workflow(payload) => {
@@ -3930,13 +4511,12 @@ impl SubagentRegistry {
                         .config
                         .mailbox
                         .commit_workflow_agent_terminal(event, output)
-                        .map(|(terminal, _)| terminal.sequence)
+                        .map(|(terminal, _)| terminal)
                         .map_err(|error| error.to_string()),
                     None => self
                         .config
                         .mailbox
                         .commit_subagent_terminal(event)
-                        .map(|event| event.sequence)
                         .map_err(|error| error.to_string()),
                 }
             }
@@ -3950,7 +4530,7 @@ impl SubagentRegistry {
         }
         debug_assert!(state.terminal_inflight.contains(subagent_id));
         match result {
-            Ok(journal_sequence) => {
+            Ok(committed) => {
                 let record = &mut state.records[index];
                 record.lifecycle = match candidate.state {
                     TerminalState::Succeeded => SubagentLifecycle::Succeeded,
@@ -3966,12 +4546,7 @@ impl SubagentRegistry {
                 } else {
                     NotificationState::Delivered
                 };
-                publish_committed_snapshot(
-                    &mut state,
-                    &self.state_version,
-                    index,
-                    journal_sequence,
-                );
+                publish_committed_snapshot(&mut state, &self.state_version, index, &committed);
                 Ok(true)
             }
             Err(error) => {
@@ -4021,6 +4596,13 @@ impl SubagentRegistry {
     pub fn install_commit_boundary_hook(&self, hook: Arc<CommitBoundaryHook>) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.commit_hook = Some(hook);
+    }
+
+    /// Parks after native Stopping publication, before physical seal permission.
+    #[cfg(test)]
+    pub(crate) fn install_seal_boundary_hook(&self, hook: Arc<CommitBoundaryHook>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.seal_boundary_hook = Some(hook);
     }
 
     /// Installs the exact test-only pause between durable ownership/record
@@ -4283,12 +4865,23 @@ fn publish_committed_snapshot(
     state: &mut RegistryState,
     version: &tokio::sync::watch::Sender<u64>,
     index: usize,
-    sequence: u64,
+    committed: &crate::events::types::RuntimeEventEnvelope,
 ) {
+    state
+        .observation_layouts
+        .insert(state.records[index].child_agent_id.clone(), Arc::default());
+    state.observation_generation = state.observation_generation.saturating_add(1);
+    let cut = SubagentRegistry::observation_cut_locked(state);
     if let Some(observer) = &state.observer {
         let snapshot = state.records[index].snapshot();
         let agent = SubagentRegistry::agent_snapshot_locked(state, &snapshot.child_agent_id);
-        observer.on_committed(agent.as_ref(), &snapshot, sequence);
+        observer.on_committed(
+            agent.as_ref(),
+            &snapshot,
+            committed,
+            cut,
+            SubagentRegistry::observation_ordinal_locked(state, &snapshot.child_agent_id),
+        );
     }
     version.send_modify(|v| *v += 1);
 }
@@ -4299,9 +4892,19 @@ fn publish_snapshot(
     index: usize,
 ) {
     let snapshot = state.records[index].snapshot();
+    state
+        .observation_layouts
+        .insert(state.records[index].child_agent_id.clone(), Arc::default());
+    state.observation_generation = state.observation_generation.saturating_add(1);
+    let cut = SubagentRegistry::observation_cut_locked(state);
     if let Some(observer) = &state.observer {
         let agent = SubagentRegistry::agent_snapshot_locked(state, &snapshot.child_agent_id);
-        observer.on_snapshot(agent.as_ref(), &snapshot);
+        observer.on_snapshot(
+            agent.as_ref(),
+            &snapshot,
+            cut,
+            SubagentRegistry::observation_ordinal_locked(state, &snapshot.child_agent_id),
+        );
     }
     version.send_modify(|v| *v += 1);
 }
@@ -4317,12 +4920,115 @@ fn publish_activity_snapshot(
     index: usize,
 ) {
     let snapshot = state.records[index].snapshot();
+    state
+        .observation_layouts
+        .insert(state.records[index].child_agent_id.clone(), Arc::default());
+    state.observation_generation = state.observation_generation.saturating_add(1);
+    let cut = SubagentRegistry::observation_cut_locked(state);
     if let Some(observer) = &state.observer {
-        observer.on_activity(&snapshot);
+        observer.on_activity(
+            &snapshot,
+            cut,
+            SubagentRegistry::observation_ordinal_locked(state, &snapshot.child_agent_id),
+        );
     }
     version.send_modify(|v| *v += 1);
 }
 
+/// Borrowed fields of the native durable Agent owner and its exact activation.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub(crate) struct AgentObservationValue<'a> {
+    pub title: &'a str,
+    pub parent_agent_id: &'a AgentId,
+    pub activation_id: &'a SubagentId,
+    pub agent_id: &'a AgentId,
+    pub child_conversation_id: &'a ConversationId,
+    pub agent: &'a str,
+    pub definition_digest: &'a str,
+    pub profile_digest: &'a str,
+    pub state: agents::AgentState,
+    pub current_activation: Option<&'a SubagentId>,
+    pub activation_state: SubagentState,
+    pub detail: Option<&'a str>,
+    pub observation: &'a SubagentObservation,
+    pub execution_profile: Option<&'a SubagentExecutionProfile>,
+    pub started_at: DateTime<Utc>,
+    pub workspace: &'a std::path::Path,
+}
+#[derive(Clone)]
+pub(crate) struct AgentObservationSource {
+    layout: crate::runtime::read_layout::ObservationLayoutCache,
+    authority: Arc<agents::DurableAgentAuthority>,
+    profile: Option<Arc<SubagentExecutionProfile>>,
+    title_agent_id: AgentId,
+    parent_agent_id: AgentId,
+    activation_id: SubagentId,
+    child_conversation_id: ConversationId,
+    agent: String,
+    definition_digest: String,
+    profile_digest: String,
+    state: agents::AgentState,
+    current_activation: Option<SubagentId>,
+    activation_state: SubagentState,
+    detail: Option<Arc<str>>,
+    observation: SubagentObservation,
+    started_at: DateTime<Utc>,
+    workspace: std::path::PathBuf,
+}
+impl AgentObservationSource {
+    pub(crate) fn direct_text(&self, path: &[String]) -> Option<&str> {
+        match path {
+            [field] => match field.as_str() {
+                "title" => Some(&self.authority.title),
+                "detail" => self.detail.as_deref(),
+                "agent" => Some(&self.agent),
+                "definition_digest" => Some(&self.definition_digest),
+                "profile_digest" => Some(&self.profile_digest),
+                "agent_id" => Some(self.title_agent_id.as_str()),
+                "parent_agent_id" => Some(self.parent_agent_id.as_str()),
+                "activation_id" => Some(self.activation_id.as_str()),
+                "child_conversation_id" => Some(self.child_conversation_id.as_str()),
+                "workspace" => self.workspace.to_str(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn indexed(
+        &self,
+    ) -> Result<&crate::runtime::read_layout::SeekableObservationSource, &'static str> {
+        self.layout
+            .get_or_init(|| {
+                self.with_value(|value| {
+                    crate::runtime::read_layout::SeekableObservationSource::new(value)
+                })
+            })
+            .as_ref()
+            .map_err(|error| *error)
+    }
+
+    pub(crate) fn with_value<R>(&self, read: impl FnOnce(&AgentObservationValue<'_>) -> R) -> R {
+        read(&AgentObservationValue {
+            title: &self.authority.title,
+            parent_agent_id: &self.parent_agent_id,
+            activation_id: &self.activation_id,
+            agent_id: &self.title_agent_id,
+            child_conversation_id: &self.child_conversation_id,
+            agent: &self.agent,
+            definition_digest: &self.definition_digest,
+            profile_digest: &self.profile_digest,
+            state: self.state,
+            current_activation: self.current_activation.as_ref(),
+            activation_state: self.activation_state,
+            detail: self.detail.as_deref(),
+            observation: &self.observation,
+            execution_profile: self.profile.as_deref(),
+            started_at: self.started_at,
+            workspace: &self.workspace,
+        })
+    }
+}
 /// One-shot barriers at the real resume staging and publication boundaries.
 #[cfg(test)]
 pub(crate) struct ResumeTestGates {
@@ -4413,7 +5119,20 @@ impl GateReleaseHook {
 impl ControlHandoffHook {
     /// Blocks the handoff until [`Self::release`].
     pub fn wait(&self) {
+        if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        }) {
+            tokio::task::block_in_place(|| self.wait_inner());
+        } else {
+            self.wait_inner();
+        }
+    }
+
+    fn wait_inner(&self) {
         let mut state = self.state.lock().expect("subagent handoff hook");
+        if matches!(*state, CommitHookState::Released) {
+            return;
+        }
         *state = CommitHookState::Entered;
         self.changed.notify_all();
         while matches!(*state, CommitHookState::Entered) {
@@ -4569,7 +5288,27 @@ pub struct TerminalAuthorityHook {
 impl TerminalAuthorityHook {
     /// Blocks the terminal settlement path until [`Self::release`].
     pub fn wait(&self) {
+        // A native driver can reach this exact pre-registry boundary on the
+        // Tokio worker that owns IO/timers. Keep the same Condvar gate, but
+        // return that reactor core while a multi-thread fixture parks here so
+        // real transport acceptance and the test liveness guard can progress.
+        if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+            matches!(
+                handle.runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::MultiThread
+            )
+        }) {
+            tokio::task::block_in_place(|| self.wait_blocking());
+        } else {
+            self.wait_blocking();
+        }
+    }
+
+    fn wait_blocking(&self) {
         let mut state = self.state.lock().expect("subagent terminal hook");
+        if matches!(*state, CommitHookState::Released) {
+            return;
+        }
         *state = CommitHookState::Entered;
         self.changed.notify_all();
         while matches!(*state, CommitHookState::Entered) {
@@ -4928,7 +5667,7 @@ mod tests {
     fn spec(task: &str) -> SubagentStartSpec {
         SubagentStartSpec {
             authority: crate::runtime::subagent::DurableAgentAuthority {
-                title: "Explore task".to_owned(),
+                title: "Explore task".into(),
                 execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                 resolved: resolved("explore"),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
@@ -5019,7 +5758,13 @@ mod tests {
     struct RecordingObserver(std::sync::Mutex<Vec<SubagentSnapshot>>);
 
     impl SubagentObserver for RecordingObserver {
-        fn on_snapshot(&self, _agent: Option<&AgentSnapshot>, snapshot: &SubagentSnapshot) {
+        fn on_snapshot(
+            &self,
+            _agent: Option<&AgentSnapshot>,
+            snapshot: &SubagentSnapshot,
+            _cut: crate::runtime::identity::ObservationCollectionCut,
+            _ordinal: Option<u64>,
+        ) {
             self.0
                 .lock()
                 .expect("recording observer lock")
@@ -7151,7 +7896,7 @@ mod tests {
             settled.settlement.publication,
             SubagentPublication::Abandoned
         );
-        assert_eq!(settled.detail.as_deref(), Some(diagnostic.as_str()));
+        assert_eq!(settled.detail.as_deref(), Some(diagnostic.as_ref()));
         assert_eq!(
             events(&plane)
                 .into_iter()
@@ -8738,10 +9483,15 @@ mod tests {
 
         let observation = SubagentObservation {
             revision: 3,
-            activity: super::super::activity::SubagentActivity::Tool {
-                tool_call_id: ToolCallId::new("call-1"),
-                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
-                progress: None,
+            activity: super::super::activity::SubagentActivity::ToolGroup {
+                active: 1,
+                representative: Some(
+                    crate::runtime::subagent::activity::SubagentToolRepresentative {
+                        tool_call_id: ToolCallId::new("call-1"),
+                        tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+                        progress: None,
+                    },
+                ),
             },
             counters: super::super::activity::SubagentActivityCounters {
                 tool_executions: 2,

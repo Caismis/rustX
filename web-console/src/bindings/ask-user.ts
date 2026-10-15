@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v46';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v48';
 import type { QuestionRowView } from '../presentation/agent/QuestionRow';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -23,7 +23,7 @@ function answerLines(entry: Record<string, unknown>): string[] | undefined {
  * persisted arguments and result. Absent when the call failed or its records
  * cannot be read unambiguously; the generic tool card then shows them raw. */
 export function askUserRow(tool: ForegroundToolExecution): QuestionRowView | undefined {
-  const id = tool.call_id;
+  const id = tool.call_id??undefined;
   if (tool.state.type !== 'settled') return { id, verdict: 'waiting' };
   const status = tool.state.result.status.type;
   const asked = questions(tool.state.arguments);

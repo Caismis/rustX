@@ -104,7 +104,7 @@ use super::super::types::{RuntimeClientCursor, RuntimeClientRequest};
 /// request. An outbound record that would exceed the limit is never
 /// truncated and never split across records; the session terminates with
 /// [`StdioTransportError::OutboundRecordTooLarge`].
-pub const STDIO_JSONL_MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
+pub const STDIO_JSONL_MAX_RECORD_BYTES: usize = 1_048_576;
 
 /// The fixed size of the transport's input read chunk.
 ///
@@ -786,7 +786,8 @@ mod tests {
             &b"   "[..],
             &b"not json"[..],
             &br#"{"method":"future_method","id":1}"#[..],
-            &br#"{"method":"snapshot_get","id":1,"extra":true}"#[..],
+            &br#"{"method":"snapshot_get","id":1}"#[..],
+            &br#"{"method":"checkpoint_get","id":1,"extra":true}"#[..],
             &br#"{"method":"initialize","id":"one","protocol_version":6}"#[..],
             &br"[]"[..],
         ] {
@@ -802,8 +803,8 @@ mod tests {
             );
         }
         assert_eq!(
-            decode_request(br#"{"method":"snapshot_get","id":3}"#).expect("valid"),
-            RuntimeClientRequest::SnapshotGet {
+            decode_request(br#"{"method":"checkpoint_get","id":3}"#).expect("valid"),
+            RuntimeClientRequest::CheckpointGet {
                 id: RequestId::new(3)
             }
         );

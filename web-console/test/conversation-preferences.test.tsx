@@ -4,7 +4,7 @@ import { ConversationPreferenceStore, conversationPreferences, CONVERSATION_PREF
 import { GeneralPage } from '../src/app/settings/general/GeneralPage';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { snapshot } from './fixture';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v46';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v48';
 
 afterEach(() => { cleanup(); conversationPreferences().update({fontSize:14, transcriptMode:'detailed', codingView:true}); });
 it('validates stored preferences and applies settings even when browser storage fails', () => {
@@ -29,7 +29,7 @@ it('General edits the three preferences, bounds the font stepper and persists th
   act(()=>conversationPreferences().update({fontSize:22}));
   expect((screen.getByRole('button',{name:'Increase font size'}) as HTMLButtonElement).disabled).toBe(true);
 });
-const process: TurnProcessView = {conversation_id:'c',attempt_id:'a',outcome:'completed',control_cursor:'1',final_message_id:'final',message_count:2,tool_call_count:0};
+const process: TurnProcessView = {attempt_id_source:null,conversation_id:'c',attempt_id:'a',outcome:'completed',control_cursor:'1',final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id:'final',message_count:2,tool_call_count:0};
 const entries: RuntimeClientTranscriptEntry[] = [
   {cursor:'1',turn_process:process,item:{type:'message',message:{role:'assistant',id:'first',content:[{type:'reasoning',text:'A reasoning preview'},{type:'text',text:'An intermediate reply'}]}}},
   {cursor:'2',turn_process:process,item:{type:'message',message:{role:'assistant',id:'final',content:[{type:'text',text:'Final reply'}]}}},

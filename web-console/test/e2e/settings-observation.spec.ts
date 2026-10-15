@@ -83,6 +83,9 @@ test('publications and an acknowledgement during outstanding convergence reads c
       await expect(notice).toBeVisible();
     };
 
+    // The initial observation must finish before holding post-write reads;
+    // otherwise the gate itself prevents the policy form becoming editable.
+    await expect(field).toBeEnabled();
     // First save: acknowledgements flow, authoritative reads are held.
     probe.armReads();
     await field.fill('19');
@@ -136,7 +139,7 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     writeFileSync(f.settings, authored.replace('stream_idle_timeout_ms = 600000', 'stream_idle_timeout_ms = 600001'));
     const revision = settings.getByText(/Revision:/);
     const before = (await revision.textContent()) ?? '';
-    await remote.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_application');
+    await remote.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_receipt');
     await expect(revision).not.toHaveText(before);
     const observed = (await revision.textContent()) ?? '';
 

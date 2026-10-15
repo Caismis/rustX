@@ -1,35 +1,29 @@
-//! Historical request inspection from frozen native authority.
-//!
-//! The one rule this module exists to enforce: **a historical request is
-//! reconstructed, never re-derived**. Every value comes from that request's
-//! own immutable [`RequestSnapshot`] and the historical Conversation Surface
-//! revision the snapshot froze, through the durable store's existing
-//! [`reconstruct_model_request`] seam. Current model configuration, the
-//! current tool catalog, the current system prompt and the current Surface
-//! are never read here, so changing a Session's model or tools after the
-//! fact cannot rewrite what an old request shows.
-//!
-//! [`RequestSnapshot`]: crate::model::snapshot::RequestSnapshot
-//! [`reconstruct_model_request`]: crate::durable::ConversationStore::reconstruct_model_request
+//! Finite canonical-message shaping for the native request read index.
+//! Full historical request reconstruction is a test-only independent oracle.
 
-use super::bounds::{
-    TRACE_DETAIL_MESSAGES, TRACE_DETAIL_TOOLS, TraceJson, TraceText, identity_fits,
-};
+#[cfg(test)]
+use super::bounds::{TRACE_DETAIL_MESSAGES, TRACE_DETAIL_TOOLS, TraceJson};
+use super::bounds::{TraceText, identity_fits};
 use super::content::{assistant_blocks, tool_result_block, user_blocks, user_source_label};
+use super::types::{TraceMessageRole, TraceRequestMessage};
+#[cfg(test)]
 use super::types::{
-    TraceMessageRole, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage,
-    TraceRequestOption, TraceToolDefinition,
+    TraceRequestDetail, TraceRequestFailure, TraceRequestOption, TraceToolDefinition,
 };
+#[cfg(test)]
 use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::message::types::MessageBlock;
 use crate::model::input::ModelInputMessage;
-use crate::model::snapshot::RequestSnapshot;
-use crate::model::types::{ModelProtocol, ModelRequest};
-
+#[cfg(test)]
 use crate::model::inspection::REQUEST_OPTION_ALLOWLIST;
+#[cfg(test)]
+use crate::model::snapshot::RequestSnapshot;
+use crate::model::types::ModelProtocol;
+#[cfg(test)]
+use crate::model::types::ModelRequest;
 
 /// The provider-neutral protocol label of one historical invocation.
-const fn protocol_label(protocol: ModelProtocol) -> &'static str {
+pub(super) const fn protocol_label(protocol: ModelProtocol) -> &'static str {
     match protocol {
         ModelProtocol::OpenAiChatCompletions => "openai_chat_completions",
         ModelProtocol::OpenAiResponses => "openai_responses",
@@ -39,6 +33,7 @@ const fn protocol_label(protocol: ModelProtocol) -> &'static str {
 
 /// The terminal outcome facts of one actual request, read from its own
 /// Journal terminal rather than from any later request's.
+#[cfg(test)]
 pub(super) struct RequestOutcome {
     pub usage: Option<crate::model::types::ModelUsage>,
     pub failure: Option<TraceRequestFailure>,
@@ -52,11 +47,12 @@ pub(super) struct RequestOutcome {
 ///
 /// Propagates the durable read failure of snapshot or Surface
 /// reconstruction; a failure is never interpreted as an empty request.
+#[cfg(test)]
 pub(super) fn request_detail(
     store: &dyn ConversationStore,
     snapshot: &RequestSnapshot,
     outcome: RequestOutcome,
-    previous: &super::summary::PreviousRequest,
+    previous: &super::oracle_summary::OriginalPreviousRequest,
 ) -> Result<Option<TraceRequestDetail>, ConversationStoreError> {
     if !identity_fits(snapshot.request_id.as_str())
         || !identity_fits(snapshot.identity.attempt_id.as_str())
@@ -85,42 +81,7 @@ pub(super) fn request_detail(
         });
     }
     let (options, omitted_option_count) = request_options(&snapshot.invocation.request_params);
-    let contributions = snapshot
-        .contributions
-        .iter()
-        .map(|record| {
-            let presentation = match &record.presentation {
-                Some(crate::context::contribution::ContributionPresentation::AgentStatus(
-                    status,
-                )) => {
-                    let turn = snapshot.identity.turn.as_str().parse().map_err(|_| {
-                        ConversationStoreError::InvalidReference(
-                            "historical contribution has invalid logical step".to_owned(),
-                        )
-                    })?;
-                    Some(super::types::TraceContributionPresentation::AgentStatus(
-                        crate::runtime_client::projection::status_view(
-                            &crate::agent::AgentStatusObservation {
-                                attempt_id: snapshot.identity.attempt_id.clone(),
-                                turn,
-                                status_message_id: record.message_id.clone(),
-                                opportunities: record.opportunities.clone(),
-                                post_tool_batch_anchor: record.post_tool_batch_anchor,
-                                status: status.clone(),
-                            },
-                        ),
-                    ))
-                }
-                None => None,
-            };
-            Ok(super::types::TraceContributionMetadata {
-                message_id: record.message_id.clone(),
-                producer: record.producer.clone(),
-                metadata: record.metadata.clone(),
-                presentation,
-            })
-        })
-        .collect::<Result<Vec<_>, ConversationStoreError>>()?;
+    let contributions = contribution_metadata(snapshot)?;
     Ok(Some(TraceRequestDetail {
         contributions,
         predecessor: previous.identity(),
@@ -155,7 +116,50 @@ pub(super) fn request_detail(
     }))
 }
 
+#[cfg(test)]
+pub(super) fn contribution_metadata(
+    snapshot: &RequestSnapshot,
+) -> Result<Vec<super::types::TraceContributionMetadata>, ConversationStoreError> {
+    snapshot
+        .contributions
+        .iter()
+        .map(|record| {
+            let presentation = match &record.presentation {
+                Some(crate::context::contribution::ContributionPresentation::AgentStatus(
+                    status,
+                )) => {
+                    let turn = snapshot.identity.turn.as_str().parse().map_err(|_| {
+                        ConversationStoreError::InvalidReference(
+                            "historical contribution has invalid logical step".to_owned(),
+                        )
+                    })?;
+                    Some(super::types::TraceContributionPresentation::AgentStatus(
+                        crate::runtime_client::projection::status_view(
+                            &crate::agent::AgentStatusObservation {
+                                attempt_id: snapshot.identity.attempt_id.clone(),
+                                turn,
+                                status_message_id: record.message_id.clone(),
+                                opportunities: record.opportunities.clone(),
+                                post_tool_batch_anchor: record.post_tool_batch_anchor,
+                                status: status.clone(),
+                            },
+                        ),
+                    ))
+                }
+                None => None,
+            };
+            Ok(super::types::TraceContributionMetadata {
+                message_id: record.message_id.clone(),
+                producer: record.producer.clone(),
+                metadata: record.metadata.clone(),
+                presentation,
+            })
+        })
+        .collect::<Result<Vec<_>, ConversationStoreError>>()
+}
+
 /// Projects the reconstructed provider-neutral request context, in wire order.
+#[cfg(test)]
 fn request_messages(request: &ModelRequest) -> (Vec<TraceRequestMessage>, bool) {
     // The newest items explain a request best, so an oversized context keeps
     // its tail rather than its head: the request-scoped context, the current
@@ -169,7 +173,7 @@ fn request_messages(request: &ModelRequest) -> (Vec<TraceRequestMessage>, bool) 
     (messages, truncated)
 }
 
-fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
+pub(super) fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
     match message {
         ModelInputMessage::Canonical(MessageBlock::User(user)) => {
             let (blocks, truncated) = user_blocks(&user.content);
@@ -217,6 +221,7 @@ fn request_message(message: &ModelInputMessage) -> TraceRequestMessage {
 }
 
 /// Splits configured request parameters into allowlisted and omitted.
+#[cfg(test)]
 fn request_options(
     params: &crate::model::invocation::RequestParams,
 ) -> (Vec<TraceRequestOption>, usize) {

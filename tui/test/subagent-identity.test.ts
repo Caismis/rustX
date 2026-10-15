@@ -47,7 +47,7 @@ describe("subagent identity", () => {
 
   it("carries the observation and started_at through the snapshot", () => {
     const observation = subagentObservation(
-      { type: "tool", tool_call_id: "call-1", tool_id: "tool-grep" },
+      { type: "tool_group", active:1, representative:{tool_call_id: "call-1", tool_id: "tool-grep",progress:null} },
       {
         revision: "7",
         last_activity_at: "2026-09-02T10:02:00Z",
@@ -93,7 +93,7 @@ describe("subagent identity", () => {
     state = reduce(state, {
       cursor: runtimeCursor(2),
       event: {
-        type: "agent_updated",
+        type: "agent_updated", position:0,
         agent: subagent("explore", "sha256:d1", "active", { observation }),
       },
     });
@@ -112,7 +112,7 @@ describe("subagent identity", () => {
     state = reduce(state, {
       cursor: runtimeCursor(2),
       event: {
-        type: "agent_updated",
+        type: "agent_updated", position:0,
         agent: subagent("explore", "sha256:d1", "inactive"),
       },
     });
@@ -137,7 +137,7 @@ describe("subagent identity", () => {
     state = reduce(state, {
       cursor: runtimeCursor(2),
       event: {
-        type: "agent_updated",
+        type: "agent_updated", position:0,
         agent: subagent("worker", "sha256:d1", "inactive", {
           detail: "child outcome unknown",
           activation_state: "interrupted",
@@ -156,8 +156,8 @@ it("incremental resync keeps Jobs and Agents at one cut and replay preserves ear
   const captured = replaceFromSnapshot(base, runtimeCursor(10));
   let live = replaceFromSnapshot(base, runtimeCursor(10));
   const transcript = live.transcript;
-  live = reduce(live, { cursor: runtimeCursor(11), event: { type: "agent_updated", agent: { ...original, activation_id: "later", current_activation: "later" } } });
-  live = reduce(live, { cursor: runtimeCursor(12), event: { type: "job_updated", job: { ...base.jobs[0]!, state: "succeeded" } } });
+  live = reduce(live, { cursor: runtimeCursor(11), event: { type: "agent_updated", position:0, agent: { ...original, activation_id: "later", current_activation: "later" } } });
+  live = reduce(live, { cursor: runtimeCursor(12), event: { type: "job_updated", position:0, job: { ...base.jobs[0]!, state: "succeeded" } } });
   assert.equal(live.agents[0]?.activation_id, "later");
   assert.equal(captured.agents[0]?.activation_id, original.activation_id);
   assert.equal(live.jobs[0]?.state, "succeeded");

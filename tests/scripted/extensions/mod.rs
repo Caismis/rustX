@@ -125,7 +125,12 @@ async fn goal351_create_while_idle_admits_one_continuation_and_drain_preserves_a
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .unwrap();
     let subscription = attachment
-        .subscribe_events(host.snapshot().unwrap().1)
+        .subscribe_events(
+            host.checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                .unwrap()
+                .1,
+        )
         .unwrap();
     composed.runtime.activate();
     assert!(model.requests().is_empty());
@@ -153,8 +158,15 @@ async fn goal351_create_while_idle_admits_one_continuation_and_drain_preserves_a
     assert_eq!(created_event.current.unwrap().autonomous_rounds_consumed, 0);
     let (admitted_event, admitted_cursor) = goal_event(&subscription).await;
     assert!(admitted_cursor > created_cursor);
-    assert_eq!(admitted_event, view);
-    assert_eq!(host.snapshot().unwrap().0.goal, Some(view.clone()));
+    assert_eq!(admitted_event, goal_display(&view));
+    assert_eq!(
+        host.checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .unwrap()
+            .0
+            .goal,
+        Some(goal_display(&view))
+    );
     // Ordinary durable inbound carried it; there is no Goal -> model path.
     assert!(model.requests()[0].messages.iter().any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if matches!(user.kind, InboundKind::GoalContinuation(_)))));
 
@@ -467,21 +479,19 @@ async fn goal351_recovery_starts_only_when_a_composed_runtime_is_explicitly_open
         let (attachment, initialized) = host
             .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        let rustx::runtime_client::RuntimeClientResult::Initialized {
-            snapshot, cursor, ..
-        } = initialized
-        else {
+        let rustx::runtime_client::RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("initialized")
         };
+        let checkpoint = attachment.checkpoint().unwrap();
+        let snapshot = checkpoint.snapshot;
+        let cursor = checkpoint.cursor;
         assert_eq!(cursor.get(), 0);
         // The Goal projection reports the conversation's durable Goal state
         // authority, which survives composition changes. It carries phase and
         // nothing else: there is no activation member to read.
         assert_eq!(
             snapshot.goal,
-            Some(rustx::goal::GoalView {
-                current: Some(stored.clone()),
-            })
+            Some(rustx::runtime_client::goal::RuntimeClientGoalView::from_native(Some(&stored)))
         );
         drop(attachment);
         let (reattached, _) = host
@@ -629,7 +639,14 @@ impl Recorder {
 }
 
 impl AgentExecutionObserver for Recorder {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
+    ) {
         self.events.lock().expect("events").push(event.clone());
     }
 
@@ -637,11 +654,15 @@ impl AgentExecutionObserver for Recorder {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<rustx::durable::TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, observation: &AgentStatusObservation) {
+    fn observe_status(
+        &self,
+        observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
         self.observations
             .lock()
             .expect("observations")
@@ -659,6 +680,7 @@ impl AgentExecutionObserver for Recorder {
         &self,
         _attempt_id: &AttemptId,
         _frame: &rustx::publication::PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
     ) {
     }
 
@@ -666,7 +688,7 @@ impl AgentExecutionObserver for Recorder {
         &self,
         _attempt_id: &AttemptId,
         _audit: &rustx::publication::PublicationAudit,
-        _transcript_cursor: rustx::durable::TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }
@@ -2829,19 +2851,31 @@ async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuatio
     }
 }
 
+fn goal_display(
+    view: &rustx::goal::GoalView,
+) -> rustx::runtime_client::goal::RuntimeClientGoalView {
+    rustx::runtime_client::goal::RuntimeClientGoalView::from_native(view.current.as_ref())
+}
+
 async fn goal_event(
     subscription: &rustx::runtime_client::EventSubscription,
 ) -> (
-    rustx::goal::GoalView,
+    rustx::runtime_client::goal::RuntimeClientGoalView,
     rustx::runtime_client::RuntimeClientCursor,
 ) {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match subscription.next().await {
                 rustx::runtime_client::EventDelivery::Event(event) => {
-                    if let rustx::runtime_client::RuntimeClientEvent::GoalChanged { view } =
-                        event.event
-                    {
+                    if let Some(view) = event.event.facts().iter().find_map(|fact| {
+                        if let rustx::runtime_client::RuntimeClientEvent::GoalChanged { view } =
+                            fact
+                        {
+                            Some(view.clone())
+                        } else {
+                            None
+                        }
+                    }) {
                         return (view, event.cursor);
                     }
                 }
@@ -3013,65 +3047,35 @@ async fn goal351_runtime_client_projection_same_cursor_controls_and_replay() {
         .await
         .unwrap()
         .unwrap();
-    let (baseline, _) = host.snapshot().unwrap();
-    assert_eq!(baseline.goal, Some(rustx::goal::GoalView { current: None }));
-    let subscription = attachment
-        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
+    // Join publication of the admitted native request before freezing the
+    // asynchronous source reader. The provider gate alone precedes that handoff.
+    let checkpoint_owner = host.clone();
+    let joined = tokio::task::spawn_blocking(move || checkpoint_owner.checkpoint())
+        .await
         .unwrap();
-    // Freeze Goal observations only after the independent request-start read
-    // domain has published its captured cut. Snapshot completion does not join it.
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let rustx::runtime_client::EventDelivery::Event(event) = subscription.next().await
-            else {
-                panic!("read-domain publication");
-            };
-            if let rustx::runtime_client::RuntimeClientEvent::ReadDomainsUpdated {
-                transcript, ..
-            } = event.event
-                && transcript == baseline.transcript
-            {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("request-start materialization");
-    let (baseline, cursor) = host.snapshot().unwrap();
+    if let Err(error) = joined {
+        panic!(
+            "initial checkpoint {error:?}: {}",
+            host.weak_inner()
+                .upgrade()
+                .unwrap()
+                .projection_source_debug()
+        );
+    }
     let inner = host.weak_inner().upgrade().unwrap();
+    // Native execution is parked. Parking the asynchronous reader joins its
+    // preparation boundary; successful controls still publish synchronously.
     inner.park_projection_worker();
-    let created = inner
-        .goal_control(GoalControl::Create {
-            objective: "Deliver".into(),
-            budget: 3,
-        })
-        .unwrap();
-    let rustx::runtime_client::RuntimeClientResult::Goal { view: created } = created else {
-        panic!("Goal result")
-    };
-    assert_ne!(Some(created.clone()), baseline.goal);
-    // Domain has committed; projection is deliberately frozen. Both public
-    // snapshot and attach must still describe the original cursor.
-    let (unfolded, same_cursor) = host.snapshot().unwrap();
-    assert_eq!(same_cursor, cursor);
-    assert_eq!(unfolded.goal, baseline.goal);
-    let (_read_attachment, initialized) = host
-        .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .unwrap();
-    let rustx::runtime_client::RuntimeClientResult::Initialized {
-        snapshot,
-        cursor: attach_cursor,
-        ..
-    } = initialized
-    else {
-        panic!("initialized")
-    };
-    assert_eq!(attach_cursor, cursor);
-    assert_eq!(snapshot.goal, baseline.goal);
-    let mut expected = created;
-    let mut previous_goal = baseline.goal.clone();
-    let mut last_cursor = cursor;
-    let mut first_revision = None;
+    let initial = host.checkpoint().unwrap();
+    assert_eq!(
+        initial.snapshot.goal,
+        Some(goal_display(&rustx::goal::GoalView { current: None }))
+    );
+    let subscription = attachment.subscribe_events(initial.cursor).unwrap();
+    let mut expected_reference = None;
+    let mut first_reference = None;
+    let mut last_cursor = initial.cursor;
+    let mut published = Vec::new();
     for mutation in [
         None,
         Some(GoalMutation::Pause),
@@ -3079,78 +3083,77 @@ async fn goal351_runtime_client_projection_same_cursor_controls_and_replay() {
             objective: "Deliver verified".into(),
         }),
         Some(GoalMutation::Budget { rounds: 4 }),
+        Some(GoalMutation::Budget { rounds: 4 }),
         Some(GoalMutation::Resume),
     ] {
-        if let Some(mutation) = mutation {
-            let result = inner
-                .goal_control(GoalControl::Mutate {
-                    expected: expected.current.as_ref().unwrap().reference.clone(),
-                    mutation,
-                })
-                .unwrap();
-            let rustx::runtime_client::RuntimeClientResult::Goal { view } = result else {
-                panic!("Goal result")
-            };
-            expected = view;
-        }
-        // A durable Journal-prefix receipt can publish Trace invalidation
-        // before the native Goal observation. Every intermediate cut must
-        // still carry the preceding Goal generation, never a partial one.
-        let (folded, next_cursor) = loop {
-            let (folded, cursor) = inner
-                .fold_one_observation()
-                .expect("queued Goal observation");
-            if folded.goal == Some(expected.clone()) {
-                break (folded, cursor);
-            }
-            assert_eq!(folded.goal, previous_goal);
-            assert!(cursor > last_cursor);
+        let action = mutation.map_or_else(
+            || GoalControl::Create {
+                objective: "Deliver".into(),
+                budget: 3,
+            },
+            |mutation| GoalControl::Mutate {
+                expected: expected_reference.clone().unwrap(),
+                mutation,
+            },
+        );
+        let rustx::runtime_client::RuntimeClientResult::GoalMutation { reference } =
+            inner.goal_control(action).unwrap()
+        else {
+            panic!("finite committed Goal receipt")
         };
-        previous_goal = folded.goal.clone();
-        assert_eq!(folded.goal, Some(expected.clone()));
-        assert!(next_cursor > last_cursor);
-        let (event_view, event_cursor) = goal_event(&subscription).await;
-        assert_eq!((event_view, event_cursor), (expected.clone(), next_cursor));
-        assert_eq!(host.snapshot().unwrap().1, next_cursor);
-        first_revision.get_or_insert_with(|| expected.current.as_ref().unwrap().reference.clone());
-        last_cursor = next_cursor;
+        let native = composed.runtime.goal_view().unwrap().unwrap();
+        let expected = goal_display(&native);
+        assert_eq!(
+            reference,
+            expected.current.as_ref().map(|goal| goal.reference.clone())
+        );
+        let checkpoint = host.checkpoint().unwrap();
+        assert_eq!(
+            checkpoint.cursor.get(),
+            last_cursor.get() + 1,
+            "one atomic native Goal commit"
+        );
+        assert_eq!(checkpoint.snapshot.goal, Some(expected.clone()));
+        assert_eq!(
+            goal_event(&subscription).await,
+            (expected.clone(), checkpoint.cursor)
+        );
+        let (read_attachment, _) = host
+            .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let independently_read = read_attachment.checkpoint().unwrap();
+        assert_eq!(independently_read.cursor, checkpoint.cursor);
+        assert_eq!(independently_read.snapshot.goal, Some(expected.clone()));
+        first_reference.get_or_insert_with(|| reference.clone().unwrap());
+        expected_reference = reference;
+        last_cursor = checkpoint.cursor;
+        published.push((expected, last_cursor));
     }
     assert!(
         inner
             .goal_control(GoalControl::Mutate {
-                expected: first_revision.unwrap(),
-                mutation: GoalMutation::Complete
+                expected: first_reference.unwrap(),
+                mutation: GoalMutation::Complete,
             })
             .is_err()
     );
-    assert_eq!(inner.queued_observations(), 0, "stale CAS emits no change");
-    // Issue #351 requirement 25: no Runtime Client snapshot or event can
-    // carry an activation flag, so `Active + disarmed` is unrepresentable.
-    let (frozen, frozen_cursor) = host.snapshot().unwrap();
-    assert_eq!(frozen_cursor, last_cursor);
-    let projected = frozen.goal.clone().unwrap();
-    assert_eq!(projected, expected);
+    let final_checkpoint = host.checkpoint().unwrap();
+    assert_eq!(
+        final_checkpoint.cursor, last_cursor,
+        "stale CAS publishes no transition"
+    );
+    let projected = final_checkpoint.snapshot.goal.clone().unwrap();
     assert_eq!(
         projected.current.as_ref().unwrap().phase,
         rustx::goal::GoalPhase::Active
     );
-    for wire in [
-        serde_json::to_string(&frozen).unwrap(),
-        serde_json::to_string(&rustx::runtime_client::RuntimeClientEvent::GoalChanged {
-            view: projected.clone(),
-        })
-        .unwrap(),
-    ] {
-        assert!(!wire.contains("armed"), "{wire}");
-        assert!(!wire.contains("disarm"), "{wire}");
+    let wire = serde_json::to_string(&projected).unwrap();
+    assert!(!wire.contains("armed") && !wire.contains("disarm"));
+    let replay = attachment.subscribe_events(initial.cursor).unwrap();
+    for expected in published {
+        assert_eq!(goal_event(&replay).await, expected);
     }
-    // Replay from the original cursor reproduces exactly the same five
-    // durable Goal generations; there is no activation-only event among them.
-    let replay = attachment.subscribe_events(cursor).unwrap();
-    for _ in 0..4 {
-        goal_event(&replay).await;
-    }
-    assert_eq!(goal_event(&replay).await, (projected, last_cursor));
+    inner.unpark_projection_worker();
     composed.runtime.shutdown().await.unwrap();
 }
 
@@ -3191,7 +3194,12 @@ async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete()
             .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
         let subscription = attachment
-            .subscribe_events(host.snapshot().unwrap().1)
+            .subscribe_events(
+                host.checkpoint()
+                    .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                    .unwrap()
+                    .1,
+            )
             .unwrap();
         composed.runtime.activate();
         let accepted = composed
@@ -3202,7 +3210,7 @@ async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete()
         let created = created.current.unwrap();
         assert_eq!(created.phase, rustx::goal::GoalPhase::Active);
         assert!(
-            matches!(created.origin, rustx::goal::GoalOrigin::HumanAttempt { message_id, .. } if message_id == accepted.message_id)
+            matches!(created.origin,rustx::runtime_client::goal::RuntimeClientGoalOrigin::HumanAttempt{message_id:Some(message_id),..} if message_id==accepted.message_id)
         );
         let (updated, cursor2) = goal_event(&subscription).await;
         assert!(cursor2 > cursor1);
@@ -3214,7 +3222,14 @@ async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete()
                 rustx::goal::GoalPhase::Blocked
             }
         );
-        assert_eq!(host.snapshot().unwrap().0.goal, Some(updated));
+        assert_eq!(
+            host.checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                .unwrap()
+                .0
+                .goal,
+            Some(updated)
+        );
         composed.runtime.shutdown().await.unwrap();
     }
 }
@@ -3829,13 +3844,31 @@ async fn goal351_trace_still_identifies_the_exact_native_goal_tools() {
         .await
         .unwrap()
         .unwrap();
-    let snapshot = host.snapshot().unwrap().0;
-    let traced: Vec<_> = snapshot
-        .trace
+    let snapshot = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .unwrap()
+        .0;
+    let rustx::runtime_client::RuntimeClientResult::TracePage { page } = host
+        .weak_inner()
+        .upgrade()
+        .unwrap()
+        .trace_page(None, 32, Vec::new())
+        .unwrap()
+    else {
+        panic!("native Trace source page");
+    };
+    let traced: Vec<_> = page
         .records
         .iter()
         .filter_map(|record| record.tool.as_ref())
-        .map(|tool| tool.tool_id.as_str().to_owned())
+        .map(|tool| {
+            tool.tool_id
+                .as_ref()
+                .expect("bounded native Tool identity")
+                .as_str()
+                .to_owned()
+        })
         .collect();
     for tool_id in ["native.create_goal", "native.update_goal"] {
         assert!(

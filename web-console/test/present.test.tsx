@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v46';
+import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v48';
 import { presentRow, presentedDeliveries } from '../src/bindings/present';
 import { Tool } from '../src/app/agent/Tool';
 import { ToolDeliveries } from '../src/app/components/Artifact';
@@ -12,9 +12,9 @@ const file = (name: string, description: string | null = null): SessionFileRefer
   ({ scope: { conversation_id: 'original', device: '1', inode: '2' }, path: `out/${name}`, name, description, mime_type: 'text/plain' });
 const ARGS = JSON.stringify({ files: [{ path: 'out/报告 file.md' }, { path: 'out/data set.csv' }] });
 const result = (status: ToolExecutionResult['status'], deliveries: SessionFileReference[] = []): ToolExecutionResult =>
-  ({ status, duration_ms: 1, content: [{ type: 'text', text: 'Declared 1 deliverable(s)' }], deliveries });
+  ({ status, duration_ms: "1", content: [{ type: 'text', text: 'Declared 1 deliverable(s)' }], deliveries });
 const tool = (state: ForegroundToolExecution['state']): ForegroundToolExecution =>
-  ({ call_id: 'call-present', message_id: 'assistant-1', block_index: 0, tool_id: 'tool-present', name: 'present', state });
+  ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'assistant-1'},block_index:0},assembly_complete:true, call_id: 'call-present', message_id: 'assistant-1', block_index: 0, tool_id: 'tool-present', name: 'present', state });
 
 it('maps only the native lifecycle to Harness present phases', () => {
   expect(presentRow(tool({ type: 'assembled', arguments: ARGS })).phase).toBe('preparing');
@@ -28,6 +28,16 @@ it('maps only the native lifecycle to Harness present phases', () => {
   }
   expect(presentRow(tool({ type: 'assembled', arguments: ARGS })).paths).toBe('out/报告 file.md, out/data set.csv');
   expect(presentRow(tool({ type: 'assembled', arguments: '{"files":[{"pa' })).paths).toBe('{"files":[{"pa');
+});
+
+it('T14 canonical present declaration displays its recorded status while execution settlement remains pending', () => {
+  const executing = { ...tool({ type: 'running', arguments: ARGS }), committed_result: result({ type: 'failed', error: 'missing file' }) };
+  expect(presentRow(executing).phase).toBe('error');
+  expect(presentRow(executing).details).toContain('missing file');
+  expect(executing.state.type).toBe('running');
+  const ui = render(<Tool tool={executing}/>);
+  expect(ui.container.querySelector('[data-present-phase="error"]')).not.toBeNull();
+  expect(ui.container.querySelector('[data-delivery-card]')).toBeNull();
 });
 
 it('the call row never renders delivery cards, even for a settled success carrying deliveries', () => {
@@ -51,10 +61,10 @@ it('the call row never renders delivery cards, even for a settled success carryi
 
 it('committed cards: canonical order, four-card summary, separate Preview and Download, localized', () => {
   const files = ['报告 file.md', 'b.txt', 'c.rs', 'd.png', 'e.bin', 'f.txt', 'g.csv'].map((name, index) => file(name, index === 0 ? 'Final report (draft)' : null));
-  expect(presentedDeliveries('m', result({ type: 'failed', error: 'x' }, files))).toEqual([]);
-  expect(presentedDeliveries('m', { ...result({ type: 'success' }), content: [{ type: 'json', value: { deliveries: files } }] })).toEqual([]);
+  expect(presentedDeliveries({type:'by_message_id',message_id:'m'}, result({ type: 'failed', error: 'x' }, files))).toEqual([]);
+  expect(presentedDeliveries({type:'by_message_id',message_id:'m'}, { ...result({ type: 'success' }), content: [{ type: 'json', value: { deliveries: files } }] })).toEqual([]);
   const openPreview = vi.fn(), download = vi.fn();
-  const ui = render(<PreviewContext.Provider value={{ openPreview, download }}><ToolDeliveries messageId="canonical-tool" result={result({ type: 'success' }, files)}/></PreviewContext.Provider>);
+  const ui = render(<PreviewContext.Provider value={{ openPreview, download }}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={result({ type: 'success' }, files)}/></PreviewContext.Provider>);
   const names = () => [...ui.container.querySelectorAll('[data-presented-name]')].map(node => node.textContent);
   expect(names()).toEqual(files.slice(0, 4).map(item => item.name));
   // Harness strips a trailing parenthetical; the extension stands in for an absent description.
@@ -65,10 +75,10 @@ it('committed cards: canonical order, four-card summary, separate Preview and Do
   fireEvent.click(toggle);
   expect(names()).toEqual(files.map(item => item.name));
   fireEvent.click(ui.getByRole('button', { name: 'Download b.txt' }));
-  expect(download).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'session_file', messageId: 'canonical-tool', index: 1, file: files[1] }, name: 'b.txt' }));
+  expect(download).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', owned:undefined, locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 1, file: files[1] }, name: 'b.txt' }));
   expect(openPreview).not.toHaveBeenCalled();
   fireEvent.click(ui.getByRole('button', { name: 'Preview 报告 file.md in sidebar' }));
-  expect(openPreview).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: { kind: 'session_file', messageId: 'canonical-tool', index: 0, file: files[0] } }));
+  expect(openPreview).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: { kind: 'session_file', conversationId:'conversation-A', owned:undefined, locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file: files[0] } }));
   act(() => localeController.setLocale('zh'));
   expect(ui.getByRole('button', { name: '在侧边栏预览 报告 file.md' })).toBeTruthy();
   expect(ui.getByRole('button', { name: '收起交付文件列表' })).toBeTruthy();

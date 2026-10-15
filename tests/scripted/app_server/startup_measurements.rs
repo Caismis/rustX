@@ -20,7 +20,15 @@ async fn issue419_measure_native_cold_load() {
         let attach = std::time::Instant::now();
         let runtime = f.manager.load(&created.session.id, None).await.unwrap();
         let load_ms = attach.elapsed().as_secs_f64() * 1000.0;
-        assert!(runtime.client().snapshot().unwrap().0.model.is_some());
+        assert!(
+            runtime
+                .client()
+                .checkpoint()
+                .unwrap()
+                .snapshot
+                .model
+                .is_some()
+        );
         println!(
             "NATIVE_STARTUP sample={sample} session={} create_ms={create_ms:.3} cold_load_ready_ms={load_ms:.3}",
             created.session.id

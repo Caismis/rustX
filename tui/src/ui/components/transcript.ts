@@ -1,3 +1,8 @@
+import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity.ts';
+import { deferredAttemptIdentities, messageDescriptors } from '../../presentation/message-descriptors.ts';
+import { sameToolOccurrence, statusIdentity } from '../../../../protocol/app-server/projection.ts';
+import { groupedQuantity } from '../../protocol/quantities.ts';
+import { deferredJournalFields } from '../../app-server/journal-fields.ts';
 import { invocationLabel } from "../../presentation/invocation.ts";
 /**
  * The semantic transcript grammar.
@@ -64,6 +69,7 @@ import type {
   AnswerSpecification,
   RuntimeClientOutcome,
   RuntimeError,
+  ForegroundToolExecution,
 } from "../../protocol/app-server.ts";
 import {
   type AgentStatusPlacement,
@@ -71,6 +77,7 @@ import {
 } from "../../presentation/selectors.ts";
 import {
   type ToolCorrelation,
+  nativeToolPresentation,
   correlateTools,
   isFoldedToolResult,
   isSplitToolCall,
@@ -121,6 +128,7 @@ export interface TranscriptContext {
   correlation: ToolCorrelation;
   /** Composed Agent Statuses grouped by the runtime fact that places them. */
   statuses: AgentStatusPlacement;
+  foreground?: ForegroundToolExecution[];
 }
 
 /** Builds the render context for one state. */
@@ -132,6 +140,7 @@ export function transcriptContext(
     preferences,
     correlation: correlateTools(state),
     statuses: agentStatusPlacement(state),
+    foreground:state.attempt?.foreground,
   };
 }
 
@@ -145,6 +154,7 @@ export function renderTranscript(
     preferences,
     correlation: correlation ?? correlateTools(state),
     statuses: agentStatusPlacement(state),
+    foreground:state.attempt?.foreground,
   };
   const blocks: TranscriptBlock[] = [];
   for (const entry of state.transcript) {
@@ -152,12 +162,52 @@ export function renderTranscript(
     if (entry.kind === "committed" && entry.message.role === "assistant") {
       const response = entry.completedResponse;
       const facts: string[] = [];
-      if (response?.usage != null) facts.push(`${response.usage.total_tokens.toLocaleString("en-US")} tok`);
+      if (response?.usage != null) facts.push(`${groupedQuantity(response.usage.total_tokens)} tok`);
       if (response?.timing?.total_duration_ms != null) facts.push(`${(response.timing.total_duration_ms / 1000).toFixed(1)}s`);
       if (facts.length) blocks.push({ kind: "text", key: `${entry.key}:response`, text: role.meta(facts.join(" · ")) });
     }
     blocks.push(...renderStatusAnnotations(entry, context));
   }
+  for(const row of state.deferredTranscriptEntries ?? []) {
+    blocks.push({kind:"text",key:`deferred-transcript:${row.offset}`,text:`Transcript record ${row.offset} · content deferred; /content loads bounded source bytes`});
+    for(const status of context.statuses.byCursor.get(String(row.offset)) ?? [])blocks.push(statusBlock(status,status.opportunities.fresh_inbound != null ? 'attached' : 'standalone'));
+  }
+  for (const record of state.publicationSettlements) {
+    if (state.transcript.some(entry => entry.kind === "publication_audit" && entry.cursor === record.transcript_cursor)) continue;
+    blocks.push({kind: "text", key: `publication-settlement:${record.transcript_cursor}`, text: `Publication ${record.settlement.kind} · ${record.settlement.block_count} blocks · retained content deferred; /observation loads bounded source details`});
+  }
+  const descriptorProcesses=new Set(state.transcript.flatMap(entry=>entry.kind==='committed'&&entry.turnProcess?[attemptOwnerKey(entry.turnProcess)]:[]));
+  for(const descriptor of messageDescriptors(state)) {
+    if (descriptor.kind.startsWith("context/")) continue;
+    if(descriptor.identity!=null && state.transcript.some(entry=>entry.kind==="committed" && entry.message.id===descriptor.identity))continue;
+    const process=descriptor.turn_process;
+    if(process){
+      const owner=attemptOwnerKey(process);
+      if(!descriptorProcesses.has(owner)){
+        descriptorProcesses.add(owner);
+        blocks.push({kind:'text',key:`canonical-process:${owner}`,text:`Turn ${process.outcome} · ${process.message_count} messages · ${process.tool_call_count} tools`});
+        if(process.outcome==='completed'&&process.final_message_id_deferred&&process.final_message_id_source)blocks.push({kind:'text',key:`canonical-final:${owner}`,text:'Final message identity deferred; /content loads original canonical metadata'});
+      }
+    }
+    blocks.push({kind:"text",key:`canonical:${JSON.stringify(descriptor.locator)}`,text:`${descriptor.kind === "message" ? descriptor.role : descriptor.kind.replaceAll("_", " ")} · ${descriptor.block_count} blocks · content deferred; /content loads bounded source bytes`});
+    if(descriptor.completed_response)blocks.push({kind:'text',key:`canonical-response:${attemptOwnerKey(descriptor.completed_response.origin)}`,text:`Response completed · ${descriptor.completed_response.completed_at}`});
+    for(const execution of descriptor.tool_calls){
+      if(execution.call_id!=null && execution.tool_id!=null)blocks.push(toolBlock(`canonical-tool:${JSON.stringify(execution.occurrence)}`,execution.call_id,context,'full',execution));
+      else blocks.push({kind:'text',key:`canonical-tool:${JSON.stringify(execution.occurrence)}`,text:`Tool metadata deferred · ${execution.state.type}; /content loads bounded source bytes`});
+    }
+  }
+  for(const execution of state.attempt?.foreground??[]) {
+    if(execution.committed_result)blocks.push({kind:'text',key:`tool-result-commit:${JSON.stringify(execution.occurrence)}`,text:`Tool result committed · execution ${execution.state.type}`});
+    if(execution.committed_result_deferred && execution.result_metadata_ref)blocks.push({kind:"text",key:`tool-result-metadata:${JSON.stringify(execution.occurrence)}`,text:`Tool result metadata deferred · ${execution.result_metadata_ref.readable_end} bytes; /content loads original canonical bytes`});
+    if(execution.result_source)blocks.push({kind:"text",key:`tool-result-source:${execution.result_source.sequence}`,text:`Tool result content deferred · ${execution.result_source.encoded_bytes} bytes; /content loads bounded native source bytes`});
+    if(execution.call_id!=null && execution.tool_id!=null)continue;
+    blocks.push({kind:"text",key:`tool-occurrence:${JSON.stringify(execution.occurrence)}`,text:`Tool metadata deferred · ${execution.state.type}; /content loads bounded source bytes`});
+  }
+  for (const field of deferredJournalFields(state.attempt)) {
+    if(field.label === 'Tool result')continue;
+    blocks.push({kind:'text',key:`attempt-diagnostic:${field.reference.sequence}:${field.label}`,text:`${field.label} content deferred · ${field.reference.encoded_bytes} bytes; /content loads exact native bytes`});
+  }
+  for(const field of deferredAttemptIdentities(state))blocks.push({kind:'text',key:`attempt-identity:${field.owner}`,text:'Turn owner identity deferred; /content loads original selected bytes'});
   const attemptOutcome = renderAttemptOutcome(state);
   if (attemptOutcome !== undefined) {
     blocks.push(attemptOutcome);
@@ -186,7 +236,7 @@ export function renderAttemptOutcome(
   }
   return {
     kind: "text",
-    key: `attempt:${state.attempt!.attemptId}:outcome`,
+    key: `attempt:${attemptOwnerKey({conversation_id:state.conversationId,attempt_id:state.attempt!.attemptId,attempt_id_source:state.attempt!.attemptSource})}:outcome`,
     text: lines.join("\n"),
   };
 }
@@ -302,7 +352,7 @@ function renderStatusAnnotations(
     blocks.push(statusBlock(status, "attached"));
   }
   for (const status of standalone) {
-    blocks.push(statusBlock(status, "standalone"));
+    blocks.push(statusBlock(status, status.opportunities.fresh_inbound != null ? "attached" : "standalone"));
   }
   return blocks;
 }
@@ -315,7 +365,7 @@ function statusBlock(
     kind: "text",
     // The composition's own identity. Two annotations can never collide, and
     // a re-render of the same fact keeps the same key.
-    key: `agent-status:${status.status_message_id}`,
+    key: `agent-status:${statusIdentity(status)}`,
     text: renderAgentStatusAnnotation(status, form),
     // Deliberately no band: the user band belongs to what the human said.
   };
@@ -524,7 +574,9 @@ function renderCommitted(
             blocks.push(refusalBlock(key, block.text));
             break;
           case "tool_call":
-            blocks.push(toolBlock(key, block.id, context, anchorPart(context, block.id)));
+            const occurrence={locator:{type:'by_message_id' as const,message_id:message.id},block_index:index};
+            const native=entry.toolCalls?.find(tool=>tool.block_index===index && (sameToolOccurrence(tool,{occurrence}) || tool.message_id===message.id));
+            blocks.push(toolBlock(key, block.id, context, anchorPart(context, block.id),native));
             break;
           case "image":
             blocks.push({ kind: "text", key, text: role.meta("(image)") });
@@ -603,7 +655,7 @@ function renderStreaming(
         break;
       case "tool_call":
         blocks.push(
-          toolBlock(key, block.callId, context, anchorPart(context, block.callId)),
+          block.callId==null || block.toolId==null ? {kind:"text",key,text:"Tool call metadata deferred · /content loads bounded source bytes"} : toolBlock(key, block.callId, context, anchorPart(context, block.callId),context.foreground?.find(slot=>slot.block_index===block.blockIndex && slot.message_id===entry.messageId)),
         );
         break;
       default:
@@ -670,8 +722,9 @@ function toolBlock(
   callId: string,
   context: TranscriptContext,
   part: ToolCardPart = "full",
+  native?: ForegroundToolExecution,
 ): TranscriptBlock {
-  const tool = context.correlation.byCallId.get(callId);
+  const tool = native ? nativeToolPresentation(native) : context.correlation.byCallId.get(callId);
   if (tool === undefined) {
     // Unreachable through the correlation, which seeds itself from these very
     // blocks. Kept total rather than throwing inside a render.

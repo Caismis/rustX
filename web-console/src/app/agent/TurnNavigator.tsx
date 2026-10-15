@@ -4,14 +4,14 @@
 // native Attempt outline; an unloaded mark pages its native outline page in
 // before navigating.
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { ConversationTurn, ConversationTurnPage, ConversationTurnId } from '../../../../protocol/app-server/v46';
+import type { ObservedTurn, ObservedTurnPage, ObservedTurnIdentity } from '../../../../protocol/app-server/v48';
 import type { AppServerClient } from '../../client/app-server';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { turnKey } from '../../client/transcript';
 import { useTranslation } from '../../locale/react';
 import css from './TurnNavigator.module.css';
 import { currentTurnLocation, turnRail, turnRailRange, TURN_SPACING_PX, RAIL_INSET_PX, type TurnRailItem } from './turn-rail-items';
-import { HISTORY_PAGE_SIZE } from '../../client/transcript';
+import { TURN_PAGE_SIZE, type TurnSelection } from '../../client/transcript';
 
 /** Fade band the mask reserves at a scrollable end. */
 const FADE_PX = 24;
@@ -43,22 +43,22 @@ const TurnMark = memo(function TurnMark({ item, index, start, label, active, bus
  * scrolls inside the frame with gradient fades at each scrollable end; the
  * active mark centers only outside the fade-free band while the pointer is
  * elsewhere. Previews follow pointer movement or focus, never scrolling. */
-export function TurnNavigator({ client, sessionId, onNavigate, active, previewCurrent }: { previewCurrent?: () => boolean; client: AppServerClient; sessionId: string; onNavigate: (turn: ConversationTurn | number) => void; active?: string | null }) {
+export function TurnNavigator({ client, sessionId, onNavigate, active, previewCurrent }: { previewCurrent?: () => boolean; client: AppServerClient; sessionId: string; onNavigate: (turn: TurnSelection) => void; active?: string | null }) {
   const view = useClientSelector(client, state => {
     const view = state.views[sessionId];
     return { target: view?.target, attachment: view?.attachment, outline: view?.turnOutline, navigation: view?.turnNavigation,
-      attempt: view?.snapshot?.attempt?.attempt_id, phase: view?.snapshot?.attempt?.phase.type,
-      conversation: view?.snapshot?.conversation_id, running: !!view?.snapshot?.attempt && view.snapshot.attempt.phase.type !== 'settled',
+      attempt: view?.snapshot?.attempt?.attempt_id,attemptSource:view?.snapshot?.attempt?.attempt_id_source, phase: view?.snapshot?.attempt?.phase.type,
+      conversation: view?.snapshot?.conversation_id, running: !!view?.snapshot?.attempt && ['admitted','running'].includes(view.snapshot.attempt.phase.type),
       location: currentTurnLocation(view?.snapshot), generation: state.generation };
   }, shallowEqual);
   useEffect(() => {
     if (view.attachment === 'attached') void client.refreshTurns(sessionId);
-  }, [client, sessionId, view.target, view.attachment, view.attempt, view.phase, view.generation]);
-  const currentId = useMemo(() => view.running && view.conversation && view.attempt ? { conversation_id: view.conversation, attempt_id: view.attempt } : undefined,
-    [view.running, view.conversation, view.attempt]);
+  }, [client, sessionId, view.target, view.attachment, view.attempt, view.phase,view.attemptSource, view.generation]);
+  const currentId = useMemo(() => view.running && view.conversation && (view.attempt!=null||view.attemptSource!=null) ? { conversation_id: view.conversation, attempt_id: view.attempt,attempt_id_source:view.attemptSource } : undefined,
+    [view.running, view.conversation, view.attempt,view.attemptSource]);
   const page = view.outline?.page;
   const readPreview = useCallback((ordinal: number, current: () => boolean) =>
-    client.previewTurns(sessionId, Math.floor((ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE, current), [client, sessionId, view.generation, view.target?.attachment_id]);
+    client.previewTurns(sessionId, Math.floor((ordinal - 1) / TURN_PAGE_SIZE) * TURN_PAGE_SIZE, current), [client, sessionId, view.generation, view.target?.attachment_id]);
   const missingLocation = !!page && !!view.location && BigInt(page.cut.transcript) < BigInt(view.location);
   useEffect(() => { if (missingLocation && !view.outline?.loading && !view.outline?.error && view.attachment === 'attached') void client.refreshTurns(sessionId); },
     [client, sessionId, missingLocation, view.outline?.loading, view.outline?.error, view.attachment, page?.offset]);
@@ -71,15 +71,19 @@ export function TurnNavigator({ client, sessionId, onNavigate, active, previewCu
 /** Same Harness navigation surface for parent and child native outlines. */
 export function TurnNavigation({ page, currentId, location, loading = false, pending, error, attached, active, onNavigate, onReload, readPreview, previewCurrent }: {
   previewCurrent?: () => boolean;
-  page?: ConversationTurnPage; currentId?: ConversationTurnId; location?: string; loading?: boolean;
+  page?: ObservedTurnPage; currentId?: ObservedTurnIdentity; location?: string; loading?: boolean;
   pending?: string; error?: string; attached: boolean; active?: string | null;
-  onNavigate: (turn: ConversationTurn | number) => void; onReload: () => void; readPreview?: (ordinal: number, current: () => boolean) => Promise<ConversationTurnPage | undefined>;
+  onNavigate: (turn: TurnSelection) => void; onReload: () => void; readPreview?: (ordinal: number, current: () => boolean) => Promise<ObservedTurnPage | undefined>;
 }) {
   const tx = useTranslation(), previewId = useId();
   const [previewKey, setPreviewKey] = useState<string | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
-  const items = useMemo(() => turnRail(page, currentId, location), [page, currentId, location]);
-  const [previewTurn, setPreviewTurn] = useState<ConversationTurn>();
+  const rail = useMemo(() => {
+    try { return {items:turnRail(page,currentId,location),error:undefined}; }
+    catch(error) { return {items:turnRail(undefined,currentId,location),error:String(error)}; }
+  }, [page,currentId,location]);
+  const items=rail.items,feedbackError=rail.error??error;
+  const [previewTurn, setPreviewTurn] = useState<ObservedTurn>();
   const previewOwner = useRef(0);
   useLayoutEffect(() => { ++previewOwner.current; setPreviewKey(null); setFocusedKey(null); setPreviewTurn(undefined); }, [previewCurrent]);
   useEffect(() => {
@@ -97,22 +101,22 @@ export function TurnNavigation({ page, currentId, location, loading = false, pen
   }, [readPreview, previewKey, attached, pending, page?.cut.mutation_revision, previewCurrent]);
   const isActive = (item: TurnRailItem) => !!item.id && (active !== undefined ? active === `turn:${item.id}` : !!currentId && turnKey(currentId) === item.id);
   // The owning viewport starts its gesture immediately, before outline I/O.
-  const navigate = (item: TurnRailItem) => { ++previewOwner.current; onNavigate(item.turn ?? item.ordinal); };
+  const navigate = (item: TurnRailItem) => { ++previewOwner.current; onNavigate(item.turn ? {turn:item.turn,cut:page?.cut} : item.ordinal); };
   // No rail and nothing to recover: no slot layer over the reading surface.
-  if (items.count < 2 && !error) return null;
+  if (items.count < 2 && !feedbackError) return null;
   return <div className={css.slot} data-turn-navigator>
     <TurnRail navigationLabel={tx('agent:reading.turn-navigation')} loading={loading} items={items} activeId={active !== undefined ? active?.slice(5) : currentId && turnKey(currentId)} isActive={isActive}
       isBusy={item => pending === item.key || !!item.id && pending === item.id} attached={attached} onNavigate={navigate}
       previewKey={previewKey} previewTurn={previewTurn} setPreviewKey={setPreviewKey} focusedKey={focusedKey} setFocusedKey={setFocusedKey} previewId={previewId}
       label={item => item.ordinal === 0 ? tx('agent:reading.current-turn') : tx(item.turn ? 'agent:reading.jump-turn' : 'agent:reading.jump-load-turn', { n: item.ordinal })}
       title={item => item.turn?.prompt || (item.ordinal === 0 ? tx('agent:reading.current-turn') : tx('agent:reading.turn', { n: item.ordinal }))} />
-    {error && <div className={css.feedback} role="alert"><p>{error}</p><button type="button" onClick={() => { onReload(); }}>{tx('agent:reading.reload-turns')}</button></div>}
+    {feedbackError && <div className={css.feedback} role="alert"><p>{feedbackError}</p><button type="button" onClick={() => { onReload(); }}>{tx('agent:reading.reload-turns')}</button></div>}
   </div>;
 }
 
 function TurnRail({ navigationLabel, loading, items, activeId, isActive, isBusy, attached, onNavigate, previewKey, previewTurn, setPreviewKey, focusedKey, setFocusedKey, previewId, label, title }: {
   navigationLabel: string; loading: boolean; items: ReturnType<typeof turnRail>; activeId?: string | null; isActive: (item: TurnRailItem) => boolean; isBusy: (item: TurnRailItem) => boolean; attached: boolean;
-  previewTurn?: ConversationTurn;
+  previewTurn?: ObservedTurn;
   onNavigate: (item: TurnRailItem) => void; previewKey: string | null; setPreviewKey: (key: string | null) => void;
   focusedKey: string | null; setFocusedKey: (key: string | null) => void; previewId: string;
   label: (item: TurnRailItem) => string; title: (item: TurnRailItem) => string;

@@ -1,10 +1,14 @@
+import {applicationReceipt} from '../fixture';
+import { contentAdvance } from '../fixture';
+import { sourceReceipt } from '../fixture';
+import { boundedSettings } from "../fixture";
 // Deterministic generated-protocol projection, never imported by production.
 import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
 import { Server, endpoint, snapshot } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/app-server';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v46';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v48';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -51,7 +55,7 @@ source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/works
 source.resolved = { ...source.user.authored, ...source.workspace!.authored };
 server.handlers.set('configuration/sourcesRead', () => {
   if (variant.get('scenario') === 'read-error') throw new RpcFailure({ code: -32000, message: '/bound/rustx.toml is not readable by the App Server process (permission denied while opening the canonical configuration directory /bound)', data: { kind: 'operation_failed' } });
-  return { type: 'source_settings', projection: { ...source, target: { kind: 'user' } } };
+  return { type: 'source_settings', projection:boundedSettings({ ...source, target: { kind: 'user' } }) };
 });
 if (variant.get('scenario') === 'loading') server.held.add('configuration/sourcesRead');
 // A User save meets an external edit of the same document: native refuses it
@@ -64,15 +68,15 @@ const session = variant.get('session');
 // After an explicit adoption native reports the candidate adopted; the
 // browser learns that only from the authoritative reread the adoption owes.
 let adopted = false;
-if (session) server.handlers.set('session/configuration', () => ({ type: 'session_configuration', application: adopted ? { ...sessionApplication(session), candidate: null } : sessionApplication(session) }));
-if (session) server.handlers.set('session/adoptConfiguration', () => { adopted = true; return { type: 'configuration_application', application: { ...sessionApplication(session), candidate: null } }; });
+if (session) server.handlers.set('session/configuration', () => ({ type: 'session_configuration', projection: applicationReceipt(adopted ? { ...sessionApplication(session), candidate: null } : sessionApplication(session)) }));
+if (session) server.handlers.set('session/adoptConfiguration', () => { adopted = true; return {type:'configuration_receipt',scope:({ ...sessionApplication(session), candidate: null })?.scope??'configuration',version:({ ...sessionApplication(session), candidate: null })?.version??'0'}; });
 /** The focused Session's native application in one banner state. */
 function sessionApplication(state: string): ConfigurationApplication {
   const application = cfg3Application();
   if (state === 'preparing') return { ...application, candidate: null, units: { capabilities: { status: 'preparing' }, provider: { status: 'preparing' } } };
   // The failed unit is authored by User and by Workspace B, while the focused
   // Session lives in /workspace/A: owner navigation must open exactly B.
-  if (state === 'failed') return { ...application, candidate: null, sources: [{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/B' }], units: { capabilities: { status: 'failed', diagnostic: 'MCP server repository-index failed to start: /usr/local/bin/repository-index-mcp exited with status 127 (command not found) before completing the initialize handshake' }, execution_policy: { status: 'applied' } } };
+  if (state === 'failed') return { ...application, candidate: null, sources: [{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/B' }], units: { capabilities: { status: 'failed', diagnostic: 'MCP server repository-index failed to start: /usr/local/bin/repository-index-mcp exited with status 127 (command not found) before completing the initialize handshake' }, execution_policy: { status: 'applied'} } };
   return application;
 }
 // A draft conversation needs the native Session model catalog and prospective
@@ -88,7 +92,7 @@ if (variant.get('conversation') === 'ready') {
 }
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
-  if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: projection, reread: { status: 'observed', projection } } };
+  if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } };
   if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:variant.get('scenario') === 'mcp-probe' && operation.id === 'broken' ? 'connection_failed' : 'reachable'}};
   return { kind: operation.kind, projection };
 };
@@ -103,7 +107,7 @@ if (variant.get('scenario') === 'mcp') {
       source.user_mcp.authored![id] = {definition,retained_env:Object.keys(env ?? {}),retained_headers:Object.keys(headers ?? {})};
     } else delete source.user_mcp.authored![id];
     source.user_mcp.revision = `mcp-${++revision}`;
-    return {type:'source_settings',projection:structuredClone(source)};
+    return {type:'sources_written',revision:sourceReceipt(structuredClone(source), request.params.mutation).revision,configuration_revision:null};
   });
 }
 if (variant.get('scenario') === 'mcp-scope') {
@@ -128,7 +132,7 @@ if (variant.get('write') === 'held') {
   server.handlers.set('configuration/sourceWrite', request => {
     if (request.method !== 'configuration/sourceWrite') throw new Error('Unreachable');
     commit('user', request.params.mutation);
-    return { type: 'source_settings', projection: { ...structuredClone(source), target: { kind: 'user' } } };
+    return {type:'sources_written',revision:sourceReceipt({ ...structuredClone(source), target: { kind: 'user' } }).revision,configuration_revision:null};
   });
   server.held.add('configuration/sourceWrite');
   const releases: (() => void)[] = [];
@@ -153,7 +157,7 @@ if (variant.get('write') === 'held') {
     for (const release of releases.splice(0)) release();
   };
 }
-server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: effective }));
+server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: {revision:'fixture',inline:effective,fields:[],collections:[]} }));
 // The native requests this page issued, for browser assertions of exact
 // identity, ordering and request counts. Test fixture only.
 (window as unknown as { rustxNativeRequests: () => unknown[] }).rustxNativeRequests = () => server.requests.map(item => item.request);
@@ -168,7 +172,7 @@ server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_
   deliver({ type: 'assistant_message_started', attempt_id: 'streamed-attempt', message_id: 'streamed-message' });
   for (let delta = 0; delta < deltas; delta++) {
     await new Promise(resolve => setTimeout(resolve));
-    deliver({ type: 'assistant_text_delta', attempt_id: 'streamed-attempt', message_id: 'streamed-message', block_index: 0, delta: 'x' });
+    deliver(contentAdvance({attempt_id:'streamed-attempt',message_id:'streamed-message',block_index:0,kind:'text',delta:'x'}, delta, delta + 1));
   }
   await new Promise(resolve => setTimeout(resolve));
 };

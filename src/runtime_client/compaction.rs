@@ -184,6 +184,7 @@ mod tests {
                 &cut.checkpoints,
                 &cut.completed_responses,
                 &cut.turns,
+                &cut.raw_tool_arguments,
             )
             .unwrap();
             let child = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();

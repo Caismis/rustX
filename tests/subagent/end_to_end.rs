@@ -10,8 +10,8 @@
 //!
 //! # No sleep-based readiness
 //!
-//! Every wait is a protocol round trip: the driver polls the authoritative
-//! `session/snapshot` until the committed ledger shows the expected content. The
+//! Every wait is a protocol round trip: the driver reads bounded authoritative
+//! checkpoints until the committed transcript shows the expected content. The
 //! child's own liveness is bounded by its startup and delegation envelopes,
 //! not by the test.
 
@@ -454,7 +454,10 @@ async fn a_real_child_shares_the_session_workspace_subdirectory() {
             .opportunities
             .fresh_inbound
             .as_ref()
-            .is_some_and(|fresh| !fresh.target_message_id.as_str().is_empty())
+            .is_some_and(|fresh| fresh
+                .target_message_id
+                .as_ref()
+                .is_some_and(|id| !id.as_str().is_empty()))
             || status
                 .opportunities
                 .post_tool_batch
@@ -465,7 +468,10 @@ async fn a_real_child_shares_the_session_workspace_subdirectory() {
         status.opportunities
     );
     assert!(
-        !status.status_message_id.as_str().is_empty(),
+        status
+            .status_message_id
+            .as_ref()
+            .is_some_and(|id| !id.as_str().is_empty()),
         "the composition identity travels with it"
     );
     // The retention bound is projection policy and is deliberately absent
@@ -549,15 +555,11 @@ async fn subagent_process_stack(alias_root: bool) {
     assert!(snapshot.agents.is_empty(), "no children at start");
 
     // The composed tool surface includes the subagent intrinsic.
-    let capabilities = snapshot.capabilities;
+    let tools = process.capability_tools().await;
     assert!(
-        capabilities
-            .tools
-            .iter()
-            .any(|tool| tool.name.as_str() == "subagent"),
+        tools.iter().any(|tool| tool.name.as_str() == "subagent"),
         "the subagent intrinsic is composed: {:?}",
-        capabilities
-            .tools
+        tools
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>()
@@ -677,9 +679,17 @@ async fn subagent_process_stack(alias_root: bool) {
             agent_id: subagent.agent_id.clone(),
         })
         .await;
-    let Ok(MethodResult::Agent { agent: status }) = response else {
+    let Ok(MethodResult::DomainPage { page }) = response else {
         panic!("agent/status must succeed: {response:?}");
     };
+    let status: rustx::runtime_client::RuntimeClientAgent =
+        rustx::runtime_client::checkpoint::decode_domain_value(
+            page.items[0]
+                .value
+                .clone()
+                .expect("small inline agent fixture"),
+        )
+        .expect("typed native agent");
     assert_eq!(
         status.activation_state,
         rustx::runtime::subagent::SubagentState::Succeeded
@@ -786,14 +796,9 @@ async fn subagent_process_stack(alias_root: bool) {
                         return None;
                     };
                     Some(rustx::runtime_client::trace::TraceToolLocator {
-                        occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
-                            assistant.id.clone(),
-                            rustx::message::types::ContentBlockIndex::new(
-                                u32::try_from(index).unwrap(),
-                            ),
-                        ),
-                        call_id: call.id.clone(),
-                        tool_id: call.tool_id.clone(),
+                        occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {locator:rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {message_id:assistant.id.clone()},block_index:rustx::message::types::ContentBlockIndex::new(u32::try_from(index).unwrap())},
+                        call_id: Some(call.id.clone()),
+                        tool_id: Some(call.tool_id.clone()),
                     })
                 })
         })
@@ -817,8 +822,13 @@ async fn subagent_process_stack(alias_root: bool) {
         .find(|record| record.id == located.record_id)
         .unwrap();
     assert_eq!(
-        selected.tool.as_ref().unwrap().call_id,
-        root_locator.call_id
+        selected.tool.as_ref().unwrap().call_id.as_ref(),
+        Some(
+            root_locator
+                .call_id
+                .as_ref()
+                .expect("finite fixture call identity")
+        )
     );
     let page = serde_json::to_string(&window.page).unwrap();
     let trace = reopened
@@ -853,15 +863,20 @@ async fn subagent_process_stack(alias_root: bool) {
             target: reopened.target(),
             agent_id: agent_id.clone(),
             locator: rustx::runtime_client::trace::TraceToolLocator {
-                occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
-                    request
-                        .request
-                        .as_ref()
-                        .unwrap()
-                        .assistant_message_id
-                        .clone(),
-                    rustx::message::types::ContentBlockIndex::new(0),
-                ),
+                occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                    locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: request
+                            .request
+                            .as_ref()
+                            .unwrap()
+                            .assistant_message_id
+                            .clone()
+                            .expect(
+                                "the native fixture request has its bounded provisional identity",
+                            ),
+                    },
+                    block_index: rustx::message::types::ContentBlockIndex::new(0),
+                },
                 call_id: root_locator.call_id.clone(),
                 tool_id: root_locator.tool_id.clone(),
             },
@@ -885,15 +900,69 @@ async fn subagent_process_stack(alias_root: bool) {
         .call(Method::AgentTraceDetail {
             target: reopened.target(),
             agent_id: agent_id.clone(),
-            record_id: request_id,
+            record_id: request_id.clone(),
         })
         .await;
-    let Ok(MethodResult::TraceDetail {
-        detail: Some(detail),
-    }) = detail
-    else {
+    let Ok(MethodResult::DomainPage { page: detail_page }) = detail else {
         panic!("child request detail: {detail:?}");
     };
+    // The bounded detail carries original content and collection sources on
+    // each request message; the full reconstruction oracle omits those fields.
+    let detail = detail_page.items[0]
+        .value
+        .as_ref()
+        .expect("small inline trace fixture");
+    assert_eq!(detail_page.items[0].identity, request_id);
+    assert_eq!(detail["id"], request_id);
+    assert_eq!(detail["kind"], "request");
+    assert_eq!(detail_page.read_cut.conversation_id, child_conversation_id);
+    let messages = detail["request"]["messages"]
+        .as_array()
+        .expect("bounded native request messages");
+    assert!(!messages.is_empty());
+    let mut task_in_original_messages = false;
+    for message in messages {
+        let role: rustx::runtime_client::trace::TraceMessageRole =
+            serde_json::from_value(message["role"].clone()).expect("exact native message role");
+        let identity: Option<rustx::runtime::identity::MessageId> =
+            serde_json::from_value(message["message_id"].clone())
+                .expect("exact native message identity");
+        let _: Option<String> = serde_json::from_value(message["source"].clone())
+            .expect("exact native user provenance");
+        let blocks: Vec<rustx::runtime_client::trace::TraceContentBlock> =
+            rustx::runtime_client::checkpoint::decode_domain_value(message["blocks"].clone())
+                .expect("typed native message previews");
+        task_in_original_messages |= blocks.iter().any(|block| {
+            matches!(block, rustx::runtime_client::trace::TraceContentBlock::Text { text }
+                if text.text.contains("count the workspace files") && !text.truncated)
+        });
+        if role == rustx::runtime_client::trace::TraceMessageRole::RequestOnly {
+            assert!(identity.is_none());
+            continue;
+        }
+        assert!(identity.is_some(), "this fixture has finite canonical IDs");
+        let content: Vec<rustx::runtime_client::checkpoint::ContentBinding> =
+            rustx::runtime_client::checkpoint::decode_domain_value(message["content"].clone())
+                .expect("original canonical content sources");
+        let collections: Vec<rustx::runtime_client::checkpoint::CollectionFrontier> =
+            rustx::runtime_client::checkpoint::decode_domain_value(message["collections"].clone())
+                .expect("original canonical collection frontiers");
+        // Small original text is complete inline. Content bindings identify
+        // deferred fields; an empty binding list does not erase provenance.
+        assert!(
+            content
+                .iter()
+                .all(|binding| { binding.content_ref.conversation_id == child_conversation_id })
+        );
+        assert!(!collections.is_empty());
+        assert!(
+            collections
+                .iter()
+                .all(|frontier| frontier.loaded <= frontier.total)
+        );
+        assert!(message["deferred"].is_boolean());
+    }
+    assert!(task_in_original_messages);
     let detail_text = serde_json::to_string(&detail).unwrap();
     assert!(detail_text.contains("count the workspace files"));
     assert!(!detail_text.contains("please delegate"));
@@ -1115,8 +1184,8 @@ async fn running_child_inspection_is_execution_independent() {
         })
         .await
         .expect("the parent continuation reaches its deterministic fixture");
-        // The product Trace API remains available while the provider is gated,
-        // including when the child's disposable inspection socket is unavailable.
+        // Live Trace belongs to the Child's own endpoint. Refusing that endpoint
+        // is explicit observation unavailability and never changes execution.
         let current_agent = tokio::time::timeout(LIVENESS, async {
             loop {
                 let snapshot = parent.snapshot().await;
@@ -1142,34 +1211,46 @@ async fn running_child_inspection_is_execution_independent() {
                 records: Vec::new(),
             })
             .await;
-        let Ok(MethodResult::Trace { page: trace }) = trace else {
-            panic!("running child Trace: {trace:?}");
-        };
-        let requests: Vec<_> = trace
-            .records
-            .iter()
-            .filter(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
-            .collect();
-        assert!(!requests.is_empty());
-        assert_eq!(
-            requests.last().unwrap().state,
-            rustx::runtime_client::trace::TraceState::Running
-        );
-        assert_eq!(
-            requests.last().unwrap().location.attempt_id,
-            current_agent.observation.attempt_id
-        );
-        let detail = parent
-            .call(Method::AgentTraceDetail {
-                target: parent.target(),
-                agent_id: current_agent.agent_id.clone(),
-                record_id: requests.last().unwrap().id.clone(),
-            })
-            .await;
-        assert!(matches!(
-            detail,
-            Ok(MethodResult::TraceDetail { detail: Some(_) })
-        ));
+        if matches!(mode, RunningChildInspection::EndpointUnavailable) {
+            assert!(
+                matches!(trace,
+                    Err(ref failure) if matches!(&failure.error.data,
+                        Some(ErrorData::ObservationUnavailable { diagnostic })
+                            if diagnostic.starts_with("child observation:")
+                    )
+                ),
+                "refused Child endpoint is explicit unavailable: {trace:?}"
+            );
+        } else {
+            let Ok(MethodResult::Trace { page: trace }) = trace else {
+                panic!("running child Trace: {trace:?}");
+            };
+            let requests: Vec<_> = trace
+                .records
+                .iter()
+                .filter(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
+                .collect();
+            assert!(!requests.is_empty());
+            assert_eq!(
+                requests.last().unwrap().state,
+                rustx::runtime_client::trace::TraceState::Running
+            );
+            assert_eq!(
+                requests.last().unwrap().location.attempt_id,
+                current_agent.observation.attempt_id
+            );
+            let detail = parent
+                .call(Method::AgentTraceDetail {
+                    target: parent.target(),
+                    agent_id: current_agent.agent_id.clone(),
+                    record_id: requests.last().unwrap().id.clone(),
+                })
+                .await;
+            assert!(matches!(
+                detail,
+                Ok(MethodResult::DomainPage {page}) if !page.items.is_empty()
+            ));
+        }
 
         let provider_attempts_before_inspection = server.attempt_count();
         assert_eq!(
@@ -1287,7 +1368,8 @@ async fn running_child_inspection_is_execution_independent() {
             .as_ref()
             .expect("the delegating parent attempt exists")
             .attempt_id
-            .clone();
+            .clone()
+            .expect("exact native fixture attempt identity");
         // Force both legal mailbox frontiers. Provider-request arrival alone
         // does not prove the delegating attempt has settled: a pending child
         // answer can be adopted by its next safe-boundary drain.
@@ -1305,7 +1387,7 @@ async fn running_child_inspection_is_execution_independent() {
                         && child.activation_state == rustx::runtime::subagent::SubagentState::Succeeded)
                 } else {
                     snapshot.attempt.as_ref().is_some_and(|attempt|
-                        attempt.attempt_id == preceding_attempt && matches!(attempt.phase,
+                        attempt.attempt_id.as_ref() == Some(&preceding_attempt) && matches!(attempt.phase,
                             rustx::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled {
                                 outcome: rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
                             }))
@@ -1324,7 +1406,11 @@ async fn running_child_inspection_is_execution_independent() {
         // The final response is held, so this snapshot names the actual
         // answering attempt before its terminal event can race the reader.
         let snapshot = parent.snapshot().await;
-        let final_attempt = snapshot.attempt.expect("answering attempt").attempt_id;
+        let final_attempt = snapshot
+            .attempt
+            .expect("answering attempt")
+            .attempt_id
+            .expect("the answering attempt has its bounded native identity");
         assert_eq!(
             final_attempt == preceding_attempt,
             same_attempt,
@@ -1336,12 +1422,12 @@ async fn running_child_inspection_is_execution_independent() {
         tokio::time::timeout(LIVENESS, async {
             loop {
                 let event = parent.next_event().await;
-                if matches!(event,
+                if event.facts().iter().any(|fact|matches!(fact,
                     rustx::runtime_client::event::RuntimeClientEvent::AttemptSettled {
                         attempt_id,
                         outcome: rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
-                    } if attempt_id == final_attempt
-                ) { break; }
+                    } if *attempt_id == final_attempt
+                )) { break; }
             }
         }).await.expect("the child-answer attempt settles through its event channel");
         let final_snapshot = parent.snapshot().await;
@@ -1882,15 +1968,21 @@ impl LiveInspector {
             )
             .await;
         let Some(rustx::runtime_client::RuntimeClientResult::Initialized {
-            conversation_id,
-            snapshot,
-            ..
+            conversation_id, ..
         }) = response.result
         else {
             panic!("running child inspection initializes: {response:?}");
         };
         assert_eq!(&conversation_id, child, "the exact running child");
-        snapshot
+        let checkpoint = self
+            .call(|id| rustx::runtime_client::RuntimeClientRequest::CheckpointGet { id })
+            .await;
+        let Some(rustx::runtime_client::RuntimeClientResult::Checkpoint { checkpoint }) =
+            checkpoint.result
+        else {
+            panic!("bounded explicit child checkpoint")
+        };
+        checkpoint.snapshot
     }
 
     /// Mutation and new work are refused before dispatch.

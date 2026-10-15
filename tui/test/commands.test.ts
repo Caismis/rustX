@@ -1,3 +1,6 @@
+import {readCut} from './support/fixtures.ts';
+import { checkpoint, domainReceipt, goalReceipt, compactReceipt, jobReceipt } from './support/fixtures.ts';
+import { boundedSettings } from "./support/fixtures.ts";
 /**
  * The command layer, tested without a terminal.
  *
@@ -20,6 +23,7 @@ import { ArgumentError, USAGE, parseArguments } from "../src/cli.ts";
 import {
   agentStatus,
   attemptModel,
+  attemptView,
   catalogModel,
   capabilities,
   questionnaireInteraction,
@@ -51,6 +55,32 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
+  const h = await harness();
+  const ref: import("../../protocol/app-server/v48.ts").ContentRef = {
+    conversation_id: h.session.state.conversationId,
+    source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
+    representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
+  };
+  Object.defineProperty(h.session, "deferredContent", { get: () => [{ path: ["binary"], content_ref: ref, deferred: true }] });
+  const observing = h.dispatcher.submit("/content 1");
+  const read = await nextRequest(h, "conversation/contentRead");
+  assert.deepEqual(paramsOf(read, "conversation/contentRead"), { target: h.target, agent_id: null, content_ref: ref, offset: 0, max_bytes: 65_536 });
+  const bytes = Buffer.from([255, 0, 195]);
+  h.transport.respond(read.id, { type: "content_chunk", chunk: {
+    content_ref: ref, offset: 0, data_base64: bytes.toString("base64"), end_offset: 3,
+    readable_end: 3, next_offset: null, complete: true,
+  } });
+  const result = await observing;
+  assert.equal(result.kind, "inspect");
+  if (result.kind !== "inspect") return;
+  assert.match(result.body, /Binary bytes \(Base64\)/);
+  assert.match(result.body, /\/wDD/);
+  assert.doesNotMatch(result.body, /�/);
+  assert.equal(h.session.state.cursor, "0");
+  h.client.close();
+});
+
 describe("Goal commands", () => {
   it("creates through the typed control without an inbound turn", async () => {
     const h = await harness();
@@ -60,9 +90,7 @@ describe("Goal commands", () => {
       target: h.target,
       control: { action: "create", objective: "finish delivery", budget: 10 },
     });
-    h.transport.respond(control.id, {
-      type: "goal",
-      view: {
+    const view = {
         current: {
           reference: { id: "goal-1", revision: "1" },
           objective: "finish delivery",
@@ -72,9 +100,12 @@ describe("Goal commands", () => {
           blocked_reason: null,
           origin: { kind: "runtime_control" as const },
           last_round_message_id: null,
+          objective_deferred:false,blocked_reason_deferred:false,last_round_message_id_deferred:false,fields:[],
         },
-      },
-    });
+      };
+    h.transport.respond(control.id, goalReceipt(view));
+    const show = await nextRequest(h, "goal/control");
+    h.transport.respond(show.id, domainReceipt("goal", [view]));
     const created = await creating;
     if (created.kind !== "inspect") throw new Error(`expected an inspect outcome, got ${created.kind}`);
     // Issue #351: the surface is derived from durable GoalPhase alone. An
@@ -85,7 +116,7 @@ describe("Goal commands", () => {
     assert.doesNotMatch(created.body, /\barm|disarm|Inactive/i);
     // Creating a Goal is a typed control, never a conversation message.
     assert.equal(h.transport.log.count("turn/start"), 0);
-    assert.equal(h.transport.log.count("goal/control"), 1);
+    assert.equal(h.transport.log.count("goal/control"), 2);
   });
 
   it("uses the observed revision for pause and never retries stale state", async () => {
@@ -102,10 +133,7 @@ describe("Goal commands", () => {
       origin: { kind: "runtime_control" as const },
       last_round_message_id: null,
     };
-    h.transport.respond(read.id, {
-      type: "goal",
-      view: { current },
-    });
+    h.transport.respond(read.id, domainReceipt("goal", [{ current }]));
 
     const mutate = await nextRequest(h, "goal/control");
     assert.deepEqual(paramsOf(mutate, "goal/control").control, {
@@ -130,12 +158,14 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
-        "/capabilities", "/attach", "/queue",
+        "/context-model", "/capabilities", "/attach", "/queue",
         "/export",
         "/settings",
+        "/content",
         "/help",
         "/goal",
         "/model",
+        "/model-position",
         "/new",
         "/resume",
         "/session",
@@ -152,7 +182,7 @@ describe("command registry", () => {
         "/show-reasoning",
         "/expand",
         "/cancel",
-        "/agents", "/send-message", "/wait-agent", "/interrupt-agent",
+        "/observation", "/observation-value", "/agents", "/agent-read", "/send-message", "/wait-agent", "/interrupt-agent",
         "/jobs", "/job-status", "/job-wait", "/job-cancel",
         "/files",
         "/quit",
@@ -201,7 +231,7 @@ describe("slash-command autocomplete", () => {
     assert.ok(suggestions);
     assert.deepEqual(
       suggestions.items.map((item) => item.value),
-      ["/model"],
+      ["/model", "/model-position", "/context-model"],
     );
   });
 
@@ -400,7 +430,7 @@ describe("CommandDispatcher", () => {
       return;
     }
     assert.match(outcome.body, /Active attempt model \(frozen at admission\)/);
-    assert.match(outcome.body, /this attempt keeps the model it froze/);
+    assert.match(outcome.body, /this attempt keeps its frozen model, profile, parameters and summary policy/);
   });
 
   it("changes the model only through model_catalog_get + model_set", async () => {
@@ -436,9 +466,7 @@ describe("CommandDispatcher", () => {
 
     // The client reads the runtime's own catalog. It never opens rustx.toml.
     const catalog = await nextRequest(h, "session/models");
-    h.transport.respond(catalog.id, {
-      type: "models",
-      catalog: {
+    h.transport.respond(catalog.id, domainReceipt('model_catalog.models',({
         models: [
           {
             model: "beta/model-b",
@@ -462,9 +490,10 @@ describe("CommandDispatcher", () => {
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
         ],
-      },
-    });
+      }).models??[]));
 
+    const modelRead = await nextRequest(h, "session/model");
+    h.transport.respond(modelRead.id, domainReceipt('model',[h.session.state.sessionModel!]));
     const modelSet = await nextRequest(h, "session/setModel");
     // A deliberate whole-state replacement: primary overrides reset — the
     // runtime resolves the new model's default profile — while the
@@ -474,10 +503,9 @@ describe("CommandDispatcher", () => {
       requestParams: {},
       summaryModel: summaryPolicy,
     });
-    h.transport.respond(modelSet.id, {
-      type: "model",
-      model: sessionModel("beta/model-b"),
-    });
+    h.transport.respond(modelSet.id, {type:"model_set",settings_revision:"1"});
+    const confirmedModelRead = await nextRequest(h,"session/model");
+    h.transport.respond(confirmedModelRead.id,domainReceipt("model",[sessionModel("beta/model-b")]));
 
     const outcome = await changing;
     assert.equal(outcome.kind, "transient");
@@ -505,6 +533,7 @@ describe("CommandDispatcher", () => {
     let bModelSet = 0;
     const sessionA = {
       state: emptyPresentationState(sessionModel("alpha/model-a")),
+      modelGet: async () => sessionModel("alpha/model-a"),
       modelCatalog: async () => {
         aCatalog += 1;
         catalogStarted.resolve(undefined);
@@ -548,7 +577,7 @@ describe("CommandDispatcher", () => {
     const h = await harness();
     const changing = h.dispatcher.submit("/model made/up");
     const catalog = await nextRequest(h, "session/models");
-    h.transport.respond(catalog.id, { type: "models", catalog: { models: [] } });
+    h.transport.respond(catalog.id, domainReceipt('model_catalog.models',({ models: [] }).models??[]));
 
     const outcome = await changing;
     assert.equal(outcome.kind, "transient");
@@ -565,9 +594,7 @@ describe("CommandDispatcher", () => {
     const choosing = h.dispatcher.submit("/model");
     // The selector reads the runtime catalog, never rustx.toml.
     const catalog = await nextRequest(h, "session/models");
-    h.transport.respond(catalog.id, {
-      type: "models",
-      catalog: {
+    h.transport.respond(catalog.id, domainReceipt('model_catalog.models',({
         models: [
           {
             model: "beta/model-b",
@@ -589,8 +616,7 @@ describe("CommandDispatcher", () => {
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
         ],
-      },
-    });
+      }).models??[]));
 
     const outcome = await choosing;
     assert.equal(outcome.kind, "choose_model");
@@ -684,6 +710,7 @@ describe("CommandDispatcher", () => {
     const h = await harness();
     const boundary = {
       surface_revision: "4",
+      locator:{type:"by_message_id" as const,message_id:"user-c"},block_count:"1",content:[],collections:[],
       message: {
         id: "user-c",
         content: [{ type: "text" as const, text: "try again" }],
@@ -827,6 +854,7 @@ describe("CommandDispatcher", () => {
       boundaries: [
         {
           surface_revision: "3",
+          locator:{type:"by_message_id" as const,message_id:"user-c"},block_count:"1",content:[],collections:[],
           message: {
             id: "user-c",
             content: [{ type: "text", text: "C" }],
@@ -844,6 +872,7 @@ describe("CommandDispatcher", () => {
       boundaries: [
         {
           surface_revision: "3",
+          locator:{type:"by_message_id" as const,message_id:"user-c"},block_count:"1",content:[],collections:[],
           message: {
             id: "user-c",
             content: [{ type: "text", text: "C" }],
@@ -930,17 +959,14 @@ describe("CommandDispatcher", () => {
         model: "alpha/summary",
         request_params: { temperature: 0.2 },
       };
-      h.transport.respond(read.id, { type: "model", model: current });
+      h.transport.respond(read.id, domainReceipt('model',[current]));
 
       const set = await nextRequest(h, "session/setModel");
       const expected = { ...current.configured };
       if (profile === null) delete expected.profile;
       else expected.profile = profile;
       assert.deepEqual(paramsOf(set, "session/setModel").config, expected);
-      h.transport.respond(set.id, {
-        type: "model",
-        model: { ...current, configured: expected },
-      });
+      h.transport.respond(set.id, domainReceipt('model',[{ ...current, configured: expected }]));
       assert.equal((await command).kind, "transient");
       assert.equal(h.transport.log.count("session/setModel"), 1);
       assert.deepEqual(
@@ -950,6 +976,48 @@ describe("CommandDispatcher", () => {
       );
     });
   }
+
+  it("selecting the current model submits its complete configuration and reports success only after native acknowledgement", async () => {
+    const h = await harness();
+    const choosing = h.dispatcher.selectModel(catalogModel("alpha/model-a"));
+    const current = sessionModel("alpha/model-a");
+    current.configured = { model: "alpha/model-a", profile: "high", requestParams: { temperature: 0.3 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "alpha/summary" } };
+    const read = await nextRequest(h, "session/model");
+    h.transport.respond(read.id, domainReceipt('model',[current]));
+    const set = await nextRequest(h, "session/setModel");
+    assert.deepEqual(paramsOf(set, "session/setModel").config, current.configured);
+    let acknowledged = false;
+    void choosing.then(() => { acknowledged = true; });
+    await Promise.resolve();
+    assert.equal(acknowledged, false, "model-name equality cannot acknowledge explicit intent");
+    h.transport.respond(set.id, {type:'model_set',settings_revision:'1'});
+    const confirmed=await nextRequest(h,'session/model');
+    h.transport.respond(confirmed.id,domainReceipt('model',[current]));
+    const outcome = await choosing;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") assert.match(outcome.text, /profile, overrides and summary policy preserved/);
+    assert.equal(h.transport.log.count("session/setModel"), 1);
+  });
+
+  it("selecting the current model cannot report success when native authority rejects explicit intent", async () => {
+    const h = await harness();
+    const choosing = h.dispatcher.selectModel(catalogModel("alpha/model-a"));
+    const read = await nextRequest(h, "session/model");
+    h.transport.respond(read.id, domainReceipt('model',[sessionModel("alpha/model-a")]));
+    const set = await nextRequest(h, "session/setModel");
+    h.transport.respondError(set.id, { code: -32000, message: "selection conflict", data: { kind: "operation_failed" } });
+    const reread = await nextRequest(h, "session/checkpoint");
+    h.transport.respond(reread.id, {type:'checkpoint',checkpoint:checkpoint(snapshot(),runtimeCursor(0))});
+    const subscribe = await nextRequest(h, "session/subscribe");
+    h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: runtimeCursor(0) });
+    const outcome = await choosing;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /selection conflict/);
+    }
+    assert.equal(h.session.modelSelectionOutcomeUnknown, false);
+  });
 
   it("CFG238 rejects obsolete ambiguous profile syntax without a native operation", async () => {
     const h = await harness();
@@ -1148,20 +1216,22 @@ describe("CommandDispatcher", () => {
     const compacting = h.dispatcher.submit("/compact");
     const compact = await nextRequest(h, "context/compact");
     assert.deepEqual(paramsOf(compact, "context/compact").target, h.target);
-    h.transport.respond(compact.id, {
-      type: "context",
-      context: {
+    const context = {
         compaction_in_progress: false,
         compaction_count: 1,
         latest_compaction: {
           generation: "1",
-          summary_message_id: "conv_8498648a-66ba-716f-8243-8cf147533e52",
+          summary_message_id: "conv_8498648a-66ba-716f-8243-8cf147533e52", summary_message_locator:{type:'by_message_id' as const,message_id:"conv_8498648a-66ba-716f-8243-8cf147533e52"}, summary_message_id_deferred:false, summary_message_id_source:null,
           surface_revision: "4",
-          tokens_before: { input_tokens: 8_400, source: "estimated" },
-          estimated_tokens_after: 1_900,
+          tokens_before: { input_tokens: "8400", source: "estimated" as const },
+          estimated_tokens_after: "1900",
         },
-      },
-    });
+      };
+    h.transport.respond(compact.id, compactReceipt(context));
+    const cut = await nextRequest(h,"session/checkpoint");
+    h.transport.respond(cut.id,{type:"checkpoint",checkpoint:checkpoint(snapshot({context}))});
+    const page = await nextRequest(h,"conversation/checkpointPage");
+    h.transport.respond(page.id,{type:"checkpoint_page",page:domainReceipt("context",[context]).page});
 
     const outcome = await compacting;
     assert.equal(outcome.kind, "transient");
@@ -1188,14 +1258,14 @@ describe("CommandDispatcher", () => {
     const h = await harness();
     const operation = h.dispatcher.submit("/settings user rescan");
     const read = await nextRequest(h, "configuration/sourcesRead");
-    h.transport.respond(read.id, { type: "source_settings", projection: {
+    h.transport.respond(read.id, { type: "source_settings", projection:boundedSettings({
       target: { kind: "user" }, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, workspace: { path: "/workspace", revision: "w" },
-      user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [],
-    } });
+      user_resource_root: "/ur", workspace_resource_root: "/wr", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, workspace_mcp: { path: "/wm", revision: "wm" }, agents: [], repair_sequence: "0",
+    }) });
     const reconcile = await nextRequest(h, "configuration/reconcile");
-    h.transport.respond(reconcile.id, { type: "configuration_application", application: { scope: h.session.sessionId, sources: [{ kind: "user" }], version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied" } } } });
+    h.transport.respond(reconcile.id, {type:'configuration_receipt',scope:({ scope: h.session.sessionId, sources: [{ kind: "user" }], version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied"} } })?.scope??'configuration',version:({ scope: h.session.sessionId, sources: [{ kind: "user" }], version: "2", desired: { input_revision: "u", attempt: "1" }, units: { execution_policy: { status: "applied"} } })?.version??'0'});
     const reread = await nextRequest(h, "configuration/sourcesRead", 1);
-    h.transport.respond(reread.id, { type: "source_settings", projection: { target: { kind: "user" }, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, user_resource_root: "/ur", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, agents: [] } });
+    h.transport.respond(reread.id, { type: "source_settings", projection:boundedSettings({ target: { kind: "user" }, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {}, user: { path: "/user", revision: "u" }, user_resource_root: "/ur", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, agents: [], repair_sequence: "0" }) });
     assert.equal((await operation).kind, "inspect");
   });
 
@@ -1239,7 +1309,8 @@ describe("CommandDispatcher", () => {
   });
 
   it("treats attempt cancellation as acceptance", async () => {
-    const h = await harness();
+    const h = await harness(snapshot({ attempt: attemptView() }));
+    const before = structuredClone(h.session.state);
     const cancelling = h.dispatcher.submit("/cancel");
     const cancel = await nextRequest(h, "turn/cancel");
     assert.deepEqual(paramsOf(cancel, "turn/cancel").target, h.target);
@@ -1254,6 +1325,8 @@ describe("CommandDispatcher", () => {
       assert.match(outcome.text, /acceptance/);
       assert.match(outcome.text, /runtime owns the terminal settlement/);
     }
+    assert.deepEqual(h.session.state, before, "the native terminal remains an observation");
+    h.client.close();
   });
 
   it("removed /approve: a stale spelling is an unknown command off the wire", async () => {
@@ -1276,19 +1349,34 @@ describe("CommandDispatcher", () => {
     const cancelling = h.dispatcher.submit("/job-cancel exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
     const cancel = await nextRequest(h, "job/cancel");
     assert.equal(paramsOf(cancel, "job/cancel").job_id, "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
-    h.transport.respond(cancel.id, {
-      type: "job",
-      job: {
-        job_id: "exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",
-        tool_id: "tool-background", tool_name: "bash", state: "cancelled",
-      },
-    });
+    const job = {job_id:"exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",tool_id:"tool-background",tool_name:"bash",state:"cancelled" as const};
+    h.transport.respond(cancel.id,{ type: "job_cancellation_accepted", job_id: job.job_id });
     const outcome = await cancelling;
+    assert.equal(h.transport.log.count("job/status"), 0, "intent acknowledgement needs no ordinary read capacity");
     assert.equal(outcome.kind, "inspect");
   });
 
-  it("surfaces a typed protocol error as an error message", async () => {
+  it("T15 controls a Job by native execution identity while its original Tool identity is deferred", async () => {
     const h = await harness();
+    const work = h.dispatcher.submit("/job-cancel exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5");
+    const cancel = await nextRequest(h, "job/cancel");
+    const job = {job_id:"exec_05cd92d5-1932-7bdc-beaf-0d97db6118c5",tool_id:null,tool_name:"bash",state:"cancelled" as const,deferred_fields:[["tool_id"]]};
+    h.transport.respond(cancel.id,{ type: "job_cancellation_accepted", job_id: job.job_id });
+    const accepted = await work;
+    assert.equal(accepted.kind, "inspect");
+    const reading = h.dispatcher.submit(`/job-status ${job.job_id}`);
+    const status = await nextRequest(h,"job/status");
+    h.transport.respond(status.id,domainReceipt("jobs."+job.job_id,[job]));
+    const outcome = await reading;
+    assert.equal(outcome.kind,"inspect");
+    if (outcome.kind === "inspect") assert.match(outcome.body,/fields deferred: tool_id/);
+    assert.equal(h.transport.log.count("conversation/checkpointValueRead"),0);
+    assert.equal(h.transport.log.count("job/cancel"),1);
+  });
+
+  it("surfaces a typed protocol error as an error message", async () => {
+    const h = await harness(snapshot({ attempt: attemptView() }));
+    const before = structuredClone(h.session.state);
     const cancelling = h.dispatcher.submit("/cancel");
     const cancel = await nextRequest(h, "turn/cancel");
     h.transport.respondError(cancel.id, {
@@ -1303,10 +1391,13 @@ describe("CommandDispatcher", () => {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /no attempt is currently cancellable/);
     }
+    assert.deepEqual(h.session.state, before, "the native terminal remains an observation");
+    h.client.close();
   });
 
   it("reports an uncertain cancellation without claiming it failed", async () => {
-    const h = await harness();
+    const h = await harness(snapshot({ attempt: attemptView() }));
+    const before = structuredClone(h.session.state);
     const cancelling = h.dispatcher.submit("/cancel");
     await nextRequest(h, "turn/cancel");
     // The response is lost. Cancellation may well have been accepted.
@@ -1319,6 +1410,7 @@ describe("CommandDispatcher", () => {
       assert.match(outcome.text, /whether the server accepted it is unknown/);
       assert.match(outcome.text, /check the authoritative state/);
     }
+    assert.deepEqual(h.session.state, before, "response loss cannot fabricate terminal settlement");
     assert.equal(
       h.transport.log.count("turn/cancel"),
       1,
@@ -1603,7 +1695,13 @@ it("a replacement attachment does not inherit an old Agent-message submission fe
   const attaching = h.host.attach(h.session.sessionId);
   const attach = await nextRequest(h, 'session/attach', 1);
   const replacementTarget = { ...h.target, attachment_id: 'replacement' };
-  h.transport.respond(attach.id, { type: 'attached', target: replacementTarget, snapshot: snapshot(), cursor: runtimeCursor(0) });
+  h.transport.respond(attach.id, {type:'attached', target: replacementTarget, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  const replacementCut = await nextRequest(h,'session/checkpoint');
+  h.transport.respond(replacementCut.id,{type:'checkpoint',checkpoint:checkpoint(snapshot())});
+  const registration = await nextRequest(h,'session/subscribe');
+  h.transport.respond(registration.id,{type:'subscribed',target:replacementTarget,registration_id:'replacement-registration',after_cursor:'0'});
+  const application = await nextRequest(h,'session/configuration');
+  h.transport.respond(application.id,{type:'session_configuration',projection:null});
   const replacement = await attaching;
   h.dispatcher.setSession(replacement);
   const next = h.dispatcher.submit('/send-message agent-child new guidance');
@@ -1615,4 +1713,30 @@ it("a replacement attachment does not inherit an old Agent-message submission fe
   assert.equal(h.transport.log.count('agent/sendMessage'), 2, 'old completion cannot release the replacement fence');
   h.transport.respond(second.id, { type: 'agent_message', agent_id: 'agent-child', activation_id: 'new', resumed: false });
   await next;
+});
+
+it('T11/T15 Agent inspection follows a bounded native page cut and opens an off-head id without mutating Applied state', async()=>{
+  const h=await harness();
+  const first=h.dispatcher.submit('/agents');const list=await nextRequest(h,'agent/list');
+  const older= (await import('./support/fixtures.ts')).subagent('older','native-source','inactive',{agent_id:'off-head'});
+  h.transport.respond(list.id,domainReceipt('agents',[older],{total:33,next:32}));
+  const firstView=await first;assert.equal(firstView.kind,'inspect');if(firstView.kind!=='inspect')return;
+  assert.match(firstView.body,/\/agents 32/);assert.match(firstView.body,/off-head/);
+  const next=h.dispatcher.submit('/agents 32');const page=await nextRequest(h,'conversation/checkpointPage');
+  const params=paramsOf(page,'conversation/checkpointPage');assert.equal(params.domain,'agents');assert.equal(params.offset,32);assert.equal(params.limit,32);assert.deepEqual(params.cut,checkpoint(snapshot()).read_cut);
+  const last=domainReceipt('agents',[older],{total:33});last.page.items[0]!.offset='32';
+  h.transport.respond(page.id,{type:'checkpoint_page',page:last.page});const lastView=await next;assert.equal(lastView.kind,'inspect');
+  assert.deepEqual(await h.dispatcher.submit('/agent-read off-head'),{kind:'inspect_agent',agentId:'off-head'});
+  assert.equal(h.session.state.agents.length,0);assert.equal(h.session.state.cursor,'0');h.client.close();
+});
+
+it('T08/T15 observation inspection reads one finite native page and selected original byte range without Applied movement',async()=>{
+ const h=await harness();const showing=h.dispatcher.submit('/observation workflows');const read=await nextRequest(h,'conversation/checkpointPage');
+ const page=domainReceipt('workflows',[null],{total:34,next:32}).page;page.items[0]!.deferred=true;page.items[0]!.offset='19';page.items[0]!.identity='native-workflow-row';
+ h.transport.respond(read.id,{type:'checkpoint_page',page});const view=await showing;assert.equal(view.kind,'inspect');if(view.kind!=='inspect')return;assert.match(view.body,/deferred content/);assert.match(view.body,/\/observation workflows 32/);
+ const reading=h.dispatcher.submit('/observation-value 19 0 ["native_field"]');const range=await nextRequest(h,'conversation/checkpointValueRead');
+ assert.deepEqual(paramsOf(range,'conversation/checkpointValueRead'),{target:h.target,agent_id:null,cut:page.read_cut,domain:'workflows',item_offset:19,path:['native_field'],offset:0,max_bytes:65536});
+ const bytes=Buffer.from('{"opaque":9007199254740993}');h.transport.respond(range.id,{type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut:page.read_cut,domain:'workflows',item_offset:19,path:['native_field'],offset:0,bytes_base64:bytes.toString('base64'),next_offset:null,readable_end:bytes.length}});
+ const result=await reading;assert.equal(result.kind,'inspect');if(result.kind==='inspect')assert.match(result.body,/9007199254740993/);
+ assert.equal(h.session.state.cursor,'0');assert.equal(h.session.state.workflows?.runs.length,0);h.client.close();
 });

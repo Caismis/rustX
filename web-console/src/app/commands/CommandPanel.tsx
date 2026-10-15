@@ -3,6 +3,8 @@ import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../../client/app-server';
+import type { CheckpointPage } from '../../../../protocol/app-server/v48';
+import { CollectionPages } from '../agent/CollectionPages';
 import { lineageSwitchSafe } from '../../bindings/projection';
 import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';
@@ -21,6 +23,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   const [rows, setRows] = useState<Row[]>([]), [query, setQuery] = useState(''), [active, setActive] = useState(0);
   const [busy, setBusy] = useState(true), [error, setError] = useNotice(), [detail, setDetail] = useNotice();
   const [next, setNext] = useState<number | null | undefined>();
+  const [toolsPage, setToolsPage] = useState<CheckpointPage>();
   const alive = useRef(true), selecting = useRef(false);
   const options = useRef<HTMLDivElement>(null);
   const [scope] = useState(() => new CommandSession(client, sessionId, () => alive.current && current()));
@@ -34,12 +37,13 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     setRows([]);
     const page = await scope.boundaries(offset);
     if (!valid()) return;
-    setRows(page.selections.filter(selection => !request.messageId || selection.boundary.message.id === request.messageId).map(selection => ({ id: selection.boundary.message.id,
-      label: selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240),
+    const matches = (selection: typeof page.selections[number]) => !request.messageId || selection.boundary.locator.type === 'by_message_id' && selection.boundary.locator.message_id === request.messageId;
+    setRows(page.selections.filter(matches).map(selection => ({ id: JSON.stringify(selection.boundary.locator),
+      label: selection.boundary.message ? selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240) : message('common:activity.content-deferred'),
 
       choice: { kind: 'history', action, selection } })));
     setNext(page.nextOffset); setActive(0);
-    if (request.messageId && !page.selections.some(item => item.boundary.message.id === request.messageId)) {
+    if (request.messageId && !page.selections.some(matches)) {
       if (page.nextOffset != null) return loadBoundaries(page.nextOffset);
       setError(message('commands:copy.this-message-is-not-an-available-native-user-boundary-no-mutation-was-sent'));
     }
@@ -57,7 +61,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
         case 'fork': case 'branch':
           setDetail(request.id === 'fork' ? message('commands:copy.independent-session-choose-the-exact-user-boundary-its-prompt-returns-to-the-composer') : message('commands:copy.create-a-native-branch-and-switch-the-idle-session-to-it-the-selected-prompt-returns-to-th'));
           await loadBoundaries(0); break;
-        case 'tools': { const result = await scope.tools(); if (valid()) { setDetail(JSON.stringify(result, null, 2)); succeeded(); } break; }
+        case 'tools': { const page = await scope.tools(); if (valid()) { setToolsPage(page); succeeded(); } break; }
         case 'tree': setDetail(message('commands:copy.native-session-lineage-opening-another-node-switches-the-idle-resident-runtime-the-origina')); await loadTree(0); break;
         case 'goal': setError(message('commands:copy.goal-controls-are-in-the-goal-dock')); break;
         default: { const exhaustive: never = request.id; throw new Error(String(exhaustive)); }
@@ -76,6 +80,16 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   const stale = !scope.current();
   return <Modal closeLabel={tx('commands:command-panel.close-dialog')} open title={request.id === 'tree' ? tx('commands:command-panel.session-tree') : tx('commands:command-panel.value', { p0: request.id })} onClose={close}>
     <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
+    {toolsPage && <>
+      {toolsPage.items.some(item => item.value == null || item.deferred) && <p role="status">{tx('common:activity.content-deferred')}</p>}
+      {toolsPage.items.map(item => item.value != null ? <pre key={item.offset}>{JSON.stringify(item.value, null, 2)}</pre> : null)}
+      {/* This inspector has loaded the native descriptor, not the selected
+          field rows. Its local loaded ranges start empty; native evidence stays
+          intact in toolsPage and Applied is untouched. */}
+      <CollectionPages client={client} target={scope.target} cut={toolsPage.read_cut}
+        collections={(toolsPage.collections ?? []).map(field => ({ ...field, loaded: '0', next_offset: BigInt(field.total) > 0n ? '0' : null }))}
+        owned={scope.current} />
+    </>}
     {error && <p role="alert">{error}</p>}
     {blocked && <p role="status">{tx('commands:command-panel.waiting-for-native-execution-and-accepted-inbound-to-settle')}</p>}
     {!busy && stale && <p role="status">{tx('commands:command-panel.attachment-changed-close-and-reopen-to-read-current-native-state')}</p>}

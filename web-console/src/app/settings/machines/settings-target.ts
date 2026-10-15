@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v46';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v48';
 import { isOutcomeUncertain, RpcFailure, type ConnectionState } from '../../../client/app-server';
 import { WorkspaceHostError } from '../../../workspaces/host';
 import { applicationScope, selectedRevision, type RevisionSelector, type SettingsTarget } from '../projection';
@@ -542,7 +542,7 @@ export const settingsTargetMachine = setup({
     recordAcknowledgement: enqueueActions(({ context, event, enqueue }) => {
       const outcome = (event as unknown as { output: WriteOutcome }).output;
       const submission = context.submission!;
-      const revision = unitRevision(outcome.acknowledgement, submission.selector);
+      const revision = outcome.acknowledgement.revision;
       const unit = context.units[submission.identity];
       if (unit && revision !== undefined) enqueue.sendTo(unit, { type: 'COMMITTED', token: submission.token, revision });
       enqueue.assign({

@@ -36,7 +36,6 @@ pub enum AdoptionEligibility {
 }
 
 pub(crate) struct PreparedConfiguration {
-    pub(crate) selection_only: bool,
     pub(crate) owner: Arc<()>,
     pub(crate) baseline: u64,
     pub(crate) preview: Arc<crate::runtime::RuntimeResourceSnapshot>,
@@ -161,7 +160,19 @@ pub(crate) struct ApplicationState {
     source_inputs:
         BTreeMap<String, Result<super::super::app_server_policy::AppServerPolicy, String>>,
     worker_running: bool,
+    #[cfg(test)]
+    worker_starts: usize,
     ready: BTreeMap<String, ReadyConfiguration>,
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SelectionApplicationProbe {
+    version: u64,
+    next_attempt: u64,
+    worker_starts: usize,
+    pending: BTreeMap<String, ApplicationIdentity>,
+    ready: Option<(usize, usize, u64)>,
 }
 
 #[derive(Clone)]
@@ -255,6 +266,25 @@ impl ConfigurationApplications {
 }
 
 impl ApplicationState {
+    #[cfg(test)]
+    pub(crate) fn selection_probe(&self, scope: &str) -> SelectionApplicationProbe {
+        SelectionApplicationProbe {
+            version: self.version,
+            next_attempt: self.next_attempt,
+            worker_starts: self.worker_starts,
+            pending: self.pending.clone(),
+            ready: self.ready.get(scope).and_then(|ready| {
+                ready.prepared.as_ref().map(|prepared| {
+                    (
+                        Arc::as_ptr(&prepared.owner) as usize,
+                        Arc::as_ptr(&prepared.preview) as usize,
+                        prepared.baseline,
+                    )
+                })
+            }),
+        }
+    }
+
     /// Initial resolution happens only for an uninitialized source scope. Once
     /// established, authored input cannot bypass successful native publication.
     /// A new Session's selection must resolve. A `persisted` Session's
@@ -534,6 +564,27 @@ impl ApplicationState {
         identity
     }
 
+    /// Reconsider an existing captured source after explicit Session intent
+    /// changes. Selection never ingests source files or adopts pending context.
+    pub(crate) fn selection_changed(
+        &mut self,
+        scope: &str,
+        selection: crate::model::session::SessionModelConfig,
+    ) {
+        // A Session with no source application has nothing to reconsider.
+        // Selection must not manufacture a failed application or ingest files
+        // merely to populate one.
+        let Some(mut input) = self.inputs.get(scope).cloned() else {
+            return;
+        };
+        if let Ok(captured) = &mut input
+            && let Ok(context) = &mut captured.context
+        {
+            context.input.model = Some(selection);
+        }
+        self.capture_binding(scope.to_owned(), input);
+    }
+
     pub(crate) fn capture_source(
         &mut self,
         target: &super::settings::SourceTarget,
@@ -629,6 +680,10 @@ impl ApplicationState {
             return false;
         }
         self.worker_running = true;
+        #[cfg(test)]
+        {
+            self.worker_starts += 1;
+        }
         true
     }
 
@@ -679,12 +734,15 @@ impl ApplicationState {
         view
     }
 
-    pub(crate) fn views(&self) -> Vec<ConfigurationApplication> {
+    pub(crate) fn next_view(
+        &self,
+        versions: &BTreeMap<String, u64>,
+    ) -> Option<ConfigurationApplication> {
         self.scopes
             .values()
+            .find(|view| view.version > versions.get(&view.scope).copied().unwrap_or(0))
             .cloned()
             .map(|view| self.owned(view))
-            .collect()
     }
 
     pub(crate) fn view(&self, scope: &str) -> Option<ConfigurationApplication> {
@@ -761,7 +819,12 @@ mod tests {
 
         // Every projection carries the owners, and retiring a scope forgets them
         // rather than leaving one Session's directory attached to another key.
-        assert!(state.views().iter().all(|view| !view.sources.is_empty()));
+        assert!(
+            state
+                .scopes
+                .keys()
+                .all(|scope| !state.view(scope).unwrap().sources.is_empty())
+        );
         let owner = ConfigurationApplications::default();
         *owner.lock() = state;
         owner.forget(session);

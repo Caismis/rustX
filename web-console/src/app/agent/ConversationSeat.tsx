@@ -6,7 +6,7 @@ import { useClientSelector, sameValue, transportSelection } from '../../client/s
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v46';
+import type { UserInputBlock } from '../../../../protocol/app-server/v48';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
@@ -88,7 +88,7 @@ function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views']
   return { id: view.id, target: view.target, attachmentObservation: view.attachmentObservation, attachment: view.attachment, attachmentIntent: view.attachmentIntent, deleting: view.deleting,
     modelMutation: view.modelMutation, modelIntent: view.modelIntent, cancellation: view.cancellation, active: activeAttempt(view.snapshot), attemptId: view.snapshot?.attempt?.attempt_id,
     resources: view.snapshot?.resources?.revision, attemptModel: view.snapshot?.attempt?.model,
-    lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model, settings: view.settings,
+    lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model, modelStatus: view.snapshot?.model_status, settings: view.settings,
     conversation: view.snapshot?.conversation_id, shuttingDown: view.snapshot?.shutting_down, durability: view.snapshot?.durability_failure,
     interactions: !!view.snapshot?.pending_interactions?.length };
 }

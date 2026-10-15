@@ -11,7 +11,7 @@
 //! this test driver
 //!   |  fixed user/runtime actions
 //!   v
-//! LocalConversationRuntime  (real composition, no injected adapter)
+//! SessionRuntimeManager + AppServerConnection  (real composition)
 //!   |
 //!   v
 //! real provider adapter -> real HTTP + SSE -> fake-provider (Python)
@@ -31,22 +31,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
-use rustx::durable::ConversationStore;
-use rustx::local_runtime::composition::{
-    HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
+use rustx::app_server::connection::AppServerConnection;
+use rustx::app_server::host::AppServerHost;
+use rustx::app_server::protocol::{
+    APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ClientIdentity, InitializeParams,
+    JsonRpcVersion, Method, MethodResult, NotificationMethod, PresentationCapabilities, Request,
+    RequestId, Response, RpcError,
+};
+use rustx::credentials::CredentialSnapshot;
+use rustx::durable::{ConversationStore, SqliteConversationStore};
+use rustx::local_runtime::HostEnvironment;
+use rustx::local_runtime::app_server_policy::AppServerPolicy;
+use rustx::local_runtime::composition::{HeadlessConversationRuntime, LocalRuntimeDependencies};
+use rustx::local_runtime::session::SessionPersistentState;
+use rustx::local_runtime::session_controller::{SessionAccess, SessionController};
+use rustx::local_runtime::session_runtime_manager::{
+    ManagedRuntimeClient, RuntimeManagerError, RuntimeResidencyPolicy, SessionRuntimeManager,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock, UserSource};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
 use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
-use rustx::runtime_client::attachment::RuntimeAttachment;
-use rustx::runtime_client::host::{EventDelivery, EventSubscription, RuntimeClientHost};
 use rustx::runtime_client::snapshot::RuntimeClientAttemptPhase;
-use rustx::runtime_client::types::RuntimeClientResult;
 use rustx::runtime_client::{
-    RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientAttemptFailure, RuntimeClientEvent,
-    RuntimeClientOutcome,
+    RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome,
 };
 
 // ---------------------------------------------------------------------------
@@ -116,12 +125,33 @@ struct Driver {
     /// The temporary root, kept alive for the fixture lifetime.
     #[allow(dead_code)]
     root: tempfile::TempDir,
-    runtime: LocalConversationRuntime,
-    /// The one Runtime Client attachment, kept alive for the subscription's
-    /// lifetime.
-    #[allow(dead_code)]
-    _attachment: RuntimeAttachment,
-    events: EventSubscription,
+    manager: SessionRuntimeManager,
+    client: ManagedRuntimeClient,
+    connection: Arc<AppServerConnection>,
+    target: AttachmentTarget,
+    access: SessionAccess,
+    store: Arc<SqliteConversationStore>,
+    events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<NotificationMethod>>,
+    submitted_after: std::sync::atomic::AtomicU64,
+    consumed_cursor: std::sync::atomic::AtomicU64,
+    relay: tokio::task::JoinHandle<()>,
+}
+
+/// Retain complete wire records; semantic assertions borrow their original facts.
+#[derive(Debug, Default)]
+struct ObservedEvents {
+    records: Vec<NotificationMethod>,
+}
+impl ObservedEvents {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = &RuntimeClientEvent> {
+        self.records.iter().flat_map(|record| match record {
+            NotificationMethod::Event { event, .. } => event.facts(),
+            _ => &[],
+        })
+    }
+    fn last(&self) -> Option<&RuntimeClientEvent> {
+        self.iter().next_back()
+    }
 }
 
 /// How a driver's catalog and session are shaped.
@@ -215,37 +245,265 @@ impl Driver {
             child_program: Some(PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
             ..LocalRuntimeDependencies::default()
         };
-        let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
+        let home = root.path().join(".test-host");
+        std::fs::create_dir_all(&home).expect("isolated host");
+        let environment =
+            HostEnvironment::from_paths(paths.workspace.clone(), home).expect("host environment");
+        let (configuration, input) = paths
+            .request()
+            .session_input(&environment)
+            .expect("fixture Session input");
+        let sessions = SessionController::open(&paths.runtime_root).expect("Session controller");
+        let session = sessions
+            .create_session(SessionPersistentState::from_input(&input))
             .await
-            .expect("the real runtime composes against the emulator catalog");
-        let (attachment, result) = runtime
-            .host()
-            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .expect("attach");
-        let RuntimeClientResult::Initialized { cursor, .. } = result else {
-            panic!("initialize returns the snapshot");
+            .expect("durable Session")
+            .session;
+        let manager = SessionRuntimeManager::new(
+            sessions.clone(),
+            configuration,
+            CredentialSnapshot::new([(
+                CREDENTIAL_VARIABLE.to_owned(),
+                CREDENTIAL_VALUE.to_owned(),
+            )]),
+            dependencies,
+            RuntimeResidencyPolicy {
+                max_resident_runtimes: 8,
+                idle_grace_ms: 300_000,
+            },
+        )
+        .expect("Session runtime owner");
+        let connection = Arc::new(AppServerConnection::new(AppServerHost::new(
+            manager.clone(),
+            AppServerPolicy::default(),
+        )));
+        rpc(
+            &connection,
+            Method::Initialize(InitializeParams {
+                protocol_version: APP_SERVER_PROTOCOL_VERSION,
+                client: ClientIdentity {
+                    name: "conformance".into(),
+                    version: "1".into(),
+                },
+                presentation: PresentationCapabilities::default(),
+            }),
+        )
+        .await
+        .expect("initialize App Server");
+        let attached = rpc(
+            &connection,
+            Method::SessionAttach {
+                session_id: session.id.clone(),
+                node_id: None,
+            },
+        )
+        .await
+        .expect("attach durable Session");
+        let MethodResult::Attached { target, .. } = attached else {
+            panic!("attach returns its bounded identity receipt");
         };
-        let (events, _) = runtime
-            .host()
-            .subscribe_events(attachment.attachment_id(), cursor)
-            .expect("subscribe");
+        let checkpoint = rpc(
+            &connection,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: Vec::new(),
+            },
+        )
+        .await
+        .expect("bounded native checkpoint");
+        let MethodResult::Checkpoint { checkpoint } = checkpoint else {
+            panic!("checkpoint response");
+        };
+        let cursor = checkpoint.cursor;
+        rpc(
+            &connection,
+            Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: cursor,
+            },
+        )
+        .await
+        .expect("subscribe");
+        let runtime = manager
+            .load(&session.id, None)
+            .await
+            .expect("resident runtime");
+        let client = runtime.client();
+        let access = sessions
+            .acquire_session(&session.id, None)
+            .await
+            .expect("read access");
+        let store = Arc::new(
+            SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .expect("durable read handle"),
+        );
+        let (send, events) = tokio::sync::mpsc::unbounded_channel();
+        let notifications = connection.clone();
+        let relay = tokio::spawn(async move {
+            loop {
+                match notifications.next_notification().await.notification {
+                    record @ NotificationMethod::Event { .. } => {
+                        if send.send(record).is_err() {
+                            return;
+                        }
+                    }
+                    NotificationMethod::Closed { .. }
+                    | NotificationMethod::ResyncRequired { .. } => break,
+                    _ => {}
+                }
+            }
+        });
         Self {
             root,
-            runtime,
-            // The attachment is held for the driver's lifetime: dropping it
-            // detaches, which releases the subscription mid-test.
-            _attachment: attachment,
-            events,
+            manager,
+            client,
+            connection,
+            target,
+            access,
+            store,
+            events: tokio::sync::Mutex::new(events),
+            submitted_after: std::sync::atomic::AtomicU64::new(0),
+            consumed_cursor: std::sync::atomic::AtomicU64::new(cursor.get()),
+            relay,
         }
     }
 
-    fn host(&self) -> &RuntimeClientHost {
-        self.runtime.host()
+    fn snapshot(
+        &self,
+    ) -> Result<
+        (
+            rustx::runtime_client::snapshot::RuntimeClientSnapshot,
+            rustx::runtime_client::RuntimeClientCursor,
+        ),
+        RuntimeManagerError,
+    > {
+        self.client
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+    }
+
+    /// Explicit original-history oracle, independent of the checkpoint's body cache.
+    /// Every selected immutable body belongs to one captured native Ledger prefix.
+    fn canonical_history(&self) -> Vec<MessageBlock> {
+        let cut = self
+            .store
+            .observation_read_cut()
+            .expect("native history cut");
+        let mut offset = 0;
+        let mut messages = Vec::new();
+        loop {
+            let page = self
+                .store
+                .message_header_page(&cut, Some(offset), 32)
+                .expect("bounded canonical history page");
+            assert_eq!(page.cut, cut);
+            assert_eq!(page.offset, offset);
+            assert_eq!(page.total, cut.ledger_through);
+            assert!(page.headers.len() <= 32);
+            let ids: Vec<_> = page
+                .headers
+                .iter()
+                .enumerate()
+                .map(|(index, header)| {
+                    assert_eq!(
+                        header.ledger_position,
+                        Some(offset + u64::try_from(index).expect("bounded header ordinal") + 1)
+                    );
+                    header
+                        .identity
+                        .clone()
+                        .expect("small original fixture identity")
+                })
+                .collect();
+            let originals = self
+                .store
+                .load_messages(&ids)
+                .expect("selected original bodies");
+            assert_eq!(originals.len(), ids.len());
+            for (original, identity) in originals.iter().zip(&ids) {
+                assert_eq!(original.id(), identity);
+            }
+            messages.extend(originals);
+            offset += u64::try_from(page.headers.len()).expect("bounded page count");
+            assert_eq!(page.next_offset, (offset < page.total).then_some(offset));
+            if page.next_offset.is_none() {
+                assert_eq!(u64::try_from(messages.len()).unwrap(), cut.ledger_through);
+                return messages;
+            }
+            assert!(!page.headers.is_empty(), "native continuation advances");
+        }
+    }
+
+    fn request_history(&self) -> rustx::runtime::request_history::RequestHistory {
+        rustx::runtime::request_history::RequestHistory::new(self.store.clone())
+    }
+
+    fn reconstruct_request(
+        &self,
+        identity: &rustx::model::RequestIdentity,
+    ) -> Result<rustx::model::ModelRequest, rustx::runtime::request_history::RequestHistoryError>
+    {
+        self.request_history().reconstruct(identity)
+    }
+
+    fn artifacts(&self) -> rustx::tools::artifacts::ArtifactStore {
+        rustx::tools::artifacts::ArtifactStore::new(
+            self.access.node.conversation_id.clone(),
+            self.access.database_path.parent().unwrap(),
+        )
+        .expect("artifact read handle")
+    }
+
+    async fn model_set(&self, config: SessionModelConfig) -> Result<MethodResult, RpcError> {
+        rpc(
+            &self.connection,
+            Method::ModelSet {
+                target: self.target.clone(),
+                config: Box::new(config),
+            },
+        )
+        .await
+    }
+
+    async fn cancel_current_attempt(&self) -> Result<MethodResult, RpcError> {
+        rpc(
+            &self.connection,
+            Method::TurnCancel {
+                target: self.target.clone(),
+            },
+        )
+        .await
+    }
+
+    async fn compact_context(&self) -> Result<MethodResult, RpcError> {
+        rpc(
+            &self.connection,
+            Method::CompactContext {
+                target: self.target.clone(),
+                request_id: "conformance-compact".to_owned().try_into().unwrap(),
+            },
+        )
+        .await
+    }
+
+    async fn shutdown(&self) -> Result<(), RuntimeManagerError> {
+        self.connection.close();
+        self.relay.abort();
+        self.manager.unload(&self.target.conversation_id).await
     }
 
     /// Submits one fixed user turn.
     fn submit(&self, text: &str) {
-        self.host()
+        self.submitted_after.store(
+            self.store
+                .presentation_frontier()
+                .expect("original pre-submit J cut"),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        self.client
             .submit_inbound(vec![UserContentBlock::Text(TextBlock {
                 text: text.to_owned(),
             })])
@@ -258,43 +516,206 @@ impl Driver {
     /// The settlement uniqueness invariant is asserted here rather than
     /// assumed: a second `AttemptSettled` fails, and the terminal event must
     /// be the last event of the attempt.
-    async fn settle(&self) -> (Vec<RuntimeClientEvent>, RuntimeClientOutcome) {
-        let mut observed = Vec::new();
-        loop {
-            match tokio::time::timeout(std::time::Duration::from_secs(30), self.events.next()).await
-            {
-                Ok(EventDelivery::Event(published)) => {
-                    let event = published.event;
-                    if let RuntimeClientEvent::AttemptSettled { outcome, .. } = &event {
-                        let outcome = outcome.clone();
-                        observed.push(event);
-                        assert!(
-                            !matches!(
-                                self.events.try_next(),
-                                EventDelivery::Event(published)
-                                    if matches!(
-                                        published.event,
-                                        RuntimeClientEvent::AttemptSettled { .. }
-                                    )
-                            ),
-                            "an attempt settles exactly once"
-                        );
-                        return (observed, outcome);
-                    }
-                    observed.push(event);
+    fn submitted_attempt(&self) -> Option<(u64, rustx::runtime::identity::AttemptId)> {
+        use rustx::durable::presentation::{FactQuery, FactScope};
+        let through = self
+            .store
+            .presentation_frontier()
+            .expect("original attempt Journal frontier");
+        // The original start is immutable J evidence. Pending adoption may
+        // expire an independent transcript cut while this attempt executes.
+        let starts = self
+            .store
+            .read_presentation_events(&FactQuery {
+                scope: FactScope::All,
+                kinds: vec!["attempt_started"],
+                before: None,
+                after: self
+                    .submitted_after
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                ascending: true,
+                through,
+                limit: 1,
+            })
+            .expect("bounded original Attempt start");
+        starts.into_iter().next().map(|start| {
+            let rustx::events::types::RuntimeEvent::AttemptStarted { attempt_id } = start.event
+            else {
+                panic!("original indexed AttemptStarted kind")
+            };
+            assert_eq!(start.attempt_id.as_ref(), Some(&attempt_id));
+            assert_eq!(start.conversation_id, self.target.conversation_id);
+            assert!(start.sequence <= through);
+            (start.sequence, attempt_id)
+        })
+    }
+
+    fn assert_original_terminal(&self, start: u64, owner: &rustx::runtime::identity::AttemptId) {
+        use rustx::durable::presentation::{FactQuery, FactScope};
+        use rustx::events::types::RuntimeEvent as E;
+        let through = self
+            .store
+            .presentation_frontier()
+            .expect("native terminal Journal frontier");
+        let query = FactQuery {
+            scope: FactScope::Attempt(owner.clone()),
+            kinds: vec![
+                "attempt_completed",
+                "attempt_failed",
+                "attempt_cancelled",
+                "attempt_timed_out",
+                "attempt_limit_exceeded",
+            ],
+            before: None,
+            after: start,
+            ascending: false,
+            through,
+            limit: 2,
+        };
+        let terminal = self
+            .store
+            .read_presentation_events(&query)
+            .expect("original terminal uniqueness");
+        assert_eq!(
+            terminal.len(),
+            1,
+            "one native terminal, regardless of checkpoint repaint"
+        );
+        let (E::AttemptCompleted { attempt_id, .. }
+        | E::AttemptFailed { attempt_id, .. }
+        | E::AttemptCancelled { attempt_id, .. }
+        | E::AttemptTimedOut { attempt_id }
+        | E::AttemptLimitExceeded { attempt_id, .. }) = &terminal[0].event
+        else {
+            panic!("original indexed terminal kind")
+        };
+        assert_eq!(attempt_id, owner);
+        assert_eq!(terminal[0].attempt_id.as_ref(), Some(owner));
+        assert_eq!(terminal[0].conversation_id, self.target.conversation_id);
+        assert!(start < terminal[0].sequence && terminal[0].sequence <= through);
+        // This independent oracle reads every original J kind through the
+        // same captured immutable frontier, including nonterminal owner facts.
+        let mut after = start;
+        let mut last_owned = None;
+        let mut original_terminals = Vec::new();
+        while after < through {
+            let page = self
+                .store
+                .read_events(Some(after), 32)
+                .expect("original Journal page");
+            assert!(
+                !page.events.is_empty(),
+                "captured original J prefix remains readable"
+            );
+            assert_eq!(
+                page.next_sequence,
+                page.events.last().map(|event| event.sequence)
+            );
+            for envelope in page.events {
+                assert!(envelope.sequence > after, "original J advances");
+                after = envelope.sequence;
+                if after > through {
+                    break;
                 }
+                assert_eq!(envelope.conversation_id, self.target.conversation_id);
+                if envelope.attempt_id.as_ref() == Some(owner) {
+                    last_owned = Some(envelope.sequence);
+                    if matches!(
+                        envelope.event,
+                        E::AttemptCompleted { .. }
+                            | E::AttemptFailed { .. }
+                            | E::AttemptCancelled { .. }
+                            | E::AttemptTimedOut { .. }
+                            | E::AttemptLimitExceeded { .. }
+                    ) {
+                        original_terminals.push(envelope.sequence);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            original_terminals,
+            [terminal[0].sequence],
+            "one exact original native terminal"
+        );
+        assert_eq!(
+            last_owned,
+            Some(terminal[0].sequence),
+            "terminal is the last original owner fact"
+        );
+    }
+
+    async fn settle(&self) -> (ObservedEvents, RuntimeClientOutcome) {
+        let mut observed = ObservedEvents::default();
+        let mut events = self.events.lock().await;
+        let mut owner = None;
+        loop {
+            let record = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                events.recv(),
+            )
+            .await
+            {
+                Ok(Some(record)) => record,
                 Ok(other) => panic!("the observation stream ended early: {other:?}"),
                 Err(elapsed) => panic!(
-                    "the attempt never settled ({elapsed}); observed {} event(s): {observed:?}",
-                    observed.len()
+                    "the attempt never settled ({elapsed}); {} complete records, cursor={}, owner={owner:?}",
+                    observed.records.len(),
+                    self.consumed_cursor
+                        .load(std::sync::atomic::Ordering::SeqCst)
                 ),
+            };
+            let NotificationMethod::Event { cursor, event, .. } = &record else {
+                unreachable!()
+            };
+            let previous = self
+                .consumed_cursor
+                .swap(cursor.get(), std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                cursor.get(),
+                previous + 1,
+                "complete native records stay contiguous"
+            );
+            if let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.as_ref() {
+                assert_eq!(metadata.read_cut.revision, cursor.get());
+            }
+            if owner.is_none() {
+                owner = self.submitted_attempt();
+            }
+            let outcome = owner.as_ref().and_then(|(start, expected)| {
+                event.facts().iter().find_map(|fact| match fact {
+                    RuntimeClientEvent::AttemptSettled {
+                        attempt_id,
+                        outcome,
+                    } if attempt_id == expected => Some(outcome.clone()),
+                    RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. }
+                        if checkpoint.read_cut.through >= *start =>
+                    {
+                        let attempt = checkpoint.snapshot.attempt.as_ref()?;
+                        if attempt.attempt_id.as_ref() != Some(expected) {
+                            return None;
+                        }
+                        if let RuntimeClientAttemptPhase::Settled { outcome } = &attempt.phase {
+                            Some(outcome.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                })
+            });
+            observed.records.push(record);
+            if let Some(outcome) = outcome {
+                let (start, attempt_id) = owner.as_ref().unwrap();
+                self.assert_original_terminal(*start, attempt_id);
+                return (observed, outcome);
             }
         }
     }
 
     /// The committed Assistant text of the conversation, concatenated.
     fn committed_assistant_text(&self) -> String {
-        let (snapshot, _) = self.host().snapshot().expect("snapshot");
+        let (snapshot, _) = self.snapshot().expect("snapshot");
         snapshot
             .messages
             .iter()
@@ -310,6 +731,27 @@ impl Driver {
                 _ => None,
             })
             .collect()
+    }
+}
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        self.connection.close();
+        self.relay.abort();
+    }
+}
+
+async fn rpc(connection: &AppServerConnection, call: Method) -> Result<MethodResult, RpcError> {
+    match connection
+        .handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(1),
+            call,
+        })
+        .await
+    {
+        Response::Success(success) => Ok(success.result),
+        Response::Failure(failure) => Err(failure.error),
     }
 }
 
@@ -447,8 +889,11 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             events
                 .iter()
                 .filter_map(|event| match event {
-                    RuntimeClientEvent::AssistantReasoningDelta { delta, .. } =>
-                        Some(delta.as_str()),
+                    RuntimeClientEvent::BlockContentAdvanced {
+                        kind,
+                        inline_delta: Some(delta),
+                        ..
+                    } if kind == "reasoning" => Some(delta.as_str()),
                     _ => None,
                 })
                 .collect::<String>(),
@@ -592,7 +1037,7 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     setup.skill_paths = vec![package];
     let driver = Driver::start_in(root, &emulator, &setup).await;
 
-    let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+    let (snapshot, _) = driver.snapshot().expect("snapshot");
     assert_eq!(
         snapshot
             .capabilities
@@ -677,12 +1122,29 @@ async fn a_provider_failure_settles_once_without_a_retry() {
     driver.submit(TURN_ONE);
     let (events, outcome) = driver.settle().await;
 
-    let RuntimeClientOutcome::Failed { error } = &outcome else {
+    let RuntimeClientOutcome::Failed {
+        error,
+        error_deferred,
+        error_source,
+    } = &outcome
+    else {
         panic!("a provider failure settles as Failed: {outcome:?}");
     };
+    assert!(
+        !error_deferred,
+        "the finite normalized provider failure is complete"
+    );
+    assert!(
+        error_source.is_none(),
+        "a complete failure needs no deferred source"
+    );
     let RuntimeClientAttemptFailure::Model { message, .. } = error else {
         panic!("the failure is projected as a model failure: {error:?}");
     };
+    assert!(
+        !message.is_empty(),
+        "the normalized model failure retains its diagnostic"
+    );
     assert!(
         !message.contains(CREDENTIAL_VALUE),
         "the projected failure never carries a credential"
@@ -741,8 +1203,6 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     // exactly one started Request Snapshot, bound to exactly one
     // `ModelRequestStarted` event.
     let snapshots = driver
-        .runtime
-        .runtime()
         .request_history()
         .page(None, 32)
         .expect("request snapshot page")
@@ -752,16 +1212,9 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
         1,
         "exactly one started Request Snapshot exists before cancellation"
     );
-    let store = rustx::durable::SqliteConversationStore::open(
-        driver.runtime.runtime().conversation_id().clone(),
-        &driver
-            .runtime
-            .tool_runtime()
-            .tool_output()
-            .root()
-            .parent()
-            .unwrap()
-            .join("conversation.sqlite"),
+    let store = rustx::durable::SqliteConversationStore::open_existing(
+        driver.access.node.conversation_id.clone(),
+        &driver.access.database_path,
     )
     .expect("open the durable store for event assertions");
     let started_facts = store
@@ -782,12 +1235,12 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     );
 
     let accepted = driver
-        .host()
         .cancel_current_attempt()
+        .await
         .expect("the in-flight attempt is cancellable");
     assert!(matches!(
         accepted,
-        RuntimeClientResult::AttemptCancellationAccepted { .. }
+        MethodResult::CancellationAccepted { .. }
     ));
 
     // The runtime really dropped the provider connection; this is observed,
@@ -887,7 +1340,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             "{scenario}: the runtime committed the canonical compaction: {events:?}"
         );
 
-        let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+        let (snapshot, _) = driver.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.context.compaction_count, 1,
             "{scenario}: exactly one compaction"
@@ -905,8 +1358,8 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         // The runtime compaction summary is a canonical Message Ledger fact,
         // externally visible like any other committed message — not a
         // private context value.
-        let summary_message = snapshot
-            .messages
+        let canonical = driver.canonical_history();
+        let summary_message = canonical
             .iter()
             .find_map(|message| match message {
                 MessageBlock::User(user) if user.kind.is_compaction_summary() => Some(user),
@@ -914,8 +1367,13 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             })
             .expect("the canonical compaction summary is committed to the ledger");
         assert_eq!(
-            summary_message.id, latest.summary_message_id,
+            Some(&summary_message.id),
+            latest.summary_message_id.as_ref(),
             "{scenario}: the compaction metadata names the committed summary"
+        );
+        assert!(
+            !latest.summary_message_id_deferred,
+            "{scenario}: generated summary ID is bounded"
         );
         assert_eq!(
             summary_message.source,
@@ -925,7 +1383,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         // Compaction never rewrote the ledger: the retired original is still
         // there, byte for byte.
         assert!(
-            snapshot.messages.iter().any(|message| matches!(
+            canonical.iter().any(|message| matches!(
                 message,
                 MessageBlock::Assistant(assistant)
                     if serde_json::to_string(assistant)
@@ -1027,7 +1485,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
         // Exactly two committed compactions, in generation order.
         let generations: Vec<u64> = events_two
             .iter()
-            .chain(&events_three)
+            .chain(events_three.iter())
             .filter_map(|event| match event {
                 RuntimeClientEvent::ContextCompacted { context, .. } => context
                     .latest_compaction
@@ -1042,7 +1500,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             "{scenario}: two compaction generations in order"
         );
 
-        let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+        let (snapshot, _) = driver.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.context.compaction_count, 2,
             "{scenario}: exactly two compactions"
@@ -1059,8 +1517,8 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
 
         // Both summaries are canonical ledger facts; both retired fillers
         // remain committed ledger bytes.
-        let summaries: Vec<_> = snapshot
-            .messages
+        let canonical = driver.canonical_history();
+        let summaries: Vec<_> = canonical
             .iter()
             .filter(|message| {
                 matches!(
@@ -1074,7 +1532,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             2,
             "{scenario}: two canonical compaction summaries"
         );
-        let ledger = serde_json::to_string(&snapshot.messages).expect("serialize the ledger");
+        let ledger = serde_json::to_string(&canonical).expect("serialize the original ledger");
         assert!(
             ledger.contains(FILLER_ONE_MARKER) && ledger.contains(FILLER_TWO_MARKER),
             "{scenario}: the ledger retains both retired fillers verbatim"
@@ -1125,7 +1583,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
         // The frozen request snapshots reconstruct the three primary
         // requests through the real provider path, after both compactions.
         await_history_len(&driver, 3).await;
-        let history = driver.host().request_history();
+        let history = driver.request_history();
         let snapshots = crate::common::request_snapshots(&history);
         assert_eq!(
             snapshots.len(),
@@ -1136,7 +1594,6 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             .iter()
             .map(|snapshot| {
                 let request = driver
-                    .host()
                     .reconstruct_request(&snapshot.identity)
                     .expect("settled historical request reconstructs");
                 serde_json::to_string(&request.messages).expect("serialize reconstructed messages")
@@ -1169,8 +1626,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
 async fn await_history_len(driver: &Driver, expected: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            if crate::common::request_snapshots(&driver.host().request_history()).len() == expected
-            {
+            if crate::common::request_snapshots(&driver.request_history()).len() == expected {
                 return;
             }
             tokio::task::yield_now().await;
@@ -1209,24 +1665,16 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
                 .expect("the second model reference parses"),
         )
     };
-    assert!(matches!(
-        driver.host().model_set(next_model.clone()),
-        Err(
-            rustx::runtime_client::RuntimeClientError::ConfigurationAdoption {
-                rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
-            }
-        )
-    ));
+    driver
+        .model_set(next_model)
+        .await
+        .expect("live selection commits");
 
     emulator.release_gate("session-model-updated").await;
     let (_, outcome) = driver.settle().await;
     assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
 
-    driver
-        .host()
-        .model_set(next_model)
-        .expect("idle model adoption");
-    let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+    let (snapshot, _) = driver.snapshot().expect("snapshot");
     let attempt = snapshot.attempt.as_ref().expect("the settled attempt");
     assert!(matches!(
         attempt.phase,
@@ -1526,7 +1974,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("read the image");
     emulator.await_gate("image-admitted").await;
-    let (snapshot, _) = driver.host().snapshot().unwrap();
+    let (snapshot, _) = driver.snapshot().unwrap();
     assert_eq!(
         snapshot
             .attempt
@@ -1548,8 +1996,8 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let text_model =
         SessionModelConfig::of(ModelRef::parse(&format!("emulator/{CHAT_MODEL}")).unwrap());
     assert!(
-        driver.host().model_set(text_model.clone()).is_err(),
-        "active admission cannot be replaced"
+        driver.model_set(text_model.clone()).await.is_ok(),
+        "Session selection changes while admitted image capabilities remain frozen"
     );
     emulator.release_gate("image-admitted").await;
     let (_, outcome) = driver.settle().await;
@@ -1563,7 +2011,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
     assert!(body_text(&requests[1]).contains(&data));
     assert!(body_text(&requests[1]).contains("image/png"));
-    let canonical_image = driver.host().snapshot().unwrap().0.messages.into_iter()
+    let canonical_image = driver.canonical_history().into_iter()
         .find(|message| matches!(message, MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-image"))
         .expect("native image result committed canonically");
     assert!(
@@ -1571,15 +2019,9 @@ async fn image_tool_round_trip_and_text_model_switch() {
             .unwrap()
             .contains("\"type\":\"image\"")
     );
-    driver
-        .host()
-        .model_set(SessionModelConfig::of(
-            rustx::model::catalog::ModelRef::parse(&format!("emulator/{CHAT_MODEL}")).unwrap(),
-        ))
-        .unwrap();
     driver.submit("continue as text");
     emulator.await_gate("text-admitted").await;
-    let (snapshot, _) = driver.host().snapshot().unwrap();
+    let (snapshot, _) = driver.snapshot().unwrap();
     assert_eq!(
         snapshot
             .attempt
@@ -1602,8 +2044,8 @@ async fn image_tool_round_trip_and_text_model_switch() {
         ModelRef::parse(&format!("emulator-anthropic/{ANTHROPIC_MODEL}")).unwrap(),
     );
     assert!(
-        driver.host().model_set(image_model.clone()).is_err(),
-        "text Attempt stays frozen"
+        driver.model_set(image_model.clone()).await.is_ok(),
+        "Session selection changes while the text Attempt stays frozen"
     );
     emulator.release_gate("text-admitted").await;
     let (_, outcome) = driver.settle().await;
@@ -1633,13 +2075,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
         1
     );
     assert!(
-        driver
-            .host()
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
-            .contains(&canonical_image),
+        driver.canonical_history().contains(&canonical_image),
         "text projection preserves the exact canonical result"
     );
     assert!(
@@ -1649,7 +2085,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
             .iter()
             .any(|tool| tool["function"]["name"] == "read_image")
     );
-    driver.host().model_set(image_model).unwrap();
+    driver.model_set(image_model).await.unwrap();
     driver.submit("inspect the retained image");
     let (_, outcome) = driver.settle().await;
     assert!(
@@ -1664,7 +2100,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     );
     // The real child process owns a different conversation and a text-only
     // invocation. Parent image history must not leak across that boundary.
-    driver.host().model_set(text_model).unwrap();
+    driver.model_set(text_model).await.unwrap();
     driver.submit("delegate the retained image context as text");
     let (_, outcome) = driver.settle().await;
     assert!(
@@ -1689,19 +2125,11 @@ async fn image_tool_round_trip_and_text_model_switch() {
         "child does not inherit parent history"
     );
     assert!(!body_text(&requests[5]).contains("read_image"));
-    assert!(
-        driver
-            .host()
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
-            .contains(&canonical_image)
-    );
+    assert!(driver.canonical_history().contains(&canonical_image));
 
     // Manual compaction invokes the production summary request builder and
     // adapter over the image-bearing canonical span, not a helper-only mock.
-    driver.host().compact_context(None).await.unwrap();
+    driver.compact_context().await.unwrap();
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 8);
     let summary = body_text(&requests[7]);
@@ -1712,36 +2140,21 @@ async fn image_tool_round_trip_and_text_model_switch() {
     assert!(!summary.contains("\"type\":\"image\""));
     assert!(!summary.contains("image_url"));
     assert!(
-        driver
-            .host()
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
-            .contains(&canonical_image),
+        driver.canonical_history().contains(&canonical_image),
         "compaction preserves the canonical ledger"
     );
     assert_eq!(
         driver
-            .runtime
-            .tool_runtime()
             .artifacts()
             .read_bounded(&rustx::runtime::identity::ArtifactId::new("artifact_1"))
             .unwrap(),
         bytes
     );
     await_history_len(&driver, 6).await;
-    driver.host().shutdown().await.unwrap();
+    driver.shutdown().await.unwrap();
     let reopened = rustx::durable::SqliteConversationStore::open_existing(
-        driver.runtime.runtime().conversation_id().clone(),
-        &driver
-            .runtime
-            .tool_runtime()
-            .tool_output()
-            .root()
-            .parent()
-            .unwrap()
-            .join("conversation.sqlite"),
+        driver.access.node.conversation_id.clone(),
+        &driver.access.database_path,
     )
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
@@ -1825,10 +2238,10 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     if let Some(text_model) = text_model {
         assert!(
             driver
-                .host()
                 .model_set(SessionModelConfig::of(ModelRef::parse(text_model).unwrap()))
-                .is_err(),
-            "active Attempt catalog is frozen"
+                .await
+                .is_ok(),
+            "live selection commits while the active Attempt catalog remains frozen"
         );
     }
     emulator.release_gate("image-budget-admitted").await;
@@ -1892,9 +2305,9 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
         }
     }
 
-    let snapshot = driver.host().snapshot().unwrap().0;
+    let canonical = driver.canonical_history();
     let mut ids = std::collections::BTreeSet::new();
-    for message in &snapshot.messages {
+    for message in &canonical {
         if let rustx::message::types::MessageBlock::Tool(tool) = message {
             for block in &tool.result.content {
                 if let rustx::tools::types::ToolResultContent::Image(image) = block {
@@ -1913,8 +2326,8 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     std::fs::remove_file(workspace.join("sample.png")).unwrap();
     if let Some(text_model) = text_model {
         driver
-            .host()
             .model_set(SessionModelConfig::of(ModelRef::parse(text_model).unwrap()))
+            .await
             .unwrap();
         driver.submit("continue as text");
         let outcome = driver.settle().await.1;
@@ -1923,10 +2336,10 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
             "{outcome:?}"
         );
         driver
-            .host()
             .model_set(SessionModelConfig::of(
                 ModelRef::parse(image_model).unwrap(),
             ))
+            .await
             .unwrap();
         driver.submit("restore images");
         let outcome = driver.settle().await.1;
@@ -1939,23 +2352,16 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
         assert!(!body_text(&requests[2]).contains(&encoded));
         assert_eq!(body_text(&requests[3]).matches(&encoded).count(), 16);
         // Original successful canonical Tool results remain immutable.
-        let after = driver.host().snapshot().unwrap().0;
-        for message in &snapshot.messages {
-            assert!(after.messages.contains(message));
+        let after = driver.canonical_history();
+        for message in &canonical {
+            assert!(after.contains(message));
         }
     }
     await_history_len(&driver, if text_model.is_some() { 4 } else { 2 }).await;
-    driver.host().shutdown().await.unwrap();
+    driver.shutdown().await.unwrap();
     let reopened = rustx::durable::SqliteConversationStore::open_existing(
-        driver.runtime.runtime().conversation_id().clone(),
-        &driver
-            .runtime
-            .tool_runtime()
-            .tool_output()
-            .root()
-            .parent()
-            .unwrap()
-            .join("conversation.sqlite"),
+        driver.access.node.conversation_id.clone(),
+        &driver.access.database_path,
     )
     .unwrap();
     let history = rustx::runtime::request_history::RequestHistory::new(Arc::new(reopened));
@@ -1972,8 +2378,6 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     );
     reconstructed.images = rustx::model::images::resolve(&reconstructed.messages, |id| {
         driver
-            .runtime
-            .tool_runtime()
             .artifacts()
             .read_bounded(id)
             .map_err(|error| error.to_string())

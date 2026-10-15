@@ -14,6 +14,8 @@ fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId,
         .with_ymd_and_hms(2026, 10, 10, 12, 0, index * 3 - 2)
         .unwrap();
     let event = |kind| RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(format!(
             "event-{}",
@@ -284,7 +286,7 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
             assert_eq!(window.target_cursor, turn.cursor);
             let mut page =
                 crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
-            crate::runtime_client::response::decorate(&store, &mut page).unwrap();
+            crate::runtime_client::response::native_oracle_decorate(&store, &mut page).unwrap();
             let process = page.entries[0].turn_process.as_ref().unwrap();
             assert_eq!(
                 process.outcome,
@@ -333,6 +335,7 @@ fn copy_history(fork: bool) {
             &selected.checkpoints,
             &selected.completed_responses,
             &selected.turns,
+            &selected.raw_tool_arguments,
         )
         .unwrap();
         for (original, copied) in selected.turns.iter().zip(expected.turns()) {
@@ -417,6 +420,7 @@ fn artifact_tree_preserves_selected_occupancy_and_native_history_after_restart()
                 &selected.checkpoints,
                 &selected.completed_responses,
                 &selected.turns,
+                &selected.raw_tool_arguments,
             )
             .unwrap();
             assert_eq!(

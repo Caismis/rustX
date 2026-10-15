@@ -11,7 +11,8 @@
 //! the socket. The socket pathname and the locked liveness sidecar are process
 //! routing state, never conversation history and never a discovery registry.
 //! External product access to child history goes through App Server
-//! `agent/conversation` (snapshot/cursor watch), `agent/transcript` and `agent/status`, never through this socket.
+//! `agent/observe` (bounded checkpoints/native cursor events), `agent/transcript`
+//! and bounded agent domain reads, never through this socket.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -116,6 +117,8 @@ pub(crate) struct LiveConversationInspectionServer {
     path: PathBuf,
     stop: Arc<tokio::sync::Notify>,
     task: Option<tokio::task::JoinHandle<()>>,
+    #[cfg(test)]
+    workset: tokio::sync::watch::Receiver<usize>,
 }
 
 impl LiveConversationInspectionServer {
@@ -125,7 +128,16 @@ impl LiveConversationInspectionServer {
     /// construction: a child conversation identity cannot have two live
     /// physical incarnations. It is therefore safe to remove that exact
     /// socket and retry the bind.
-    pub(crate) fn bind(path: PathBuf, host: RuntimeClientHost) -> std::io::Result<Self> {
+    pub(crate) fn bind(
+        path: PathBuf,
+        host: RuntimeClientHost,
+        activation_id: crate::runtime::identity::SubagentId,
+    ) -> std::io::Result<Self> {
+        if host.inner.observation_activation_id() != Some(activation_id) {
+            return Err(std::io::Error::other(
+                "inspection host does not own the admitted activation",
+            ));
+        }
         if std::env::var_os(TEST_FAIL_BIND_ENV).is_some() {
             return Err(std::io::Error::other(
                 "test-injected live inspection endpoint bind failure",
@@ -140,12 +152,28 @@ impl LiveConversationInspectionServer {
             Err(error) => return Err(error),
         };
         let stop = Arc::new(tokio::sync::Notify::new());
-        let task = tokio::spawn(run_listener(listener, host, Arc::clone(&stop)));
+        #[cfg(test)]
+        let (workset, workset_rx) = tokio::sync::watch::channel(0);
+        let task = tokio::spawn(run_listener(
+            listener,
+            host,
+            Arc::clone(&stop),
+            #[cfg(test)]
+            workset,
+        ));
         Ok(Self {
             path,
             stop,
             task: Some(task),
+            #[cfg(test)]
+            workset: workset_rx,
         })
+    }
+
+    /// Physically owned tasks at the listener's admission/reap boundary.
+    #[cfg(test)]
+    pub(crate) fn physical_workset(&self) -> tokio::sync::watch::Receiver<usize> {
+        self.workset.clone()
     }
 
     /// Stops the accept loop, closes active inspection connections, and
@@ -159,29 +187,139 @@ impl LiveConversationInspectionServer {
     }
 }
 
+/// Cancels socket readiness without cancelling an admitted source request.
+/// The connection task retains its `JoinSet` capacity until that request's real
+/// synchronous/blocking work returns; shutdown joins those tasks instead of
+/// abandoning their physical workers.
+struct InspectionIo<T> {
+    inner: T,
+    stopped: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+}
+impl<T> InspectionIo<T> {
+    fn new(inner: T, stop: tokio_util::sync::CancellationToken) -> Self {
+        Self {
+            inner,
+            stopped: Box::pin(stop.cancelled_owned()),
+        }
+    }
+}
+impl<T: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for InspectionIo<T> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.stopped.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut this.inner).poll_read(cx, buffer)
+    }
+}
+impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for InspectionIo<T> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        if this.stopped.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        std::pin::Pin::new(&mut this.inner).poll_write(cx, bytes)
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.stopped.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        std::pin::Pin::new(&mut this.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        std::pin::Pin::new(&mut this.inner).poll_shutdown(cx)
+    }
+}
+
 async fn run_listener(
     listener: UnixListener,
     host: RuntimeClientHost,
     stop: Arc<tokio::sync::Notify>,
+    #[cfg(test)] workset: tokio::sync::watch::Sender<usize>,
 ) {
     let mut connections = JoinSet::new();
+    let socket_stop = tokio_util::sync::CancellationToken::new();
     loop {
         tokio::select! {
             biased;
             () = stop.notified() => break,
+            _ = connections.join_next(), if !connections.is_empty() => {
+                #[cfg(test)]
+                workset.send_replace(connections.len());
+            },
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else {
                     break;
                 };
+                // The JoinSet owns physical capacity through actual task exit.
+                // No separate permit may be recycled when a waiter is dropped.
+                if connections.len() >= 8 {
+                    drop(stream);
+                    continue;
+                }
                 let host = host.clone();
+                let socket_stop=socket_stop.clone();
                 connections.spawn(async move {
                     let (reader, writer) = stream.into_split();
                     let endpoint = RuntimeClientEndpoint::new_read_only(&host);
-                    let _ = serve_stdio_jsonl_with_io(endpoint, reader, writer).await;
+                    let _ = serve_stdio_jsonl_with_io(endpoint, InspectionIo::new(reader,socket_stop.clone()), InspectionIo::new(writer,socket_stop)).await;
                 });
+                #[cfg(test)]
+                workset.send_replace(connections.len());
             }
         }
     }
-    connections.abort_all();
+    socket_stop.cancel();
     while connections.join_next().await.is_some() {}
+    #[cfg(test)]
+    workset.send_replace(0);
+}
+
+#[cfg(test)]
+type TraceReadGate = (
+    tokio::sync::oneshot::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+#[cfg(test)]
+static TRACE_READ_GATES: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::BTreeMap<crate::runtime::identity::ConversationId, TraceReadGate>,
+    >,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+#[cfg(test)]
+pub(crate) fn install_trace_read_gate(
+    conversation: crate::runtime::identity::ConversationId,
+    gate: TraceReadGate,
+) {
+    assert!(
+        TRACE_READ_GATES
+            .lock()
+            .unwrap()
+            .insert(conversation, gate)
+            .is_none()
+    );
+}
+#[cfg(test)]
+pub(crate) fn trace_read_gate(conversation: &crate::runtime::identity::ConversationId) {
+    let gate = TRACE_READ_GATES.lock().unwrap().remove(conversation);
+    if let Some((entered, release)) = gate {
+        let _ = entered.send(());
+        release.recv().unwrap();
+    }
 }

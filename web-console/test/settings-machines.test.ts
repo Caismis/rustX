@@ -1,8 +1,9 @@
+import { boundedSettings, sourceReceipt } from './fixture';
 import { displayText, translator } from '../src/locale/translation';
 import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v46';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v48';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { adoptionInFlight, applicationCurrent, applicationKnown, observationUnavailable, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
@@ -180,7 +181,7 @@ it.each(['observed', 'failed'] as const)('R17 a Workspace reread of a replaced g
   expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
   expect(scripted.reads).toHaveLength(2);
   scripted.writes[0].resolve({
-    acknowledgement: projection('r2'),
+    acknowledgement: sourceReceipt(projection('r2')),
     reread: outcome === 'observed'
       ? { status: 'observed', projection: projection('obsolete-reread') }
       : { status: 'failed', error: new Error('obsolete reread failed') },
@@ -242,7 +243,7 @@ it('R03 a committed write whose reread fails stays committed with an uncertain o
   edit(actor, ['read'], 'r1');
   submit(actor, 'r1');
   await flush();
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'failed', error: new Error('reread unavailable') } });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: { status: 'failed', error: new Error('reread unavailable') } });
   await flush();
   const snapshot = actor.getSnapshot();
   // The commit is definitive and is recorded on the transaction that submitted it.
@@ -288,7 +289,7 @@ it.each([
   expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
   const failRead = () => scripted.reads[1].reject(new Error('superseding read failed'));
   const settleWrite = () => scripted.writes[0].resolve({
-    acknowledgement: projection('r2'),
+    acknowledgement: sourceReceipt(projection('r2')),
     reread: reread === 'observed'
       ? { status: 'observed', projection: projection('obsolete-reread') }
       : { status: 'failed', error: new Error('obsolete reread failed') },
@@ -330,7 +331,7 @@ it('R18 a Product Host commit that lands while the connection is down settles, a
   await flush();
   expect(scripted.reads).toHaveLength(1);
   expect(actor.getSnapshot().matches({ authority: { attached: 'blocked' } })).toBe(true);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('obsolete-reread') } });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: { status: 'observed', projection: projection('obsolete-reread') } });
   await flush();
   // The commit is definitive and classified under the evidence available —
   // which is none — rather than left waiting for an unrelated future event.
@@ -374,7 +375,7 @@ it('R04 a definitive acknowledgement settles its transaction after the presentat
   expect(actor.getSnapshot().context.observation).toBeUndefined();
   expect(actor.getSnapshot().context.staleObservation?.user.revision).toBe('r1');
   const readsBefore = scripted.reads.length;
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   // The commit is recorded on the exact transaction that submitted it, and a
   // detached lifetime issues no read of its own.
@@ -410,7 +411,7 @@ it('R05 an authority replacement leaves the old acknowledgement settling only it
   await flush();
   replacement.reads[0].resolve(projection('fresh'));
   await flush();
-  old.writes[0].resolve({ acknowledgement: projection('r2') });
+  old.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   // The old transaction records its own commit; the replacement never sees it.
   expect(unitOf(oldActor).getSnapshot().context.submitted?.committed).toBe('r2');
@@ -552,7 +553,7 @@ it('R22 reopening with an unobserved commit coalesces validation and post-commit
   await flush();
   actor.send({ type: 'DETACH' });
   // The definitive commit lands while nothing is presented.
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   expect(actor.getSnapshot().context.unobservedSettlement).toEqual({ identity: toolsIdentity, selector: revisionSelector(toolsMutation), committed: true, revision: 'r2' });
   actor.send({ type: 'ATTACH' });
@@ -606,7 +607,7 @@ it('R22 reopening during a Workspace write keeps its reserved reread as the fres
   // bounce restores that reservation instead of starting a competing read.
   expect(scripted.reads).toHaveLength(1);
   expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('r2') } });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: { status: 'observed', projection: projection('r2') } });
   await flush();
   // The write's own reread is the new attachment's fresh authoritative
   // observation, and it settles the committed transaction exactly once.
@@ -635,7 +636,7 @@ it('R22 a commit landing during the reattach read supersedes it into one post-co
   // The validation read is in flight when the acknowledgement lands. It
   // predates the commit, so the post-commit read the commit forces supersedes
   // it rather than letting it discharge the commit's observation obligation.
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   expect(scripted.reads).toHaveLength(3);
   // The superseded read can never publish, whatever it carries and whenever it
@@ -783,7 +784,7 @@ it.each([
   expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
   expect(actor.getSnapshot().matches({ mutation: 'submitting' })).toBe(true);
   expect(scripted.reads).toHaveLength(3);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread(outcome) });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: obsoleteReread(outcome) });
   await flush();
   const late = actor.getSnapshot();
   // W1 still records its definitive commit on the transaction that submitted it…
@@ -830,7 +831,7 @@ it.each(['observed', 'failed'] as const)('R24 a generation replaced while Settin
   await flush();
   expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
   expect(scripted.reads).toHaveLength(2);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread(outcome) });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: obsoleteReread(outcome) });
   await flush();
   expect(actor.getSnapshot().context.observation).toBeUndefined();
   expect(actor.getSnapshot().context.readError).toBe('');
@@ -867,7 +868,7 @@ it('R24 a reservation superseded by a newer publication read is not resurrected 
   await flush();
   expect(actor.getSnapshot().matches({ authority: { attached: 'reading' } })).toBe(true);
   expect(scripted.reads).toHaveLength(3);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread('observed') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: obsoleteReread('observed') });
   await flush();
   expect(actor.getSnapshot().context.observation).toBeUndefined();
   scripted.reads[2].resolve(projection('r2', userApplication('2')));
@@ -931,7 +932,7 @@ it.each([
   expect(superseded.context.rereadReservation).toBeUndefined();
   expect(superseded.matches({ mutation: 'submitting' })).toBe(true);
   expect(scripted.reads).toHaveLength(2);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread(outcome) });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: obsoleteReread(outcome) });
   await flush();
   // The late reread publishes nothing in either outcome: no projection, no
   // read failure, no block. The commit itself is recorded on its transaction.
@@ -978,7 +979,7 @@ it('R25 a publication no newer than the reservation watermark never supersedes t
   await flush();
   expect(actor.getSnapshot().matches({ authority: { attached: 'awaitingWrite' } })).toBe(true);
   expect(scripted.reads).toHaveLength(1);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('r2', userApplication('1')) } });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: { status: 'observed', projection: projection('r2', userApplication('1')) } });
   await flush();
   // The reserved reread is the reattached presentation's fresh observation.
   const snapshot = actor.getSnapshot();
@@ -1059,7 +1060,7 @@ it('R08 a late acknowledgement of an older intent never erases a newer edit', as
   await flush();
   // Intent B is authored while submission A is still in flight.
   edit(actor, ['read', 'write'], 'r1');
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   const unit = unitOf(actor).getSnapshot();
   expect(unit.context.draft).toEqual({ value: ['read', 'write'] });
@@ -1267,7 +1268,7 @@ it('R28 only a deliberate new submission replaces the previous mutation outcome'
   expect(scripted.writes[1].expected).toBe('r1');
   expect(actor.getSnapshot().context.rejection).toBeUndefined();
   expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'submitting' });
-  scripted.writes[1].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[1].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'committed' });
   scripted.reads.at(-1)!.resolve(projection('r2'));
@@ -1293,7 +1294,7 @@ it('R29 a post-commit read that observes the exact pre-save revision is an exter
   submit(actor, 'r1');
   await flush();
   expect(scripted.writes[0].expected).toBe('r1');
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   // Acknowledged; the post-commit read is issued but has not completed. The
   // held observation still says r1, and that is not a source change.
@@ -1358,7 +1359,7 @@ it.each([
   await flush();
   expect(scripted.reads).toHaveLength(2);
   expect(actor.getSnapshot().matches({ authority: { attached: { reading: 'current' } } })).toBe(true);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: obsoleteReread('observed') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: obsoleteReread('observed') });
   await flush();
   // The commit is recorded while that read is outstanding, so the read now
   // predates it.
@@ -1410,7 +1411,7 @@ async function committedAwaitingObservation() {
   edit(actor, ['read'], 'r1');
   submit(actor, 'r1');
   await flush();
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   expect(scripted.reads).toHaveLength(2);
   return { scripted, actor };
@@ -1627,7 +1628,7 @@ it('R36 a successfully committed and observed transaction retires, and a later e
   submit(actor, 'r1');
   await flush();
   const first = unitOf(actor);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   // Acknowledged, with its observation still owed: the transaction lives.
   expect(unitOf(actor)).toBe(first);
@@ -1665,7 +1666,7 @@ it('R36 a newer browser intent survives the settlement of the older commit, so t
   // Intent A2 is authored while A1 is still natively submitting.
   edit(actor, ['read', 'write'], 'r1');
   const unit = unitOf(actor);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   scripted.reads[1].resolve(projection('r2'));
   await flush();
@@ -1694,7 +1695,7 @@ it('R36 one terminal settlement retires the transaction exactly once, however ma
   submit(actor, 'r1');
   await flush();
   const unit = unitOf(actor);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   scripted.reads[1].resolve(projection('r2'));
   await flush();
@@ -2156,6 +2157,8 @@ function scriptedClient() {
   const client = {
     getSnapshot: () => view,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    // The configuration owner consumes a materialized read port.
+    readApplication: async(id:string) => (await client.request({method:'session/configuration',params:{session_id:id}},'session_configuration') as unknown as {application:ConfigurationApplication|null}).application,
     request: ({ method }: { method: string }) => {
       const gate = deferred<unknown>();
       requests.push({ method, authority: view.authorityRevision, ...gate });
@@ -2199,7 +2202,7 @@ async function observedTarget(native: ReturnType<typeof scriptedClient>) {
   const actor = native.system.settingsTarget(userSettingsTarget, () => undefined);
   actor.send({ type: 'ATTACH' });
   await flush();
-  native.pending('configuration/sourcesRead').at(-1)!.resolve({ projection: projection('r1') });
+  native.pending('configuration/sourcesRead').at(-1)!.resolve({type:'source_settings', projection: boundedSettings(projection('r1')) });
   await flush();
   actor.send({ type: 'UNIT.EDIT', identity: providerIdentity, selector: revisionSelector(providerMutation), revision: 'r1', value: providerWrite });
   return actor;
@@ -2257,7 +2260,7 @@ it.each(['acknowledged', 'conflicted', 'rejected', 'uncertain'] as const)('R26 a
   expect(old.getSnapshot().matches({ mutation: 'submitting' })).toBe(true);
   expect(native.system.transactionOwners()).toEqual([oldOwner]);
   const write = native.pending('configuration/sourceWrite')[0];
-  if (outcome === 'acknowledged') write.resolve({ projection: projection('r2') });
+  if (outcome === 'acknowledged') write.resolve({type:'sources_written', revision: sourceReceipt(projection('r2'),providerMutation).revision, configuration_revision:null});
   else if (outcome === 'conflicted') write.reject(new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: 'r1', actual: 'r-external' } }));
   else if (outcome === 'rejected') write.reject(new RpcFailure({ code: -32602, message: 'Invalid provider' }));
   else write.reject(new OutcomeUncertain());
@@ -2473,7 +2476,7 @@ it('R31 a connection generation replacement inside one authority keeps every lif
   expect(native.system.sessionConfiguration('session-2')).toBe(held);
   // The write submitted on the old generation still settles its exact
   // transaction, and the actor stays live for its whole authority.
-  native.pending('configuration/sourceWrite')[0].resolve({ projection: projection('r2') });
+  native.pending('configuration/sourceWrite')[0].resolve({type:'sources_written',revision:sourceReceipt(projection('r2'),providerMutation).revision,configuration_revision:null});
   await flush();
   expect(unit.getSnapshot().matches({ mutation: 'acknowledged' })).toBe(true);
   expect(unit.getSnapshot().context.submitted?.committed).toBe('r2');
@@ -2564,7 +2567,7 @@ it('R33 a Settings target attached before a reconnect reads exactly once when it
   const target = native.system.settingsTarget(userSettingsTarget, () => undefined);
   target.send({ type: 'ATTACH' });
   await flush();
-  native.pending('configuration/sourcesRead')[0].resolve({ projection: projection('r1') });
+  native.pending('configuration/sourcesRead')[0].resolve({type:'source_settings', projection: boundedSettings(projection('r1')) });
   await flush();
   native.reconnect();
   expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
@@ -2642,10 +2645,10 @@ it('R34 a failed User Settings read is retried by its own source publication alo
   publishApplication(native, { ...cfg3SourceApplication(), version: '3' });
   await flush();
   expect(reads()).toHaveLength(2);
-  reads()[1].resolve({ projection: projection('r1', userApplication('2')) });
+  reads()[1].resolve({type:'source_settings', projection: boundedSettings(projection('r1', userApplication('2'))) });
   await flush();
   expect(reads()).toHaveLength(3);
-  reads()[2].resolve({ projection: projection('r2', userApplication('3')) });
+  reads()[2].resolve({type:'source_settings', projection: boundedSettings(projection('r2', userApplication('3'))) });
   await flush();
   expect(reads()).toHaveLength(3);
   expect(target.getSnapshot().context.observation?.user.revision).toBe('r2');
@@ -2868,7 +2871,7 @@ it('R35 a mutation natively submitting refuses every other unit, which keeps its
   expectStatusDraftIntact(actor);
   // A settles normally. Its acknowledgement alone admits nothing: the
   // observation this target holds predates the commit.
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   expect(mutationOutcome(actor.getSnapshot())).toEqual({ kind: 'committed' });
   expect(admitted(actor)).toBe(false);
@@ -2891,7 +2894,7 @@ it('R35 a definitive commit awaiting its post-commit observation refuses a secon
   editStatus(actor, 'r1');
   submit(actor, 'r1');
   await flush();
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   // A is definitively committed; its post-commit read is outstanding.
   expect(unitOf(actor).getSnapshot().matches({ mutation: 'acknowledged' })).toBe(true);
@@ -2932,7 +2935,7 @@ it('R35 a pre-commit read adopted after a Workspace commit is current observatio
   reconnect(actor, 1, userApplication('2'));
   await flush();
   expect(scripted.reads).toHaveLength(2);
-  scripted.writes[0].resolve({ acknowledgement: projection('r2'), reread: { status: 'observed', projection: projection('r2', userApplication('2')) } });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')), reread: { status: 'observed', projection: projection('r2', userApplication('2')) } });
   await flush();
   // The read issued before the commit answers with the pre-commit source.
   scripted.reads[1].resolve(projection('r1', userApplication('2')));
@@ -2961,7 +2964,7 @@ it('R35 a commit whose post-commit read fails exposes no pre-commit authority an
   editStatus(actor, 'r1');
   submit(actor, 'r1');
   await flush();
-  scripted.writes[0].resolve({ acknowledgement: projection('r2') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
   scripted.reads[1].reject(new Error('post-commit read unavailable'));
   await flush();
@@ -3037,7 +3040,7 @@ it('R37 a unit whose definitive commit awaits its observation refuses a new edit
   submit(actor, 'r0');
   await flush();
   const first = unitOf(actor);
-  scripted.writes[0].resolve({ acknowledgement: projection('r1') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r1')) });
   await flush();
   let unit = first.getSnapshot();
   expect(awaitingCommitObservation(unit)).toBe(true);
@@ -3095,7 +3098,7 @@ it('R37 a newer intent authored before the acknowledgement survives it, is froze
   await flush();
   // Intent B exists before the acknowledgement of A.
   edit(actor, ['read', 'write'], 'r0');
-  scripted.writes[0].resolve({ acknowledgement: projection('r1') });
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r1')) });
   await flush();
   let unit = unitOf(actor).getSnapshot();
   expect(awaitingCommitObservation(unit)).toBe(true);
@@ -3392,16 +3395,16 @@ it('composer and Settings holders share one target transaction owner; opening re
   const native = scriptedClient();
   const actor = native.system.settingsTarget(userSettingsTarget, () => undefined);
   native.system.retainTarget(actor);
-  native.pending('configuration/sourcesRead')[0].resolve({ projection: projection('r1') });
+  native.pending('configuration/sourcesRead')[0].resolve({type:'source_settings', projection: boundedSettings(projection('r1')) });
   await flush();
   native.system.retainTarget(actor);
   expect(native.pending('configuration/sourcesRead')).toHaveLength(2);
-  native.pending('configuration/sourcesRead')[1].resolve({ projection: projection('r2') });
+  native.pending('configuration/sourcesRead')[1].resolve({type:'source_settings', projection: boundedSettings(projection('r2')) });
   await flush();
   native.system.releaseTarget(actor);
   native.reconnect();
   expect(native.pending('configuration/sourcesRead')).toHaveLength(3);
-  native.pending('configuration/sourcesRead')[2].resolve({ projection: projection('r3') });
+  native.pending('configuration/sourcesRead')[2].resolve({type:'source_settings', projection: boundedSettings(projection('r3')) });
   await flush();
   expect(actor.getSnapshot().context.observation).toMatchObject(projection('r3'));
   native.system.releaseTarget(actor);
@@ -3426,7 +3429,7 @@ it('first-submit readiness remains closed across approval write, confirmed commi
   requestApproval(actor);
   expect(workspaceApprovalBlock(actor)).toBe('workspace:approval.applying');
   expect(scripted.writes[0].expected).toBe('workspace-1');
-  scripted.writes[0].resolve({ acknowledgement: approvalSource('workspace-2', 'full_access') }); await flush();
+  scripted.writes[0].resolve({ acknowledgement: sourceReceipt(approvalSource('workspace-2', 'full_access')) }); await flush();
   expect(workspaceApprovalBlock(actor)).toBe('workspace:approval.saved');
   scripted.reads.at(-1)!.reject(new Error('Read unavailable')); await flush();
   expect(workspaceApprovalBlock(actor)).toBe('workspace:approval.saved');

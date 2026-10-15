@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v46';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v48';
 import { Server, snapshot, readingWindow } from './fixture';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
 const entry = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), item: { type: 'message', message: { id: `m${n}`, role: 'assistant', content: [{ type: 'text', text: `Message ${n}` }] } } });
@@ -68,14 +68,14 @@ it('reattachment in the same connection rejects the old page and duplicate load 
 
 it('fresh native Tool projections replace overlaps; unresolved old projections force an authoritative window rebase', () => {
   const call = entry(8);
-  call.tool_calls = [{ message_id: 'm8', block_index: 0, call_id: 'native-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{}' } }];
+  call.tool_calls = [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'m8'},block_index:0},assembly_complete:true, message_id: 'm8', block_index: 0, call_id: 'native-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{}' } }];
   const first = replaceTranscript({ entries: [call, entry(9)], next_cursor: '8' });
   const rebased = refreshTranscript(first, { entries: [entry(9), entry(10)], next_cursor: '9' });
   expect(rebased.page.entries).toEqual([entry(9), entry(10)]);
   expect(rebased.epoch).toBeGreaterThan(first.epoch);
   expect(rebased.error).toContain('reread unresolved native responses or Tools');
   const settled = structuredClone(call);
-  settled.tool_calls![0].state = { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1 } };
+  settled.tool_calls![0].state = { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1" } };
   const repaired = refreshTranscript(first, { entries: [settled, entry(9)], next_cursor: '8' });
   expect(repaired.page.entries![0].tool_calls![0].state.type).toBe('settled');
 });

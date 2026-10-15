@@ -1,4 +1,7 @@
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle } from '../../../protocol/app-server/v46';
+export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
+import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
+import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v48';
 
 /** Most summary records the browser retains for one Trace interval. */
 export const TRACE_LIMIT = 512;
@@ -8,6 +11,14 @@ export const TRACE_MAX_BYTES = 4 * 1024 * 1024;
 export const TRACE_PAGE_SIZE = 32;
 /** Most record details retained at once; selection is one, neighbours warm. */
 export const TRACE_DETAIL_LIMIT = 8;
+/** Aggregate UTF-8 encoded detail/cache evidence budget. */
+export const TRACE_DETAIL_MAX_BYTES = 16 * 1024 * 1024;
+const detailWeights = new WeakMap<TraceDetailEntry, number>();
+function detailWeight(entry: TraceDetailEntry) {
+  let bytes=detailWeights.get(entry);
+  if(bytes===undefined){bytes=new TextEncoder().encode(JSON.stringify(entry)).length;detailWeights.set(entry,bytes);}
+  return bytes;
+}
 
 /**
  * One fetched detail, fenced by the identity and epoch it was read for.
@@ -20,6 +31,11 @@ export const TRACE_DETAIL_LIMIT = 8;
  */
 export interface TraceDetailEntry {
   readonly epoch: number;
+  readonly content?:import('../../../protocol/app-server/v48').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v48').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v48').ContentChunk>;
+  /** A positive finite descriptor is not a complete TraceDetail. */
+  readonly page?: CheckpointPage;
+  readonly reader?: TraceFieldReader;
   readonly detail?: TraceDetail;
   readonly loading?: boolean;
   readonly error?: string;
@@ -34,10 +50,18 @@ export interface TraceDetailEntry {
  * execution semantics, and is discarded wholesale whenever the server says
  * the interval it described no longer applies.
  */
+export interface TraceFieldReader {
+ value(cut:CheckpointReadCut,field:TraceValueSelector,offset:number,current:()=>boolean):Promise<CheckpointValueChunk>;
+ content(cut:CheckpointReadCut,reference:ContentRef,offset:number,current:()=>boolean):Promise<ContentChunk>;
+ page(cut:CheckpointReadCut,domain:string,offset:number,current:()=>boolean):Promise<CheckpointPage>;
+}
 export interface TraceCache {
   /** A native tool landing retains its historical interval until explicitly released. */
   located?: true;
   page: TracePage;
+  /** Captured per represented row, never replaced with the latest checkpoint. */
+  readCuts?:Readonly<Record<string,CheckpointReadCut>>;
+  fields?:TraceFieldReader;
   epoch: number;
   /** Retained separately so a rebase cannot close the open inspector. */
   selection?: TraceRecord;
@@ -46,8 +70,15 @@ export interface TraceCache {
   error?: string;
 }
 
-export function replaceTrace(page: TracePage, previous?: TraceCache): TraceCache {
-  return { page, epoch: (previous?.epoch ?? 0) + 1, details: {} };
+function pageCuts(page:TracePage,outerCut?:CheckpointReadCut):Record<string,CheckpointReadCut> {
+ const cut=page.read_cut??outerCut;
+ return cut?Object.fromEntries(page.records.map(record=>[record.id,cut])):{};
+}
+function retainedCuts(cuts:Readonly<Record<string,CheckpointReadCut>>,records:readonly TraceRecord[],selection?:TraceRecord) {
+ return Object.fromEntries([...records,...(selection?[selection]:[])].flatMap(record=>cuts[record.id]?[[record.id,cuts[record.id]]]:[]));
+}
+export function replaceTrace(page: TracePage, previous?: TraceCache,outerCut?:CheckpointReadCut): TraceCache {
+  return { page,readCuts:pageCuts(page,outerCut),fields:previous?.fields, epoch: (previous?.epoch ?? 0) + 1, details: {} };
 }
 
 function merge(older: TraceRecord[], newer: TraceRecord[]) {
@@ -69,15 +100,74 @@ function merge(older: TraceRecord[], newer: TraceRecord[]) {
   return [...merged, ...older.slice(offset), ...pending];
 }
 
-function bounded(records: TraceRecord[]) {
-  return records.length <= TRACE_LIMIT && JSON.stringify(records).length * 2 <= TRACE_MAX_BYTES;
+function bounded(records: TraceRecord[],cuts:Readonly<Record<string,CheckpointReadCut>>={},selection?:TraceRecord) {
+  const retained=retainedCuts(cuts,records,selection);
+  const uniqueCuts=new Set(Object.values(retained));
+  const selected=selection&&!records.some(record=>record.id===selection.id)?JSON.stringify(selection).length*2:0;
+  const bytes=JSON.stringify(records).length*2+selected+Object.keys(retained).reduce((size,key)=>size+key.length*2,0)
+    +[...uniqueCuts].reduce((size,cut)=>size+JSON.stringify(cut).length*2,0);
+  return records.length <= TRACE_LIMIT && bytes <= TRACE_MAX_BYTES;
+}
+
+/** Standalone responses supply their own complete immutable reader scope. */
+export function standaloneTraceCut(page:TracePage,conversationId:string,activation?:CheckpointReadCut['activation_id']) {
+  const cut=page.read_cut;
+  if(!cut||cut.conversation_id!==conversationId||JSON.stringify(cut.activation_id??null)!==JSON.stringify(activation??null))throw new Error('Original Trace page cut is unavailable.');
+  return cut;
+}
+
+/** A detail header may itself be deferred; that never authorizes whole-item hydration. */
+export function inlineTraceDetail(page:CheckpointPage,recordId:string):TraceDetail|undefined {
+  const item=page.items[0];
+  if(!item||item.deferred)return;
+  const value=item.value;
+  if(!value||typeof value!=='object'||Array.isArray(value)||!('id' in value)||value.id!==recordId)throw new Error('Trace detail header identity changed.');
+  if((!('kind' in value)||value.kind!=='request')||!('request' in value)||value.request==null||'record' in value||'content' in value)throw new Error('Original non-Request Trace requires its finite inspection head.');
+  return value as unknown as TraceDetail;
+}
+
+/** A deferred header remains read evidence, never an incomplete typed detail. */
+export function retainedTraceDetailPage(page:CheckpointPage,id:string):CheckpointPage|undefined {
+ const item=page.items[0];
+ if(!item?.deferred)return;
+ const sequence=/^trace:(0|[1-9][0-9]*)$/.exec(id)?.[1];
+ if(!sequence||page.domain!==`trace.records.${sequence}.detail`||page.total!=='1'||page.cursor!==page.read_cut.revision||page.items.length!==1||page.next_offset!=null
+  ||item.offset!=='0'||item.identity!==id||!item.value||typeof item.value!=='object'||Array.isArray(item.value)||!('id' in item.value)||item.value.id!==id)throw new Error('Original Trace detail descriptor changed.');
+ traceInspectionHead(page,id);
+ return page;
+}
+/** The selected page keeps its own owner and cut, independently of a later Trace head. */
+export function bindTraceDetailReader(reader:TraceFieldReader,page:CheckpointPage,current:()=>boolean):TraceFieldReader {
+ const valid=(cut:CheckpointReadCut,owned:()=>boolean)=>{
+  if(!current()||!owned()||JSON.stringify(cut)!==JSON.stringify(page.read_cut))throw new Error('Original Trace detail view was replaced.');
+ };
+ return {
+  value:async(cut,field,offset,owned)=>{valid(cut,owned);const chunk=await reader.value(cut,field,offset,()=>current()&&owned());valid(cut,owned);return chunk;},
+  page:async(cut,domain,offset,owned)=>{valid(cut,owned);const result=await reader.page(cut,domain,offset,()=>current()&&owned());valid(cut,owned);return result;},
+  content:async(cut,ref,offset,owned)=>{valid(cut,owned);const chunk=await reader.content(cut,ref,offset,()=>current()&&owned());valid(cut,owned);return chunk;},
+ };
+}
+
+type TraceInterests = NonNullable<Extract<Request1, {method:'session/trace'}>['params']['records']>;
+
+function appendInterest(batch: TraceInterests, value: string): TraceInterests {
+  if (batch.length === 8) throw new Error('Trace refresh exceeds eight interests.');
+  return [...batch, value];
+}
+
+/** Construct the schema-bounded tuple without widening the admission limit. */
+function interestBatch(values: readonly string[]): TraceInterests {
+  return values.reduce<TraceInterests>(appendInterest, []);
 }
 
 /** Loaded identities the server should refresh at the next snapshot cut. */
-export function traceInterests(cache?: TraceCache) {
+export function traceInterestBatches(cache?: TraceCache) {
   const records = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.records] : [];
-  return [...new Map(records.map(record => [record.id, record.position])).values()].slice(0, TRACE_LIMIT);
+  const interests=[...new Map(records.map(record => [record.id, record.position])).values()].slice(0, TRACE_LIMIT+1);
+  return Array.from({length:Math.max(1,Math.ceil(interests.length/8))},(_,index)=>interestBatch(interests.slice(index*8,index*8+8)));
 }
+
+export function traceInterests(cache?:TraceCache){return traceInterestBatches(cache)[0]!;}
 
 /**
  * Retains at most {@link TRACE_DETAIL_LIMIT} details, keeping the selected
@@ -89,18 +179,31 @@ function boundDetails(
   ...keep: (string | undefined)[]
 ): Readonly<Record<string, TraceDetailEntry>> {
   const ids = Object.keys(details);
-  if (ids.length <= TRACE_DETAIL_LIMIT) return details;
   const protectedIds = keep.filter((id): id is string => id !== undefined && details[id] !== undefined);
   const retained = [
     ...new Set([...protectedIds, ...ids.filter(id => !protectedIds.includes(id))]),
-  ].slice(0, TRACE_DETAIL_LIMIT);
-  return Object.fromEntries(retained.map(id => [id, details[id]!]));
+  ];
+  let bytes=2;
+  const entries: [string, TraceDetailEntry][]=[];
+  for(const id of retained){
+    if(entries.length===TRACE_DETAIL_LIMIT)break;
+    const entry=details[id]!, keyBytes=new TextEncoder().encode(JSON.stringify(id)).length+2, weight=detailWeight(entry)+keyBytes;
+    if(weight>TRACE_DETAIL_MAX_BYTES){
+      const refusal={epoch:entry.epoch,error:"Record detail exceeds the local observation cache budget."};
+      const refusalBytes=detailWeight(refusal)+keyBytes;
+      if(bytes+refusalBytes<=TRACE_DETAIL_MAX_BYTES){bytes+=refusalBytes;entries.push([id,refusal]);}
+      continue;
+    }
+    if(bytes+weight>TRACE_DETAIL_MAX_BYTES)continue;
+    bytes+=weight;entries.push([id,entry]);
+  }
+  return Object.fromEntries(entries);
 }
 
 export function selectTrace(cache: TraceCache, id?: string): TraceCache {
   const selection = cache.page.records.find(record => record.id === id)
     ?? (cache.selection?.id === id ? cache.selection : undefined);
-  return { ...cache, selection, details: boundDetails(cache.details, id) };
+  return { ...cache, selection, readCuts:retainedCuts(cache.readCuts??{},cache.page.records,selection),details: boundDetails(cache.details, id) };
 }
 
 /** Records a detail request so a late or superseded reply can be rejected. */
@@ -128,20 +231,26 @@ export function completeTraceDetail(
   epoch: number,
   detail?: TraceDetail,
   error?: string,
+  content?:TraceDetailEntry['content'],
+  readContent?:TraceDetailEntry['readContent'],
+  page?:CheckpointPage,
+  reader?:TraceFieldReader,
 ): TraceCache {
   if (cache.epoch !== epoch) return cache;
   return {
     ...cache,
     details: boundDetails(
-      { ...cache.details, [id]: { epoch, ...(detail ? { detail } : {}), ...(!detail ? { error: error ?? 'Record detail is unavailable at this read cut.' } : {}) } },
+      { ...cache.details, [id]: { epoch, content,readContent,page,reader,...(detail ? { detail } : {}), ...(!detail&&!page ? { error: error ?? 'Record detail is unavailable at this read cut.' } : {}) } },
       cache.selection?.id,
       id,
     ),
   };
 }
 
-export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = []): TraceCache {
-  if (!previous) return replaceTrace(page);
+export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = [],outerCut?:CheckpointReadCut,lifecycleOnly=false): TraceCache {
+  if (!previous) return replaceTrace(page,undefined,outerCut);
+  const cut=page.read_cut??outerCut;
+  const readCuts={...previous.readCuts,...(lifecycleOnly||previous.located?{}:pageCuts(page,outerCut)),...(cut?Object.fromEntries(updates.map(update=>[update.id,cut])):{})};
   const repairs = new Map(updates.map(update => [update.id, update]));
   const repair = (record: TraceRecord): TraceRecord => {
     const update = repairs.get(record.id);
@@ -149,6 +258,7 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
     return {
       ...record,
       location: update.location,
+      fields:update.fields,collections:update.collections,
       state: update.state,
       timing: update.timing,
       message_id: update.message_id,
@@ -158,16 +268,16 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
     };
   };
-  if (previous.located) page = { ...previous.page, records: previous.page.records.map(repair) };
+  if (previous.located||lifecycleOnly) page = { ...previous.page, records: previous.page.records.map(repair) };
   const selection = previous.selection
     ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
     : undefined;
-  if (previous.page.records.length === 0) return { ...previous, page, selection };
+  if (previous.page.records.length === 0) return { ...previous, page, selection,readCuts:retainedCuts(readCuts,page.records,selection) };
   const overlap = new Set(previous.page.records.map(record => record.id));
   // A flat ledger describes one server-proven interval. No shared anchor means
   // unknown intervening history, never permission to concatenate two ranges.
   if (!page.records.some(record => overlap.has(record.id))) {
-    return { ...replaceTrace(page, previous), selection };
+    return { ...replaceTrace(page, previous,outerCut), selection,readCuts:retainedCuts(readCuts,page.records,selection) };
   }
   const records = merge(previous.page.records.map(repair), page.records);
   const latest = new Map(records.map(record => [record.id, record]));
@@ -178,14 +288,14 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   const details = Object.fromEntries(Object.entries(previous.details).filter(([id]) =>
     JSON.stringify(old.get(id)) === JSON.stringify(latest.get(id)),
   ));
-  if (!bounded(records)) {
-    return { ...replaceTrace(page, previous), selection, error: 'Trace window reached its bound; showing latest.' };
+  if (!bounded(records,readCuts,selection)) {
+    return { ...replaceTrace(page, previous,outerCut), selection,readCuts:retainedCuts(readCuts,page.records,selection), error: 'Trace window reached its bound; showing latest.' };
   }
-  return { ...previous, selection, details, page: { records, next_cursor: previous.page.next_cursor } };
+  return { ...previous, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
 }
 
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {
   const records = merge(page.records, previous.page.records);
-  if (!bounded(records)) throw new Error('Trace window is full. Return to latest first.');
-  return { ...previous, loading: false, error: undefined, page: { records, next_cursor: page.next_cursor } };
+  if (!bounded(records,{...pageCuts(page),...previous.readCuts},previous.selection)) throw new Error('Trace window is full. Return to latest first.');
+  return { ...previous, loading: false, error: undefined,readCuts:retainedCuts({...pageCuts(page),...previous.readCuts},records,previous.selection),page: { read_cut:null,records, next_cursor: page.next_cursor } };
 }

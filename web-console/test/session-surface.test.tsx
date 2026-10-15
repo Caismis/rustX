@@ -1,3 +1,4 @@
+import { boundedSettings } from "./fixture";
 import { translator, displayText } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -9,13 +10,13 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v46';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v48';
 
 let server: Server;
 beforeEach(() => {
   server = new Server(); localStorage.clear();
-  server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: cfg3Source(), session_revision: '1' }));
-  server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: cfg3Effective() }));
+  server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection:boundedSettings(cfg3Source()), session_revision: '1' }));
+  server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: {revision:'fixture',inline:cfg3Effective(),fields:[],collections:[]} }));
 });
 afterEach(() => { cleanup(); server.client.disconnect(); localStorage.clear(); });
 async function mount(ids = ['A', 'B']) {
@@ -123,7 +124,7 @@ it('a summary begun before canonical history cannot complete its later preview c
   server.commit(initial);
   server.snapshots.set('A', canonicalUser(null)); server.cursor++;
   const refresh = server.client.refresh('A');
-  await server.waitFor('session/snapshot', 1);
+  await server.waitFor('session/checkpoint', 1);
   server.reply(initial); await attaching;
   const preview = await server.waitFor('session/summary', 2);
   server.reply(preview); await refresh;
@@ -698,7 +699,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v46').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v48').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 

@@ -460,6 +460,12 @@ impl Read for ArtifactReadHandle {
     }
 }
 
+impl std::io::Seek for ArtifactReadHandle {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.file, position)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ArtifactError, ArtifactStore};

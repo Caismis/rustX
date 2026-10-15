@@ -148,7 +148,7 @@ impl RuntimeClientEndpoint {
                     );
                 }
                 // Version negotiation, admission, identity allocation, and
-                // the linearized initial snapshot are all the host's, not
+                // the bounded identity receipt are all the host's, not
                 // the transport's.
                 let Some(host) = self.host.upgrade() else {
                     return error(id, RuntimeClientError::NotAttached);

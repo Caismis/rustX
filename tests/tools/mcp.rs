@@ -519,9 +519,9 @@ mod unix_tests {
             terminal.state,
             rustx::tools::background::BackgroundLifecycle::Succeeded
         );
-        let result = terminal.result.expect("terminal result");
+        let result = terminal.result.as_ref().expect("terminal result");
         assert_eq!(
-            result.managed_output.map(|value| *value),
+            result.managed_output.as_deref().cloned(),
             Some(rustx::tools::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&advertised),
             })

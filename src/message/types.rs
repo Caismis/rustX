@@ -466,7 +466,7 @@ impl AgentStatusModuleId {
 /// reminder), while `fingerprint` identifies the bounded relevant state that
 /// was actually presented. They are deliberately separate so a changed Todo
 /// state does not become a different reminder kind.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContributionEmission {
     /// Stable key for the reminder meaning.

@@ -1,16 +1,17 @@
 import type { Translate } from '../locale/translation';
-import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask, UserContentBlock, UserInputBlock } from '../../../protocol/app-server/v46';
+import type { CollectionFrontier, RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask, UserContentBlock, UserInputBlock } from '../../../protocol/app-server/v48';
 
 /** Current composer-context docks read only the replaceable authoritative
  * snapshot. Transcript, Trace and historical Tool results never enter here. */
 
 /** `todos` is present exactly when the attached runtime composes Todo. An
  * empty list under a composed runtime is a current fact, not an absence. */
-export type TodoDockState = { kind: 'absent' } | { kind: 'current'; tasks: readonly TodoTask[] };
-export function todoDock(snapshot?: RuntimeClientSnapshot): TodoDockState {
+export type TodoDockState = { kind: 'absent' } | { kind: 'current'; tasks: readonly TodoTask[]; deferred?: boolean };
+export function todoDock(snapshot?: RuntimeClientSnapshot, frontier?: CollectionFrontier): TodoDockState {
   if (!snapshot?.todos) return { kind: 'absent' };
   // Tombstones stay native dependency targets; they are not current work.
-  return { kind: 'current', tasks: (snapshot.todos.tasks ?? []).filter(task => task.status !== 'deleted') };
+  const deferred = frontier?.domain === 'todos.tasks' && BigInt(frontier.total) > BigInt(frontier.loaded);
+  return { kind: 'current', tasks: (snapshot.todos.tasks ?? []).filter(task => task.status !== 'deleted'), ...(deferred ? { deferred: true } : {}) };
 }
 
 /** Durable `GoalPhase` is the one Goal lifecycle authority (Issue #351):
@@ -18,7 +19,7 @@ export function todoDock(snapshot?: RuntimeClientSnapshot): TodoDockState {
  * the runtime reaches an eligible idle boundary. There is no activation bit,
  * so the dock can never render an Active Goal that is silently inert. */
 export interface GoalDockState {
-  goal: GoalSnapshot;
+  goal: RuntimeClientGoalSnapshot;
 }
 /** Extension absent, no Goal and terminal Complete occupy no composer space. */
 export function goalDock(snapshot?: RuntimeClientSnapshot): GoalDockState | undefined {

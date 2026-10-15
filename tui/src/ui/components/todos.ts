@@ -21,7 +21,7 @@
  * to go: completed rows go first, newest first, and only then is the tail of
  * the remaining list trimmed. Whatever is hidden is always named on a final
  * `+N more` row, so the reader is never shown a silently truncated plan —
- * and `/todos` prints the complete list, unbounded, at any time.
+ * and `/todos` names unloaded records and their bounded observation route.
  */
 
 import {
@@ -52,6 +52,8 @@ export interface TodoPanelLayout {
   columns: number;
   /** The content-row budget. Defaults to {@link TODO_PANEL_ROWS}. */
   rows?: number;
+  /** Exact native records outside this view's loaded prefix. */
+  deferredTasks?: string;
 }
 
 /**
@@ -70,7 +72,7 @@ export function renderTodoPanel(
   }
   const tasks = visibleTasks(snapshot);
   if (tasks.length === 0) {
-    return "";
+    return layout.deferredTasks ? deferredTodoNotice(layout.deferredTasks) : "";
   }
   const { done, total } = progress(snapshot);
   const complete = done === total;
@@ -94,19 +96,24 @@ export function renderTodoPanel(
   if (hidden > 0) {
     rows.push(`${role.chrome("└─")} ${role.meta(summarizeHidden(hiddenCompleted, hiddenUnfinished))}`);
   }
-  return [heading, ...rows].join("\n");
+  return [layout.deferredTasks ? `${heading} ${role.meta("(loaded prefix)")}` : heading,
+    ...rows, ...(layout.deferredTasks ? [deferredTodoNotice(layout.deferredTasks)] : [])].join("\n");
 }
 
-/** The complete list, grouped by status, for `/todos`. */
+/** The loaded native task page, grouped by status, for `/todos`. */
 export function renderTodoInspection(
   snapshot: TodoSnapshot | undefined,
   composed = true,
+  deferredTasks?: string,
 ): string {
   // A runtime that composes no Todo Plugin has no task list and no `todo`
   // tool, so "no tasks yet" would describe the wrong thing entirely: nothing
   // the agent could do would ever create one (Issue #259).
   if (!composed) {
     return "The Todo Plugin is off for this generation. Enable agent.plugins.todo in rustx.toml, then reload.";
+  }
+  if (deferredTasks && snapshot !== undefined && visibleTasks(snapshot).length === 0) {
+    return deferredTodoNotice(deferredTasks);
   }
   if (snapshot === undefined || visibleTasks(snapshot).length === 0) {
     return "No tasks yet. The agent creates them with the todo tool as it plans multi-step work.";
@@ -136,7 +143,18 @@ export function renderTodoInspection(
       [role.strong(title), ...group.map((task) => `  ${renderRow(task, true)}`)].join("\n"),
     );
   }
-  return sections.join("\n\n");
+  return [...sections, ...(deferredTasks ? [deferredTodoNotice(deferredTasks)] : [])].join("\n\n");
+}
+
+export function deferredTodoRecords(
+  frontiers: readonly import("../../../../protocol/app-server/v48.ts").CollectionFrontier[] | undefined,
+): string | undefined {
+  const field = frontiers?.find(value => value.domain === "todos.tasks");
+  return field && BigInt(field.total) > BigInt(field.loaded) ? field.total : undefined;
+}
+
+function deferredTodoNotice(total: string): string {
+  return `Todo content deferred (${total} native task records). Read /observation todos.tasks.`;
 }
 
 /** One task row: glyph, optional id, subject, activity, dependencies. */

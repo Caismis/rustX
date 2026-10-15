@@ -31,7 +31,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
     runtime.activate();
     let spec = SubagentStartSpec {
         authority: DurableAgentAuthority {
-            title: "Explore task".to_owned(),
+            title: "Explore task".into(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("explore"),
             approval_mode: ApprovalMode::Policy,

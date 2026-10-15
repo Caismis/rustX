@@ -679,7 +679,14 @@ impl OrderingObserver {
 }
 
 impl AgentExecutionObserver for OrderingObserver {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
+    ) {
         if matches!(event, RuntimeEvent::ModelRequestFailed { .. }) {
             self.order
                 .lock()
@@ -692,11 +699,16 @@ impl AgentExecutionObserver for OrderingObserver {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<rustx::durable::TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, _observation: &rustx::agent::AgentStatusObservation) {}
+    fn observe_status(
+        &self,
+        _observation: &rustx::agent::AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
+    }
 
     fn observe_publication_opened(
         &self,
@@ -709,6 +721,7 @@ impl AgentExecutionObserver for OrderingObserver {
         &self,
         _attempt_id: &AttemptId,
         _frame: &rustx::publication::PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
     ) {
         self.order
             .lock()
@@ -720,7 +733,7 @@ impl AgentExecutionObserver for OrderingObserver {
         &self,
         _attempt_id: &AttemptId,
         _audit: &rustx::publication::PublicationAudit,
-        _transcript_cursor: rustx::durable::TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }

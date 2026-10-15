@@ -36,10 +36,16 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         journal: EXACT,
         transcript: EXACT,
         mutation_revision: EXACT,
+        ledger_through: 0,
+        surface_revision: crate::conversation::SurfaceRevision::INITIAL,
+        transcript_total: 0,
+        pending_through: 0,
+        pending_total: 0,
     };
-    let reading_id = crate::durable::reading::ConversationTurnId {
+    let reading_id = crate::runtime_client::turn::ObservedTurnIdentity {
         conversation_id: target.conversation_id.clone(),
-        attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+        attempt_id: Some(crate::runtime::identity::AttemptId::new("attempt-fixture")),
+        attempt_id_source: None,
     };
     let mut fixtures = vec![
         ProtocolMessage::Request(Box::new(Request {
@@ -56,14 +62,14 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-node".into()),
             result: MethodResult::Node {
-                node: crate::local_runtime::session::SessionNode {
+                node: crate::local_runtime::session::observation::SessionNodeObservation {
                     id: crate::local_runtime::session::SessionNodeId::new(
                         "node_00000000-0000-7000-8000-000000000001",
                     ),
                     conversation_id: target.conversation_id.clone(),
                     ordinal: EXACT,
                     parent: None,
-                    origin: crate::local_runtime::session::SessionNodeOrigin::New,
+                    origin: crate::local_runtime::session::observation::SessionNodeOriginObservation::New,
                 },
             },
         }))),
@@ -218,6 +224,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Notification(Notification {
             jsonrpc: JsonRpcVersion::V2,
             notification: NotificationMethod::Event {
+                registration_id: "registration_fixture".into(),
                 target: target.clone(),
                 cursor: crate::runtime_client::RuntimeClientCursor::new(9_007_199_254_740_993),
                 event: Box::new(crate::runtime_client::RuntimeClientEvent::AttemptStarted {
@@ -274,13 +281,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         serde_json::from_value(serde_json::json!({
             "jsonrpc": "2.0", "id": "trace-tool-summary", "result": {
                 "type": "trace", "page": { "records": [{
-                    "id": "trace:7", "position": "trace:7",
+                    "id": "trace:7", "position": "trace:7", "fields": [], "collections": [],
                     "location": { "attempt_id": "attempt-a", "step_id": "1" },
                     "kind": "tool", "state": "completed",
                     "timing": { "started_at": "2026-09-15T00:00:00Z" },
                     "preview": { "text": "bounded result", "truncated": true },
                     "request": null,
-                    "tool": { "call_id": "reused-call", "tool_id": "tool-bash", "name": "bash",
+                    "tool": { "call_id": "reused-call", "tool_id": "tool-bash", "name": "bash", "fields": [],
                         "arguments": { "text": "{\"command\":\"bounded input", "truncated": true },
                         "started": true, "outcome": "success", "detail": null },
                     "calls": [], "attachments": [], "has_detail": true, "truncated": false
@@ -321,24 +328,28 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         Method::TraceLocateTool {
             target: target.clone(),
             locator: crate::runtime_client::trace::TraceToolLocator {
-                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
-                    crate::runtime::identity::MessageId::new("assistant-fixture"),
-                    crate::message::types::ContentBlockIndex::new(2),
-                ),
-                call_id: crate::runtime::identity::ToolCallId::new("call-fixture"),
-                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+                occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: crate::runtime::identity::MessageId::new("assistant-fixture"),
+                    },
+                    block_index: crate::message::types::ContentBlockIndex::new(2),
+                },
+                call_id: Some(crate::runtime::identity::ToolCallId::new("call-fixture")),
+                tool_id: Some(crate::runtime::identity::ToolId::new("tool-bash")),
             },
         },
         Method::AgentTraceLocateTool {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
             locator: crate::runtime_client::trace::TraceToolLocator {
-                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
-                    crate::runtime::identity::MessageId::new("assistant-fixture"),
-                    crate::message::types::ContentBlockIndex::new(2),
-                ),
-                call_id: crate::runtime::identity::ToolCallId::new("call-fixture"),
-                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+                occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: crate::runtime::identity::MessageId::new("assistant-fixture"),
+                    },
+                    block_index: crate::message::types::ContentBlockIndex::new(2),
+                },
+                call_id: Some(crate::runtime::identity::ToolCallId::new("call-fixture")),
+                tool_id: Some(crate::runtime::identity::ToolId::new("tool-bash")),
             },
         },
         Method::Transcript {
@@ -355,12 +366,20 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 id: crate::runtime::identity::MessageId::new("source-message-fixture"),
                 cut: None,
             },
-            limit: 64,
+            limit: 32,
+        },
+        Method::ModelSelect {
+            target: target.clone(),
+            choice: crate::model::session::CatalogModelSelection {
+                binding_revision: EXACT,
+                model_position: 0,
+                profile_position: None,
+            },
         },
         Method::ConversationTurns {
             target: target.clone(),
             offset: Some(64),
-            limit: 64,
+            limit: 32,
         },
         Method::SessionFork {
             session_id: target.session_id.clone(),
@@ -373,7 +392,6 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             target: target.clone(),
             expected: crate::durable::inbox::PendingInboundRef {
                 sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
-                message_id: crate::runtime::identity::MessageId::new("message-fixture"),
                 revision: EXACT,
             },
             text: "edited pending input".into(),
@@ -382,7 +400,6 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             target: target.clone(),
             expected: crate::durable::inbox::PendingInboundRef {
                 sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
-                message_id: crate::runtime::identity::MessageId::new("message-fixture"),
                 revision: EXACT,
             },
         },
@@ -470,12 +487,26 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
             data: "IyBSZXBvcnQK".into(),
         },
-        MethodResult::Jobs {
-            jobs: Vec::new(),
-            returned: 0,
-            matched: 0,
-            limit: crate::tools::background::MAX_JOB_LIST_LIMIT,
-            truncated: false,
+        MethodResult::DomainPage {
+            page: crate::runtime_client::checkpoint::CheckpointPage {
+                collections: Vec::new(),
+                cursor: crate::runtime_client::types::RuntimeClientCursor::new(EXACT),
+                read_cut: crate::runtime_client::checkpoint::CheckpointReadCut {
+                    canonical_foreground: None,
+                    live_publication: None,
+                    collection_cuts: std::collections::BTreeMap::new(),
+                    conversation_id: target.conversation_id.clone(),
+                    activation_id: None,
+                    revision: EXACT,
+                    through: EXACT,
+                    source_cut: None,
+                    domain_revisions: std::collections::BTreeMap::default(),
+                },
+                domain: "jobs".into(),
+                total: 0,
+                items: Vec::new(),
+                next_offset: None,
+            },
         },
         MethodResult::AgentStatistics {
             metrics: crate::runtime_client::agent_statistics::AgentStatistics::default(),
@@ -483,35 +514,16 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         MethodResult::InboundMutation {
             outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
         },
-        MethodResult::ConfigurationApplication {
-            application:
-                crate::local_runtime::configuration::application::ConfigurationApplication {
-                    scope: "session-fixture".into(),
-                    // A Session application scope is a Session identity; its
-                    // authored owners are named separately and never parsed
-                    // out of that key.
-                    sources: vec![
-                        crate::local_runtime::configuration::settings::SourceTarget::User,
-                        crate::local_runtime::configuration::settings::SourceTarget::Workspace {
-                            directory: "/workspace/fixture".into(),
-                        },
-                    ],
-                    version: EXACT,
-                    desired:
-                        crate::local_runtime::configuration::application::ApplicationIdentity {
-                            input_revision: Some("input".into()),
-                            attempt: EXACT,
-                        },
-                    units: std::collections::BTreeMap::default(),
-                    candidate: None,
-                },
+        MethodResult::ConfigurationReceipt {
+            scope: "session-fixture".into(),
+            version: EXACT,
         },
         MethodResult::ConversationTurns {
-            page: crate::durable::reading::ConversationTurnPage {
+            page: crate::runtime_client::turn::ObservedTurnPage {
                 cut: reading_cut,
                 total: 1,
                 offset: 0,
-                turns: vec![crate::durable::reading::ConversationTurn {
+                turns: vec![crate::runtime_client::turn::ObservedTurn {
                     id: reading_id,
                     ordinal: 1,
                     cursor: Some(crate::durable::TranscriptCursor::new(EXACT)),
@@ -527,11 +539,20 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     journal: 0,
                     transcript: 0,
                     mutation_revision: 0,
+                    ledger_through: 0,
+                    surface_revision: crate::conversation::SurfaceRevision::INITIAL,
+                    transcript_total: 0,
+                    pending_through: 0,
+                    pending_total: 0,
                 },
                 newer_cursor: None,
                 target: None,
                 target_cursor: None,
                 page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
+                    source_cut: None,
+                    content: Vec::new(),
+                    collections: Vec::new(),
+                    deferred_entries: Vec::new(),
                     inherited_through: Some(
                         crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(0),
                     ),
@@ -587,6 +608,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     fixtures.push(ProtocolMessage::Notification(Notification {
         jsonrpc: JsonRpcVersion::V2,
         notification: NotificationMethod::Event {
+            registration_id: "registration_fixture".into(),
             target,
             cursor: crate::runtime_client::RuntimeClientCursor::new(EXACT),
             event: Box::new(
@@ -882,9 +904,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v46.schema.json", "v46.ts"]);
+        assert_eq!(generations, ["v48.schema.json", "v48.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v46.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v48.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

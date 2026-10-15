@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../protocol/app-server/v46';
+import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../protocol/app-server/v48';
 import { Questionnaire } from '../src/app/agent/Questionnaire';
 import { askUserRow } from '../src/bindings/ask-user';
 import { QuestionRow } from '../src/presentation/agent/QuestionRow';
@@ -89,9 +89,9 @@ it('collapsing keeps the header strip and the draft', () => {
 
 const asked = JSON.stringify({ questions: [{ header: 'Direction', question: 'Which direction?', options: [] }, { header: 'Scope', question: 'Which scope?', options: [] }] });
 const call = (state: ForegroundToolExecution['state']): ForegroundToolExecution =>
-  ({ message_id: 'm', block_index: 0, call_id: 'call-ask', tool_id: 'tool-ask-user', name: 'ask_user', state });
+  ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'m'},block_index:0},assembly_complete:true, message_id: 'm', block_index: 0, call_id: 'call-ask', tool_id: 'tool-ask-user', name: 'ask_user', state });
 const settled = (status: { type: string }, value?: unknown) => call({ type: 'settled', arguments: asked,
-  result: { status, duration_ms: 0, content: value === undefined ? [] : [{ type: 'json', value }] } } as ForegroundToolExecution['state']);
+  result: { status, duration_ms: "0", content: value === undefined ? [] : [{ type: 'json', value }] } } as ForegroundToolExecution['state']);
 
 it('the native ask_user record projects its verdict and pairs answers by question index', () => {
   expect(askUserRow(call({ type: 'running', arguments: '{"questions":[' }))).toEqual({ id: 'call-ask', verdict: 'waiting' });

@@ -1,3 +1,4 @@
+import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
 import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -9,7 +10,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v46';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v48';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -741,7 +742,7 @@ it('S1-35 while one unit owns the target mutation barrier every other unit stays
   fireEvent.click(removeStatus());
   expect(submitted).toHaveBeenCalledTimes(1);
   // The commit is acknowledged; its post-commit read is still outstanding.
-  await act(async () => { write.resolve({ acknowledgement: committed }); });
+  await act(async () => { write.resolve({ acknowledgement: sourceReceipt(committed) }); });
   await screen.findByText('Saved.');
   expect(saveStatus().disabled).toBe(true);
   expect(statusInput.disabled).toBe(false);

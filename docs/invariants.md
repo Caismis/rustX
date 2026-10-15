@@ -1,5 +1,64 @@
 # Runtime Invariants
 
+## Bounded conversation observation (Issue #467, RFC v3)
+
+Conversation observation is bounded by encoded transport bytes, incremental by
+the Runtime Client cursor, recoverable from authoritative state, and independent
+of Agent execution lifetime. These requirements apply to Root and Child reads,
+both physical transports, internal Unix inspection, WebUI and TUI.
+
+| Invariant | Required boundary |
+| --- | --- |
+| INV-01 | Disconnect, observation cancellation, registration replacement and recovery change observation ownership only. Agent Loop, Tool and terminal settlement owners retain execution authority. |
+| INV-02 | Every complete JSON-RPC record fits 1,048,576 encoded UTF-8 bytes. A capped writer checks the actual envelope and escaped payload without first allocating an unbounded record. |
+| INV-03 | String or safe Integer Request IDs fit 256 serialized bytes and are validated before method, capacity, connection or domain admission, including typed requests and cancellation targets. |
+| INV-04 | Committed connection resources have finite identity receipts and exact same-connection reconciliation. Response loss never makes a Root attachment unresolvable. |
+| INV-05 | Folding consecutive complete transitions from Checkpoint(C) converges to Checkpoint(D), retaining native identities, revisions, cuts, frontiers, interaction authority and commit/settlement facts. |
+| INV-06 | Runtime Client Projection alone constructs bounded display transitions and assigns one native cursor per complete transition. Transport batching never redefines an event or splits an already published cursor. |
+| INV-07 | Final registration/publication validation, bounded candidate selection, one non-suspending physical acceptance attempt and finite acceptance-state commit share one synchronization boundary. |
+| INV-08 | Applied Cursor advances after complete parsing and successful contiguous fold. TransportAccepted and consumed/projected cursors cannot substitute for it. |
+| INV-09 | Model Inline, Checkpoint and ContentRead expose only the existing durably staged, release-authorized Publication frontier. Reads never flush, stage, release or execute. |
+| INV-10 | A ContentRef binds exact source identity, representation, version, revision and readable frontier. Replacement never redirects it to another source. |
+| INV-11 | Display bounds defer materialization; canonical history and durable Publication Audit bytes retain their native order, identities and content. |
+| INV-12 | CanonicalMessageBlock, DurableTranscriptAudit and LivePublicationPrefix remain distinct. Provisional output, assembled proposals, canonical commitment, Audit and execution settlement remain separate facts. |
+| INV-13 | Unavailable, reconnecting, recovering and DurableOnly observation states do not invent Completed, Failed or Cancelled execution outcomes. |
+| INV-14 | Replay, queues, encoded candidates, observation waits, inspection connections, listeners, source worksets and residual physical work have finite bounds and owned release paths. Logical cancellation cannot release a physically occupied permit. |
+| INV-15 | Bounded response substitution retains its original Delivery Access publication owner and precedence. Content authorization remains with the native durable/publication source. |
+| INV-16 | Large items retain finite descriptors and advancing byte/page continuations. A bounded authoritative checkpoint can recover an oversized transition without resyncing indefinitely on the same object. |
+| INV-17 | Observation repair never repeats a model request, Tool execution, Child activation or uncertain non-idempotent mutation. |
+
+Admission associations are connection-local and live through response disposition;
+exact tokens fence delayed cleanup. They are not durable idempotency records (B1,
+N1). Root registration follows PendingReceipt → Following → RecoveryRequired →
+Retired. Replacement before physical acceptance discards stale notifications;
+acceptance before replacement stands. Pending accepts no bytes. Stdio completes
+the same record and delimiter after its first positive write; tungstenite Frame
+handoff is WebSocket acceptance and later Flush is not another acceptance (B2,
+N2).
+
+Checkpoint descriptors are frozen under Projection synchronization, materialized
+off-lock at the same native cut, then validated within two attempts and one shared
+five-second deadline. Loaded bytes are caches. Native field/page ordinals, positive
+settlement heads and publication frontiers remain authority despite cache eviction
+(C1, N3). Native Journal readiness and direct-publication provenance index existing
+source facts; they create no second journal, client ACK registry or execution owner.
+
+ContentRead returns at most 65,536 decoded bytes and performs bounded physical
+range work. Server validation of a returned reference covers ownership, source,
+version, representation, revision, frontier and checked offsets. RawJsonUtf8 retains
+original bytes; CanonicalJsonV1 requires deterministic native structural encoding;
+Utf8Text chunks may split code points and BinaryBytes never aliases another source.
+Replay can fold an expired Live reference without retrieving it (B3, C2, N4).
+
+Child observation has one admitted wait per exact (Target, AgentId), cancellation
+ownership and capacity installed before first poll, and one absolute fifteen-second
+deadline through routing, connect, initialize, checkpoint, replay and fallback.
+Its own Projection owns Live events; DurableOnly grants retained reads without a
+followable stream. The Parent owns no complete Child mirror. Finished listener
+tasks are reaped, and every residual physical operation retains capacity until
+termination (C3–C4, N5). See [the public contract](app-server-protocol.md#bounded-observation-and-acceptance)
+and [the read boundaries](conversation-reading.md).
+
 Preview tabs are browser presentation metadata, never native file authority.
 An occurrence and its active lease must both be current before bytes or derived
 content can publish. Closing, hiding or replacing their scope retires the lease;
@@ -406,7 +465,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v46 navigation adds native Turn-relative finite windows at a captured
+App Server v48 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -784,11 +843,14 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   Agent Loop owns the foreground executor-start frontier, while the background
   registry owns the detached-runner frontier for background results; the latter
   does not change foreground Agent Loop ownership. A canonical
-  ToolMessage commit repairs an unsettled Runtime Client foreground slot for
-  `BeforeStart` without fabricating `ToolExecutionStarted` or physical
-  completion, while a live settlement and the commit share an at-most-once
-  projection transition. Canonical ToolMessages still commit exactly once in
-  model call order.
+  ToolMessage commit publishes `ToolResultCommitted` and a separate
+  `committed_result` in the Runtime Client foreground slot. It does not fabricate
+  `ToolExecutionStarted`, physical completion, or Journal terminal settlement.
+  A `BeforeStart` policy result can therefore be committed while the execution
+  state remains unstarted. Journal terminal facts alone advance that execution
+  state, preserving their status, duration and exit evidence. A late canonical
+  result updates the canonical display body without retracting terminal Journal
+  evidence. Canonical ToolMessages still commit exactly once in model call order.
 
 - `ModelRequestCompleted.usage` reports the completed request's canonical
   final usage: terminal `Completed.usage`, otherwise the latest `UsageUpdate`,
@@ -1299,6 +1361,23 @@ Each option has a non-empty `label` (at most 60 scalar values) and
 single-select questions. Related blocking questions are grouped into one
 invocation.
 
+The model-facing schema contains no generation-facing regex for `question`,
+`header`, `label`, `description` or `preview`. Removing those patterns does not
+relax the native normalizer or shared Questionnaire validator: whitespace-only
+text, duplicate question text, duplicate labels, reserved custom-answer labels
+and invalid preview modes remain rejected before executor entry. Conflict
+diagnostics identify both zero-based paths and a correction without echoing
+authored values. Native argument diagnostics have an explicit UTF-8-safe byte
+bound; the ordinary model-facing result projection also enforces its existing
+output budget.
+
+Every rejected committed call still owns exactly one failed canonical result
+slot in original call order. It creates no pending questionnaire or requested
+fact. The next model request carries that result and renders the failure from
+`status.error`, without copying it into tool-owned content or inserting user
+messages. Only a subsequent model proposal can supply corrected arguments;
+validation rejection schedules no automatic re-execution.
+
 Those are the **tool's** authoring bounds. The runtime-owned contract is the
 typed question vocabulary: `ask_user` maps `multi_select: false` onto
 `SingleChoice { options, allow_custom: true }` and `multi_select: true` onto
@@ -1652,10 +1731,11 @@ conversation's durable authorities after the runtime is gone.
   inspection, task-history, or TUI-only child-history ids.
 - **Canonical messages stay in the child.** Child messages are committed
   exactly once to the child Message Ledger. A Runtime Client inspector reads
-  the child's normal Surface/transcript projection and never copies messages
-  into the parent Ledger, a subagent snapshot, a transcript cache, or TUI
-  state. The existing canonical terminal delivery into the parent remains its
-  one unchanged path.
+  the child's bounded Runtime Client projection. It never commits observed
+  messages into the parent Ledger or a subagent snapshot. WebUI and TUI own
+  bounded loaded ranges and disposable byte caches; these are observation
+  state, with no history authority. The existing canonical terminal delivery
+  into the parent remains its one unchanged path.
 - **Execution history stays in the child.** The child Event Journal and
   durable Request Snapshots remain the authorities for execution facts and
   model-request history. A running inspector attaches to the child's actual
@@ -1689,7 +1769,8 @@ conversation's durable authorities after the runtime is gone.
   the child is reaped and the marker is gone, the same identity uses durable
   fallback.
 - **Navigation is presentation state.** Parent/child frames, selection, and
-  the current-conversation label exist only in the TUI app. `Ctrl+Up`/`Ctrl+Down`
+  the current-conversation label belong to client presentation state. In the
+  TUI, `Ctrl+Up`/`Ctrl+Down`
   selects a row, `Enter` attaches the exact child identity, and `Esc` returns
   to the existing parent attachment. Navigation writes no Ledger or Event
   Journal fact and makes no model request.
@@ -2639,8 +2720,9 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** SQLite 57, child IPC 32, Runtime Client 68
-  and App Server 45 refuse earlier stores and peers. Authoring a `worktree`
+- **Retired formats are refused.** The current SQLite 58, child IPC 33,
+  Runtime Client 69 and App Server 48 gates include the subsequent bounded
+  observation changes (#467) and refuse earlier stores and peers. Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.
 
 ## Subagent recovery-semantics conformance (Issue #138)
@@ -5700,22 +5782,20 @@ semantic normalization boundary. The frozen invariants:
   future Event Journal sequence. Cursor allocation is committed by
   exactly one linearization owner together with event publication;
   overflow fails explicitly and never wraps.
-- **A snapshot returned at cursor C contains all Runtime Client state
-  through C.** The conversation runtime publishes every semantic
-  transition as a runtime-owned `ConversationObservation` into the shared
-  leaf queue, and every projection lock acquisition drains that queue
-  first, so the fold, cursor allocation, event publication, replay
-  retention, subscriber delivery, snapshot reads, and attachment
-  admission/detach serialize through the one projection synchronization
-  boundary. The coordinator's admission boundary and the projection
-  boundary are distinct by design (Issue #61), and the drain-before-serve
-  rule is the explicit bridge between them: a snapshot never reads
-  several subsystem locks and hopes nothing changed between them, and an
-  observation enqueued before the drain is either reflected in the
-  snapshot or published at a cursor strictly after it. The initial
-  bootstrap seed and the live observation stream form one complete
-  projection by the adapter bootstrap linearization (see the Issue #61
-  invariants).
+- **A checkpoint returned at cursor C contains all published Runtime Client
+  state through C.** The conversation runtime sends native
+  `ConversationObservation` transitions to the existing leaf queue. Its
+  projection worker captures a finite publication draft, materializes and
+  encodes outside the Projection lock, then installs the complete transition
+  and its single cursor under the native publication boundary. Pure reads
+  capture the already-published seed and never drain the queue, flush
+  publication buffers or drive execution. Checkpoint materialization uses
+  that captured cut outside the lock and validates its evidence before
+  returning. A queued transition not yet installed at C is published at a
+  later cursor; it cannot be partially included in C. The coordinator's
+  execution admission boundary remains separate from projection publication.
+  Bootstrap and the live stream share the original adapter linearization
+  and one Projection owner.
 - **A successful resume after C observes every subsequent Runtime Client
   event, otherwise the runtime reports `resync_required`.** Serviceability
   is decided under the same boundary that registers the subscriber, so no
@@ -5736,7 +5816,7 @@ semantic normalization boundary. The frozen invariants:
   `resync_required` result until the client re-subscribes.
 - **Projection failure after an authoritative transition is explicit.**
   Cursor exhaustion stops publication without wrapping and makes every
-  read (`snapshot_get`, `capability_get`, `initialize`, subscribe, and
+  read (`checkpoint_get`, `capability_get`, `initialize`, subscribe, and
   subscription polls) fail with `projection_exhausted`; no read hands back
   a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
@@ -6638,20 +6718,60 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **Update linearization.** A session model update that linearizes before
   attempt admission is observed by that attempt; one that linearizes after
   admission affects only future attempts. Both share the one coordinator
-  lock, so there is no third possibility and no timing assumption.
+  lock, so there is no third possibility and no timing assumption. Selection
+  commits immediately while execution is active; it has no idle requirement,
+  pending-model queue or deferred application worker. General context/capability
+  adoption retains its existing readiness and idle-safety requirements.
 
-- **`attempt_started` is self-contained.** The event carries the frozen
-  `AttemptModelView` of the attempt it announces, byte-identical to
-  `snapshot.attempt.model`. A client following only the incremental stream
-  therefore never infers the active attempt's model from event ordering and
-  never needs a second `snapshot_get`. The value is produced by the
+- **Selection preparation preserves published authority.** A complete proposed
+  selection resolves against the Session's published catalog and retained
+  binding, outside the final commit fence. Source/application identity, durable
+  settings revision, retained binding, runtime allocation and resource snapshot
+  are revalidated before publication. A stale candidate cannot overwrite a newer
+  selection, catalog or independent execution-policy publication. Selection
+  imports no unrelated pending configuration.
+
+- **Durability and publication agree.** Atomic catalog replacement is a changed selection's
+  commit point; retained binding and runtime model publication complete before
+  releasing the admission fence. A write
+  failure before publication leaves all three unchanged. A committed replacement
+  with uncertain durability publishes coherent native authority but returns a
+  typed uncertain outcome, never a successful acknowledgement. Clients recover
+  through an authoritative read and never replay the selection automatically.
+
+- **No-op detection includes durable intent.** An already-explicit identical
+  selection still validates lifecycle, revisions and resources, then the durable
+  owner confirms the stored selection and retained revision before skipping its
+  write. An inherited default resolving to the same invocation must still become
+  durable explicit intent. An unchanged acknowledgement creates no event or
+  binding revision and never bypasses runtime retirement.
+
+- **Profile choices preserve whole-state intent.** A same-Model Profile change
+  preserves explicit request/output overrides and the Summary Model policy;
+  invalid combinations fail without fallback. A different-Model choice resets
+  primary request/output overrides, uses its default Profile unless explicitly
+  chosen, and retains the independent Summary Model policy. Every accepted
+  mutation remains one complete `SessionModelConfig`.
+
+- **Derived work keeps its parent's authority.** Child execution created after a
+  Session model mutation still uses its parent Attempt's captured model registry,
+  selection, resources and policy. Primary and explicit summary adapters, output
+  limits and parameters remain immutable, and physical resources remain owned by
+  the existing snapshots and leases through settlement.
+
+- **`attempt_started` preserves the frozen model authority.** Its complete
+  bounded display transition carries the Attempt model view or exact deferred
+  read evidence at the same native cut. A client never infers the active
+  attempt's model from event ordering or the Session's current selection.
+  Deferred display content is loaded through bounded reads. The view is produced by the
   projection from runtime-owned state; a client can neither supply nor
   influence it. It is the *frozen* model, never the session's desired model:
   a `model_set` accepted while the attempt runs publishes
   `session_model_changed` and never re-announces the running attempt.
 
 - **Transactional updates.** A rejected `model_set` changes nothing,
-  allocates no cursor, and publishes no event.
+  allocates no cursor, and publishes no event. An explicitly reported committed
+  durability uncertainty is distinct from a rejected pre-commit mutation.
 
 - **Attempt-scoped context window.** The context window belongs to the
   selected model; the current runtime/project configuration supplies the
@@ -6708,11 +6828,12 @@ contracts and provider protocols. These invariants are frozen by M2:
   provider, context, or agent-loop semantics. A Pi component may hold enough
   local state to render itself; that state is disposable.
 
-- **Reconstructable from a snapshot.** Given a fresh
-  `RuntimeClientSnapshot`, the complete meaningful UI state is
-  reconstructable without consulting hidden client or Pi state, without a
-  local conversation log, and without client-side history inference. The
-  presentation projection is an ephemeral render cache, never canonical
+- **Reconstructable from bounded authoritative observation.** A fresh native
+  checkpoint establishes the display heads, read cut, content references and
+  advancing collection frontiers. Contiguous events update that state; bounded
+  reads materialize deferred content without changing Applied. No hidden Pi
+  state, local conversation log or client-side history inference is required.
+  The presentation projection is an ephemeral render cache, never canonical
   conversation state.
 
 - **One transport owner.** Exactly one object owns JSONL framing, request-id
@@ -6722,10 +6843,11 @@ contracts and provider protocols. These invariants are frozen by M2:
   protocol error, and process exit all reject explicitly, and post-terminal
   requests fail immediately. Transport loss is never cancellation.
 
-- **Snapshot repair, never gap inference.** `resync_required` triggers
-  `snapshot_get`, wholesale replacement of the projection, and a fresh
-  subscription after the new cursor. Nothing is replayed from what the client
-  believed happened.
+- **Checkpoint recovery.** `resync_required` enters CheckpointLoading, installs
+  the exact bounded authoritative cut and requests a fresh subscription.
+  Following starts after its receipt; the locally Applied Cursor never jumps
+  over an unparsed record or an unfollowed gap. Observation recovery does not
+  replay semantic mutations.
 
 - **Runtime-provided identity only.** Streaming and tool state are keyed by
   `attempt_id`, `message_id`, `block_index`, `tool_call_id`, and

@@ -38,7 +38,6 @@ use rustx::agent::{
     AgentStatusObservation,
 };
 use rustx::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-use rustx::durable::TranscriptCursor;
 use rustx::events::types::RuntimeEvent;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
@@ -217,7 +216,14 @@ struct ExecutionSignals {
 }
 
 impl AgentExecutionObserver for ExecutionSignals {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
+    ) {
         if matches!(event, RuntimeEvent::ToolExecutionStarted { .. }) {
             self.started.send_replace(true);
         }
@@ -253,22 +259,33 @@ impl AgentExecutionObserver for ExecutionSignals {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, _observation: &AgentStatusObservation) {}
+    fn observe_status(
+        &self,
+        _observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
+    }
 
     fn observe_publication_opened(&self, _attempt_id: &AttemptId, _start: &PublicationStreamStart) {
     }
 
-    fn observe_publication(&self, _attempt_id: &AttemptId, _frame: &PublicationFrame) {}
+    fn observe_publication(
+        &self,
+        _attempt_id: &AttemptId,
+        _frame: &PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
+    ) {
+    }
 
     fn observe_publication_settled(
         &self,
         _attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        _transcript_cursor: TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }

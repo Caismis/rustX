@@ -2,10 +2,12 @@ import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
+import { wireDiagnostics } from './wire-diagnostics';
 
 for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'] as const) {
   test(`persistent native model failures ${locale} ${theme}`, async ({ page }) => {
     const fixture = await startDogfood('web_model_errors');
+    const diagnostic = wireDiagnostics(page);
     let passed = false;
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -69,6 +71,9 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await expect(failures.last()).toContainText('malformed chat chunk');
       await expect(page.getByText('Conversation recovered after model errors.', { exact: true })).toBeVisible();
       expect(errors).toEqual([]); passed = true;
+    } catch (error) {
+      console.error('Native model-error observation diagnostic', JSON.stringify({ wire: diagnostic(), native_stderr: fixture.diagnostics().appErrors.slice(-4096) }));
+      throw error;
     } finally { await fixture.stop(passed); }
   });
 }

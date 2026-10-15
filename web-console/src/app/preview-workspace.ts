@@ -1,6 +1,6 @@
-import type { AttachmentTarget } from '../../../protocol/app-server/v46';
+import type { AttachmentTarget } from '../../../protocol/app-server/v48';
 import { sameTarget, type AppServerClient } from '../client/app-server';
-import { FilePreviewCoordinator, samePreviewSource, type FilePreviewLease } from '../client/session-files';
+import { FilePreviewCoordinator, samePreviewSource, type FilePreviewLease, type PreviewSource } from '../client/session-files';
 import { PREVIEW_POLICY } from '../client/preview-policy';
 import type { WorkspaceAuthority } from '../workspaces/authority';
 import type { ProductHostWorkspaces } from '../workspaces/host';
@@ -34,6 +34,12 @@ export const clampSplit = (ratio: number, width: number) => {
   return splitFits(width) ? Math.min(max, Math.max(min, Number.isFinite(ratio) ? ratio : .5)) : .5;
 };
 
+function copyPreviewSource(source: PreviewSource): PreviewSource {
+  if (source.kind === 'artifact') return structuredClone(source);
+  const { owned, ...coordinates } = source;
+  return { ...structuredClone(coordinates), owned };
+}
+
 /** Browser-only logical owner. Disposal linearizes before publication of each mutation.
  * Inactive workspaces contain metadata only; leases are separate and never persisted. */
 export class PreviewWorkspaceOwner {
@@ -61,7 +67,7 @@ export class PreviewWorkspaceOwner {
   }
   private scope(id: string): PreviewScope | undefined {
     const state = this.client.getSnapshot(), view = state.views[id];
-    if (!view?.target || view.deleting || view.attachmentIntent !== 'wanted' || view.attachment !== 'attached' || state.connection !== 'connected') return;
+    if (!view?.target || view.deleting || view.attachmentIntent !== 'wanted' || !['attached', 'resynchronizing'].includes(view.attachment) || state.connection !== 'connected') return;
     return { sessionId: id, generation: state.generation, authorityRevision: state.authorityRevision, hostRevision: this.authority.getRevision(), target: { ...view.target } };
   }
   private invalidate = () => {
@@ -134,7 +140,7 @@ export class PreviewWorkspaceOwner {
     }
     const existing = workspace.tabs.find(tab => samePreviewSource(tab.artifact.source, artifact.source));
     if (!existing && workspace.tabs.length >= PREVIEW_POLICY.tabsPerSession) { this.problem = 'tabs'; this.publish(); return; }
-    const tab: PreviewTab = existing ?? { id: ++this.occurrence, artifact: { ...artifact, source: structuredClone(artifact.source) }, pane: workspace.activePane, view: {} };
+    const tab: PreviewTab = existing ?? { id: ++this.occurrence, artifact: { ...artifact, source: copyPreviewSource(artifact.source) }, pane: workspace.activePane, view: {} };
     workspace = { ...workspace, tabs: existing ? workspace.tabs : [...workspace.tabs, tab], expanded: true, activePane: tab.pane,
       panes: workspace.panes.length ? workspace.panes.map(pane => pane.id === tab.pane ? { ...pane, selected: tab.id } : pane) : [{ id: tab.pane, selected: tab.id }] };
     this.sessions.set(scope.sessionId, workspace); this.mode = 'preview'; this.problem = undefined; this.publish(); return tab.id;

@@ -719,6 +719,8 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
             };
             store
                 .append_event(RuntimeEventEnvelope {
+                    tool_occurrence: None,
+                    observation: None,
                     schema_version: EVENT_SCHEMA_VERSION,
                     event_id: EventId::new(format!("{family}-{kind}")),
                     sequence: 0,
@@ -815,6 +817,8 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
         result.managed_output = Some(Box::new(continuation));
         store
             .append_event(RuntimeEventEnvelope {
+                tool_occurrence: None,
+                observation: None,
                 schema_version: EVENT_SCHEMA_VERSION,
                 event_id: EventId::new(format!("managed-output-{index}")),
                 sequence: 0,
@@ -948,6 +952,8 @@ async fn inherited_turn_archive(member: bool) {
         .with_timezone(&Utc);
     let ended_at = started_at + chrono::Duration::seconds(7);
     let event = |kind, timestamp| RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: 1,
         event_id: EventId::new(format!(
             "archive-turn-{}",

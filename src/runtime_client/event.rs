@@ -35,9 +35,9 @@ use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::publication::PublicationAudit;
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
-use crate::runtime::interaction::{InteractionOutcome, InteractionRef, RoutedInteraction};
+use crate::runtime::interaction::{InteractionOutcome, InteractionRef};
 use crate::runtime::types::{CancellationReason, RuntimeError};
-use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
+use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// One externally visible Runtime Client observation.
 ///
@@ -47,11 +47,37 @@ use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProg
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientEvent {
+    /// One authoritative transition may carry several finite facts, but owns
+    /// exactly one published Cursor and must fold atomically.
+    ProjectionTransition {
+        events: Vec<RuntimeClientEvent>,
+        metadata: super::checkpoint::ProjectionMetadata,
+    },
+    /// An already folded transition whose growing fields are represented by
+    /// a complete finite cut before publication, never rewritten by transport.
+    CheckpointAdvanced {
+        transition: String,
+        checkpoint: Box<super::checkpoint::RuntimeClientCheckpoint>,
+    },
+    BlockContentAdvanced {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        position: u64,
+        attempt_id: AttemptId,
+        message_id: MessageId,
+        block_index: ContentBlockIndex,
+        kind: String,
+        base_length: u64,
+        end_length: u64,
+        content_revision: u64,
+        inline_delta: Option<String>,
+        content_ref: super::content::ContentRef,
+    },
     /// Native derived read domains at a committed journal cut. Published only
     /// when durable facts change, never for publication text/argument suffixes.
     ReadDomainsUpdated {
         transcript: super::snapshot::RuntimeClientTranscriptPage,
-        occupancy: Option<crate::context::occupancy::ContextOccupancy>,
+        trace: super::trace::TracePage,
+        occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
         todos: Option<crate::tools::todo::TodoSnapshot>,
     },
     /// Independent Trace invalidation; reread Trace, not the Session snapshot.
@@ -66,7 +92,9 @@ pub enum RuntimeClientEvent {
     },
     /// Bounded authoritative durable Goal view. Every emission follows a
     /// committed durable transition; there is no activation-only form.
-    GoalChanged { view: crate::goal::GoalView },
+    GoalChanged {
+        view: crate::runtime_client::goal::RuntimeClientGoalView,
+    },
     /// Complete bounded replacement at one native Workflow revision.
     WorkflowsUpdated {
         workflows: crate::runtime::workflow::read_model::WorkflowSnapshot,
@@ -76,7 +104,7 @@ pub enum RuntimeClientEvent {
     /// The event is self-contained: it carries the immutable model snapshot
     /// the attempt froze at admission, so a continuously subscribed client
     /// knows the attempt's authoritative model without inferring it from
-    /// event ordering and without a second `snapshot_get` round trip. The
+    /// event ordering and without a second `checkpoint_get` round trip. The
     /// value is runtime-owned — a client never supplies or derives it — and
     /// it is exactly [`RuntimeClientAttempt::model`]
     /// ([`super::snapshot::RuntimeClientAttempt`]) of the same attempt.
@@ -118,9 +146,14 @@ pub enum RuntimeClientEvent {
     },
     /// A native interaction is pending. The request is authoritative runtime
     /// projection state; it is not a client-owned prompt.
+    PendingHeadChanged {
+        owner: String,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        head: Vec<super::snapshot::RuntimeClientInteractionHeader>,
+    },
     InteractionPending {
         /// The complete routed interaction projection.
-        interaction: RoutedInteraction,
+        interaction: super::snapshot::RuntimeClientInteractionHeader,
     },
     /// A native interaction was removed from the live pending projection.
     InteractionSettled {
@@ -195,43 +228,12 @@ pub enum RuntimeClientEvent {
         /// The provisional message identity.
         message_id: MessageId,
     },
-    /// An incremental text delta of one output block.
-    AssistantTextDelta {
-        /// The attempt streaming the message.
-        attempt_id: AttemptId,
-        /// The provisional message identity.
-        message_id: MessageId,
-        /// The output block the delta belongs to.
-        block_index: ContentBlockIndex,
-        /// The incremental text.
-        delta: String,
-    },
-    /// An incremental reasoning delta of one output block.
-    AssistantReasoningDelta {
-        /// The attempt streaming the message.
-        attempt_id: AttemptId,
-        /// The provisional message identity.
-        message_id: MessageId,
-        /// The reasoning block the delta belongs to.
-        block_index: ContentBlockIndex,
-        /// The incremental reasoning text.
-        delta: String,
-    },
-    /// An incremental refusal delta of one output block. Refusal is
-    /// preserved as refusal, never flattened into text.
-    AssistantRefusalDelta {
-        /// The attempt streaming the message.
-        attempt_id: AttemptId,
-        /// The provisional message identity.
-        message_id: MessageId,
-        /// The refusal block the delta belongs to.
-        block_index: ContentBlockIndex,
-        /// The incremental refusal text.
-        delta: String,
-    },
-
     /// A tool call within the in-flight Assistant message started.
     ToolCallStarted {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        position: u64,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        foreground_position: u64,
         /// The attempt assembling the call.
         attempt_id: AttemptId,
         /// The provisional message identity.
@@ -239,23 +241,14 @@ pub enum RuntimeClientEvent {
         /// The tool-call content block being assembled.
         block_index: ContentBlockIndex,
         /// The tool-call identity and metadata known at start.
-        call: ToolCallStart,
-    },
-    /// An incremental JSON argument fragment of one tool call.
-    ToolCallArgumentsDelta {
-        /// The attempt assembling the call.
-        attempt_id: AttemptId,
-        /// The provisional message identity.
-        message_id: MessageId,
-        /// The tool-call content block being assembled.
-        block_index: ContentBlockIndex,
-        /// The tool-call identity being assembled.
-        call_id: ToolCallId,
-        /// The incremental JSON argument fragment.
-        arguments_delta: String,
+        call: super::snapshot::RuntimeClientToolCall,
     },
     /// A tool call within the in-flight Assistant message finished assembly.
     ToolCallAssembled {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        position: u64,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        foreground_position: u64,
         /// Exact native assembled representation; clients must not reserialize JSON numbers.
         arguments_json: String,
         /// The attempt assembling the call.
@@ -265,7 +258,8 @@ pub enum RuntimeClientEvent {
         /// The tool-call content block that completed.
         block_index: ContentBlockIndex,
         /// The fully assembled tool call.
-        call: ToolCall,
+        call: super::snapshot::RuntimeClientToolCall,
+        arguments_ref: Option<super::content::ContentRef>,
     },
 
     /// The in-flight Assistant publication settled without ever becoming a
@@ -282,6 +276,7 @@ pub enum RuntimeClientEvent {
     /// The audit is a noncanonical derived transcript item, not a Message
     /// Ledger message or an execution fact.
     AssistantPublicationSettled {
+        settlement_head: Vec<super::snapshot::RuntimeClientPublicationSettlementRecord>,
         /// The attempt that streamed the publication.
         attempt_id: AttemptId,
         /// The bounded immutable audit of the settled stream.
@@ -290,44 +285,80 @@ pub enum RuntimeClientEvent {
         transcript_cursor: RuntimeClientTranscriptCursor,
     },
 
+    /// The native stream settled, with retained audit content available by bounded reads.
+    AssistantPublicationDeferredSettled {
+        settlement_head: Vec<super::snapshot::RuntimeClientPublicationSettlementRecord>,
+        attempt_id: AttemptId,
+        settlement: super::snapshot::RuntimeClientPublicationSettlement,
+        /// Bounded retained prefix, never a claim that deferred content is empty.
+        audit: Option<Box<PublicationAudit>>,
+        transcript_cursor: RuntimeClientTranscriptCursor,
+        /// Exact immutable source evidence captured by the native audit transaction.
+        read_cut: crate::durable::observation::ObservationReadCut,
+        content: Vec<super::checkpoint::ContentBinding>,
+        collections: Vec<super::checkpoint::CollectionFrontier>,
+    },
+
+    /// The same provisional block acquired its canonical immutable locator at C.
+    ToolOccurrenceRebound {
+        attempt_id: AttemptId,
+        previous_locator: super::content::CanonicalContentLocator,
+        occurrence: super::snapshot::RuntimeClientToolOccurrence,
+        metadata_ref: Option<super::content::ContentRef>,
+    },
+    /// Canonical Tool result commitment; execution-terminal state remains Journal-owned.
+    ToolResultCommitted {
+        attempt_id: AttemptId,
+        occurrence: super::snapshot::RuntimeClientToolOccurrence,
+        result: ToolExecutionResult,
+        result_deferred: bool,
+        result_metadata_ref: Option<super::content::ContentRef>,
+    },
+
     /// A foreground tool execution started.
     ToolExecutionStarted {
         /// The attempt executing the call.
         attempt_id: AttemptId,
+        occurrence: Option<super::snapshot::RuntimeClientToolOccurrence>,
+        metadata_ref: Option<super::content::ContentRef>,
         /// The logical tool-call identity.
-        tool_call_id: ToolCallId,
+        tool_call_id: Option<ToolCallId>,
         /// The canonical tool identity.
-        tool_id: ToolId,
+        tool_id: Option<ToolId>,
     },
     /// Bounded structured progress of one tool execution.
     ToolExecutionProgress {
         /// The attempt executing the call.
         attempt_id: AttemptId,
+        occurrence: Option<super::snapshot::RuntimeClientToolOccurrence>,
+        metadata_ref: Option<super::content::ContentRef>,
         /// The logical tool-call identity.
-        tool_call_id: ToolCallId,
+        tool_call_id: Option<ToolCallId>,
         /// The canonical tool identity.
-        tool_id: ToolId,
+        tool_id: Option<ToolId>,
         /// The detached runtime execution instance for background work;
         /// `None` for foreground executions (no fake id is invented).
         execution_id: Option<ToolExecutionId>,
         /// The bounded structured progress.
         progress: ToolProgress,
     },
-    /// A tool execution or pre-tool policy settled with its normalized result
-    /// (success, failure, denial, cancellation, timeout, or validation
-    /// rejection all settle through this one shape). For an accepted call
-    /// without a live execution settlement, the canonical `ToolMessage` commit
-    /// may publish this event directly (notably for `BeforeStart`
-    /// cancellation); the projection's slot transition remains at-most-once.
+    /// A native execution-terminal Journal fact settled this execution.
+    /// Canonical result commitment travels separately through [`ToolResultCommitted`](Self::ToolResultCommitted).
     ToolExecutionSettled {
         /// The attempt executing the call.
         attempt_id: AttemptId,
+        occurrence: Option<super::snapshot::RuntimeClientToolOccurrence>,
+        metadata_ref: Option<super::content::ContentRef>,
         /// The logical tool-call identity.
-        tool_call_id: ToolCallId,
+        tool_call_id: Option<ToolCallId>,
         /// The canonical tool identity.
-        tool_id: ToolId,
+        tool_id: Option<ToolId>,
         /// The normalized execution result.
         result: ToolExecutionResult,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_source: Option<super::snapshot::JournalFieldRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_metadata_ref: Option<super::content::ContentRef>,
     },
 
     /// A canonical message was committed to conversation history.
@@ -337,7 +368,17 @@ pub enum RuntimeClientEvent {
     /// the conversation coordinator). The committed content is the
     /// authoritative canonical block; client projections treat it as
     /// read-only.
+    MessageDescriptorCommitted {
+        attempt_id: Option<AttemptId>,
+        descriptor: super::snapshot::RuntimeClientMessageDescriptor,
+        head: Vec<super::snapshot::RuntimeClientMessageDescriptor>,
+        transcript_cursor: Option<RuntimeClientTranscriptCursor>,
+        evicted_message_id: Option<MessageId>,
+    },
     MessageCommitted {
+        /// Exact display-head eviction; canonical history remains authoritative and readable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evicted_message_id: Option<MessageId>,
         /// The committing attempt, when one is active.
         attempt_id: Option<AttemptId>,
         /// The committed canonical message.
@@ -381,6 +422,8 @@ pub enum RuntimeClientEvent {
         /// unrelated composition.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         evicted_status_message_id: Option<MessageId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evicted_status_locator: Option<super::content::CanonicalContentLocator>,
     },
 
     /// An inbound message was enqueued into the conversation mailbox.
@@ -422,7 +465,15 @@ pub enum RuntimeClientEvent {
     ///
     /// Background work is conversation-owned: it survives attempt
     /// termination, client detach, and client reconnect.
+    /// The native collection source changed outside the loaded display head.
+    CollectionChanged {
+        domain: String,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+    },
     JobUpdated {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        position: u64,
+        evicted_job_id: Option<crate::runtime::identity::ToolExecutionId>,
         /// The canonical registry snapshot after the transition.
         job: RuntimeClientJob,
     },
@@ -433,6 +484,9 @@ pub enum RuntimeClientEvent {
     /// Subagent children are conversation-owned: they survive attempt
     /// termination, client detach, and client reconnect.
     AgentUpdated {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        position: u64,
+        evicted_agent_id: Option<crate::runtime::identity::AgentId>,
         /// The canonical registry snapshot after the transition.
         agent: Box<RuntimeClientAgent>,
     },
@@ -449,7 +503,7 @@ pub enum RuntimeClientEvent {
     /// The carried [`CapabilityView`] is the complete folded projection
     /// after the commit; its `revision` tells the client whether the
     /// executable capability identity changed. A client never needs to
-    /// poll `snapshot_get` to discover an availability transition.
+    /// poll `checkpoint_get` to discover an availability transition.
     CapabilityUpdated {
         /// The deterministic active capability projection.
         capabilities: CapabilityView,
@@ -462,7 +516,7 @@ pub enum RuntimeClientEvent {
     /// A configuration commit commits both halves together, so it publishes one event
     /// carrying both. Splitting it into a capability event beside a
     /// resource event would allocate two cursors, and an incremental client
-    /// that folds events — rather than re-reading `snapshot_get` — would
+    /// that folds events — rather than re-reading `checkpoint_get` — would
     /// then hold the new capability generation beside the resource
     /// generation the same commit retired. That pairing never existed in
     /// the runtime, so it is never published.
@@ -478,7 +532,8 @@ pub enum RuntimeClientEvent {
     /// transition or an activation committed on its own authority.
     ResourceGenerationUpdated {
         plugins: Option<super::settings::EffectivePlugins>,
-        model: Box<crate::model::session::SessionModelView>,
+        model: Option<Box<crate::model::session::SessionModelView>>,
+        model_status: super::snapshot::RuntimeClientModelStatus,
         approval_mode: crate::runtime::ApprovalMode,
         /// The active capability projection this generation was composed
         /// against.
@@ -496,7 +551,8 @@ pub enum RuntimeClientEvent {
     /// an already-admitted attempt keeps the model it froze at admission.
     SessionModelChanged {
         /// The redacted session model state after the update.
-        model: Box<SessionModelView>,
+        model: Option<Box<SessionModelView>>,
+        model_status: super::snapshot::RuntimeClientModelStatus,
     },
 
     /// Runtime drain began and no longer admits new inbound work. Detach
@@ -531,6 +587,12 @@ pub enum RuntimeClientOutcome {
     Completed {
         /// The normalized finish reason.
         finish_reason: ModelFinishReason,
+        /// The original reason exceeds its finite inline preview.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        finish_reason_deferred: bool,
+        /// Exact allowlisted reason bytes at the published native cut.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        finish_reason_source: Option<super::snapshot::JournalFieldRef>,
     },
     /// The attempt was cancelled.
     Cancelled {
@@ -548,6 +610,12 @@ pub enum RuntimeClientOutcome {
     Failed {
         /// The normalized client-visible failure.
         error: RuntimeClientAttemptFailure,
+        /// The normalized diagnostic exceeds its finite inline preview.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        error_deferred: bool,
+        /// Normalized diagnostic source; never a raw provider error.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_source: Option<super::snapshot::JournalFieldRef>,
     },
 }
 
@@ -567,7 +635,6 @@ pub enum RuntimeClientAttemptFailure {
         /// The normalized human-readable message.
         message: String,
         /// The retry hint, when the provider reported one.
-        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         retry_after_ms: Option<u64>,
     },
     /// A runtime failure.
@@ -575,4 +642,81 @@ pub enum RuntimeClientAttemptFailure {
         /// The normalized runtime error.
         error: RuntimeError,
     },
+}
+
+impl RuntimeClientEvent {
+    /// The ordered facts belonging to one complete native cursor transition.
+    #[must_use]
+    pub fn facts(&self) -> &[Self] {
+        match self {
+            Self::ProjectionTransition { events, .. } => events,
+            event => std::slice::from_ref(event),
+        }
+    }
+}
+
+/// Borrow only diagnostics into a finite display; original fields retain their J source.
+pub(crate) fn finite_attempt_failure(
+    failure: &crate::events::types::AttemptFailure,
+) -> (RuntimeClientAttemptFailure, bool) {
+    fn text(value: &str, deferred: &mut bool) -> String {
+        *deferred |= value.chars().nth(256).is_some();
+        value.chars().take(256).collect()
+    }
+    let mut deferred = false;
+    let value = match failure {
+        crate::events::types::AttemptFailure::Model { error } => {
+            RuntimeClientAttemptFailure::Model {
+                kind: error.kind.clone(),
+                message: text(&error.message, &mut deferred),
+                retry_after_ms: error.retry_after_ms,
+            }
+        }
+        crate::events::types::AttemptFailure::Runtime { error } => {
+            use crate::runtime::types::RuntimeError as E;
+            let error = match error {
+                E::Internal { message } => E::Internal {
+                    message: text(message, &mut deferred),
+                },
+                E::InvalidState { message } => E::InvalidState {
+                    message: text(message, &mut deferred),
+                },
+                E::Unsupported { message } => E::Unsupported {
+                    message: text(message, &mut deferred),
+                },
+                E::UnknownTool { name } => E::UnknownTool {
+                    name: text(name, &mut deferred),
+                },
+                E::DurableStore { message } => E::DurableStore {
+                    message: text(message, &mut deferred),
+                },
+                E::ContractViolation { message } => E::ContractViolation {
+                    message: text(message, &mut deferred),
+                },
+                E::ContextPreparationFailed { message } => E::ContextPreparationFailed {
+                    message: text(message, &mut deferred),
+                },
+                E::ContextCompactionFailed { message } => E::ContextCompactionFailed {
+                    message: text(message, &mut deferred),
+                },
+                E::PreStepRejected { reason } => E::PreStepRejected {
+                    reason: text(reason, &mut deferred),
+                },
+                E::PreStepPolicyFailed { message } => E::PreStepPolicyFailed {
+                    message: text(message, &mut deferred),
+                },
+                E::ToolResultObservationFailed { message } => E::ToolResultObservationFailed {
+                    message: text(message, &mut deferred),
+                },
+                E::RestartInterrupted { message } => E::RestartInterrupted {
+                    message: text(message, &mut deferred),
+                },
+                E::DeferredContextRejected { message } => E::DeferredContextRejected {
+                    message: text(message, &mut deferred),
+                },
+            };
+            RuntimeClientAttemptFailure::Runtime { error }
+        }
+    };
+    (value, deferred)
 }

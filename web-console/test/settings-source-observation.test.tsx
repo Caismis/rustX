@@ -1,7 +1,11 @@
+import {applicationReceipt} from './fixture';
+import { materializeSource } from '../../protocol/app-server/source-observation';
+import { sourceReceipt } from './fixture';
+import { boundedSettings } from "./fixture";
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v46';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v48';
 import { findOnAdvanced, openSettingsPage, queryOnAdvanced, settingsReady, SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/app-server';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -36,8 +40,8 @@ class Native {
 
 async function open(native: Native) {
   const s = new Server();
-  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
-  s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection:boundedSettings(native.projection()) }));
+  s.handlers.set('configuration/sourceWrite', () => ({type:'sources_written',revision:sourceReceipt(native.projection()).revision,configuration_revision:null}));
   await s.connect();
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await settingsReady();
@@ -49,9 +53,15 @@ async function open(native: Native) {
   return s;
 }
 const sent = (s: Server, method: Request['method']) => s.requests.filter(item => item.request.method === method).map(item => item.request);
+async function readSource(server:Server,target:SourceTarget):Promise<SourceSettings> {
+  const generation=server.client.getSnapshot().generation;
+  const {projection}=await server.client.request({method:'configuration/sourcesRead',params:{target}},'source_settings');
+  return materializeSource(projection,async(reference,offset)=>(await server.client.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk')).chunk,()=>server.client.getSnapshot().generation===generation);
+}
+
 /** Native application publication, independent of any acknowledgement. */
 async function publish(s: Server, application: ConfigurationApplication) {
-  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application } }); });
+  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application:applicationReceipt(application) } }); });
 }
 async function deliver(s: Server, request: Request) { await act(async () => { s.reply(request); await Promise.resolve(); }); }
 /** Settle every authoritative read this client has already issued. */
@@ -294,11 +304,11 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
     const projection = native.projection();
     projection.target = target;
     if (target.kind === 'workspace') { projection.workspace!.revision = 'ws-1'; projection.application = workspaceApplication ? structuredClone(workspaceApplication) : null; }
-    return { type: 'source_settings', projection };
+    return { type: 'source_settings', projection:boundedSettings(projection) };
   });
   s.handlers.set('configuration/sourceWrite', request => {
     const target = (request as Extract<Request, { method: 'configuration/sourceWrite' }>).params.target;
-    return { type: 'source_settings', projection: { ...native.projection(), target } };
+    return {type:'sources_written',revision:sourceReceipt({ ...native.projection(), target }).revision,configuration_revision:null};
   });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
@@ -307,13 +317,14 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
     configureWorkspace: async (id, _endpoint, operation) => {
       const target: SourceTarget = { kind: 'workspace', directory: `/workspace/${id === 'workspace-a' ? 'A' : 'B'}` };
       if (operation.kind === 'write') {
-        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
-        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
+        const receipt=await s.client.request({method:'configuration/sourceWrite',params:{target:target,expected_revision:operation.expected_revision,mutation:operation.mutation}},'sources_written');
+        const acknowledgement={target:target,revision:receipt.revision};
+        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: await readSource(s,target) };
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
-      if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
+      if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_receipt');
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
-      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
+      return { kind: operation.kind, projection: await readSource(s,target) };
     },
   };
   await s.connect();
@@ -428,22 +439,23 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
   let releaseWrite!: () => void;
   const heldWrite = new Promise<void>(resolve => { releaseWrite = resolve; });
   const s = new Server();
-  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: projection() }));
-  s.handlers.set('configuration/sourceWrite', () => { revision = 'ws-B'; return { type: 'source_settings', projection: projection() }; });
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection:boundedSettings(projection()) }));
+  s.handlers.set('configuration/sourceWrite', () => { revision = 'ws-B'; return {type:'sources_written',revision:sourceReceipt(projection()).revision,configuration_revision:null}; });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
       if (operation.kind === 'write') {
-        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
-        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
+        const receipt=await s.client.request({method:'configuration/sourceWrite',params:{target:target,expected_revision:operation.expected_revision,mutation:operation.mutation}},'sources_written');
+        const acknowledgement={target:target,revision:receipt.revision};
+        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: await readSource(s,target) };
         captured();
         await heldWrite;
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
-      if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application');
+      if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_receipt');
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
-      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection };
+      return { kind: operation.kind, projection: await readSource(s,target) };
     },
   };
   await s.connect();
@@ -508,23 +520,24 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   const s = new Server();
   s.handlers.set('configuration/sourcesRead', () => {
     if (readFails) throw new RpcFailure({ code: -32000, message: 'authoritative read unavailable', data: { kind: 'operation_failed' } });
-    return { type: 'source_settings', projection: native.projection() };
+    return { type: 'source_settings', projection:boundedSettings(native.projection()) };
   });
-  s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return { type: 'source_settings', projection: native.projection() }; });
+  s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return {type:'sources_written',revision:sourceReceipt(native.projection()).revision,configuration_revision:null}; });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
       if (operation.kind === 'write') {
-        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+        const receipt=await s.client.request({method:'configuration/sourceWrite',params:{target:native.target,expected_revision:operation.expected_revision,mutation:operation.mutation}},'sources_written');
+        const acknowledgement={target:native.target,revision:receipt.revision};
         // Native has committed B and this operation owns its authoritative
         // reread of B; the whole Host response is then held.
-        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
+        const reread: WorkspaceConfigurationReread = { status: 'observed', projection: await readSource(s,native.target) };
         captured.release(); await held.reached;
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
-      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
+      return { kind: operation.kind, projection: await readSource(s,native.target) };
     },
   };
   await s.connect();
@@ -581,21 +594,22 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   const native = workspaceSource();
   const captured = barrier(), held = barrier();
   const s = new Server();
-  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
-  s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return { type: 'source_settings', projection: native.projection() }; });
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection:boundedSettings(native.projection()) }));
+  s.handlers.set('configuration/sourceWrite', () => { native.revision = 'ws-B'; return {type:'sources_written',revision:sourceReceipt(native.projection()).revision,configuration_revision:null}; });
   const host: ProductHostWorkspaces = {
     ...s.workspaceHost,
     resolveWorkspace: async () => ({ cwd: native.target.directory }),
     configureWorkspace: async (_id, _endpoint, operation) => {
       if (operation.kind === 'write') {
-        const acknowledgement = (await s.client.request({ method: 'configuration/sourceWrite', params: { target: native.target, expected_revision: operation.expected_revision, mutation: operation.mutation } }, 'source_settings')).projection;
+        const receipt=await s.client.request({method:'configuration/sourceWrite',params:{target:native.target,expected_revision:operation.expected_revision,mutation:operation.mutation}},'sources_written');
+        const acknowledgement={target:native.target,revision:receipt.revision};
         // The commit is definitive; only this operation's own reread failed.
         const reread: WorkspaceConfigurationReread = { status: 'failed', error: new Error('authoritative reread unavailable') };
         captured.release(); await held.reached;
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
-      return { kind: operation.kind, projection: (await s.client.request({ method: 'configuration/sourcesRead', params: { target: native.target } }, 'source_settings')).projection };
+      return { kind: operation.kind, projection: await readSource(s,native.target) };
     },
   };
   await s.connect();

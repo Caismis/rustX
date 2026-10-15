@@ -1,9 +1,11 @@
+import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CapabilityInspection1, Model, Request1, SourceSettings } from '../../protocol/app-server/v46';
+import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v48';
+type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/app-server';
@@ -149,7 +151,7 @@ it('S2-04 Agent holds identity and guidance; Tools & Permissions holds what the 
 
 // ── S2-05 Extensions keep native facts distinct ─────────────────────────────
 
-function inventory(): CapabilityInspection1 {
+function inventory(): CapabilityInspection {
   return {
     definitions: [
       { family: 'mcp', name: 'search', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/mcp.toml' } },
@@ -194,7 +196,7 @@ it('S2-05 every extension row reports kind, scope, validity, preparation and roo
 });
 
 /** Two MCP identities authored in one `mcp.toml`, one valid and one not. */
-function siblingInventory(): CapabilityInspection1 {
+function siblingInventory(): CapabilityInspection {
   const mcp = '/home/user/rustx/.agents/mcp.toml';
   return {
     definitions: [
@@ -241,7 +243,7 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
 
 /** Every native preparation and admission status, next to one identity of each
  * observed family native published no observation for. */
-function observationInventory(): CapabilityInspection1 {
+function observationInventory(): CapabilityInspection {
   const at = (path: string) => ({ scope: 'user' as const, path: `/home/user/rustx/.agents/${path}` });
   return {
     definitions: [
@@ -856,7 +858,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
       if (mutation.unit === 'model') source.user.authored!.models![mutation.id] = mutation.authored!;
       source.user.revision = `user-${++revision}`;
       reread = deferred<void>();
-      return { type: 'source_settings', projection: structuredClone(source) };
+      return {type:'sources_written',revision:sourceReceipt(structuredClone(source)).revision,configuration_revision:null};
     }
     if (op.method === 'configuration/sourcesRead' && reread) await reread.promise;
   });

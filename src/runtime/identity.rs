@@ -59,13 +59,13 @@ macro_rules! id_type {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
         #[derive(schemars::JsonSchema)]
-        pub struct $name(String);
+        pub struct $name(std::sync::Arc<str>);
 
         impl $name {
             /// Creates a new identifier from a string value.
             #[must_use]
             pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
+                Self(std::sync::Arc::from(value.into()))
             }
 
             /// Returns the identifier value as a string slice.
@@ -77,7 +77,7 @@ macro_rules! id_type {
             /// Consumes the identifier and returns its string value.
             #[must_use]
             pub fn into_string(self) -> String {
-                self.0
+                self.0.to_string()
             }
         }
 
@@ -256,6 +256,13 @@ id_type! {
     /// Provider/model-issued opaque correlation string, scoped to a request/publication.
     /// Not a rustX global identity: canonical ownership uses `ToolCallOccurrenceRef`.
     ToolCallId
+}
+
+impl ToolCallId {
+    /// Private live-source association; equality of semantic IDs remains textual.
+    pub(crate) fn shared_source_token(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.0).cast::<()>() as usize
+    }
 }
 
 uuid_id_type! {
@@ -697,6 +704,18 @@ impl RuntimeResourceRevision {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn t20_large_provider_identity_clones_share_the_original_allocation() {
+        let original = super::ToolCallId::new("provider-id".repeat(400_000));
+        let cloned = original.clone();
+        assert!(std::sync::Arc::ptr_eq(&original.0, &cloned.0));
+        assert_eq!(
+            serde_json::to_string(&original).unwrap(),
+            serde_json::to_string(&cloned).unwrap()
+        );
+        assert_eq!(cloned.into_string(), original.as_str());
+    }
+
     use super::{
         AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
         EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, SkillId,
@@ -804,4 +823,48 @@ impl UuidV7Generator for SystemUuidV7Generator {
 #[must_use]
 pub fn is_uuid_v7(value: uuid::Uuid) -> bool {
     value.get_version_num() == 7 && value.get_variant() == uuid::Variant::RFC4122
+}
+
+/// One native collection owner's synchronized observation frontier.
+/// It carries no execution authority and is independent of client cursors.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub struct ObservationCollectionCut {
+    pub generation: u64,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub total: u64,
+}
+/// A finite native-owner collection page in stable allocation order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservationCollectionPage<T> {
+    pub cut: ObservationCollectionCut,
+    pub offset: u64,
+    pub items: Vec<T>,
+    pub next_offset: Option<u64>,
+}
+
+/// A mutable native collection distinguishes expired evidence from unavailable
+/// sources and invalid ranges. None of these failures owns execution settlement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservationCollectionReadError {
+    CutExpired,
+    InvalidRequest(&'static str),
+    Unavailable(&'static str),
+}
+impl ObservationCollectionCut {
+    pub(crate) fn validate_current(
+        self,
+        current: Self,
+    ) -> Result<(), ObservationCollectionReadError> {
+        if current.generation == u64::MAX {
+            return Err(ObservationCollectionReadError::Unavailable(
+                "native collection observation generation exhausted",
+            ));
+        }
+        if self != current {
+            return Err(ObservationCollectionReadError::CutExpired);
+        }
+        Ok(())
+    }
 }

@@ -69,6 +69,9 @@
 //! Cancellation is a generic Agent Loop invariant for every execution:
 //! observable cancellation is checked before every model turn begins.
 
+#[cfg(test)]
+pub(crate) mod attribution;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -650,7 +653,13 @@ fn publish_model_turn_start_events(
     }
     for event in commit.events() {
         if let Some(observer) = observer {
-            observer.observe_event(attempt_id, &event.event, event.sequence);
+            observer.observe_event(
+                attempt_id,
+                &event.event,
+                event.sequence,
+                event.tool_occurrence.as_ref(),
+                event.observation.as_deref(),
+            );
         }
     }
 }
@@ -2163,6 +2172,7 @@ impl<'a> AgentExecution<'a> {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             })?;
         let adoption = adopted.adoption;
+        let canonical_receipts = adopted.canonical_receipts;
         let adopted = adopted.items;
         if adopted.is_empty() {
             return Ok(false);
@@ -2182,17 +2192,15 @@ impl<'a> AgentExecution<'a> {
                 .collect(),
         )
         .expect("nonempty ordered committed identities");
-        for (commit, item) in prepared.into_iter().zip(&adopted) {
+        for ((commit, _item), receipt) in
+            prepared.into_iter().zip(&adopted).zip(&canonical_receipts)
+        {
             // Infallible: every adopted identity was validated above under
             // exclusive ownership of the conversation state.
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
-                observer.observe_committed(
-                    &self.request.attempt_id,
-                    &block,
-                    item.transcript_cursor(),
-                );
+                observer.observe_committed(&self.request.attempt_id, &block, receipt);
             }
         }
         // The adoption fact is published after its canonical messages, with
@@ -2200,7 +2208,13 @@ impl<'a> AgentExecution<'a> {
         // record, and the observation queue holds its receipt until exactly
         // this publication releases it.
         if let (Some(observer), Some(adoption)) = (self.observer, adoption.as_ref()) {
-            observer.observe_event(&self.request.attempt_id, &adoption.event, adoption.sequence);
+            observer.observe_event(
+                &self.request.attempt_id,
+                &adoption.event,
+                adoption.sequence,
+                adoption.tool_occurrence.as_ref(),
+                adoption.observation.as_deref(),
+            );
         }
         self.pending_fresh_inbound = Some(fresh);
         Ok(true)
@@ -2250,6 +2264,8 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         request_ordinal: u32,
     ) -> Result<PreparedModelTurn, Terminal> {
+        #[cfg(test)]
+        let _profile = attribution::Timer::new(attribution::Phase::Prepare);
         if let Some(message) = self.durable_failure.clone() {
             return Err(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -2875,6 +2891,8 @@ impl<'a> AgentExecution<'a> {
         prepared: PreparedModelTurn,
     ) -> Result<StartedModelTurn, Terminal> {
         #[cfg(test)]
+        let _profile = attribution::Timer::new(attribution::Phase::Start);
+        #[cfg(test)]
         if let Some(pause) = self
             .start_boundary_pause
             .lock()
@@ -2904,9 +2922,12 @@ impl<'a> AgentExecution<'a> {
             // dispatch can precede commit or reconstruction verification.
             let request_start_ms = self.monotonic_clock.now_millis();
             let timestamp = Utc::now();
-            store
-                .commit_model_turn_start(&context, &prepared.snapshot, timestamp)
-                .map(|commit| (commit, request_start_ms))
+            let committed = {
+                #[cfg(test)]
+                let _profile = attribution::Timer::new(attribution::Phase::Commit);
+                store.commit_model_turn_start(&context, &prepared.snapshot, timestamp)
+            };
+            committed.map(|commit| (commit, request_start_ms))
         });
         let (start_commit, request_start_ms) = match arbitration {
             Ok(StartAdjudication::CancelledBeforeStart) => {
@@ -2941,24 +2962,38 @@ impl<'a> AgentExecution<'a> {
         // invoked.
         self.last_started_request = Some(prepared.snapshot.identity.clone());
         self.logical_model_step = LogicalModelStepState::Unresolved;
-        for commit in prepared.context {
+        for (commit, receipt) in prepared
+            .context
+            .into_iter()
+            .zip(&start_commit.context_receipts)
+        {
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
                 // Request-scoped Context-kind messages are model history, not
                 // ordinary transcript items, so they carry no transcript
                 // cursor and never create a semantic user echo.
-                observer.observe_committed(&self.request.attempt_id, &block, None);
+                observer.observe_committed(&self.request.attempt_id, &block, receipt);
             }
         }
         if let Some(observer) = self.observer {
-            for contribution in &prepared.snapshot.contributions {
+            for (ordinal, contribution) in prepared.snapshot.contributions.iter().enumerate() {
                 if prepared
                     .snapshot
                     .request_context_ids
                     .contains(&contribution.message_id)
                 {
-                    contribution.observe(observer, &self.request.attempt_id, self.turn);
+                    contribution.observe(
+                        observer,
+                        &self.request.attempt_id,
+                        self.turn,
+                        start_commit.started.observation.as_ref().and_then(|_| {
+                            start_commit
+                                .status_sources
+                                .iter()
+                                .find(|source| source.contribution_ordinal == ordinal as u64)
+                        }),
+                    );
                 }
             }
         }
@@ -2972,24 +3007,27 @@ impl<'a> AgentExecution<'a> {
         self.last_request_anchor = Some(prepared.anchor.clone());
         self.last_request_estimated_input = Some(prepared.estimated_input);
         self.last_request_id = Some(prepared.snapshot.request_id.clone());
-        let mut reconstructed = self
-            .store
-            .reconstruct_model_request(&prepared.snapshot.request_id)
-            .map_err(|error| {
-                self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
-                self.durable_failure = Some(format!(
-                    "durable request reconstruction failed after start: {error}"
-                ));
-                Terminal::Failed {
-                    failure: AttemptFailure::Runtime {
-                        error: RuntimeError::DurableStore {
-                            message: format!(
-                                "durable request reconstruction failed after start: {error}"
-                            ),
-                        },
+        let reconstructed = {
+            #[cfg(test)]
+            let _profile = attribution::Timer::new(attribution::Phase::Reconstruct);
+            self.store
+                .reconstruct_model_request(&prepared.snapshot.request_id)
+        };
+        let mut reconstructed = reconstructed.map_err(|error| {
+            self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
+            self.durable_failure = Some(format!(
+                "durable request reconstruction failed after start: {error}"
+            ));
+            Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore {
+                        message: format!(
+                            "durable request reconstruction failed after start: {error}"
+                        ),
                     },
-                }
-            })?;
+                },
+            }
+        })?;
         if reconstructed
             .invocation
             .capabilities
@@ -3531,7 +3569,7 @@ impl<'a> AgentExecution<'a> {
             observer.observe_committed(
                 &self.request.attempt_id,
                 &completed.summary_block,
-                Some(completed.transcript_cursor),
+                &completed.receipt,
             );
         }
         self.record_persisted_event(completed.persisted_event);
@@ -4560,7 +4598,9 @@ impl<'a> AgentExecution<'a> {
             let block = MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new(format!(
                     "{}-tool-{}-{}",
-                    self.request.attempt_id, self.turn, slot.call.id
+                    self.request.attempt_id,
+                    self.turn,
+                    occurrences[batch_position].block_index.get()
                 )),
                 occurrence: occurrences[batch_position].clone(),
                 tool_call_id: slot.call.id.clone(),
@@ -5207,7 +5247,7 @@ impl<'a> AgentExecution<'a> {
         let stream_id = publication.start.stream_id.clone();
         let prepared = self.conversation.prepare_commit(&block)?;
         let event = Self::canonical_event(&block).expect("an Assistant commit has its event");
-        let (persisted, transcript_cursor) = self
+        let (persisted, receipt) = self
             .store
             .commit_canonical_publication(
                 &stream_id,
@@ -5220,7 +5260,7 @@ impl<'a> AgentExecution<'a> {
         self.publication = None;
         self.conversation.install_prepared(prepared);
         if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, &block, Some(transcript_cursor));
+            observer.observe_committed(&self.request.attempt_id, &block, &receipt);
         }
         self.record_persisted_event(persisted);
         Ok(())
@@ -5278,11 +5318,7 @@ impl<'a> AgentExecution<'a> {
                 batch_anchor = Some(cursor);
             }
             if let Some(observer) = self.observer {
-                observer.observe_committed(
-                    &self.request.attempt_id,
-                    block,
-                    receipt.transcript_cursor,
-                );
+                observer.observe_committed(&self.request.attempt_id, block, &receipt);
             }
         }
         for event in persisted_events {
@@ -5417,13 +5453,16 @@ impl<'a> AgentExecution<'a> {
         if frames.is_empty() {
             return;
         }
-        if let Err(error) = self.store.stage_publication_frames(&frames) {
-            self.record_publication_failure(&format!(
-                "publication frames could not be staged before release: {error}"
-            ));
-            return;
-        }
-        self.release_publication(&frames);
+        let receipts = match self.store.stage_publication_frames(&frames) {
+            Ok(receipts) => receipts,
+            Err(error) => {
+                self.record_publication_failure(&format!(
+                    "publication frames could not be staged before release: {error}"
+                ));
+                return;
+            }
+        };
+        self.release_publication(&frames, &receipts);
     }
 
     /// Commits **U** — the final publication frame and the publication
@@ -5442,26 +5481,38 @@ impl<'a> AgentExecution<'a> {
         }
         let stream_id = publication.start.stream_id.clone();
         let frames = publication.coalescer.take_terminal_frames();
-        if let Err(error) = self.store.commit_publication_terminal(&stream_id, &frames) {
-            let message =
-                format!("the publication terminal could not be committed durably: {error}");
-            self.record_publication_failure(&message);
-            return Err(RuntimeError::DurableStore { message });
-        }
+        let receipts = match self.store.commit_publication_terminal(&stream_id, &frames) {
+            Ok(receipts) => receipts,
+            Err(error) => {
+                let message =
+                    format!("the publication terminal could not be committed durably: {error}");
+                self.record_publication_failure(&message);
+                return Err(RuntimeError::DurableStore { message });
+            }
+        };
         if let Some(publication) = self.publication.as_mut() {
             publication.terminal_committed = true;
         }
-        self.release_publication(&frames);
+        self.release_publication(&frames, &receipts);
         Ok(())
     }
 
     /// Releases already-committed frames to the live observation seam.
-    fn release_publication(&self, frames: &[PublicationFrame]) {
+    fn release_publication(
+        &self,
+        frames: &[PublicationFrame],
+        receipts: &[crate::publication::PublicationFrameReceipt],
+    ) {
         let Some(observer) = self.observer else {
             return;
         };
-        for frame in frames {
-            observer.observe_publication(&self.request.attempt_id, frame);
+        assert_eq!(
+            frames.len(),
+            receipts.len(),
+            "one native receipt per staged Frame"
+        );
+        for (frame, receipt) in frames.iter().zip(receipts) {
+            observer.observe_publication(&self.request.attempt_id, frame, receipt);
         }
     }
 
@@ -5493,7 +5544,7 @@ impl<'a> AgentExecution<'a> {
             .store
             .terminalize_publication_audit(&stream_id, Utc::now())
         {
-            Ok((audit, transcript_cursor)) => {
+            Ok((audit, receipt)) => {
                 // Only remove the in-memory owner after the durable
                 // settlement committed. On failure it remains the one
                 // recoverable unsettled stream.
@@ -5502,7 +5553,7 @@ impl<'a> AgentExecution<'a> {
                     observer.observe_publication_settled(
                         &self.request.attempt_id,
                         &audit,
-                        transcript_cursor,
+                        &receipt,
                     );
                 }
                 Ok(())
@@ -5568,6 +5619,8 @@ impl<'a> AgentExecution<'a> {
             Some(TurnId::new(self.turn.to_string()))
         };
         RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(""),
             sequence: 0,
@@ -5582,7 +5635,13 @@ impl<'a> AgentExecution<'a> {
     fn record_persisted_event(&self, envelope: RuntimeEventEnvelope) {
         let event = envelope.event;
         if let Some(observer) = self.observer {
-            observer.observe_event(&self.request.attempt_id, &event, envelope.sequence);
+            observer.observe_event(
+                &self.request.attempt_id,
+                &event,
+                envelope.sequence,
+                envelope.tool_occurrence.as_ref(),
+                envelope.observation.as_deref(),
+            );
         }
     }
 
@@ -6294,9 +6353,14 @@ pub(crate) mod test_sync {
         }
 
         fn park(&self) {
-            let parks = self.parks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-            self.reached.send_replace(parks);
-            let _ = self.release.recv();
+            // Hand off the worker before announcing this synchronous fixture
+            // park, so a control task in its unstealable LIFO slot can run.
+            // Both M9 call sites retain their original arbitration boundary.
+            tokio::task::block_in_place(|| {
+                let parks = self.parks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                self.reached.send_replace(parks);
+                let _ = self.release.recv();
+            });
         }
     }
 
@@ -6768,6 +6832,8 @@ mod tests {
             _attempt_id: &AttemptId,
             event: &RuntimeEvent,
             _journal_sequence: u64,
+            _tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
+            _receipt: Option<&crate::durable::observation::NativeObservationBatch>,
         ) {
             if matches!(event, RuntimeEvent::ModelRequestStarted { .. })
                 && let Some((clock, store)) = &self.start_gap
@@ -6793,7 +6859,7 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             block: &MessageBlock,
-            _transcript_cursor: Option<crate::durable::TranscriptCursor>,
+            _receipt: &crate::durable::inbox::TranscriptCommitReceipt,
         ) {
             self.committed
                 .lock()
@@ -6801,7 +6867,11 @@ mod tests {
                 .push(block.clone());
         }
 
-        fn observe_status(&self, observation: &crate::agent::AgentStatusObservation) {
+        fn observe_status(
+            &self,
+            observation: &crate::agent::AgentStatusObservation,
+            _source: Option<&crate::durable::inbox::StatusObservationSource>,
+        ) {
             self.statuses
                 .lock()
                 .expect("observer status lock")
@@ -6815,7 +6885,12 @@ mod tests {
         ) {
         }
 
-        fn observe_publication(&self, _attempt_id: &AttemptId, frame: &PublicationFrame) {
+        fn observe_publication(
+            &self,
+            _attempt_id: &AttemptId,
+            frame: &PublicationFrame,
+            _receipt: &crate::publication::PublicationFrameReceipt,
+        ) {
             self.frames
                 .lock()
                 .expect("observer frame lock")
@@ -6826,7 +6901,7 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             audit: &crate::publication::PublicationAudit,
-            _transcript_cursor: crate::durable::TranscriptCursor,
+            _receipt: &crate::durable::inbox::PublicationAuditReceipt,
         ) {
             self.audits
                 .lock()
@@ -6859,7 +6934,11 @@ mod tests {
             fingerprint: "observer-fingerprint".to_owned(),
         };
         ModelTurnStartCommit {
+            status_sources: Vec::new(),
+            context_receipts: Vec::new(),
             started: RuntimeEventEnvelope {
+                tool_occurrence: None,
+                observation: None,
                 schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
                 event_id: EventId::new("observer-start"),
                 sequence: 1,
@@ -6873,6 +6952,8 @@ mod tests {
                 },
             },
             contribution_emissions: vec![RuntimeEventEnvelope {
+                tool_occurrence: None,
+                observation: None,
                 schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
                 event_id: EventId::new("observer-emission"),
                 sequence: 2,
@@ -7484,7 +7565,9 @@ mod tests {
                 },
             },
             RuntimeEvent::ToolMessageCommitted {
-                message_id: MessageId::new("attempt-1-tool-1-call-1"),
+                // The existing tool owner derives new message identity from the
+                // canonical occurrence, independent of opaque provider call ID.
+                message_id: MessageId::new("attempt-1-tool-1-0"),
                 tool_call_id: ToolCallId::new("call-1"),
             },
             RuntimeEvent::TurnCompleted,

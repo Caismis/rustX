@@ -1,3 +1,10 @@
+import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.ts';
+import { messageDescriptors } from './message-descriptors.ts';
+import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
+import { refineToolSlots } from '../../../protocol/app-server/projection.ts';
+import { displayInteraction, type DisplayInteraction } from './interaction-display.ts';
+import type { ContentBinding } from '../../../protocol/app-server/v48.ts';
+import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, statusIdentity } from '../../../protocol/app-server/projection.ts';
 /**
  * The presentation reducer.
  *
@@ -19,7 +26,7 @@
  * *where a fact goes in the render tree*, never *what the fact is*: it starts
  * no execution, admits nothing, drains nothing, settles nothing, and can
  * produce no state the runtime did not publish. Discard it at any moment and
- * one `snapshot_get` rebuilds it exactly.
+ * one bounded checkpoint rebuilds it exactly.
  *
  * Identity is always runtime-provided — `attempt_id`, `message_id`,
  * `block_index`, `tool_call_id`, `execution_id`. Nothing is identified by its
@@ -29,7 +36,6 @@
 import type {
   AgentStatusView,
   AttemptModelView,
-  MessageId,
   RoutedInteraction,
   RuntimeClientCursor,
   RuntimeClientEvent,
@@ -37,7 +43,6 @@ import type {
   RuntimeClientTranscriptEntry,
   RuntimeClientTranscriptPage,
   SessionModelView,
-  ToolExecutionResult,
 } from "../protocol/app-server.ts";
 import { EXACT_ZERO, compareExact } from "../protocol/app-server.ts";
 import {
@@ -56,7 +61,7 @@ export interface ProjectedEvent {
   cursor: RuntimeClientCursor;
   event: RuntimeClientEvent;
 }
-import { parseSnapshot, publishedTodos } from "./todos.ts";
+import { parseSnapshot } from "./todos.ts";
 import type {
   AttemptPresentation,
   PresentationState,
@@ -76,6 +81,9 @@ export function emptyPresentationState(
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
     pendingInteractions: [],
+    messageDescriptors: [],
+    deferredTranscriptEntries: [],
+    publicationSettlements: [],
     jobs: [],
     agents: [],
     statuses: [],
@@ -83,6 +91,7 @@ export function emptyPresentationState(
     capabilities: { configured_tools: [], revision: EXACT_ZERO, tools: [], skills: [] },
     resources: emptyResources(),
     sessionModel,
+    modelStatus: null,
     effectivePlugins: null,
     settingsEvidence: "live_session",
     todos: undefined,
@@ -121,7 +130,108 @@ function emptyResources(): PresentationState["resources"] {
  * this runtime-derived projection, so an authoritative repair cannot
  * reconstruct or carry them accidentally.
  */
-export function replaceFromSnapshot(
+const historyBindings = new WeakMap<PresentationState,ContentBinding[]>();
+const nativeSnapshots = new WeakMap<PresentationState, RuntimeClientSnapshot>();
+export function replaceFromSnapshot(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): PresentationState {
+  const state = presentSnapshot(snapshot, cursor);
+  nativeSnapshots.set(state, snapshot);
+  return state;
+}
+export function presentationCheckpoint(state: PresentationState) {
+  const snapshot = nativeSnapshots.get(state);
+  return snapshot ? observationCheckpoint(snapshot, state.cursor) : undefined;
+}
+export function deferredContent(state: PresentationState) {
+  const snapshot = nativeSnapshots.get(state);
+  const bindings=new Map((historyBindings.get(state) ?? []).map(binding=>[contentRefKey(binding.content_ref),binding]));
+  for(const binding of snapshot ? contentBindings(snapshot) : [])bindings.set(contentRefKey(binding.content_ref),binding);
+  for(const entry of state.transcript) {
+    if(entry.kind!=='committed'&&entry.kind!=='attempt_terminal')continue;
+    const process=entry.kind==='committed'?entry.turnProcess:entry.turn;
+    const reference=process?.outcome==='completed'&&process.final_message_id_deferred?process.final_message_id_source:undefined;
+    if(reference)bindings.set(contentRefKey(reference),{path:['transcript',entry.cursor,'turn_process','final_message_id'],content_ref:reference,deferred:true});
+  }
+  for(const descriptor of messageDescriptors(state)) {
+    const process=descriptor.turn_process;
+    const reference=process?.outcome==='completed'&&process.final_message_id_deferred?process.final_message_id_source:undefined;
+    if(reference)bindings.set(contentRefKey(reference),{path:['message_descriptors',JSON.stringify(descriptor.locator),'turn_process','final_message_id'],content_ref:reference,deferred:true});
+  }
+  for(const [index,status] of state.statuses.entries()) {
+    if(status.rendered_ref) bindings.set(contentRefKey(status.rendered_ref),{path:['statuses',String(index),'rendered'],content_ref:status.rendered_ref,deferred:true});
+    const metadata=status.opportunities.fresh_inbound?.target_metadata_ref;
+    if(metadata) bindings.set(contentRefKey(metadata),{path:['statuses',String(index),'opportunities','fresh_inbound','target_metadata'],content_ref:metadata,deferred:true});
+  }
+  return [...bindings.values()].filter(binding=>binding.deferred);
+}
+const TOOL_EVENT_TYPES=['tool_call_started','tool_call_assembled','tool_call_rebound','tool_execution_rebound','tool_occurrence_rebound','tool_execution_started','tool_execution_progress','tool_result_committed','tool_execution_settled'] as const;
+type NativeToolEvent=Extract<RuntimeClientEvent,{type:typeof TOOL_EVENT_TYPES[number]}>;
+function isNativeToolEvent(event:RuntimeClientEvent): event is NativeToolEvent {
+  return (TOOL_EVENT_TYPES as readonly string[]).includes(event.type);
+}
+
+export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
+  const native = nativeSnapshots.get(state), event = protocolEvent.event;
+  if (event.type === 'projection_transition') {
+    let next = state;
+    for (const item of event.events) next = reduce(next, { cursor: protocolEvent.cursor, event: item });
+    if (native) nativeSnapshots.set(next, foldRuntimeEvent(native, event));
+    preserveHistoryBindings(state,next);
+    return next;
+  }
+  if (event.type === 'checkpoint_advanced') return replaceFromSnapshot(checkpointSnapshot(event.checkpoint), protocolEvent.cursor);
+  if (event.type === 'block_content_advanced') {
+    if (!native) throw new Error('No checkpoint for content advancement.');
+    const next=mergeNativeTranscript(state,replaceFromSnapshot(foldRuntimeEvent(native,event),protocolEvent.cursor));
+    nativeSnapshots.set(next,foldRuntimeEvent(native,event));preserveHistoryBindings(state,next);return next;
+  }
+  if (event.type === 'assistant_publication_deferred_settled') {
+    if (!native) throw new Error('No authoritative checkpoint for publication settlement.');
+    const projected = foldRuntimeEvent(native, event);
+    const next = mergeNativeTranscript(state, replaceFromSnapshot(projected, protocolEvent.cursor));
+    nativeSnapshots.set(next, projected);
+    preserveHistoryBindings(state, next);
+    return next;
+  }
+  if (isNativeToolEvent(event)) {
+    if(!native)throw new Error('No authoritative checkpoint for Tool observation.');
+    const projected=foldRuntimeEvent(native,event);
+    const head=presentSnapshot(projected,protocolEvent.cursor);
+    const next={...state,cursor:protocolEvent.cursor,attempt:head.attempt,messageDescriptors:[...projected.message_descriptors],
+      transcript:state.transcript.map(row=>row.kind==='committed' && row.toolCalls && ['tool_execution_started','tool_execution_progress','tool_execution_settled','tool_result_committed','tool_occurrence_rebound'].includes(event.type)
+        ?{...row,toolCalls:refineToolSlots(row.toolCalls??[],event as Parameters<typeof refineToolSlots>[1])}:row)};
+    if(['tool_call_started','tool_call_assembled','tool_call_rebound'].includes(event.type)) {
+      next.transcript=[...state.transcript.filter(row=>row.kind!=='streaming'),...head.transcript.filter(row=>row.kind==='streaming')];
+    }
+    nativeSnapshots.set(next,projected);
+    preserveHistoryBindings(state,next);
+    return next;
+  }
+  const next = reduceOrdinaryState(state, { ...protocolEvent, event });
+  if (native) {
+    const projected=foldRuntimeEvent(native,event);
+    nativeSnapshots.set(next,projected);
+    // Native display transitions define the head positions and evictions.
+    // The terminal renderer never grows a second Agent/Job collection.
+    next.jobs=[...(projected.jobs ?? [])];
+    next.agents=[...(projected.agents ?? [])];
+    next.statuses=[...(projected.statuses ?? [])];
+    next.pendingInteractions=(projected.pending_interactions??[]).map(displayInteraction);
+    next.todos=projected.todos==null?undefined:parseSnapshot(projected.todos);
+    next.messageDescriptors=[...projected.message_descriptors];
+    next.publicationSettlements=[...projected.publication_settlements ?? []];
+    // Rebuild only the finite native streaming head: provider block indexes
+    // are identities, while the projection owns ordinal insertion/eviction.
+    if (["tool_call_started", "tool_call_assembled", "tool_call_rebound", "tool_execution_rebound", "assistant_message_started"].includes(event.type)) {
+      const streaming = presentSnapshot(projected, protocolEvent.cursor).transcript.filter(row=>row.kind==="streaming");
+      next.transcript = [...next.transcript.filter(row=>row.kind!=="streaming"), ...streaming];
+    }
+    if(next.attempt && projected.attempt && attemptOwnerKey({conversation_id:projected.conversation_id,...projected.attempt})===attemptOwnerKey({conversation_id:next.conversationId,attempt_id:next.attempt.attemptId,attempt_id_source:next.attempt.attemptSource}))next.attempt={...next.attempt,foreground:[...(projected.attempt.foreground??[])]};
+  }
+  preserveHistoryBindings(state,next);
+  return next;
+}
+
+function presentSnapshot(
   snapshot: RuntimeClientSnapshot,
   cursor: RuntimeClientCursor,
 ): PresentationState {
@@ -140,8 +250,9 @@ export function replaceFromSnapshot(
     // been observed incrementally.
     transcript.push({
       kind: "streaming",
-      key: `streaming:${attempt.attempt_id}:${inFlight.message_id}`,
-      attemptId: attempt.attempt_id,
+      key: `streaming:${attemptOwnerKey({conversation_id:snapshot.conversation_id,...attempt})}:${inFlight.message_id}`,
+      attemptId: attempt.attempt_id ?? undefined,
+            attemptSource: attempt.attempt_id_source ?? undefined,
       messageId: inFlight.message_id,
       blocks: (inFlight.blocks ?? []).map(
         (block): StreamingBlock =>
@@ -149,8 +260,8 @@ export function replaceFromSnapshot(
             ? {
                 kind: "tool_call",
                 blockIndex: block.block_index,
-                callId: block.call_id,
-                toolId: block.tool_id,
+                callId: block.call_id ?? undefined,
+                toolId: block.tool_id ?? undefined,
                 name: block.name,
                 argumentsText: block.arguments,
               }
@@ -175,7 +286,8 @@ export function replaceFromSnapshot(
       attempt === undefined
         ? undefined
         : {
-            attemptId: attempt.attempt_id,
+            attemptId: attempt.attempt_id ?? undefined,
+            attemptSource: attempt.attempt_id_source ?? undefined,
             phase: attempt.phase,
             turn: attempt.turn,
             lastUsage: attempt.last_usage ?? undefined,
@@ -187,7 +299,10 @@ export function replaceFromSnapshot(
       pending: [...(snapshot.inbound.pending ?? [])],
       last_drain: snapshot.inbound.last_drain ?? undefined,
     },
-    pendingInteractions: [...(snapshot.pending_interactions ?? [])],
+    pendingInteractions: (snapshot.pending_interactions ?? []).map(displayInteraction),
+    messageDescriptors: [...snapshot.message_descriptors],
+    deferredTranscriptEntries: boundedDeferred(snapshot.transcript.deferred_entries??[]),
+    publicationSettlements: [...snapshot.publication_settlements ?? []],
     jobs: [...(snapshot.jobs ?? [])],
     agents: [...(snapshot.agents ?? [])],
     // The runtime's bounded composition window, verbatim. Every annotation
@@ -214,6 +329,7 @@ export function replaceFromSnapshot(
         ? undefined
         : (parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: "1" }),
     sessionModel: snapshot.model ?? null,
+    modelStatus: snapshot.model_status ?? null,
     effectivePlugins: snapshot.effective_plugins ?? null,
     settingsEvidence: snapshot.settings_evidence,
     runtimeShutdown: snapshot.shutting_down,
@@ -246,23 +362,48 @@ function mergeNativeTranscript(state: PresentationState, fresh: PresentationStat
   }
   return {
     ...fresh,
-    transcript: orderTranscript([...older, ...fresh.transcript]),
+    transcript: boundedHistory(orderTranscript([...older, ...fresh.transcript])),
     transcriptNextCursor: state.transcriptNextCursor,
   };
 }
 
+function boundedDeferred(rows: import('../../../protocol/app-server/v48.ts').CheckpointPageItem[]) {
+ const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v48.ts').CheckpointPageItem[]=[];let bytes=0;
+ for(const row of [...unique.values()].reverse()){const size=new TextEncoder().encode(JSON.stringify(row)).length;if(kept.length===512||bytes+size>4*1024*1024)break;bytes+=size;kept.push(row);}
+ return kept.reverse();
+}
+const HISTORY_CACHE_BYTES=8*1024*1024,HISTORY_CACHE_ITEMS=512;
+function boundedHistory(entries: TranscriptEntry[], oldest=false): TranscriptEntry[] {
+ const kept:TranscriptEntry[]=[];let bytes=0;
+ for(const entry of oldest?entries:[...entries].reverse()) {
+   const size=new TextEncoder().encode(JSON.stringify(entry)).length;
+   if(kept.length===HISTORY_CACHE_ITEMS||bytes+size>HISTORY_CACHE_BYTES)break;
+   bytes+=size;kept.push(entry);
+ }
+ return oldest?kept:kept.reverse();
+}
 /** Merges an older durable page ahead of the currently loaded transcript. */
+function preserveHistoryBindings(previous:PresentationState,next:PresentationState,incoming:ContentBinding[] = []) {
+ const ids=new Set(next.transcript.filter(isDurableTranscriptEntry).map(entry=>entry.kind==='committed'?entry.message.id:undefined));
+ const merged=new Map<string,ContentBinding>();
+ for(const binding of [...historyBindings.get(previous)??[],...incoming]) {
+   if(binding.content_ref.source.type==='canonical_message_block' && binding.content_ref.source.locator.type==='by_message_id' && !ids.has(binding.content_ref.source.locator.message_id))continue;
+   merged.set(contentRefKey(binding.content_ref),binding);
+ }
+ // Every retained descriptor came from at most one finite loaded row page.
+ const values=[...merged.values()];let bytes=0;const kept:ContentBinding[]=[];
+ for(const binding of values){bytes+=new TextEncoder().encode(JSON.stringify(binding)).length;if(kept.length>=4096||bytes>4*1024*1024)break;kept.push(binding);}
+ historyBindings.set(next,kept);
+}
 export function mergeTranscriptPage(
   state: PresentationState,
   page: RuntimeClientTranscriptPage,
 ): PresentationState {
   const older = (page.entries ?? []).map(transcriptEntryFromWire);
   const merged = deduplicateTranscript([...state.transcript, ...older]);
-  return {
-    ...state,
-    transcript: orderTranscript(merged),
-    transcriptNextCursor: page.next_cursor ?? undefined,
-  };
+  const next={ ...state,deferredTranscriptEntries:boundedDeferred([...state.deferredTranscriptEntries,...page.deferred_entries??[]]),transcript:boundedHistory(orderTranscript(merged),true),transcriptNextCursor:page.next_cursor??undefined };
+  const native=nativeSnapshots.get(state);if(native)nativeSnapshots.set(next,native);preserveHistoryBindings(state,next,[...page.content??[],...(page.deferred_entries??[]).flatMap(row=>row.content)]);
+  return next;
 }
 
 /**
@@ -271,9 +412,9 @@ export function mergeTranscriptPage(
  * Pure: the input state is never mutated, so a caller may keep the previous
  * value (for a diff, a test assertion, or an undo of a render).
  */
-export function reduce(
-  state: PresentationState,
-  protocolEvent: ProjectedEvent,
+function reduceOrdinaryState(
+    state: PresentationState,
+    protocolEvent: ProjectedEvent & { event: Exclude<ProjectedEvent['event'], NativeToolEvent | { type: 'projection_transition' | 'checkpoint_advanced' | 'block_content_advanced' }> },
 ): PresentationState {
   const event = protocolEvent.event;
   const transcriptCursor =
@@ -333,6 +474,9 @@ export function reduce(
       }
       return next;
 
+    case "pending_head_changed":
+    case "message_descriptor_committed":
+      return next;
     case "trace_changed":
       return next; // Trace is a read capability; this client has no Trajectory UI.
 
@@ -345,7 +489,7 @@ export function reduce(
     case "interaction_pending":
       next.pendingInteractions = upsertInteraction(
         state.pendingInteractions,
-        event.interaction,
+        displayInteraction(event.interaction),
       );
       return next;
 
@@ -414,29 +558,8 @@ export function reduce(
       ];
       return next;
 
-    case "assistant_text_delta":
-      return appendText(next, state, event.message_id, event.block_index, "text", event.delta);
-
-    case "assistant_reasoning_delta":
-      return appendText(
-        next,
-        state,
-        event.message_id,
-        event.block_index,
-        "reasoning",
-        event.delta,
-      );
-
-    case "assistant_refusal_delta":
-      return appendText(
-        next,
-        state,
-        event.message_id,
-        event.block_index,
-        "refusal",
-        event.delta,
-      );
-
+    case "assistant_publication_deferred_settled":
+      return next; // Complete deferred source fold is owned by the shared reducer above.
     case "assistant_publication_settled":
       // The stream settled without ever becoming a canonical Assistant
       // message, so the in-flight card is dropped exactly as the Rust
@@ -454,132 +577,6 @@ export function reduce(
         },
       );
       return next;
-
-    case "tool_call_started": {
-      // The foreground slot is created here, exactly as the Rust projection
-      // creates it, so an incremental client and a fresh snapshot describe
-      // the same execution list. Deferring the slot to
-      // `tool_execution_started` would lose the runtime-published name and
-      // arguments, which that event does not repeat.
-      withStreaming(next, state, event.message_id, (message) => ({
-        ...message,
-        blocks: [
-          ...message.blocks,
-          {
-            kind: "tool_call",
-            blockIndex: event.block_index,
-            callId: event.call.id,
-            toolId: event.call.tool_id,
-            name: event.call.name,
-            argumentsText: "",
-          },
-        ],
-      }));
-      return withForeground(next, state, event.attempt_id, (foreground) =>
-        upsertForeground(foreground, event.call.id, (existing) => ({
-          message_id: event.message_id,
-          block_index: event.block_index,
-          call_id: event.call.id,
-          tool_id: event.call.tool_id,
-          name: event.call.name,
-          state: existing?.state ?? { type: "assembled", arguments: "" },
-        })),
-      );
-    }
-
-    case "tool_call_arguments_delta": {
-      withStreaming(next, state, event.message_id, (message) => ({
-        ...message,
-        blocks: message.blocks.map((block) =>
-          block.kind === "tool_call" && block.callId === event.call_id
-            ? {
-                ...block,
-                argumentsText: block.argumentsText + event.arguments_delta,
-              }
-            : block,
-        ),
-      }));
-      return withForeground(next, state, event.attempt_id, (foreground) =>
-        updateForeground(foreground, event.call_id, (existing) =>
-          withArguments(
-            existing,
-            argumentsOf(existing) + event.arguments_delta,
-          ),
-        ),
-      );
-    }
-
-    case "tool_call_assembled": {
-      const assembled = event.arguments_json;
-      withStreaming(next, state, event.message_id, (message) => ({
-        ...message,
-        blocks: message.blocks.map((block) =>
-          block.kind === "tool_call" && block.callId === event.call.id
-            ? {
-                ...block,
-                name: event.call.name,
-                argumentsText: assembled,
-              }
-            : block,
-        ),
-      }));
-      return withForeground(next, state, event.attempt_id, (foreground) =>
-        updateForeground(foreground, event.call.id, (existing) => ({
-          ...withArguments(existing, assembled),
-          name: event.call.name,
-        })),
-      );
-    }
-
-    case "tool_execution_started":
-      return withForeground(next, state, event.attempt_id, (foreground) =>
-        updateForeground(foreground, event.tool_call_id, (existing) => ({
-          ...existing,
-          call_id: event.tool_call_id,
-          tool_id: event.tool_id,
-          name: existing?.name ?? "",
-          state:
-            existing?.state.type === "settled"
-              ? existing.state
-              : {
-                  type: "running",
-                  arguments: argumentsOf(existing),
-                },
-        })),
-      );
-
-    case "tool_execution_progress":
-      if (event.execution_id !== undefined) {
-        // A progress report carrying a detached execution identity belongs to
-        // the conversation-owned background registry, not to this attempt's
-        // foreground list.
-        return next;
-      }
-      return withForeground(next, state, event.attempt_id, (foreground) =>
-        updateForeground(foreground, event.tool_call_id, (existing) => ({
-          ...existing,
-          call_id: event.tool_call_id,
-          tool_id: event.tool_id,
-          name: existing?.name ?? "",
-          state:
-            existing?.state.type === "settled"
-              ? existing.state
-              : {
-                  type: "running",
-                  arguments: argumentsOf(existing),
-                  progress: event.progress,
-                },
-        })),
-      );
-
-    case "tool_execution_settled":
-      return withForeground(next, state, event.attempt_id, (foreground) =>
-        settleForeground(
-          foreground,
-          event.tool_call_id,
-          event.result,
-        ),
-      );
 
     case "message_committed": {
       if (isHiddenContextMessage(event.message)) {
@@ -607,51 +604,16 @@ export function reduce(
         message: event.message,
         nativeFactsPending: event.message.role === "assistant",
       });
-      // A committed `todo` result *is* the list moving, so the panel follows
-      // it live without waiting for the next snapshot — the same derivation
-      // the runtime runs over the same fact.
-      //
-      // The fold is guarded on the composition fact the snapshot carried, not
-      // on the message: a runtime that composes no Todo extension must show
-      // no current list, and canonical history it inherited — which still
-      // legitimately contains `todo` results, and still renders as transcript
-      // history — must never manufacture one (Issue #259).
-      if (next.todos !== undefined) {
-        const todos = publishedTodos(event.message);
-        if (todos !== undefined) {
-          next.todos = todos;
-        }
-      }
-      // A canonical ToolMessage is also the authoritative repair path for a
-      // foreground slot whose live execution settlement was not published
-      // (for example BeforeStart cancellation). The Rust projection normally
-      // emits one equivalent `tool_execution_settled` event before this
-      // message, so this update is idempotent and also keeps the reducer safe
-      // when the commit is the first fact it sees. The result is copied from
-      // the typed message; phase is never inferred by the TUI.
-      if (event.message.role === "tool" && committingAttempt !== undefined) {
-        const toolMessage = event.message;
-        withForeground(next, state, committingAttempt, (foreground) =>
-          settleForeground(
-            foreground,
-            toolMessage.tool_call_id,
-            toolMessage.result,
-          ),
-        );
-      }
+      // Canonical Tool content is independently displayable. The native Todo
+      // observation owner alone replaces the current task projection.
+      // Canonical content and execution-terminal Journal facts are independent.
+      // ToolResultCommitted carries C evidence; only ToolExecutionSettled changes
+      // the foreground execution phase.
       return next;
     }
 
     case "agent_status_composed":
-      // The event is one complete transition of the runtime's bounded window,
-      // and it is folded mechanically. Identity is the composed status
-      // message, so a replayed observation of one composition stays one
-      // presentation item — and, carrying no eviction, removes nothing.
-      next.statuses = foldStatusWindow(
-        state.statuses,
-        event.status,
-        event.evicted_status_message_id ?? undefined,
-      );
+      // The shared native fold installs exactly the published head/eviction.
       return next;
 
     case "inbound_enqueued":
@@ -700,6 +662,9 @@ export function reduce(
       };
       return next;
 
+    case "collection_changed":
+      return next;
+
     case "job_updated":
       next.jobs = upsertBackground(state.jobs, event.job);
       return next;
@@ -722,14 +687,16 @@ export function reduce(
       next.capabilities = event.capabilities;
       next.resources = event.resources;
       next.effectivePlugins = event.plugins ?? null;
-      next.sessionModel = event.model;
+      next.sessionModel = event.model ?? null;
+      next.modelStatus = event.model_status;
       next.effectiveApprovalMode = event.approval_mode;
       return next;
 
     case "session_model_changed":
       // The session's desired model only. A running attempt keeps the model
       // it froze; nothing about `state.attempt` changes here.
-      next.sessionModel = event.model;
+      next.sessionModel = event.model ?? null;
+      next.modelStatus = event.model_status;
       return next;
 
     case "runtime_shutdown":
@@ -773,7 +740,7 @@ function transcriptEntryFromWire(
 ): TranscriptEntry {
   switch (entry.item.type) {
     case "attempt_terminal":
-      return { kind: "attempt_terminal", key: `attempt:${entry.item.turn.conversation_id}:${entry.item.turn.attempt_id}`, cursor: entry.cursor, turn: entry.item.turn };
+      return { kind: "attempt_terminal", key: `attempt:${attemptOwnerKey(entry.item.turn)}`, cursor: entry.cursor, turn: entry.item.turn };
     case "message": {
       const messageId = messageIdOf(entry.item.message);
       return {
@@ -782,8 +749,10 @@ function transcriptEntryFromWire(
         messageId,
         cursor: entry.cursor,
         message: entry.item.message,
+        ...(entry.tool_calls==null?{}:{toolCalls:[...entry.tool_calls]}),
         nativeFactsPending: entry.response_pending === true || (entry.tool_calls ?? []).some(call => call.state.type !== "settled"),
         ...(entry.completed_response == null ? {} : { completedResponse: entry.completed_response }),
+        ...(entry.turn_process == null ? {} : { turnProcess: entry.turn_process }),
       };
     }
     case "publication_audit":
@@ -899,36 +868,16 @@ function deduplicateTranscript(transcript: TranscriptEntry[]): TranscriptEntry[]
  * diverge the moment the bound was crossed — a live fold keeping a
  * composition a later snapshot repair would silently drop.
  */
-function foldStatusWindow(
-  statuses: AgentStatusView[],
-  status: AgentStatusView,
-  evictedStatusMessageId: MessageId | undefined,
-): AgentStatusView[] {
-  const retained =
-    evictedStatusMessageId === undefined
-      ? statuses
-      : statuses.filter(
-          (existing) => existing.status_message_id !== evictedStatusMessageId,
-        );
-  if (
-    retained.some(
-      (existing) => existing.status_message_id === status.status_message_id,
-    )
-  ) {
-    return retained;
-  }
-  return [...retained, status];
-}
-
 /** Keeps one entry per composition identity, in the runtime's own order. */
 function dedupeStatuses(statuses: AgentStatusView[]): AgentStatusView[] {
   const seen = new Set<string>();
   const kept: AgentStatusView[] = [];
   for (const status of statuses) {
-    if (seen.has(status.status_message_id)) {
+    const identity = statusIdentity(status);
+    if (seen.has(identity)) {
       continue;
     }
-    seen.add(status.status_message_id);
+    seen.add(identity);
     kept.push(status);
   }
   return kept;
@@ -968,170 +917,6 @@ function dropStreaming(
   );
 }
 
-function withStreaming(
-  next: PresentationState,
-  previous: PresentationState,
-  messageId: string,
-  update: (message: StreamingMessage) => StreamingMessage,
-): PresentationState {
-  next.transcript = previous.transcript.map((entry) =>
-    entry.kind === "streaming" && entry.messageId === messageId
-      ? update(entry)
-      : entry,
-  );
-  return next;
-}
-
-function appendText(
-  next: PresentationState,
-  previous: PresentationState,
-  messageId: string,
-  blockIndex: number,
-  kind: "text" | "reasoning" | "refusal",
-  delta: string,
-): PresentationState {
-  return withStreaming(next, previous, messageId, (message) => {
-    const existing = message.blocks.find(
-      (block) => block.blockIndex === blockIndex,
-    );
-    if (existing === undefined) {
-      return {
-        ...message,
-        blocks: [...message.blocks, { kind, blockIndex, text: delta }],
-      };
-    }
-    return {
-      ...message,
-      blocks: message.blocks.map((block) =>
-        block.blockIndex === blockIndex && block.kind !== "tool_call"
-          ? { ...block, text: block.text + delta }
-          : block,
-      ),
-    };
-  });
-}
-
-function withForeground(
-  next: PresentationState,
-  previous: PresentationState,
-  attemptId: string,
-  update: (
-    foreground: AttemptPresentation["foreground"],
-  ) => AttemptPresentation["foreground"],
-): PresentationState {
-  if (previous.attempt === undefined || previous.attempt.attemptId !== attemptId) {
-    return next;
-  }
-  next.attempt = {
-    ...previous.attempt,
-    foreground: update(previous.attempt.foreground),
-  };
-  return next;
-}
-
-function argumentsOf(
-  existing: AttemptPresentation["foreground"][number] | undefined,
-): string {
-  return existing === undefined ? "" : existing.state.arguments;
-}
-
-/** Replaces the arguments of one foreground slot, keeping its lifecycle. */
-function withArguments(
-  slot: AttemptPresentation["foreground"][number],
-  args: string,
-): AttemptPresentation["foreground"][number] {
-  switch (slot.state.type) {
-    case "assembled":
-      return { ...slot, state: { type: "assembled", arguments: args } };
-    case "running":
-      return {
-        ...slot,
-        state: {
-          type: "running",
-          arguments: args,
-          progress: slot.state.progress,
-        },
-      };
-    default:
-      return {
-        ...slot,
-        state: {
-          type: "settled",
-          arguments: args,
-          result: slot.state.result,
-        },
-      };
-  }
-}
-
-/**
- * Updates an existing foreground slot, or does nothing.
- *
- * Unlike {@link upsertForeground} this never creates a slot: an argument
- * fragment for a call the projection has not seen started describes nothing
- * the runtime published, so it is dropped rather than guessed into existence.
- */
-function updateForeground(
-  foreground: AttemptPresentation["foreground"],
-  callId: string,
-  update: (
-    existing: AttemptPresentation["foreground"][number],
-  ) => AttemptPresentation["foreground"][number],
-): AttemptPresentation["foreground"] {
-  const index = foreground.findIndex((entry) => entry.call_id === callId);
-  if (index === -1) {
-    return foreground;
-  }
-  const updated = [...foreground];
-  updated[index] = update(foreground[index]!);
-  return updated;
-}
-
-function upsertForeground(
-  foreground: AttemptPresentation["foreground"],
-  callId: string,
-  build: (
-    existing: AttemptPresentation["foreground"][number] | undefined,
-  ) => AttemptPresentation["foreground"][number],
-): AttemptPresentation["foreground"] {
-  const index = foreground.findIndex((entry) => entry.call_id === callId);
-  if (index === -1) {
-    return [...foreground, build(undefined)];
-  }
-  const updated = [...foreground];
-  updated[index] = build(foreground[index]);
-  return updated;
-}
-
-/**
- * Settles a foreground slot from an already-authoritative typed result.
- *
- * A canonical ToolMessage is the repair path for a matching slot belonging to
- * a call that never published a live execution settlement. Once a slot is
- * settled, later lifecycle facts are ignored so the client never emits or
- * displays a second terminal result. A commit never invents a slot: accepted
- * calls already assembled one, and a missing identity is not a projection
- * fact the message can reconstruct.
- */
-function settleForeground(
-  foreground: AttemptPresentation["foreground"],
-  callId: string,
-  result: ToolExecutionResult,
-): AttemptPresentation["foreground"] {
-  const existing = foreground.find((entry) => entry.call_id === callId);
-  if (existing === undefined || existing.state.type === "settled") {
-    return foreground;
-  }
-  return updateForeground(foreground, callId, (existing) => ({
-    ...existing,
-    state: {
-      type: "settled",
-      arguments: argumentsOf(existing),
-      result,
-    },
-  }));
-}
-
 function upsertBackground(
   background: PresentationState["jobs"],
   execution: PresentationState["jobs"][number],
@@ -1163,9 +948,9 @@ function upsertSubagent(
 }
 
 function upsertInteraction(
-  interactions: RoutedInteraction[],
-  interaction: RoutedInteraction,
-): RoutedInteraction[] {
+  interactions: DisplayInteraction[],
+  interaction: DisplayInteraction,
+): DisplayInteraction[] {
   const index = interactions.findIndex((entry) =>
     sameInteraction(entry.interaction, interaction.interaction)
   );
@@ -1189,5 +974,5 @@ function sameInteraction(
 
 /** Durable read-only history while runtime preparation is pending. */
 export function historyPresentation(conversationId: string, page: import('../protocol/app-server.ts').RuntimeClientTranscriptPage): PresentationState {
-  return { ...emptyPresentationState(null), conversationId, transcript: (page.entries ?? []).map(transcriptEntryFromWire), statistics: page.statistics, transcriptNextCursor: page.next_cursor ?? undefined };
+  return { ...emptyPresentationState(null), conversationId, transcript: (page.entries ?? []).map(transcriptEntryFromWire), statistics: page.statistics, transcriptNextCursor: page.next_cursor ?? undefined, deferredTranscriptEntries:boundedDeferred(page.deferred_entries??[]) };
 }

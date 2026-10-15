@@ -3,6 +3,7 @@ use crate::context::assembly::ContextGeneration;
 use crate::durable::SqliteConversationStore;
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::TextBlock;
+use crate::message::types::InboundKind;
 use crate::message::types::{
     AssistantMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
@@ -11,7 +12,6 @@ use crate::model::{
     ModelCapabilities, ModelCompat, ModelProtocol, RequestIdentity, RequestSnapshot, UsageDetails,
 };
 use crate::runtime::identity::{CapabilityRevision, ConversationId, EventId, TurnId};
-use crate::runtime_client::snapshot::transcript_page_view;
 use chrono::{TimeZone, Utc};
 
 fn event(
@@ -20,6 +20,8 @@ fn event(
     event: RuntimeEvent,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: 1,
         event_id: EventId::new(format!(
             "event-{}",
@@ -190,7 +192,7 @@ fn page(
         store.load_transcript_page(before, limit).unwrap(),
     )
     .unwrap();
-    decorate(store, &mut page).unwrap();
+    native_oracle_decorate(store, &mut page).unwrap();
     page
 }
 fn tails(page: &RuntimeClientTranscriptPage) -> Vec<&CompletedResponseView> {
@@ -294,7 +296,9 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
     );
     assert_eq!(tails(&full)[0].models, ["historical-model"]);
     let clock = totals.latest_turn.unwrap();
-    assert_eq!(clock.attempt_id, AttemptId::new("b"));
+    assert_eq!(clock.attempt_id, Some(AttemptId::new("b")));
+    assert!(!clock.attempt_id_deferred);
+    assert!(clock.attempt_id_source.is_none());
     assert_eq!(clock.ended_at, Some(clock.started_at));
 }
 
@@ -343,7 +347,7 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
     let result = page(&store, None, 64);
     let tails = tails(&result);
     assert_eq!(tails.len(), 1);
-    assert_eq!(tails[0].closing_message_id, MessageId::new("closing"));
+    assert_eq!(tails[0].closing_message_id, Some(MessageId::new("closing")));
     assert_eq!(tails[0].retry_message_id, Some(MessageId::new("input-a")));
     assert_eq!(tails[0].usage.as_ref().unwrap().total_tokens, 240);
     assert_eq!(
@@ -387,8 +391,14 @@ fn historical_pages_reopen_and_later_attempts_preserve_identity_and_totals() {
     }
     let newest = page(&store, None, 1);
     let older = page(&store, newest.next_cursor.map(Into::into), 64);
-    assert_eq!(tails(&newest)[0].origin.attempt_id, AttemptId::new("b"));
-    assert_eq!(tails(&older)[0].origin.attempt_id, AttemptId::new("a"));
+    assert_eq!(
+        tails(&newest)[0].origin.attempt_id,
+        Some(AttemptId::new("b"))
+    );
+    assert_eq!(
+        tails(&older)[0].origin.attempt_id,
+        Some(AttemptId::new("a"))
+    );
     assert_eq!(newest.statistics, older.statistics);
     assert_eq!(
         newest
@@ -430,7 +440,7 @@ fn published_read_cut_does_not_observe_a_later_completion() {
     for entry in &mut old.entries {
         entry.completed_response = None;
     }
-    decorate_through(&store, &mut old, through).unwrap();
+    native_oracle_decorate_through(&store, &mut old, through).unwrap();
     assert!(tails(&old).is_empty());
     assert_eq!(tails(&page(&store, None, 64)).len(), 1);
 }
@@ -640,10 +650,22 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             &[]
         ))
     );
-    assert!(is_completed_response(&store, &tail.closing_message_id).unwrap());
+    assert!(
+        is_completed_response(
+            &store,
+            tail.closing_message_id
+                .as_ref()
+                .expect("bounded fixture identity")
+        )
+        .unwrap()
+    );
     assert_eq!(
         store
-            .message_append_revision(&tail.closing_message_id)
+            .message_append_revision(
+                tail.closing_message_id
+                    .as_ref()
+                    .expect("bounded fixture identity")
+            )
             .unwrap(),
         Some(tail.surface_revision)
     );
@@ -667,6 +689,7 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
             .read_lineage_cut(store.load_head().unwrap().revision)
             .map(|cut| cut.turns)
             .unwrap(),
+        &[],
     )
     .unwrap();
     let child = SqliteConversationStore::in_memory(child_id).unwrap();
@@ -687,7 +710,16 @@ fn real_compaction_preserves_response_identity_cut_and_cumulative_usage() {
     let inherited_tail = tails(&inherited)[0];
     assert_eq!(inherited_tail.origin, tail.origin);
     assert_eq!(inherited_tail.usage, tail.usage);
-    assert!(is_completed_response(&child, &inherited_tail.closing_message_id).unwrap());
+    assert!(
+        is_completed_response(
+            &child,
+            inherited_tail
+                .closing_message_id
+                .as_ref()
+                .expect("bounded fixture identity")
+        )
+        .unwrap()
+    );
     // Totals travel with the inherited turn; its pre-compaction context
     // reading does not, because the retained Surface compacted after it.
     assert_eq!(
@@ -738,6 +770,10 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
     }));
     finish(&store, "a");
     let completed = page(&store, None, 64);
+    let final_position = store
+        .message_ledger_position(&MessageId::new("a-final"))
+        .unwrap()
+        .unwrap();
     for entry in &completed.entries {
         let RuntimeClientTranscriptItem::Message { message } = &entry.item else {
             continue;
@@ -745,8 +781,19 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
         match message.id().as_str() {
             "a-intermediate" | "a-final" => {
                 let process = entry.turn_process.as_ref().unwrap();
-                assert_eq!(process.attempt_id, AttemptId::new("a"));
+                assert_eq!(process.attempt_id, Some(AttemptId::new("a")));
+                assert!(process.attempt_id_source.is_none());
                 assert_eq!(process.final_message_id, Some(MessageId::new("a-final")));
+                assert_eq!(
+                    process.final_message_locator,
+                    Some(
+                        super::super::content::CanonicalContentLocator::ByLedgerPosition {
+                            position: final_position,
+                        }
+                    )
+                );
+                assert!(!process.final_message_id_deferred);
+                assert!(process.final_message_id_source.is_none());
             }
             _ => assert!(
                 entry
@@ -799,7 +846,8 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
             panic!("missing terminal Turn")
         };
         assert_eq!(turn.conversation_id, id);
-        assert_eq!(turn.attempt_id, AttemptId::new(attempt));
+        assert_eq!(turn.attempt_id, Some(AttemptId::new(attempt)));
+        assert!(turn.attempt_id_source.is_none());
         assert_eq!(turn.outcome, outcome);
         assert_eq!(
             turn.failure.is_some(),
@@ -813,6 +861,9 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
         assert_eq!(turn.message_count, 2);
         assert_eq!(turn.tool_call_count, 1);
         assert_eq!(turn.final_message_id, None);
+        assert!(turn.final_message_locator.is_none());
+        assert!(!turn.final_message_id_deferred);
+        assert!(turn.final_message_id_source.is_none());
         let members = page(&store, None, 4);
         assert!(
             members
@@ -988,6 +1039,54 @@ fn terminal_cases() -> [(&'static str, RuntimeEvent, TurnProcessOutcome); 4] {
     ]
 }
 
+fn assert_original_tool_view(
+    store: &dyn ConversationStore,
+    bounded: &crate::runtime_client::snapshot::ForegroundToolExecution,
+    original: &crate::runtime_client::snapshot::ForegroundToolExecution,
+) {
+    assert_eq!(
+        bounded.committed_result, original.committed_result,
+        "numeric source retains the independent original canonical Tool result"
+    );
+    assert!(bounded.committed_result.is_some());
+    let original_message_id = original
+        .message_id
+        .as_ref()
+        .expect("the exact original proposal alias");
+    let messages = store
+        .load_messages(std::slice::from_ref(original_message_id))
+        .unwrap();
+    let MessageBlock::Assistant(message) = &messages[0] else {
+        panic!("original canonical proposal");
+    };
+    let AssistantContentBlock::ToolCall(call) = &message.content
+        [usize::try_from(bounded.block_index.get()).expect("native block index fits")]
+    else {
+        panic!("the actual original Tool occurrence");
+    };
+    let crate::runtime_client::snapshot::ForegroundToolState::Assembled { arguments } =
+        &bounded.state
+    else {
+        panic!("canonical C without a native Tool terminal must stay Assembled");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(arguments).unwrap(),
+        call.arguments
+    );
+    assert_eq!(bounded.call_id.as_ref(), Some(&call.id));
+    assert_eq!(bounded.tool_id.as_ref(), Some(&call.tool_id));
+    assert_eq!(
+        bounded.occurrence.locator,
+        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+            position: store
+                .message_ledger_position(original_message_id)
+                .unwrap()
+                .unwrap(),
+        }
+    );
+    assert_eq!(bounded.block_index, original.block_index);
+}
+
 #[test]
 fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
@@ -1003,7 +1102,24 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         assistant(&store, attempt, &format!("{attempt}-final"));
         finish(&store, attempt);
     }
-    let expected = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
+    let original = page(&store, Some(crate::durable::TranscriptCursor::new(5)), 4);
+    let selected = store
+        .read_window_headers(
+            &crate::durable::reading::ConversationWindowAt::Older {
+                cut: None,
+                before: crate::durable::TranscriptCursor::new(5),
+            },
+            4,
+        )
+        .unwrap();
+    let frozen_cut = selected.cut.read.clone();
+    let mut expected = crate::runtime_client::snapshot::transcript_header_view(selected.page);
+    super::decorate_window(&store, &mut expected, selected.cut.read.journal).unwrap();
+    assert_original_tool_view(
+        &store,
+        &expected.entries[0].tool_calls[0],
+        &original.entries[0].tool_calls[0],
+    );
     let outline = store.conversation_turns(0, 64).unwrap();
     let frontier = store.presentation_frontier().unwrap();
     let unrelated = (0..2048)
@@ -1029,9 +1145,24 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         })
         .collect::<Vec<_>>();
     crate::durable::sqlite::append_assistant_history_fixture(&store, &unrelated).unwrap();
+    let old = store
+        .read_window_headers(
+            &crate::durable::reading::ConversationWindowAt::Older {
+                cut: Some(frozen_cut),
+                before: outline.turns[1].cursor.unwrap(),
+            },
+            4,
+        )
+        .unwrap();
+    let mut retained = crate::runtime_client::snapshot::transcript_header_view(old.page);
+    super::decorate_window(&store, &mut retained, old.cut.read.journal).unwrap();
+    assert_eq!(
+        retained, expected,
+        "the exact old native cut remains immutable after unrelated commits"
+    );
     // The four rows of Attempt a: the page before Attempt b's location.
     let read = store
-        .conversation_window(
+        .read_window_headers(
             &crate::durable::reading::ConversationWindowAt::Older {
                 cut: None,
                 before: outline.turns[1].cursor.unwrap(),
@@ -1039,15 +1170,18 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             4,
         )
         .unwrap();
-    let mut window = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
-    super::decorate_window(&store, &mut window, read.cut.journal).unwrap();
+    let mut window = crate::runtime_client::snapshot::transcript_header_view(read.page);
+    super::decorate_window(&store, &mut window, read.cut.read.journal).unwrap();
     assert_eq!(window.entries, expected.entries);
-    assert_eq!(tails(&window)[0].origin.attempt_id, AttemptId::new("a"));
+    assert_eq!(
+        tails(&window)[0].origin.attempt_id,
+        Some(AttemptId::new("a"))
+    );
     assert!(window.entries.iter().all(|entry| {
         entry
             .turn_process
             .as_ref()
-            .is_some_and(|owner| owner.attempt_id == AttemptId::new("a"))
+            .is_some_and(|owner| owner.attempt_id == Some(AttemptId::new("a")))
     }));
     assert_eq!(
         window.entries[0].tool_calls[0].state,
@@ -1134,11 +1268,22 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
     let first_cut = cut;
     let first = fold.read(&store, cut, || None).unwrap();
     assert_eq!(first.statistics, statistics(&store, cut).unwrap());
-    assert_eq!(
-        first.occupancy,
-        crate::context::occupancy::read(&store, cut).unwrap()
+    let native_occupancy = crate::context::occupancy::read(&store, cut).unwrap();
+    assert!(
+        native_occupancy
+            .as_ref()
+            .is_some_and(|value| value.model.len() <= 512)
     );
-    assert!(first.occupancy.is_some());
+    let expected_occupancy = native_occupancy.as_ref().map(|value| {
+        crate::runtime_client::occupancy::RuntimeClientContextOccupancy::from_native(value, None)
+    });
+    assert_eq!(first.occupancy, expected_occupancy);
+    assert!(
+        first
+            .occupancy
+            .as_ref()
+            .is_some_and(|value| !value.model_deferred && value.model_source.is_none())
+    );
     assert!(
         first
             .statistics
@@ -1331,10 +1476,10 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
             .is_empty()
     );
     let selected_window = child
-        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut copied_page = transcript_page_view(selected_window.page).unwrap();
-    super::decorate_window(&child, &mut copied_page, selected_window.cut.journal).unwrap();
+    let mut copied_page = super::super::snapshot::transcript_header_view(selected_window.page);
+    super::decorate_window(&child, &mut copied_page, selected_window.cut.read.journal).unwrap();
     assert_eq!(
         tails(&copied_page)[0].origin.conversation_id,
         source.conversation_id().clone()
@@ -1423,19 +1568,20 @@ fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading()
 fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let read = store
-        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut empty = transcript_page_view(read.page).unwrap();
-    super::decorate_window(&store, &mut empty, read.cut.journal).unwrap();
+    let mut empty = super::super::snapshot::transcript_header_view(read.page);
+    super::decorate_window(&store, &mut empty, read.cut.read.journal).unwrap();
     assert!(empty.entries.is_empty());
     user(&store, "human-only");
     let read = store
-        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut human = transcript_page_view(read.page).unwrap();
-    super::decorate_window(&store, &mut human, read.cut.journal).unwrap();
+    let mut human = super::super::snapshot::transcript_header_view(read.page);
+    super::decorate_window(&store, &mut human, read.cut.read.journal).unwrap();
     assert!(human.entries[0].turn_process.is_none());
     assert!(human.entries[0].completed_response.is_none());
+    let frozen = human.clone();
     append(
         &store,
         "later",
@@ -1446,20 +1592,52 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
     assistant(&store, "later", "later-answer");
     finish(&store, "later");
     let read = store
-        .conversation_window(&crate::durable::reading::ConversationWindowAt::Latest, 8)
+        .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut historical = transcript_page_view(read.page).unwrap();
-    super::decorate_window(&store, &mut historical, 0).unwrap();
-    assert!(tails(&historical).is_empty());
+    let mut historical = super::super::snapshot::transcript_header_view(read.page);
+    let mut old_window = frozen.clone();
+    super::decorate_window(&store, &mut old_window, 0).unwrap();
+    assert_eq!(old_window, frozen, "the genuine old native cut stays exact");
+    assert!(matches!(
+        super::decorate_window(&store, &mut historical, 0),
+        Err(crate::durable::ConversationStoreError::InvalidReference(_))
+    ));
+    assert!(tails(&old_window).is_empty());
     assert!(
-        historical
+        old_window
             .entries
             .iter()
             .all(|entry| entry.turn_process.is_none())
     );
-    super::decorate_window(&store, &mut historical, read.cut.journal).unwrap();
+    super::decorate_window(&store, &mut historical, read.cut.read.journal).unwrap();
     assert_eq!(
         tails(&historical)[0].origin.attempt_id,
-        AttemptId::new("later")
+        Some(AttemptId::new("later"))
     );
+}
+
+#[test]
+fn cutless_response_decoration_is_rejected_without_changing_native_page() {
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
+    ))
+    .unwrap();
+    store.initialize(&[]).unwrap();
+    let mut page =
+        super::super::snapshot::transcript_page_view(store.load_transcript_page(None, 1).unwrap())
+            .unwrap();
+    let original = page.clone();
+    for window in [false, true] {
+        let result = if window {
+            decorate_window(&store, &mut page, 0)
+        } else {
+            decorate_through(&store, &mut page, 0)
+        };
+        assert!(matches!(
+            result,
+            Err(ConversationStoreError::InvalidReference(ref detail))
+                if detail == "native decoration cut absent"
+        ));
+        assert_eq!(page, original);
+    }
 }

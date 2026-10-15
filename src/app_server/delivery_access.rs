@@ -79,25 +79,35 @@ pub(crate) fn unauthorized() -> RpcError {
     })
 }
 
+/// A selected read coordinate is independent of the native present authoring limit.
+fn validate_index(index: usize) -> Result<(), RpcError> {
+    let index = u64::try_from(index).map_err(|_| domain(ErrorData::InvalidParams))?;
+    if index > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX {
+        return Err(domain(ErrorData::InvalidParams));
+    }
+    Ok(())
+}
+
 /// Admit one access as a detached native operation on the exact attachment.
 /// Dropping the caller's waiter never cancels it: physical settlement, not the
 /// response, releases the native read permit.
 pub(super) async fn request(
     host: AppServerHost,
     route: Arc<Route>,
-    message_id: crate::runtime::identity::MessageId,
+    locator: crate::runtime_client::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,
     authorization: CancellationToken,
 ) -> Result<MethodResult, RpcError> {
     check_rpc(&authorization)?;
+    validate_index(delivery_index)?;
     let client = route.client.clone();
     let sessions = host.manager().session_controller();
     let owner = host.clone();
     let receiver = host
-        .admit_request(|request_owner| {
-            client.start_operation(move || {
+        .admit_request(super::RequestLane::Ordinary, |request_owner| {
+            client.start_operation(move |_| {
                 let authority = route.attachment.read_authority();
                 async move {
                     let _request = request_owner;
@@ -108,7 +118,7 @@ pub(super) async fn request(
                         &route,
                         &authority.map_err(client_error)?,
                         sessions,
-                        message_id,
+                        locator,
                         delivery_index,
                         roots,
                         access,
@@ -164,7 +174,7 @@ async fn resolve(
     route: &Arc<Route>,
     authority: &Arc<crate::runtime_client::host::ClientInner>,
     sessions: crate::local_runtime::session_controller::SessionController,
-    message_id: crate::runtime::identity::MessageId,
+    locator: crate::runtime_client::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,
@@ -180,8 +190,7 @@ async fn resolve(
             .expect("read authority probe") = Some(authorization.clone());
     }
     let failed = |reason| domain(ErrorData::SessionFileRead { reason });
-    if delivery_index >= crate::tools::session_files::PRESENT_MAX_FILES
-        || matches!(&roots, Roots::Registered(roots) if roots.is_empty()
+    if matches!(&roots, Roots::Registered(roots) if roots.is_empty()
             || roots.len() > 32
             || roots.iter().any(|p| !p.is_absolute() || p.as_os_str().len() > 4096))
     {
@@ -202,8 +211,8 @@ async fn resolve(
         .transpose()
         .map_err(|_| failed(FileFailure::Unavailable))?;
     let file = match &agent_id {
-        Some(id) => authority.agent_file_reference(id, &message_id, delivery_index),
-        None => authority.session_file_reference(&message_id, delivery_index),
+        Some(id) => authority.agent_file_reference(id, &locator, delivery_index),
+        None => authority.session_file_reference(&locator, delivery_index),
     }
     .map_err(|_| failed(FileFailure::Unavailable))?;
     let mapping_conversation = if agent_id.is_some() {

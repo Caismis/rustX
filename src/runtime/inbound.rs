@@ -54,15 +54,13 @@ use crate::runtime::types::{ConversationLifecycle, LifecycleAdmission};
 /// mailbox state; the Runtime Client projection (Issue #37) treats each
 /// callback as one projection fold under its own synchronization boundary.
 pub trait InboundObserver: Send + Sync {
-    /// Observes one durably accepted item under its assigned sequence.
-    fn on_enqueued(&self, item: &InboundItem);
-
-    /// Observes one committed finite adoption batch (watermark, count, and
-    /// items), no longer pending.
-    fn on_drained(&self, batch: &InboundBatch);
-
-    /// Replaces the pending projection after a committed native mutation.
-    fn on_pending_changed(&self, items: Vec<InboundItem>);
+    /// Observes the finite native pending head captured by the commit transaction.
+    /// Missing derived evidence fences display reads without changing commitment.
+    fn on_pending(
+        &self,
+        receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+        cut: &crate::durable::reading::ConversationReadCut,
+    );
 }
 
 /// A conversation-scoped inbound sequence number.
@@ -123,6 +121,19 @@ impl InboundItem {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    pub(crate) fn from_observation_header(
+        revision: u64,
+        sequence: u64,
+        message: UserMessageBlock,
+    ) -> Self {
+        Self {
+            revision,
+            sequence: InboundSequence::new(sequence),
+            message,
+            transcript_cursor: None,
+        }
+    }
+
     /// The durable inbound sequence of the item.
     #[must_use]
     pub fn sequence(&self) -> InboundSequence {
@@ -637,6 +648,19 @@ impl ConversationInboundMailbox {
     /// # Panics
     ///
     /// Panics only if the mailbox lock is poisoned.
+    /// Installs the leaf observer after the runtime has captured native bounded headers.
+    /// The coordinator owns the inactive-runtime freeze across both operations.
+    pub(crate) fn install_observer(&self, observer: Arc<dyn InboundObserver>) {
+        let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
+        debug_assert!(
+            state
+                .lifecycle
+                .as_ref()
+                .is_some_and(|lifecycle| !lifecycle.is_running())
+        );
+        state.observer = Some(observer);
+    }
+
     pub(crate) fn install_observer_and_pending(
         &self,
         observer: Arc<dyn InboundObserver>,
@@ -927,14 +951,9 @@ impl ConversationInboundMailbox {
             if !accepted.retried {
                 {
                     let state = self.state.lock().expect("inbound mailbox lock poisoned");
-                    let item = InboundItem {
-                        revision: 0,
-                        sequence: accepted.sequence,
-                        message: accepted.message.clone(),
-                        transcript_cursor: accepted.transcript_cursor,
-                    };
                     if let Some(observer) = &state.observer {
-                        observer.on_enqueued(&item);
+                        observer
+                            .on_pending(accepted.pending_observation.as_ref(), &accepted.read_cut);
                     }
                 }
                 self.wake.notify_one();
@@ -964,10 +983,10 @@ impl ConversationInboundMailbox {
             })?;
             let Some(accepted) = accepted else { return Ok(false); };
             let state = self.state.lock().expect("inbound mailbox lock poisoned");
-            if let Some(observer) = &state.observer {
-                observer.on_enqueued(&InboundItem { revision: 0,
-                        sequence: accepted.sequence,
-                    message: accepted.message, transcript_cursor: accepted.transcript_cursor });
+            if !(domain.publishes_observation() && accepted.goal_observation.is_some())
+                && let Some(observer) = &state.observer
+            {
+                observer.on_pending(accepted.pending_observation.as_ref(), &accepted.read_cut);
             }
             self.wake.notify_one();
             Ok(true)
@@ -994,14 +1013,8 @@ impl ConversationInboundMailbox {
         let (accepted, event) = self.inbound.accept_inbound_with_event(draft, event)?;
         if !accepted.retried {
             let state = self.state.lock().expect("inbound mailbox lock poisoned");
-            let item = InboundItem {
-                revision: 0,
-                sequence: accepted.sequence,
-                message: accepted.message.clone(),
-                transcript_cursor: accepted.transcript_cursor,
-            };
             if let Some(observer) = &state.observer {
-                observer.on_enqueued(&item);
+                observer.on_pending(accepted.pending_observation.as_ref(), &accepted.read_cut);
             }
             self.wake.notify_one();
         }
@@ -1049,16 +1062,10 @@ impl ConversationInboundMailbox {
             if accepted.retried {
                 continue;
             }
-            let item = InboundItem {
-                revision: 0,
-                sequence: accepted.sequence,
-                message: accepted.message.clone(),
-                transcript_cursor: accepted.transcript_cursor,
-            };
             {
                 let state = self.state.lock().expect("inbound mailbox lock poisoned");
                 if let Some(observer) = &state.observer {
-                    observer.on_enqueued(&item);
+                    observer.on_pending(accepted.pending_observation.as_ref(), &accepted.read_cut);
                 }
             }
             woke = true;
@@ -1233,6 +1240,7 @@ impl ConversationInboundMailbox {
     /// A busy publisher keeps the caller's preceding complete projection valid;
     /// it must not expose a half-installed background terminal transition.
     /// Mutation authority remains the store transaction.
+    #[cfg(test)]
     pub(crate) fn with_pending_snapshot<T>(
         &self,
         read: impl FnOnce(Vec<InboundItem>) -> T,
@@ -1282,24 +1290,20 @@ impl ConversationInboundMailbox {
         self.with_running_commit(|| {
             let _publication = self.publication.lock().expect("inbound publication lock");
             let outcome = commit()?;
-            let items = self
-                .inbound
-                .load_pending()?
-                .into_iter()
-                .map(|item| InboundItem {
-                    revision: item.revision,
-                    sequence: item.sequence,
-                    message: item.message,
-                    transcript_cursor: item.transcript_cursor,
-                })
-                .collect();
+            let crate::durable::inbox::PendingMutationOutcome::Applied {
+                read_cut,
+                pending_observation,
+            } = &outcome
+            else {
+                return Ok(outcome);
+            };
             if let Some(observer) = &self
                 .state
                 .lock()
                 .expect("inbound mailbox lock poisoned")
                 .observer
             {
-                observer.on_pending_changed(items);
+                observer.on_pending(pending_observation.as_ref(), read_cut);
             }
             Ok::<_, MailboxError>(outcome)
         })?
@@ -1340,17 +1344,16 @@ impl ConversationInboundMailbox {
             })
             .collect();
         if !items.is_empty() {
-            let committed = InboundBatch {
-                conversation_id: self.conversation_id.clone(),
-                watermark: batch.watermark(),
-                items: items.clone(),
-            };
             let state = self.state.lock().expect("inbound mailbox lock poisoned");
             if let Some(observer) = &state.observer {
-                observer.on_drained(&committed);
+                observer.on_pending(adopted.pending_observation.as_ref(), &adopted.read_cut);
             }
         }
-        Ok(AdoptedInbound { items, adoption })
+        Ok(AdoptedInbound {
+            items,
+            adoption,
+            canonical_receipts: adopted.canonical_receipts,
+        })
     }
 }
 
@@ -1362,6 +1365,7 @@ impl ConversationInboundMailbox {
 /// Trace-affecting receipt until its owner publishes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdoptedInbound {
+    pub canonical_receipts: Vec<crate::durable::inbox::TranscriptCommitReceipt>,
     /// The adopted items, in strict sequence order.
     pub items: Vec<InboundItem>,
     /// The committed adoption fact, present exactly when `items` is non-empty.
@@ -1386,22 +1390,18 @@ mod tests {
 
     #[derive(Default)]
     struct PendingObserver {
-        drained: std::sync::Mutex<Vec<super::InboundBatch>>,
-        pending: std::sync::Mutex<Vec<super::InboundItem>>,
+        receipts: std::sync::Mutex<Vec<Arc<crate::durable::inbox::PendingObservationReceipt>>>,
     }
     impl super::InboundObserver for PendingObserver {
-        fn on_enqueued(&self, item: &super::InboundItem) {
-            self.pending.lock().unwrap().push(item.clone());
-        }
-        fn on_drained(&self, batch: &super::InboundBatch) {
-            self.pending
+        fn on_pending(
+            &self,
+            receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+            _cut: &crate::durable::reading::ConversationReadCut,
+        ) {
+            self.receipts
                 .lock()
                 .unwrap()
-                .retain(|item| item.sequence() > batch.watermark());
-            self.drained.lock().unwrap().push(batch.clone());
-        }
-        fn on_pending_changed(&self, items: Vec<super::InboundItem>) {
-            *self.pending.lock().unwrap() = items;
+                .push(Arc::clone(receipt.expect("actual indexed receipt")));
         }
     }
 
@@ -1415,23 +1415,27 @@ mod tests {
         let selected = mailbox.select_pending_batch().unwrap().unwrap();
         let expected = crate::durable::inbox::PendingInboundRef {
             sequence,
-            message_id: MessageId::new("edited"),
             revision: 0,
         };
         mailbox.edit_pending(&expected, "committed").unwrap();
         mailbox
             .remove_pending(&crate::durable::inbox::PendingInboundRef {
                 sequence: removed,
-                message_id: MessageId::new("removed"),
                 revision: 0,
             })
             .unwrap();
-        assert_eq!(observer.pending.lock().unwrap().len(), 1);
-        assert_eq!(observer.pending.lock().unwrap()[0].revision(), 1);
+        assert_eq!(observer.receipts.lock().unwrap().last().unwrap().total, 1);
+        assert_eq!(
+            observer.receipts.lock().unwrap().last().unwrap().head[0].revision,
+            1
+        );
         let receipt = mailbox.adopt_pending_batch(&selected, None).unwrap();
-        let drains = observer.drained.lock().unwrap();
-        assert_eq!(drains.len(), 1);
-        assert_eq!(drains[0].items(), receipt.items);
+        let native_receipt = observer.receipts.lock().unwrap().last().unwrap().clone();
+        assert_eq!(native_receipt.adopted_count, Some(1));
+        assert_eq!(
+            native_receipt.adopted_through,
+            Some(selected.watermark().get())
+        );
         assert_eq!(
             receipt.items[0].message().content,
             human("unused", "committed").content
@@ -1439,13 +1443,13 @@ mod tests {
         assert_eq!(receipt.items.len(), 1);
         // The adoption fact travels back so its receipt can be published.
         assert!(receipt.adoption.is_some());
-        assert!(observer.pending.lock().unwrap().is_empty());
+        assert_eq!(observer.receipts.lock().unwrap().last().unwrap().total, 0);
         assert!(mailbox.select_pending_batch().unwrap().is_none());
         assert_eq!(
             mailbox.edit_pending(&expected, "too late").unwrap(),
             crate::durable::inbox::PendingMutationOutcome::NotPending
         );
-        assert!(observer.pending.lock().unwrap().is_empty());
+        assert_eq!(observer.receipts.lock().unwrap().last().unwrap().total, 0);
     }
 
     fn fixed_time() -> DateTime<Utc> {

@@ -8,6 +8,7 @@ use super::{
     SubagentTerminalState,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Maximum number of durable Agent identities materialized by listing surfaces.
 pub const MAX_AGENT_LIST_LIMIT: usize = 64;
@@ -18,7 +19,7 @@ pub const MAX_AGENT_LIST_LIMIT: usize = 64;
 #[serde(deny_unknown_fields)]
 pub struct DurableAgentAuthority {
     /// Immutable task label, independent of the named execution profile.
-    pub title: String,
+    pub title: Arc<str>,
     pub resolved: ResolvedSubagentSpec,
     pub execution_policy: super::super::InheritedExecutionPolicy,
     pub approval_mode: crate::runtime::types::ApprovalMode,
@@ -26,7 +27,7 @@ pub struct DurableAgentAuthority {
 
 pub(super) struct AgentRecord {
     pub created_sequence: u64,
-    pub authority: DurableAgentAuthority,
+    pub authority: Arc<DurableAgentAuthority>,
     /// The Session execution binding frozen when this Agent was created.
     /// Every later activation runs in exactly this directory; resume never
     /// re-resolves it, substitutes a default workspace or falls back to CWD.
@@ -119,7 +120,7 @@ pub enum AgentState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentSnapshot {
-    pub title: String,
+    pub title: Arc<str>,
     pub agent_id: AgentId,
     pub conversation_id: ConversationId,
     pub parent_agent_id: AgentId,
@@ -209,6 +210,33 @@ impl SubagentRegistry {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         Some(state.agents.get(id)?.workspace.clone())
     }
+    pub(crate) fn interaction_inspection_source(
+        &self,
+        interaction: &crate::runtime::interaction::InteractionRef,
+    ) -> Option<(
+        std::path::PathBuf,
+        crate::runtime::identity::ConversationId,
+        crate::runtime::identity::SubagentId,
+    )> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let activation = state.routed_direct.get(interaction)?;
+        let record = &state.records[*state.index.get(activation)?];
+        if !record.lifecycle.is_active()
+            || record.publication_abandoned
+            || !state.routed_interactions.contains_key(interaction)
+        {
+            return None;
+        }
+        Some((
+            super::super::child_conversation_inspection_socket_path(
+                self.config.spawn.product_root.root(),
+                &record.child_conversation_id,
+            ),
+            record.child_conversation_id.clone(),
+            activation.clone(),
+        ))
+    }
+
     pub(crate) fn agent_inspection_path(&self, id: &AgentId) -> Option<std::path::PathBuf> {
         let agent = self.agent_snapshot(id)?;
         Some(super::super::child_conversation_inspection_socket_path(
@@ -217,10 +245,7 @@ impl SubagentRegistry {
         ))
     }
 
-    pub(super) fn agent_snapshot_locked(
-        state: &RegistryState,
-        id: &AgentId,
-    ) -> Option<AgentSnapshot> {
+    pub(super) fn agent_state_locked(state: &RegistryState, id: &AgentId) -> Option<AgentState> {
         let agent = state.agents.get(id)?;
         let activation = &state.records[*state.index.get(&agent.latest_activation)?];
         let lifecycle = if agent.unavailable(activation, state.has_recovery_obligation_for(id)) {
@@ -237,6 +262,15 @@ impl SubagentRegistry {
                 _ => AgentState::Stopping,
             }
         };
+        Some(lifecycle)
+    }
+    pub(super) fn agent_snapshot_locked(
+        state: &RegistryState,
+        id: &AgentId,
+    ) -> Option<AgentSnapshot> {
+        let agent = state.agents.get(id)?;
+        let activation = &state.records[*state.index.get(&agent.latest_activation)?];
+        let lifecycle = Self::agent_state_locked(state, id)?;
         Some(AgentSnapshot {
             title: agent.authority.title.clone(),
             agent_id: id.clone(),
@@ -384,9 +418,9 @@ impl SubagentRegistry {
                 admission: Some(admission),
             });
         }
-        let snapshot = Self::agent_snapshot_locked(&state, id).expect("Agent owns activation");
         Ok(CapturedAgentActivation {
-            id: snapshot.current_activation,
+            id: (!activation.lifecycle.is_terminal() || !activation.physical_settlement_proven)
+                .then(|| agent.latest_activation.clone()),
             admission: None,
         })
     }
@@ -459,6 +493,29 @@ impl SubagentRegistry {
         self.settle_captured_agent(id, true).await
     }
 
+    /// Commit intent for the exact reserved or current activation; physical settlement remains separate.
+    /// # Errors
+    /// Unknown Agents and unavailable admission/settlement ownership are rejected.
+    pub fn interrupt_agent_intent(
+        &self,
+        id: &AgentId,
+    ) -> Result<Option<SubagentId>, AgentControlError> {
+        let _settlement = self
+            .config
+            .mailbox
+            .begin_settlement_admission()
+            .map_err(|_| AgentControlError::Settlement)?;
+        let captured = self.capture_agent_activation(id, true)?;
+        if captured.admission.is_none()
+            && let Some(activation) = &captured.id
+        {
+            self.cancel_intent(activation, CancellationReason::UserRequested)
+                .map_err(|_| AgentControlError::Settlement)?
+                .ok_or(AgentControlError::Settlement)?;
+        }
+        Ok(captured.id)
+    }
+
     /// Selection and admission/reservation are one mutex transaction, never a
     /// status read followed by a separate steer/resume decision.
     ///
@@ -480,6 +537,21 @@ impl SubagentRegistry {
         self.send_message_with_attachments(id, message, &[], origin, cancellation)
             .await
     }
+    /// Refuse a known unresolved owner before acquiring any new mutation authority.
+    /// This is a read of the same native predicate rechecked by control arbitration.
+    pub(crate) fn check_message_target(&self, id: &AgentId) -> Result<(), AgentControlError> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let agent = state
+            .agents
+            .get(id)
+            .ok_or_else(|| AgentControlError::Unknown(id.clone()))?;
+        let activation = &state.records[state.index[&agent.latest_activation]];
+        if agent.unavailable(activation, state.has_recovery_obligation_for(id)) {
+            return Err(AgentControlError::Settlement);
+        }
+        Ok(())
+    }
+
     /// Send Session-resolved files with guidance, or resume an inactive Agent.
     /// # Errors
     /// Rejects unknown Agents, transient settlement, invalid or empty input,
@@ -520,6 +592,7 @@ impl SubagentRegistry {
                 },
             ));
         }
+        self.check_message_target(id)?;
         let ownership = self
             .config
             .spawn
@@ -585,7 +658,7 @@ impl SubagentRegistry {
                             let agent =
                                 state.agents.get_mut(id).expect("looked up under same lock");
                             let spec = SubagentStartSpec {
-                                authority: agent.authority.clone(),
+                                authority: (*agent.authority).clone(),
                                 admission: super::ActivationAdmission {
                                     attachments: attachments.to_vec(),
                                     task: message.to_owned(),
@@ -802,7 +875,7 @@ impl SubagentRegistry {
                                 &mut state,
                                 &registry.state_version,
                                 index,
-                                receipt.sequence,
+                                &receipt,
                             );
                         }
                         drop(ownership);
@@ -863,7 +936,7 @@ impl SubagentRegistry {
                             )).map_err(|error| error.to_string())
                         }.await;
                         match publication {
-                            Ok(receipt) => rollback_sequence = Some(receipt.sequence),
+                            Ok(receipt) => rollback_sequence = Some(receipt),
                             Err(detail) => {
                                 result = Err(SubagentStartError::Rollback {
                                     detail: format!(
@@ -908,7 +981,7 @@ impl SubagentRegistry {
                                 &mut state,
                                 &registry.state_version,
                                 index,
-                                sequence,
+                                &sequence,
                             );
                         } else {
                             super::publish_snapshot(&mut state, &registry.state_version, index);
@@ -1106,11 +1179,21 @@ impl SubagentRegistry {
                         let authority = authorities
                             .remove(&child_agent_id)
                             .expect("referenced Agent authority loaded before registry replay");
+                        if !state.agents.contains_key(&child_agent_id) {
+                            let ordinal = state.agent_observation_order.len();
+                            state
+                                .agent_observation_index
+                                .insert(child_agent_id.clone(), ordinal);
+                            state.agent_observation_order.push(child_agent_id.clone());
+                            state
+                                .observation_layouts
+                                .insert(child_agent_id.clone(), Arc::default());
+                        }
                         state.agents.insert(
                             child_agent_id.clone(),
                             AgentRecord {
                                 created_sequence: envelope.sequence,
-                                authority,
+                                authority: Arc::new(authority),
                                 // The binding frozen by the creating ownership
                                 // fact, never current configuration.
                                 workspace: workspace.clone(),
@@ -1142,8 +1225,9 @@ impl SubagentRegistry {
                             started_at: envelope.timestamp,
                         };
                         let mut record = SubagentRecord::recovered(parent_agent_id, &evidence)?;
-                        record.profile =
-                            Some(SubagentExecutionProfile::from_frozen(&spec.resolved.model));
+                        record.profile = Some(Arc::new(SubagentExecutionProfile::from_frozen(
+                            &spec.resolved.model,
+                        )));
                         state.records.push(record);
                     }
                 }

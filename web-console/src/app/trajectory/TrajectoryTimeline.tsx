@@ -453,7 +453,7 @@ function TimelineInteraction({
               .filter(boundary => boundary.at > model.start && boundary.at >= domainStart && boundary.at <= domainStart + domainDuration)
               .map(boundary => (
                 <span
-                  key={boundary.nativeAttemptId}
+                  key={boundary.ownerKey}
                   className={css.turnBoundary}
                   style={{ '--trajectory-turn-left': `${(boundary.at - model.start) / fullDuration * 100}%` } as CSSProperties}
                 />

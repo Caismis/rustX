@@ -739,7 +739,7 @@ async fn proactive_compaction_before_the_next_turn() {
             result: success_result("ok"),
         },
         RuntimeEvent::ToolMessageCommitted {
-            message_id: MessageId::new("attempt-1-tool-1-call-1"),
+            message_id: MessageId::new("attempt-1-tool-1-0"),
             tool_call_id: ToolCallId::new("call-1"),
         },
         RuntimeEvent::TurnCompleted,
@@ -803,7 +803,7 @@ async fn proactive_compaction_before_the_next_turn() {
     ));
     assert!(matches!(
         requests[1].messages[2].as_canonical(),
-        Some(MessageBlock::Tool(tool)) if tool.id.as_str() == "attempt-1-tool-1-call-1"
+        Some(MessageBlock::Tool(tool)) if tool.id.as_str() == "attempt-1-tool-1-0"
     ));
 
     // The Message Ledger keeps every original fact and gains exactly one
@@ -817,7 +817,7 @@ async fn proactive_compaction_before_the_next_turn() {
         vec![
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             summary_id(1).as_str().to_owned(),
             "attempt-1-agent-2".to_owned(),
         ]
@@ -834,7 +834,7 @@ async fn proactive_compaction_before_the_next_turn() {
         vec![
             summary_id(1).as_str().to_owned(),
             "attempt-1-agent-1".to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ],
         "the summary replaced exactly the selected span at its position"
@@ -1974,7 +1974,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
             "msg-user-1".to_owned(),
             summary_id(1).as_str().to_owned(),
             retry_message_id(1).as_str().to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             summary_id(2).as_str().to_owned(),
             retry_message_id(2).as_str().to_owned(),
         ],

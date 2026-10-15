@@ -98,19 +98,28 @@
 //! re-implements semantics, and transport loss detaches without cancelling or
 //! settling anything.
 
-pub mod agent_conversation;
+pub mod agent_observation;
 pub mod agent_statistics;
 mod agent_trace;
 pub mod attachment;
+pub(crate) mod capability_source;
+pub mod checkpoint;
 mod compaction;
+pub mod content;
+pub(crate) mod domain;
 pub mod endpoint;
 pub mod event;
+pub mod goal;
 pub mod host;
+pub mod occupancy;
 pub mod projection;
+pub(crate) mod resource_source;
 pub mod response;
 pub mod settings;
 pub mod snapshot;
+pub(crate) mod tool_observation;
 pub mod trace;
+pub(crate) mod trace_observation;
 pub mod transport;
 pub mod types;
 
@@ -136,9 +145,9 @@ pub use snapshot::{
     InboundDiagnostics, InboundDrainView, InboundItemView, PostToolBatchOpportunityView,
     RuntimeClientAgent, RuntimeClientAttempt, RuntimeClientAttemptPhase,
     RuntimeClientCompactionView, RuntimeClientContextFile, RuntimeClientContextView,
-    RuntimeClientJob, RuntimeClientResourcesView, RuntimeClientSkill, RuntimeClientSnapshot,
-    RuntimeClientStatusSection, RuntimeClientTodoStatusTask, RuntimeClientTool,
-    RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
+    RuntimeClientJob, RuntimeClientModelName, RuntimeClientResourcesView, RuntimeClientSkill,
+    RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask,
+    RuntimeClientTool, RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
     RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
     RuntimeClientTranscriptItem, RuntimeClientTranscriptPage, RuntimeDurabilityFailure,
 };
@@ -147,3 +156,23 @@ pub use types::{
     RuntimeClientError, RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse,
     RuntimeClientResult,
 };
+
+pub(crate) mod structural_json;
+
+pub(crate) mod state_observation;
+
+pub(crate) mod interaction_observation;
+
+mod preflight;
+
+mod pending_observation;
+
+pub(crate) mod attempt_identity;
+pub mod delivery;
+pub(crate) mod history_observation;
+pub(crate) mod journal_observation;
+pub mod turn;
+
+pub(crate) mod workflow_source;
+
+pub(crate) mod audit_observation;

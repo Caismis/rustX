@@ -1,42 +1,42 @@
 import { afterEach, expect, it } from 'vitest';
-import type { ConversationTurn, ConversationTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v46';
+import type { ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v48';
 import { Server, snapshot } from './fixture';
 import { HISTORY_LIMIT, HISTORY_MAX_BYTES, turnKey } from '../src/client/transcript';
-const owner=(n:number)=>({conversation_id:'conversation-A',attempt_id:`attempt-${n}`,control_cursor:String(n),message_count:1,tool_call_count:0,outcome:'completed' as const});
+const owner=(n:number)=>({attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,conversation_id:'conversation-A',attempt_id:`attempt-${n}`,control_cursor:String(n),message_count:1,tool_call_count:0,outcome:'completed' as const});
 const entry=(n:number):RuntimeClientTranscriptEntry=>({cursor:String(n),item:{type:'message',message:{role:'assistant',id:`m${n}`,content:[{type:'text',text:`answer-${n}`}]}},turn_process:owner(n)});
-const turn=(n:number):ConversationTurn=>({id:{conversation_id:'conversation-A',attempt_id:`attempt-${n}`},ordinal:n,cursor:String(n),prompt:`prompt-${n}`,response:''});
-const cut={conversation_id:'conversation-A',journal:'6063',transcript:'6063',mutation_revision: '0'};
-const outline:ConversationTurnPage={cut,offset:0,total:6063,turns:Array.from({length:64},(_,i)=>turn(i+1))};
+const turn=(n:number):ObservedTurn=>({id:{conversation_id:'conversation-A',attempt_id:`attempt-${n}`},ordinal:n,cursor:String(n),prompt:`prompt-${n}`,response:''});
+const cut={conversation_id:'conversation-A',journal:'6063',transcript:'6063',mutation_revision: '0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};
+const outline:ObservedTurnPage={cut,offset:0,total:"6063",turns:Array.from({length:64},(_,i)=>turn(i+1))};
 const cursors=()=>server.client.getSnapshot().views.A.history?.page.entries?.map(row=>Number(row.cursor));
 const reads=()=>server.requests.filter(row=>row.request.method==='session/transcript');
 let server:Server;
 afterEach(()=>server?.client.disconnect());
 async function ready(){
- server=new Server();server.snapshots.set('A',{...snapshot(),transcript:{entries:Array.from({length:64},(_,i)=>entry(6000+i)),next_cursor:'6000'}});await server.attached('A');
+ server=new Server();server.snapshots.set('A',{...snapshot(),transcript:{entries:Array.from({length:32},(_,i)=>entry(6032+i)),next_cursor:'6032'}});await server.attached('A');
  server.handlers.set('session/turns',()=>({type:'conversation_turns',page:outline}));await server.client.readTurns('A');
  server.handlers.set('session/transcript',request=>{
   if(request.method!=='session/transcript')throw new Error('transcript read');
   const {at,limit}=request.params;
-  const start=at.type==='message'?Number(at.id.slice(1)):at.type==='turn'?Number(at.id.attempt_id.slice(8)):at.type==='older'?Math.max(1,Number(at.before)-limit):at.type==='newer'?Number(at.after)+1:6000;
+  const start=at.type==='message'?Number(at.id.slice(1)):at.type==='turn_ordinal'?at.ordinal:at.type==='older'?Math.max(1,Number(at.before)-limit):at.type==='newer'?Number(at.after)+1:6000;
   const end=at.type==='older'?Number(at.before):Math.min(start+limit,6064);
-  return {type:'transcript_window',window:{cut,target:at.type==='turn'?at.id:null,target_cursor:at.type==='turn'||at.type==='message'?String(start):null,newer_cursor:end<6064?String(end-1):null,page:{entries:Array.from({length:end-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
+  return {type:'transcript_window',window:{cut,target:at.type==='turn_ordinal'?turn(start).id:null,target_cursor:at.type==='turn_ordinal'||at.type==='message'?String(start):null,newer_cursor:end<6064?String(end-1):null,page:{entries:Array.from({length:end-start},(_,i)=>entry(start+i)),next_cursor:start>1?String(start):null}}};
  });
  server.held.add('session/transcript');
 }
 async function serve(count=1){server.reply(await server.waitFor('session/transcript',count));}
 
-it('a loaded native anchor lands without a read',async()=>{await ready();expect(await server.client.navigateTurn('A',turn(6010))).toEqual(turn(6010));expect(reads()).toHaveLength(0);});
+it('a loaded native anchor lands without a read',async()=>{await ready();expect(await server.client.navigateTurn('A',{turn:turn(6040),cut})).toEqual(turn(6040));expect(reads()).toHaveLength(0);});
 
 it('exact source message uses one bounded native request without scanning intervening history',async()=>{
- await ready();expect(await server.client.navigateMessage('A','m6010')).toBe(true);expect(reads()).toHaveLength(0);
+ await ready();expect(await server.client.navigateMessage('A','m6040')).toBe(true);expect(reads()).toHaveLength(0);
  const work=server.client.navigateMessage('A','m530');
  const request=await server.waitFor('session/transcript',1);
- expect(request.params).toMatchObject({at:{type:'message',id:'m530',cut:null},limit:64});
+ expect(request.params).toMatchObject({at:{type:'message',id:'m530',cut:null},limit:32});
  server.reply(request);expect(await work).toBe(true);expect(reads()).toHaveLength(1);
- expect(cursors()).toEqual(Array.from({length:64},(_,i)=>530+i));
+ expect(cursors()).toEqual(Array.from({length:32},(_,i)=>530+i));
 });
 it('obsolete source jump cannot publish or continue reading after a newer turn jump',async()=>{
- await ready();const old=server.client.navigateMessage('A','m1'),fresh=server.client.navigateTurn('A',turn(400));
+ await ready();const old=server.client.navigateMessage('A','m1'),fresh=server.client.navigateTurn('A',{turn:turn(400),cut});
  await serve(2);expect(await fresh).toEqual(turn(400));const history=server.client.getSnapshot().views.A.history;
  await serve(1);expect(await old).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(history);expect(reads()).toHaveLength(2);
 });
@@ -58,18 +58,18 @@ it.each(['loaded', 'held'] as const)('a %s source-message jump cannot land after
  expect(server.client.isAttachmentObservationCurrent('A', view.attachmentObservation)).toBe(false);
  const history = view.history;
  if (read) { server.reply(read); expect(await source).toBe(false); }
- else expect(await server.client.navigateMessage('A', 'm6010')).toBe(false);
+ else expect(await server.client.navigateMessage('A', 'm6040')).toBe(false);
  expect(server.client.getSnapshot().views.A.history).toBe(history);
  expect(reads()).toHaveLength(kind === 'held' ? 1 : 0);
  server.reply(mutation); await switching;
 });
-it('6063 Turns: distant jump is one read and 64 retained entries; live authority continues independently',async()=>{
- await ready();const work=server.client.navigateTurn('A',turn(1));
+it('6063 Turns: distant jump is one read and 32 retained entries; live authority continues independently',async()=>{
+ await ready();const work=server.client.navigateTurn('A',{turn:turn(1),cut});
  expect(server.client.getSnapshot().views.A.turnNavigation?.pending).toBe(turnKey(turn(1).id));
  const request=await server.waitFor('session/transcript',1);
- expect(request.params).toMatchObject({at:{type:'turn',id:turn(1).id,cut},limit:64});
+ expect(request.params).toMatchObject({at:{type:'turn_ordinal',ordinal:1,cut},limit:32});
  server.reply(request);expect(await work).toEqual(turn(1));
- expect(cursors()).toEqual(Array.from({length:64},(_,i)=>i+1));expect(reads()).toHaveLength(1);
+ expect(cursors()).toEqual(Array.from({length:32},(_,i)=>i+1));expect(reads()).toHaveLength(1);
  const historical=server.client.getSnapshot().views.A.history;
  await server.update('A',{...snapshot(),transcript:{entries:[entry(6063),entry(6064)]}});
  expect(server.client.getSnapshot().views.A.history).toBe(historical);
@@ -77,13 +77,13 @@ it('6063 Turns: distant jump is one read and 64 retained entries; live authority
  server.client.returnToLatest('A');expect(cursors()).toEqual([6063,6064]);expect(reads()).toHaveLength(1);
 });
 it('new navigation retires an older in-flight jump without waiting for it',async()=>{
- await ready();const old=server.client.navigateTurn('A',turn(500)),fresh=server.client.navigateTurn('A',turn(200));
+ await ready();const old=server.client.navigateTurn('A',{turn:turn(500),cut}),fresh=server.client.navigateTurn('A',{turn:turn(200),cut});
  await serve(2);expect(await fresh).toEqual(turn(200));const installed=server.client.getSnapshot().views.A.history;
  await serve(1);expect(await old).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(installed);expect(reads()).toHaveLength(2);
 });
 it('a newer jump retires an ordinary older read; late completion cannot prepend into its window',async()=>{
  await ready();const older=server.client.loadEarlier('A');await server.client.loadEarlier('A');
- expect(reads()).toHaveLength(1);const jump=server.client.navigateTurn('A',turn(400));
+ expect(reads()).toHaveLength(1);const jump=server.client.navigateTurn('A',{turn:turn(400),cut});
  await serve(2);expect(await jump).toEqual(turn(400));const installed=server.client.getSnapshot().views.A.history;
  await serve(1);await older;expect(server.client.getSnapshot().views.A.history).toBe(installed);
 });
@@ -97,7 +97,7 @@ it('repeated older gestures retain bounded entries and bytes, ordered without du
  expect(reads()).toHaveLength(20);
 });
 for(const replacement of ['attachment','node','runtime','generation','resync'] as const)it(`${replacement} replacement fences navigation`,async()=>{
- await ready();const work=server.client.navigateTurn('A',turn(1));const request=await server.waitFor('session/transcript',1),socket=server.socket;
+ await ready();const work=server.client.navigateTurn('A',{turn:turn(1),cut});const request=await server.waitFor('session/transcript',1),socket=server.socket;
  if(replacement==='attachment'){await server.client.release('A');await server.client.attach('A');}
  if(replacement==='node'){await server.client.switchNode('A','another-node');await server.client.attach('A','another-node');}
  if(replacement==='runtime'||replacement==='generation')await server.connect();
@@ -106,13 +106,13 @@ for(const replacement of ['attachment','node','runtime','generation','resync'] a
  expect(server.client.getSnapshot().views.A.history).toBe(before.history);expect(server.client.getSnapshot().views.A.turnNavigation).toBe(before.turnNavigation);
 });
 it('failed jump preserves the last valid presentation and explicit retry recovers',async()=>{
- await ready();const before=server.client.getSnapshot().views.A.history,work=server.client.navigateTurn('A',turn(1));const request=await server.waitFor('session/transcript',1);
+ await ready();const before=server.client.getSnapshot().views.A.history,work=server.client.navigateTurn('A',{turn:turn(1),cut});const request=await server.waitFor('session/transcript',1);
  server.socket.deliver({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'History mutation invalidated this cut'}});expect(await work).toBe(false);
  expect(server.client.getSnapshot().views.A.history).toBe(before);expect(server.client.getSnapshot().views.A.turnNavigation?.error).toContain('History mutation');
- const retry=server.client.navigateTurn('A',turn(200));await serve(2);expect(await retry).toEqual(turn(200));
+ const retry=server.client.navigateTurn('A',{turn:turn(200),cut});await serve(2);expect(await retry).toEqual(turn(200));
 });
 it('native mutation retires a held read and its obsolete cut',async()=>{
- await ready();const work=server.client.navigateTurn('A',turn(1));const request=await server.waitFor('session/transcript',1);
+ await ready();const work=server.client.navigateTurn('A',{turn:turn(1),cut});const request=await server.waitFor('session/transcript',1);
  server.cursor++;server.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:String(server.cursor),event:{type:'pending_inbound_changed',pending:[]}}});
  const before=server.client.getSnapshot().views.A.history;server.reply(request);expect(await work).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(before);
 });
@@ -122,7 +122,7 @@ it('outline read survives a transcript page but a resync retires it synchronousl
  server.socket.success(req,{type:'conversation_turns',page:{...outline,offset:64}});await work;
  expect(server.client.getSnapshot().views.A.turnOutline?.page?.offset).toBe(64);
  const pending=server.client.readTurns('A',128),old=await server.waitFor('session/turns',3);
- server.held.add('session/snapshot');server.socket.deliver({jsonrpc:'2.0',method:'session/resyncRequired',params:{target:server.target('A'),after_cursor:'0',earliest_serviceable:'1'}});
+ server.held.add('session/checkpoint');server.socket.deliver({jsonrpc:'2.0',method:'session/resyncRequired',params:{target:server.target('A'),after_cursor:'0',earliest_serviceable:'1'}});
  expect(server.client.getSnapshot().views.A.turnOutline).toBeUndefined();
  server.socket.success(old,{type:'conversation_turns',page:{...outline,offset:128}});await pending;
  expect(server.client.getSnapshot().views.A.turnOutline).toBeUndefined();
@@ -148,44 +148,45 @@ it('resync retires a queued outline refresh; the old reply cannot retire new aut
 });
 it.each(['byte bound','entry bound','foreign cut'] as const)('%s rejects a malformed window without replacing presentation',async failure=>{
  await ready();const before=server.client.getSnapshot().views.A.history;
- const work=server.client.navigateTurn('A',turn(1)),request=await server.waitFor('session/transcript',1);
+ const work=server.client.navigateTurn('A',{turn:turn(1),cut}),request=await server.waitFor('session/transcript',1);
  const entries=failure==='entry bound'?Array.from({length:65},(_,i)=>entry(i+1)):[entry(1)];
  if(failure==='byte bound'&&entries[0].item.type==='message'&&entries[0].item.message.role==='assistant')entries[0].item.message.content=[{type:'text',text:'x'.repeat(HISTORY_MAX_BYTES)}];
  server.socket.success(request,{type:'transcript_window',window:{cut:failure==='foreign cut'?{...cut,mutation_revision:'1'}:cut,page:{entries},target:turn(1).id,target_cursor:'1'}});
  expect(await work).toBe(false);expect(reads()).toHaveLength(1);expect(server.client.getSnapshot().views.A.history).toBe(before);
- expect(server.client.getSnapshot().views.A.turnNavigation?.error).toBeTruthy();
+ if(failure==='byte bound'){expect(server.client.getSnapshot().connection).toBe('stale');expect(server.client.getSnapshot().views.A.cursor).toBe('0');}
+ else expect(server.client.getSnapshot().views.A.turnNavigation?.error).toBeTruthy();
 });
 
 it('later paging moves a finite cut and returning to latest releases it',async()=>{
- await ready();const jump=server.client.navigateTurn('A',turn(1));await serve(1);await jump;
- for(let n=2;n<=6;n++){const next=server.client.loadLater('A');await serve(n);await next;
+ await ready();const jump=server.client.navigateTurn('A',{turn:turn(1),cut});await serve(1);await jump;
+ for(let n=2;n<=12;n++){const next=server.client.loadLater('A');await serve(n);await next;
   expect(cursors()!.length).toBeLessThanOrEqual(HISTORY_LIMIT);
-  expect(reads().at(-1)!.request.params).toMatchObject({at:{type:'newer',cut},limit:64});}
- expect(reads()).toHaveLength(6);expect(cursors()![0]).toBe(129);expect(cursors()!.at(-1)).toBe(384);
+  expect(reads().at(-1)!.request.params).toMatchObject({at:{type:'newer',cut},limit:32});}
+ expect(reads()).toHaveLength(12);expect(cursors()![0]).toBe(129);expect(cursors()!.at(-1)).toBe(384);
  expect(server.client.getSnapshot().views.A.history?.page.next_cursor).toBe('129');
- server.client.returnToLatest('A');expect(reads()).toHaveLength(6);
+ server.client.returnToLatest('A');expect(reads()).toHaveLength(12);
  expect(server.client.getSnapshot().views.A.history?.window).toBeUndefined();
- expect(cursors()).toEqual(Array.from({length:64},(_,i)=>6000+i));
+ expect(cursors()).toEqual(Array.from({length:32},(_,i)=>6032+i));
 });
 
 it('a failed replacement jump releases the obsolete page loading owner and allows recovery', async () => {
  await ready();const entries=cursors(),older=server.client.loadEarlier('A');
- const jump=server.client.navigateTurn('A',turn(400));const request=await server.waitFor('session/transcript',2);
+ const jump=server.client.navigateTurn('A',{turn:turn(400),cut});const request=await server.waitFor('session/transcript',2);
  server.socket.deliver({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'read failed'}});expect(await jump).toBe(false);
  expect(cursors()).toEqual(entries);expect(server.client.getSnapshot().views.A.history?.loading).toBe(false);
  await serve(1);await older;expect(cursors()).toEqual(entries);
  const retry=server.client.loadEarlier('A');await serve(3);await retry;
- expect(reads()).toHaveLength(3);expect(cursors()![0]).toBe(5936);
+ expect(reads()).toHaveLength(3);expect(cursors()![0]).toBe(6000);
 });
 
 it('an obsolete user gesture cannot install a native window or publish its failure', async () => {
  await ready();let current=true;
  const before=server.client.getSnapshot().views.A.history;
- const work=server.client.navigateTurn('A',turn(1),()=>current);
+ const work=server.client.navigateTurn('A',{turn:turn(1),cut},()=>current);
  const reply=await server.waitFor('session/transcript',1);
  current=false;server.reply(reply);expect(await work).toBe(false);
  expect(server.client.getSnapshot().views.A.history).toBe(before);
- const failed=server.client.navigateTurn('A',turn(2),()=>true);
+ const failed=server.client.navigateTurn('A',{turn:turn(2),cut},()=>true);
  const error=await server.waitFor('session/transcript',2);
  server.client.invalidateReading('A');
  server.socket.deliver({jsonrpc:'2.0',id:error.id,error:{code:-32000,message:'obsolete failure'}});
@@ -205,7 +206,7 @@ for(const source of ['gesture','refresh'] as const)it(`latest unloaded navigatio
  server.reply(old);await first;
  const fresh=await server.waitFor('session/turns',3);expect(fresh.params).toMatchObject({offset:256,limit:64});
  expect(server.client.getSnapshot().views.A.turnOutline?.page).toBe(original);
- server.reply(fresh);const window=await server.waitFor('session/transcript',1);expect(window.params).toMatchObject({at:{type:'turn',id:turn(300).id}});
+ server.reply(fresh);const window=await server.waitFor('session/transcript',1);expect(window.params).toMatchObject({at:{type:'turn_ordinal',ordinal:300}});
  server.reply(window);expect(await latest).toEqual(turn(300));expect(reads()).toHaveLength(1);expect(cursors()![0]).toBe(300);
  if(source==='refresh'){const owed=await server.waitFor('session/turns',4);expect(owed.params).toMatchObject({offset:256});server.reply(owed);}
  expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(source==='refresh'?4:3);
@@ -255,14 +256,14 @@ it.each([64,128,192])('ordinal %i stays fixed across growth into the next latest
  server.handlers.set('session/turns',request=>{
   if(request.method!=='session/turns')throw Error();
   const offset=request.params.offset??Math.floor((total-1)/64)*64;
-  return {type:'conversation_turns',page:{...outline,cut:{...cut,journal:String(7000+total),transcript:String(7000+total)},total,offset,turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
+  return {type:'conversation_turns',page:{...outline,cut:{...cut,journal:String(7000+total),transcript:String(7000+total)},total:String(total),offset,turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
  });
  await server.client.readTurns('A');server.held.add('session/turns');
  const navigation=server.client.navigateTurn('A',ordinal),held=await server.waitFor('session/turns',3);
  expect(held.params).toMatchObject({offset:ordinal-64,limit:64});
  total=ordinal+1;const resolvedCut={...cut,journal:String(7000+total),transcript:String(7000+total)};server.reply(held);
  const window=await server.waitFor('session/transcript',1);
- expect(window.params).toMatchObject({at:{type:'turn',id:turn(ordinal).id,cut:resolvedCut},limit:64});
+ expect(window.params).toMatchObject({at:{type:'turn_ordinal',ordinal,cut:resolvedCut},limit:32});
  server.socket.success(window,{type:'transcript_window',window:{cut:resolvedCut,target:turn(ordinal).id,target_cursor:String(ordinal),page:{entries:[entry(ordinal)]}}});expect(await navigation).toEqual(turn(ordinal));expect(reads()).toHaveLength(1);
  expect(cursors()![0]).toBe(ordinal);expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'latest'});
  const refresh=server.client.refreshTurns('A'),latest=await server.waitFor('session/turns',4);
@@ -310,7 +311,7 @@ it.each(['resync','mutation','attachment','disconnect'] as const)('%s retires ac
  await ready();server.held.add('session/turns');
  const active=server.client.refreshTurns('A'),held=await server.waitFor('session/turns',2),socket=server.socket;
  const pending=server.client.navigateTurn('A',300);await server.client.refreshTurns('A');
- if(reason==='resync'){server.held.add('session/snapshot');socket.deliver({jsonrpc:'2.0',method:'session/resyncRequired',params:{target:server.target('A'),after_cursor:'0',earliest_serviceable:'1'}});}
+ if(reason==='resync'){server.held.add('session/checkpoint');socket.deliver({jsonrpc:'2.0',method:'session/resyncRequired',params:{target:server.target('A'),after_cursor:'0',earliest_serviceable:'1'}});}
  if(reason==='mutation'){server.cursor++;socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:server.target('A'),cursor:String(server.cursor),event:{type:'pending_inbound_changed',pending:[]}}});}
  if(reason==='attachment'){await server.client.release('A');await server.client.attach('A');}
  if(reason==='disconnect')server.client.disconnect();
@@ -336,7 +337,7 @@ it('an automatic refresh queued during pending replacement survives and uses the
 it('a genuinely missing ordinal reports unavailability without a transcript read',async()=>{
  await ready();server.held.add('session/turns');
  const work=server.client.navigateTurn('A',128),held=await server.waitFor('session/turns',2);
- server.socket.success(held,{type:'conversation_turns',page:{...outline,total:64,offset:0,turns:outline.turns}});
+ server.socket.success(held,{type:'conversation_turns',page:{...outline,total:"64",offset:0,turns:outline.turns}});
  expect(await work).toBe(false);expect(reads()).toHaveLength(0);
  expect(server.client.getSnapshot().views.A.turnNavigation?.error).toBe('This Turn is no longer in the native outline.');
 });
@@ -346,7 +347,7 @@ for (const outcome of ['complete', 'leave', 'navigate', 'error', 'growth'] as co
  server.handlers.set('session/turns', request => {
   if(request.method!=='session/turns') throw new Error('outline method');
   const offset=request.params.offset??Math.floor((total-1)/64)*64;
-  return {type:'conversation_turns',page:{cut:{...cut,journal:String(6063+total-128)},offset,total,turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
+  return {type:'conversation_turns',page:{cut:{...cut,journal:String(6063+total-128)},offset,total:String(total),turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>turn(offset+i+1))}};
  });
  await server.client.refreshTurns('A');
  const before=server.client.getSnapshot().views.A;
@@ -358,7 +359,7 @@ for (const outcome of ['complete', 'leave', 'navigate', 'error', 'growth'] as co
  if(outcome==='leave') current=false;
  if(outcome==='navigate') {
   const latest=turn(128);
-  const navigation=server.client.navigateTurn('A',latest);
+  const navigation=server.client.navigateTurn('A',{turn:latest,cut:before.turnOutline!.page!.cut});
   // Navigation supersedes the preview even though it needs no outline RPC.
   await serve(); expect(await navigation).toEqual(latest);
  }
@@ -391,4 +392,34 @@ it('explicit navigation can acquire the matching in-flight preview without a dup
  await serve(); expect(await navigate).toEqual(turn(100)); await preview;
  expect(server.client.getSnapshot().views.A.turnOutline?.paging).toEqual({type:'page',offset:64});
  expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(2);
+});
+
+it.each(['owned','released'] as const)('a selected inherited Turn retains its original outline cut after replacement and respects %s ownership',async disposition=>{
+ await ready();
+ const source={type:'inherited' as const,kind:'turn' as const,ordinal:0,domain:'transcript.turns.0.identity',encoded_bytes:9000};
+ const selected={turn:{...turn(1),id:{conversation_id:'original-parent-owner',attempt_id:null,attempt_id_source:source}},cut};
+ const replacementCut={...cut,journal:'7000',transcript:'7000'};
+ server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{...outline,cut:replacementCut}}));
+ await server.client.readTurns('A');expect(server.client.getSnapshot().views.A.turnOutline!.page!.cut).toEqual(replacementCut);
+ const work=server.client.navigateTurn('A',selected),request=await server.waitFor('session/transcript',1);
+ expect(request.params).toMatchObject({target:server.client.target('A'),at:{type:'turn_ordinal',ordinal:1,cut},limit:32});
+ const row={...entry(1),turn_process:{...owner(1),...selected.turn.id}};
+ if(disposition==='released')await server.client.release('A');
+ const before=server.client.getSnapshot().views.A.history;
+ server.socket.success(request,{type:'transcript_window',window:{cut,target:selected.turn.id,target_cursor:'1',page:{entries:[row]}}});
+ if(disposition==='owned'){expect(await work).toEqual(selected.turn);expect(server.client.getSnapshot().views.A.history!.window!.cut).toEqual(cut);}
+ else{expect(await work).toBe(false);expect(server.client.getSnapshot().views.A.history).toBe(before);}
+});
+
+it('an exact oversized directory count preserves its source facts and reports unavailable geometry without retrying or clamping',async()=>{
+ await ready();const page={...outline,total:'18446744073709551615'};
+ server.handlers.set('session/turns',()=>({type:'conversation_turns',page}));
+ const before=server.requests.filter(row=>row.request.method==='session/turns').length;
+ expect(await server.client.readTurns('A')).toBeUndefined();
+ const view=server.client.getSnapshot().views.A;
+ expect(view.turnOutline!.page).toEqual(page);
+ expect(view.turnOutline!.error).toContain(page.total);
+ expect(view.turnOutline!.loading).toBe(false);
+ expect(server.requests.filter(row=>row.request.method==='session/turns')).toHaveLength(before+1);
+ expect(reads()).toHaveLength(0);expect(view.attachment).toBe('attached');
 });

@@ -3,6 +3,7 @@ import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { connectRemote, choose, openSettingsPage } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
+import { followRoot } from './source-reading';
 
 // Building 300 durable Attempts is preparation, with its own fixture budget.
 // Browser/race assertions retain the repository's 120-second deadline and gates.
@@ -16,26 +17,20 @@ const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<
     const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     const id = created.session.id;
     const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
-    await remote.client.call('session/subscribe', { target: attached.target, after_cursor: attached.cursor }, 'subscribed');
+    const following = await followRoot(remote, attached.target);
     // Every terminal barrier is a real native event. Seeding does not repeatedly
     // rebuild full snapshots or synthesize any history entry.
     for (let i = 0; i < 300; i++) {
-      let stop: () => void = () => {};
-      const terminal = new Promise<void>((resolve, reject) => {
-        stop = remote.client.onNotification(note => {
-          if (note.method !== 'session/event' || note.params.target.conversation_id !== attached.target.conversation_id || note.params.event.type !== 'attempt_settled') return;
-          stop();
-          if (note.params.event.outcome.type === 'completed') resolve();
-          else reject(new Error(`Reading Attempt ${i} failed: ${JSON.stringify(note.params.event.outcome)}`));
-        });
-      });
+      const terminal = following.nextSettlement();
       await remote.client.call('turn/start', { target: attached.target, content: [{ type: 'text', text: `Reading ${i}` }] }, 'inbound_accepted');
       await terminal;
     }
-    const first = (await remote.client.call('session/turns', { target: attached.target, offset: 0, limit: 64 }, 'conversation_turns')).page.turns[0];
-    const latest = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'latest' }, limit: 64 }, 'transcript_window')).window;
+    following.stop();
+    const firstPage = (await remote.client.call('session/turns', { target: attached.target, offset: 0, limit: 64 }, 'conversation_turns')).page;
+    const first=firstPage.turns[0];
+    const latest = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'latest' }, limit: 32 }, 'transcript_window')).window;
     expect(BigInt(latest.page.entries![0].cursor) - BigInt(first.cursor!)).toBeGreaterThan(512n);
-    const firstWindow = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'turn', id: first.id, cut: (await remote.client.call('session/turns', { target: attached.target, offset: 0, limit: 64 }, 'conversation_turns')).page.cut }, limit: 64 }, 'transcript_window')).window;
+    const firstWindow = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'turn_ordinal', ordinal: first.ordinal, cut: firstPage.cut }, limit: 32 }, 'transcript_window')).window;
     const sourceEntry = firstWindow.page.entries!.find(entry => entry.item.type === 'message' && entry.item.message.role === 'assistant')!;
     if (sourceEntry.item.type !== 'message') throw new Error('Missing canonical source message');
     const exact = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'message', id: sourceEntry.item.message.id, cut: firstWindow.cut }, limit: 1 }, 'transcript_window')).window;
@@ -45,7 +40,7 @@ const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<
     expect(exact.page.entries![0].item).toMatchObject({ type: 'message', message: { id: sourceEntry.item.message.id } });
     const completed = sourceEntry.completed_response;
     if (!completed) throw new Error('The selected source Message has no native completed-response cut.');
-    const fork = await remote.client.call('session/fork', { session_id: id, node_id: created.session.active_node, surface_revision: completed.surface_revision, boundary: sourceEntry.item.message.id, side: 'after' }, 'session_transition');
+    const fork = await remote.client.call('session/fork', { session_id: id, node_id: created.session.active_node, surface_revision: completed.surface_revision, boundary: completed.closing_locator, side: 'after' }, 'session_transition');
     await remote.client.call('session/detach', { target: attached.target }, 'detached'); await remote.shutdown();
       await use({ fixture, id, forkId: fork.session.id, sourceNode: created.session.active_node, sourceMessage: sourceEntry.item.message.id, sourceCursor: sourceEntry.cursor, pass: () => { passed = true; } });
     } finally { await fixture.stop(passed); }
@@ -78,8 +73,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
         }
         send(data: Parameters<WebSocket['send']>[0]) {
           const request = JSON.parse(String(data));
-          if (request.method === 'session/transcript' && request.params.at.type === 'turn') { this.methods.set(String(request.id), 'turn'); state.reads++; }
-          if (request.method === 'session/transcript' && request.params.at.type !== 'turn') state.other++;
+          if (request.method === 'session/transcript' && request.params.at.type === 'turn_ordinal') { this.methods.set(String(request.id), 'turn'); state.reads++; }
+          if (request.method === 'session/transcript' && request.params.at.type !== 'turn_ordinal') state.other++;
           super.send(data);
         }
       }
@@ -143,7 +138,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     expect(await page.evaluate(()=>(window as any).readingTransport.other)).toBe(0);
     expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBe(2);
     await expect(page.getByText(/Native reading answer 299\n/)).toHaveCount(1);
-    expect(await page.evaluate(()=>(window as any).readingTransport.windows)).toEqual([64,64]);
+    expect(await page.evaluate(()=>(window as any).readingTransport.windows)).toEqual([32,32]);
     expect(await viewport.locator('[data-chat-anchor-key]').count()).toBeLessThanOrEqual(256);
     await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
@@ -230,13 +225,13 @@ test('Fork source exact Message landing and cancellation by scrolling, newer nav
   await expect(anchor).toHaveCount(0); // Outside the initial native latest window.
   const wire = await page.evaluate(() => ({ requests: (window as any).sourceTransport.requests, windows: (window as any).sourceTransport.windows }));
   const locate = wire.requests.filter((request: any) => request.method === 'session/history' && request.params.at.type === 'message');
-  expect(locate).toHaveLength(1); expect(locate[0].params.at.id).toBe(sourceMessage); expect(locate[0].params.limit).toBe(64);
+  expect(locate).toHaveLength(1); expect(locate[0].params.at.id).toBe(sourceMessage); expect(locate[0].params.limit).toBe(32);
   expect(wire.requests.filter((request: any) => request.method === 'session/node').every((request: any) => request.params.node_id)).toBe(true);
   expect(locate[0].params).toMatchObject({ session_id: id, node_id: sourceNode });
   expect(wire.requests.filter((request: any) => ['session/attach','session/detach','session/switchNode','turn/start'].includes(request.method) && (request.params.session_id === id || request.params.target?.session_id === id))).toHaveLength(0);
   expect(wire.requests.filter((request: any) => request.method === 'session/tree')).toHaveLength(0);
   expect(wire.windows[0].target_cursor).toBe(sourceCursor); expect(wire.windows[0].target ?? null).toBeNull();
-  expect(wire.windows[0].page.entries.length).toBeLessThanOrEqual(64);
+  expect(wire.windows[0].page.entries.length).toBeLessThanOrEqual(32);
   if (race === 'scroll') {
     const movement = await viewport.evaluate(el => { const before = el.scrollTop; el.scrollTop += before > 200 ? -200 : 200; el.dispatchEvent(new Event('scroll')); return Math.abs(el.scrollTop - before); });
     expect(movement).toBeGreaterThan(100);

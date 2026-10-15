@@ -4,8 +4,11 @@ use std::sync::Weak;
 
 use chrono::{DateTime, Utc};
 
-use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+#[cfg(test)]
+use crate::message::types::MessageBlock;
+use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
 use crate::runtime::conversation_runtime::ConversationRuntime;
+#[cfg(test)]
 use crate::runtime::observation::ConversationObservation;
 
 use super::session::{SessionCatalog, SessionId};
@@ -16,25 +19,23 @@ pub(crate) fn human_message_time(user: &UserMessageBlock) -> Option<DateTime<Utc
         .flatten()
 }
 
+#[cfg(test)]
 fn collect_activity(observation: &ConversationObservation, latest: &mut Option<DateTime<Utc>>) {
-    match observation {
-        ConversationObservation::Committed {
-            block: MessageBlock::User(user),
-            ..
-        } => {
-            if let Some(time) = human_message_time(user) {
-                *latest = Some(latest.map_or(time, |previous| previous.max(time)));
+    for fact in observation.facts() {
+        let time = match fact {
+            ConversationObservation::CanonicalCommitted { receipt, .. } => {
+                receipt.observation.human_activity_at
             }
+            #[cfg(test)]
+            ConversationObservation::Committed {
+                block: MessageBlock::User(user),
+                ..
+            } => human_message_time(user),
+            _ => None,
+        };
+        if let Some(time) = time {
+            *latest = Some(latest.map_or(time, |previous| previous.max(time)));
         }
-        ConversationObservation::JournalBatch { observations, .. } => {
-            for observation in observations {
-                collect_activity(observation, latest);
-            }
-        }
-        ConversationObservation::Published { observation, .. } => {
-            collect_activity(observation, latest);
-        }
-        _ => {}
     }
 }
 
@@ -43,7 +44,7 @@ pub(crate) fn arm_activity(
     session_id: SessionId,
     runtime: &ConversationRuntime,
 ) {
-    let observations = match runtime.subscribe_observations() {
+    let mut observations = match runtime.session_observation_metadata() {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(%session_id, %error, "Session activity subscription failed");
@@ -51,21 +52,23 @@ pub(crate) fn arm_activity(
         }
     };
     tokio::spawn(async move {
+        let mut published = None;
         loop {
-            observations.wait().await;
-            let mut latest = None;
-            for observation in observations.drain() {
-                collect_activity(&observation, &mut latest);
-            }
-            if let Some(time) = latest {
+            // A watch retains exactly one native aggregate while Catalog I/O
+            // is blocked; no canonical body or Journal callback is queued.
+            let metadata = observations.borrow_and_update().clone();
+            if let Some(time) = metadata.human_activity_at
+                && published.is_none_or(|previous| previous < time)
+            {
                 let Some(catalog) = catalog.upgrade() else {
                     return;
                 };
                 if let Err(error) = catalog.lock().await.publish_activity(&session_id, time) {
                     tracing::warn!(%session_id, %error, "Session activity publication failed");
                 }
+                published = Some(time);
             }
-            if observations.is_closed() {
+            if metadata.closed || observations.changed().await.is_err() {
                 return;
             }
         }

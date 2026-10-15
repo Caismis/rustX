@@ -14,6 +14,22 @@ use crate::runtime::identity::{
 };
 use crate::tools::types::{ToolCall, ToolCallStart};
 
+/// Finite observation evidence produced inside the existing frame staging transaction.
+/// Returning this receipt never grants access beyond its exact committed frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublicationFrameReceipt {
+    /// Native P committed, but its optional bounded display layout is unavailable.
+    pub unavailable: bool,
+    pub stream_id: PublicationStreamId,
+    pub sequence: u64,
+    pub content: Vec<crate::runtime_client::content::ContentRef>,
+    pub suffix_bytes: Option<u64>,
+    pub block_ordinal: Option<u64>,
+    pub block_total: u64,
+    pub tool_ordinal: Option<u64>,
+    pub tool_total: u64,
+}
+
 /// One committed-for-release payload of a publication stream.
 ///
 /// Every suffix variant carries the **increment** rustX committed, not the

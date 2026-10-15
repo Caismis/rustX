@@ -7,6 +7,31 @@ use crate::local_runtime::configuration::application::{
 };
 use crate::local_runtime::configuration::settings::{ConfigMutation, SourceMutation};
 
+/// Captures the native execution frontier before admitting or releasing work.
+/// The coordinator retains that exact receipt, so no late Notify waiter can
+/// lose a completed handoff. Adoption still awaits its independent eligibility.
+struct SettlementReceiptWait {
+    runtime: crate::runtime::ConversationRuntime,
+    after: u64,
+}
+impl SettlementReceiptWait {
+    fn capture(runtime: &crate::runtime::ConversationRuntime) -> Self {
+        Self {
+            runtime: runtime.clone(),
+            after: runtime.settlement_ordinal_for_test(),
+        }
+    }
+    async fn wait(&mut self) {
+        let receipt = self.runtime.child_attempt_settlement(self.after).await;
+        assert_eq!(
+            receipt.ordinal,
+            self.after + 1,
+            "exact next native execution handoff"
+        );
+        self.after = receipt.ordinal;
+    }
+}
+
 /// A resident Session's configuration-adoption eligibility exactly as a
 /// Runtime Client attachment observes it: the bootstrap snapshot value, then
 /// only published change events. Nothing here reads configuration authority
@@ -15,6 +40,7 @@ pub(super) struct EligibilityStream {
     _attachment: crate::runtime_client::RuntimeAttachment,
     subscription: crate::runtime_client::EventSubscription,
     current: AdoptionEligibility,
+    conversation_id: crate::runtime::identity::ConversationId,
 }
 
 impl EligibilityStream {
@@ -23,12 +49,16 @@ impl EligibilityStream {
         let (attachment, _) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        let (snapshot, cursor) = host.snapshot().unwrap();
+        let (snapshot, cursor) = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .unwrap();
         let subscription = attachment.subscribe_events(cursor).unwrap();
         Self {
             _attachment: attachment,
             subscription,
             current: snapshot.configuration_adoption_eligibility,
+            conversation_id: snapshot.conversation_id,
         }
     }
 
@@ -39,12 +69,20 @@ impl EligibilityStream {
         while self.current != expected {
             match self.subscription.next().await {
                 crate::runtime_client::EventDelivery::Event(event) => {
-                    if let crate::runtime_client::RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
-                        eligibility,
-                    } = event.event
-                    {
-                        assert_ne!(eligibility, self.current, "eligibility republished unchanged");
-                        self.current = eligibility;
+                    for fact in event.event.facts() {
+                        match fact {
+                            crate::runtime_client::RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
+                                assert_ne!(*eligibility, self.current, "eligibility republished unchanged");
+                                self.current.clone_from(eligibility);
+                            }
+                            crate::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                                assert_eq!(checkpoint.snapshot.conversation_id, self.conversation_id);
+                                assert_eq!(checkpoint.cursor, event.cursor);
+                                self.current.clone_from(&checkpoint.snapshot.configuration_adoption_eligibility);
+                                eprintln!("eligibility replacement at {:?}: {:?}", checkpoint.cursor, self.current);
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 other => panic!("eligibility stream ended: {other:?}"),
@@ -82,7 +120,7 @@ async fn c07_zero_session_commit_transfers_ownership_before_lost_response() {
         let f = Fixture::with_session_count(None, 0).await;
         let source = f
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap();
         let (entered, waiting) = tokio::sync::oneshot::channel();
@@ -97,21 +135,19 @@ async fn c07_zero_session_commit_transfers_ownership_before_lost_response() {
         let manager = f.manager.clone();
         let rpc = tokio::spawn(async move {
             manager
-                .source_settings(
+                .write_source_settings(
                     &SourceTarget::User,
-                    Some((
-                        source.user.revision,
-                        SourceMutation::Config {
-                            mutation: ConfigMutation::AppServer {
-                                authored: Some(
-                                    crate::local_runtime::app_server_policy::AppServerPolicy {
-                                        max_connections: 19,
-                                        ..Default::default()
-                                    },
-                                ),
-                            },
+                    source.user.revision,
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::AppServer {
+                            authored: Some(
+                                crate::local_runtime::app_server_policy::AppServerPolicy {
+                                    max_connections: 19,
+                                    ..Default::default()
+                                },
+                            ),
                         },
-                    )),
+                    },
                 )
                 .await
         });
@@ -128,7 +164,7 @@ async fn c07_zero_session_commit_transfers_ownership_before_lost_response() {
         release.send(()).unwrap();
         assert_eq!(
             f.manager
-                .source_settings(&SourceTarget::User, None)
+                .source_settings(&SourceTarget::User)
                 .await
                 .unwrap()
                 .user
@@ -154,7 +190,7 @@ async fn c01_c02_c03_zero_session_source_authority_is_inert_and_isolated() {
                 directory: f.workspaces[0].clone(),
             },
         ] {
-            let source = f.manager.source_settings(&target, None).await.unwrap();
+            let source = f.manager.source_settings(&target).await.unwrap();
             assert_eq!(source.workspace.is_some(), target.workspace().is_some());
             assert_eq!(
                 source.workspace_resource_root.is_some(),
@@ -165,16 +201,14 @@ async fn c01_c02_c03_zero_session_source_authority_is_inert_and_isolated() {
                 SourceTarget::Workspace { .. } => source.workspace.unwrap().revision,
             };
             f.manager
-                .source_settings(
+                .write_source_settings(
                     &target,
-                    Some((
-                        revision,
-                        SourceMutation::Config {
-                            mutation: ConfigMutation::NativeTools {
-                                authored: Some(vec![]),
-                            },
+                    revision,
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::NativeTools {
+                            authored: Some(vec![]),
                         },
-                    )),
+                    },
                 )
                 .await
                 .unwrap();
@@ -199,17 +233,17 @@ async fn c01_c02_c03_zero_session_source_authority_is_inert_and_isolated() {
                 .is_empty()
         );
         assert!(f.provider.request_bodies().is_empty());
-        assert!(
-            f.manager
-                .applications
-                .lock()
-                .views()
-                .iter()
-                .all(|a| a.scope.starts_with("source:") && a.units.len() == 1)
-        );
+        {
+            let applications = f.manager.applications.lock();
+            let mut versions = std::collections::BTreeMap::new();
+            while let Some(application) = applications.next_view(&versions) {
+                assert!(application.scope.starts_with("source:") && application.units.len() == 1);
+                versions.insert(application.scope, application.version);
+            }
+        }
         let user = f
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap();
         assert!(
@@ -229,23 +263,21 @@ async fn c06_zero_session_process_hot_restart_reopen_and_revert() {
         let target = SourceTarget::User;
         let actual = f.manager.process_policy();
         for restart in [false, true, false] {
-            let source = f.manager.source_settings(&target, None).await.unwrap();
+            let source = f.manager.source_settings(&target).await.unwrap();
             let mut desired = actual.clone();
             desired.max_connections = 17;
             if restart {
                 desired.shutdown_deadline_ms += 1;
             }
             f.manager
-                .source_settings(
+                .write_source_settings(
                     &target,
-                    Some((
-                        source.user.revision,
-                        SourceMutation::Config {
-                            mutation: ConfigMutation::AppServer {
-                                authored: Some(desired),
-                            },
+                    source.user.revision,
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::AppServer {
+                            authored: Some(desired),
                         },
-                    )),
+                    },
                 )
                 .await
                 .unwrap();
@@ -258,7 +290,7 @@ async fn c06_zero_session_process_hot_restart_reopen_and_revert() {
                     UnitApplication::Applied
                 }
             );
-            let reopened = f.manager.source_settings(&target, None).await.unwrap();
+            let reopened = f.manager.source_settings(&target).await.unwrap();
             assert_eq!(reopened.application.unwrap(), application);
             let process = reopened.process_bindings.unwrap();
             assert_eq!(process.max_connections, 17);
@@ -294,39 +326,38 @@ async fn c05_broken_source_retains_revision_inventory_and_explicit_validated_rep
     bounded(async {
         let f = Fixture::with_session_count(None, 0).await;
         let target = SourceTarget::User;
-        let initial = f.manager.source_settings(&target, None).await.unwrap();
+        let initial = f.manager.source_settings(&target).await.unwrap();
         let bytes = std::fs::read_to_string(&initial.user.path).unwrap();
         std::fs::write(&initial.user.path, "broken = [").unwrap();
-        let broken = f.manager.source_settings(&target, None).await.unwrap();
+        let broken = f.manager.source_settings(&target).await.unwrap();
         assert_ne!(broken.user.revision, initial.user.revision);
         assert!(broken.user.authored.is_none());
         assert!(broken.user.diagnostic.is_some());
         assert!(broken.prospective_resources.is_some());
         assert!(
             f.manager
-                .source_settings(
+                .write_source_settings(
                     &target,
-                    Some((
-                        broken.user.revision.clone(),
-                        SourceMutation::RepairConfig {
-                            document: "still = [".into()
-                        }
-                    ))
+                    broken.user.revision.clone(),
+                    SourceMutation::RepairConfig {
+                        document: "still = [".into()
+                    }
                 )
                 .await
                 .is_err()
         );
         let repaired = f
             .manager
-            .source_settings(
+            .write_source_settings(
                 &target,
-                Some((
-                    broken.user.revision,
-                    SourceMutation::RepairConfig { document: bytes },
-                )),
+                broken.user.revision,
+                SourceMutation::RepairConfig { document: bytes },
             )
             .await
             .unwrap();
+        let repaired_projection = f.manager.source_settings(&target).await.unwrap();
+        assert_eq!(repaired.revision, repaired_projection.user.revision);
+        let repaired = repaired_projection;
         assert!(repaired.user.authored.is_some());
         assert!(repaired.user.diagnostic.is_none());
         // Syntactically valid but unresolved sources retain the entire editor and
@@ -335,7 +366,7 @@ async fn c05_broken_source_retains_revision_inventory_and_explicit_validated_rep
             toml::from_str(&std::fs::read_to_string(&repaired.user.path).unwrap()).unwrap();
         document["agent"].as_table_mut().unwrap().remove("model");
         std::fs::write(&repaired.user.path, toml::to_string(&document).unwrap()).unwrap();
-        let missing = f.manager.source_settings(&target, None).await.unwrap();
+        let missing = f.manager.source_settings(&target).await.unwrap();
         assert!(missing.user.authored.is_some());
         assert!(missing.prospective_diagnostic.is_some());
         assert!(missing.prospective_resources.is_some());
@@ -344,7 +375,7 @@ async fn c05_broken_source_retains_revision_inventory_and_explicit_validated_rep
             toml::Value::try_from(serde_json::json!({"model":"local/missing"})).unwrap(),
         );
         std::fs::write(&repaired.user.path, toml::to_string(&document).unwrap()).unwrap();
-        let unresolved = f.manager.source_settings(&target, None).await.unwrap();
+        let unresolved = f.manager.source_settings(&target).await.unwrap();
         assert!(unresolved.user.authored.is_some());
         assert!(unresolved.prospective_diagnostic.is_some());
         assert!(unresolved.prospective_resources.is_some());
@@ -362,24 +393,28 @@ async fn c04_workspace_override_empty_and_removal_keep_distinct_source_intent() 
         let target = SourceTarget::Workspace {
             directory: f.workspaces[0].clone(),
         };
-        let original = f.manager.source_settings(&target, None).await.unwrap();
+        let original = f.manager.source_settings(&target).await.unwrap();
         for authored in [Some(vec!["read".into()]), Some(vec![]), None] {
-            let before = f.manager.source_settings(&target, None).await.unwrap();
+            let before = f.manager.source_settings(&target).await.unwrap();
             let after = f
                 .manager
-                .source_settings(
+                .write_source_settings(
                     &target,
-                    Some((
-                        before.workspace.unwrap().revision,
-                        SourceMutation::Config {
-                            mutation: ConfigMutation::NativeTools {
-                                authored: authored.clone(),
-                            },
+                    before.workspace.unwrap().revision,
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::NativeTools {
+                            authored: authored.clone(),
                         },
-                    )),
+                    },
                 )
                 .await
                 .unwrap();
+            let after_projection = f.manager.source_settings(&target).await.unwrap();
+            assert_eq!(
+                after.revision,
+                after_projection.workspace.as_ref().unwrap().revision
+            );
+            let after = after_projection;
             assert_eq!(after.user, original.user);
             assert_eq!(
                 after
@@ -432,7 +467,7 @@ async fn c11_c12_model_selection_and_source_authoring_have_disjoint_durable_owne
         let target = SourceTarget::Workspace {
             directory: f.workspaces[0].clone(),
         };
-        let sources = f.manager.source_settings(&target, None).await.unwrap();
+        let sources = f.manager.source_settings(&target).await.unwrap();
         let other = f
             .manager
             .sessions
@@ -461,20 +496,18 @@ async fn c11_c12_model_selection_and_source_authoring_have_disjoint_durable_owne
                 .unwrap(),
             other
         );
-        let after = f.manager.source_settings(&target, None).await.unwrap();
+        let after = f.manager.source_settings(&target).await.unwrap();
         assert_eq!(after.user, sources.user);
         assert_eq!(after.workspace, sources.workspace);
         f.manager
-            .source_settings(
+            .write_source_settings(
                 &target,
-                Some((
-                    after.workspace.unwrap().revision,
-                    SourceMutation::Config {
-                        mutation: ConfigMutation::Instructions {
-                            authored: Some("new source guidance".into()),
-                        },
+                after.workspace.unwrap().revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Instructions {
+                        authored: Some("new source guidance".into()),
                     },
-                )),
+                },
             )
             .await
             .unwrap();
@@ -521,17 +554,15 @@ pub(super) async fn settled(fixture: &Fixture, index: usize) -> ConfigurationApp
 async fn write(fixture: &Fixture, _index: usize, mutation: ConfigMutation) {
     let source = fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap();
     fixture
         .manager
-        .source_settings(
+        .write_source_settings(
             &crate::local_runtime::configuration::settings::SourceTarget::User,
-            Some((source.user.revision, SourceMutation::Config { mutation })),
+            source.user.revision,
+            SourceMutation::Config { mutation },
         )
         .await
         .unwrap();
@@ -583,9 +614,9 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
                 .unwrap(),
             admitted
         );
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         runtime.wait_for_configuration_admissions().await;
         let requests = fixture.provider.request_bodies();
         assert_eq!(requests.len(), 2);
@@ -617,9 +648,9 @@ async fn issue383_disabled_extension_keeps_admitted_configuration_until_settleme
                 .iter()
                 .any(|tool| tool["function"]["name"] == "todo")
         );
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[1].release();
-        settlement.notified().await;
+        settlement.wait().await;
         fixture.close().await;
     }))
     .await;
@@ -910,9 +941,9 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
                 .unwrap(),
             captured
         );
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         runtime.submit_inbound(input("request-B")).unwrap();
         fixture.gates[1].wait_entered().await;
         let later = runtime
@@ -927,7 +958,7 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         assert!(later.generation > captured.generation);
         assert_ne!(later.model_timeout, captured.model_timeout);
         fixture.gates[1].release();
-        settlement.notified().await;
+        settlement.wait().await;
         fixture.close().await;
     })
     .await;
@@ -1056,9 +1087,9 @@ async fn t11_admission_gate_orders_busy_adoption_without_cancelling_attempt() {
         // The admitted attempt makes the runtime publish Busy; the
         // configuration application is untouched by it.
         eligibility.until(AdoptionEligibility::Busy).await;
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         // Settlement publishes Eligible without any configuration read.
         eligibility.until(AdoptionEligibility::Eligible).await;
         fixture
@@ -1140,6 +1171,118 @@ impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
     fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
         crate::tools::deadline::ToolProgressCapability::None
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_model_selection_accepts_background_ownership_without_adopting_pending_context() {
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let id = fixture.sessions[0].id.clone();
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let instructions = runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions
+            .clone();
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("live-selection-background"),
+            },
+            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let background = runtime.tool_runtime().background();
+        let prepared = background
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            background
+                .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
+                .unwrap()
+        else {
+            panic!("background dispatch accepted")
+        };
+        started.wait_for(|entered| *entered).await.unwrap();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Instructions {
+                authored: Some("pending context must remain pending".into()),
+            },
+        )
+        .await;
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding,
+            ),
+            Err(AdoptionError::Busy)
+        );
+
+        let selected = crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+        );
+        fixture
+            .manager
+            .set_model(&id, selected.clone())
+            .await
+            .unwrap();
+        assert_eq!(runtime.model_view().configured, selected);
+        assert_eq!(
+            fixture
+                .manager
+                .sessions
+                .read_settings(&id)
+                .await
+                .unwrap()
+                .1
+                .model,
+            Some(selected)
+        );
+        assert!(
+            background.configuration_busy(),
+            "selection retains physical background ownership"
+        );
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .configuration()
+                .unwrap()
+                .config
+                .agent
+                .instructions,
+            instructions
+        );
+        let candidate = settled(&fixture, 0).await.candidate.unwrap();
+        assert_eq!(
+            fixture.manager.adopt_configuration(
+                &id,
+                &candidate.identity,
+                candidate.expected_binding,
+            ),
+            Err(AdoptionError::Busy)
+        );
+
+        release.send_replace(true);
+        background.wait_until_terminal(&execution_id).await.unwrap();
+        fixture.gates[0].release();
+        fixture.close().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1297,10 +1440,7 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
     fixture.manager.load(id, None).await.unwrap();
     let source = fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap();
     let mut document: toml::Value =
@@ -1434,7 +1574,7 @@ async fn t05_complete_policy_registry_publishes_while_instructions_remain_pendin
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn t08_model_baseline_change_rejects_prepared_context() {
+async fn t08_model_baseline_change_recaptures_prepared_context() {
     bounded(async {
         let fixture = Fixture::new().await;
         let id = &fixture.sessions[0].id;
@@ -1460,20 +1600,30 @@ async fn t08_model_baseline_change_rejects_prepared_context() {
             .desired;
         // A deliberate model commit uses the same runtime gate and advances
         // the Session baseline while preparation holds no admission lock.
-        runtime
-            .model_set(crate::model::session::SessionModelConfig::of(
-                crate::model::catalog::ModelRef::parse("local/b").unwrap(),
-            ))
+        fixture
+            .manager
+            .set_model(
+                id,
+                crate::model::session::SessionModelConfig::of(
+                    crate::model::catalog::ModelRef::parse("local/b").unwrap(),
+                ),
+            )
+            .await
             .unwrap();
         probe.before_configuration_publish.release();
         let application = settled(&fixture, 0).await;
-        assert!(
-            application.candidate.is_none(),
-            "stale baseline cannot become ready"
+        let recaptured = application
+            .candidate
+            .as_ref()
+            .expect("new baseline becomes ready");
+        assert_eq!(recaptured.identity, application.desired);
+        assert_eq!(
+            recaptured.expected_binding,
+            runtime.configuration_view().unwrap().adopted_binding
         );
         assert!(matches!(
             application.units[&ApplyUnit::Instructions],
-            UnitApplication::Failed { .. }
+            UnitApplication::Ready { .. }
         ));
         assert_eq!(runtime.model_view().configured.model.to_string(), "local/b");
         assert_ne!(
@@ -1486,7 +1636,10 @@ async fn t08_model_baseline_change_rejects_prepared_context() {
                 .instructions,
             "prepared for old model"
         );
-        assert_eq!(application.desired, candidate_id);
+        assert_ne!(
+            application.desired, candidate_id,
+            "stale preparation is superseded"
+        );
         fixture.close().await;
     })
     .await;
@@ -1514,26 +1667,21 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
         probe.before_configuration_prepare.arm();
         let source = fixture
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap();
         let manager = fixture.manager.clone();
         let target = crate::local_runtime::configuration::settings::SourceTarget::User;
         let rpc = tokio::spawn(async move {
             manager
-                .source_settings(
+                .write_source_settings(
                     &target,
-                    Some((
-                        source.user.revision,
-                        SourceMutation::Config {
-                            mutation: ConfigMutation::Instructions {
-                                authored: Some("survives disconnect".into()),
-                            },
+                    source.user.revision,
+                    SourceMutation::Config {
+                        mutation: ConfigMutation::Instructions {
+                            authored: Some("survives disconnect".into()),
                         },
-                    )),
+                    },
                 )
                 .await
         });
@@ -1558,10 +1706,7 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
         // Reconnect rereads authority. It does not repeat the source mutation.
         let reread = fixture
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap();
         assert_eq!(reread.application.unwrap().scope, "source:user");
@@ -1610,11 +1755,11 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
             UnitApplication::Applied
         );
         assert!(runtime.runtime_resources().revision() > captured.generation);
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         // Only now can the provider release the Tool proposal. The Tool batch
         // and subsequent model Step are created after newer policy published.
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         let requests = fixture.provider.request_bodies();
         assert_eq!(
             requests.len(),
@@ -1644,10 +1789,7 @@ async fn t09_unselected_model_and_default_edits_publish_without_adoption_t15_new
     let invocation = runtime.model_snapshot();
     let source = fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap();
     let path = source.user.path;
@@ -1826,22 +1968,23 @@ async fn t08_model_capture_ignores_unrelated_resource_directories_t09_same_selec
     let selected = crate::model::session::SessionModelConfig::of(
         crate::model::catalog::ModelRef::parse("local/b").unwrap(),
     );
+    assert!(fixture.manager.configuration_application(id).is_none());
     let view = fixture
         .manager
         .set_model(id, selected.clone())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     assert_eq!(view.configured, selected);
-    settled(&fixture, 0).await;
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let before = runtime.runtime_resources();
-    let application = fixture.manager.configuration_application(id).unwrap();
+    assert!(
+        fixture.manager.configuration_application(id).is_none(),
+        "selection must not ingest sources or manufacture a configuration application"
+    );
     fixture.manager.set_model(id, selected).await.unwrap();
     assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
-    assert_eq!(
-        fixture.manager.configuration_application(id).unwrap(),
-        application
-    );
+    assert!(fixture.manager.configuration_application(id).is_none());
     fixture.close().await;
 }
 
@@ -1951,10 +2094,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     .unwrap();
     let initial_source = fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap();
     let mut initial: toml::Value =
@@ -1983,10 +2123,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_are_adop
     let before = runtime.runtime_resources();
     let source = fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap();
     let mut document: toml::Value =
@@ -2297,10 +2434,7 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
         probe.before_configuration_prepare.arm();
         let source = fixture
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap();
         let mut document: toml::Value =
@@ -2434,10 +2568,7 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
     // Persist the small process limit so source reconciliation keeps it.
     let source = fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap();
     let mut document: toml::Value =
@@ -2450,25 +2581,20 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
     let before = fixture.manager.registry.0.lock().unwrap().entries.len();
     fixture
         .manager
-        .source_settings(
+        .write_source_settings(
             &crate::local_runtime::configuration::settings::SourceTarget::User,
-            Some((
-                fixture
-                    .manager
-                    .source_settings(
-                        &crate::local_runtime::configuration::settings::SourceTarget::User,
-                        None,
-                    )
-                    .await
-                    .unwrap()
-                    .user
-                    .revision,
-                SourceMutation::Config {
-                    mutation: ConfigMutation::Instructions {
-                        authored: Some("cold desired context".into()),
-                    },
+            fixture
+                .manager
+                .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
+                .await
+                .unwrap()
+                .user
+                .revision,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Instructions {
+                    authored: Some("cold desired context".into()),
                 },
-            )),
+            },
         )
         .await
         .unwrap();
@@ -2709,10 +2835,7 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
     let old = runtime.runtime_resources();
     let source = fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap();
     let mut document: toml::Value =
@@ -2856,15 +2979,12 @@ async fn workflow_only_agent_change(model_change: bool) {
         fixture.gates[0].wait_entered().await;
         let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
         let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
-        let source = fixture.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }, None).await.unwrap();
+        let source = fixture.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }).await.unwrap();
         let authored = if model_change { profile("reviewer A", "b") } else { profile("reviewer B", "a") };
-        fixture.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }, Some((
-            source.agents.iter().find(|entry| entry.source.path == agent).unwrap().source.revision.clone(),
-            SourceMutation::Agent {
+        fixture.manager.write_source_settings(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: workspace.clone() }, source.agents.iter().find(|entry| entry.source.path == agent).unwrap().source.revision.clone(), SourceMutation::Agent {
                 name: crate::runtime::subagent::SubagentName::parse("reviewer").unwrap(),
                 authored: Some(crate::local_runtime::agent_resources::parse(&authored).unwrap()),
-            },
-        ))).await.unwrap();
+            }).await.unwrap();
         let application = settled(&fixture, 0).await;
         assert!(probe.configuration_preparations.load(Ordering::SeqCst) > preparations);
         assert_ne!(live.runtime_resources().capability().revision(), before.capability().revision());
@@ -4116,7 +4236,7 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
         };
         let user = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap();
         assert_eq!(user.session_models, None);
@@ -4150,11 +4270,7 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
             ),
         )
         .unwrap();
-        let source = fixture
-            .manager
-            .source_settings(&workspace, None)
-            .await
-            .unwrap();
+        let source = fixture.manager.source_settings(&workspace).await.unwrap();
         assert!(
             source
                 .resolved
@@ -4213,12 +4329,9 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
         let before = count().await;
         let source = fixture
             .manager
-            .source_settings(
-                &SourceTarget::Workspace {
-                    directory: broken.clone(),
-                },
-                None,
-            )
+            .source_settings(&SourceTarget::Workspace {
+                directory: broken.clone(),
+            })
             .await
             .unwrap();
         let Some(SessionModelsView::Unavailable { diagnostic }) = source.session_models else {
@@ -4282,7 +4395,7 @@ async fn issue419_initial_model_commit_readback_admission_and_later_switch() {
             assert_eq!(runtime.model_view().configured, selection);
             runtime.submit_inbound(input("request-A")).unwrap();
             f.gates[0].wait_entered().await;
-            let before = managed.client().snapshot().unwrap().0;
+            let before = managed.client().checkpoint().unwrap().snapshot;
             assert_eq!(
                 before
                     .attempt
@@ -4307,18 +4420,14 @@ async fn issue419_initial_model_commit_readback_admission_and_later_switch() {
                 f.manager
                     .set_model(&created.session.id, later.clone())
                     .await
-                    .is_err(),
-                "ordinary model mutation preserves the running Attempt's admission fence"
+                    .is_ok(),
+                "live selection commits while the running Attempt retains its snapshot"
             );
-            let after = managed.client().snapshot().unwrap().0;
+            let after = managed.client().checkpoint().unwrap().snapshot;
             assert_eq!(before.attempt.unwrap().model, after.attempt.unwrap().model);
-            let settlement = runtime.settlement_signal();
+            let mut settlement = SettlementReceiptWait::capture(&runtime);
             f.gates[0].release();
-            settlement.notified().await;
-            f.manager
-                .set_model(&created.session.id, later.clone())
-                .await
-                .unwrap();
+            settlement.wait().await;
             assert_eq!(runtime.model_view().configured, later);
             f.manager
                 .unload(&created.session.active_conversation_id)
@@ -4337,7 +4446,7 @@ async fn issue419_omitted_intent_uses_native_default_at_creation_not_draft_proje
         let target = SourceTarget::Workspace {
             directory: f.workspaces[0].clone(),
         };
-        let projected = f.manager.source_settings(&target, None).await.unwrap();
+        let projected = f.manager.source_settings(&target).await.unwrap();
         let Some(SessionModelsView::Available { default_model, .. }) = projected.session_models
         else {
             panic!()
@@ -4345,7 +4454,7 @@ async fn issue419_omitted_intent_uses_native_default_at_creation_not_draft_proje
         assert_eq!(default_model.model.to_string(), "local/a");
         let path = f
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -4387,9 +4496,9 @@ async fn issue419_omitted_intent_uses_native_default_at_creation_not_draft_proje
         assert_eq!(
             runtime
                 .client()
-                .snapshot()
+                .checkpoint()
                 .unwrap()
-                .0
+                .snapshot
                 .attempt
                 .unwrap()
                 .model
@@ -4399,9 +4508,9 @@ async fn issue419_omitted_intent_uses_native_default_at_creation_not_draft_proje
                 .to_string(),
             "local/b"
         );
-        let settlement = native.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&native);
         f.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         f.manager
             .unload(&created.session.active_conversation_id)
             .await
@@ -4445,12 +4554,9 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             let f = Fixture::with_session_count(None, 1).await;
             f.manager.load(&f.sessions[0].id, None).await.unwrap();
             f.manager
-                .source_settings(
-                    &SourceTarget::Workspace {
-                        directory: f.workspaces[0].clone(),
-                    },
-                    None,
-                )
+                .source_settings(&SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                })
                 .await
                 .unwrap();
             let creator = AppServerConnection::new(f.host.clone());
@@ -4505,7 +4611,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             );
             let path = f
                 .manager
-                .source_settings(&SourceTarget::User, None)
+                .source_settings(&SourceTarget::User)
                 .await
                 .unwrap()
                 .user
@@ -4693,7 +4799,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         fixture.manager.load(id, None).await.unwrap();
         let models = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -4743,7 +4849,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         };
         write(&fixture, 0, ConfigMutation::RootModel { authored: Some(root) }).await;
         // A named Agent's own selection.
-        let source = fixture.manager.source_settings(&SourceTarget::User, None).await.unwrap();
+        let source = fixture.manager.source_settings(&SourceTarget::User).await.unwrap();
         let mut agent_model = crate::model::session::SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
         agent_model.profile = Some(ModelProfileId::new("precise"));
         agent_model.request_params = params(serde_json::json!({"metadata": {"k": null}})).0;
@@ -4754,21 +4860,15 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         };
         fixture
             .manager
-            .source_settings(
-                &SourceTarget::User,
-                Some((
-                    source.absent_resource_revision.clone(),
-                    SourceMutation::Agent {
+            .write_source_settings(&SourceTarget::User, source.absent_resource_revision.clone(), SourceMutation::Agent {
                         name: crate::runtime::subagent::SubagentName::parse("profiled").unwrap(),
                         authored: Some(agent.clone()),
-                    },
-                )),
-            )
+                    })
             .await
             .unwrap();
 
         // Native source TOML: every request_params is a JSON-encoded string.
-        let source = fixture.manager.source_settings(&SourceTarget::User, None).await.unwrap();
+        let source = fixture.manager.source_settings(&SourceTarget::User).await.unwrap();
         let text = std::fs::read_to_string(&source.user.path).unwrap();
         let table = text.parse::<toml::Table>().unwrap();
         let json = |value: &toml::Value| -> serde_json::Value {
@@ -4841,7 +4941,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         assert!(application.candidate.is_none(), "{application:?}");
         assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
         assert_eq!(runtime.model_view(), model);
-        let after = fixture.manager.source_settings(&SourceTarget::User, None).await.unwrap();
+        let after = fixture.manager.source_settings(&SourceTarget::User).await.unwrap();
         assert_ne!(after.user.revision, source.user.revision);
         assert_eq!(after.resolved, resolved);
         assert_eq!(after.user.authored.unwrap().models, projected.models);
@@ -4899,7 +4999,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let authored = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -5023,7 +5123,8 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             .manager
             .set_model(&id, explicit.clone())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(adopted.configured, explicit);
         assert_eq!(adopted.effective, view.effective);
         assert_eq!(runtime.runtime_resources().revision(), revision);
@@ -5123,7 +5224,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         // admitted: the Attempt keeps its frozen invocation on the wire, and
         // the change is adopted for the next Attempt.
         let mut eligibility = EligibilityStream::open(&fixture, &id);
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(input("request-A frozen")).unwrap();
         fixture.gates[0].wait_entered().await;
         eligibility.until(AdoptionEligibility::Busy).await;
@@ -5154,7 +5255,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             Err(AdoptionError::Busy)
         );
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         // Semantic settlement precedes release of the owning Attempt task.
         // Adoption needs the authoritative idle eligibility transition.
         eligibility.until(AdoptionEligibility::Eligible).await;
@@ -5166,12 +5267,12 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
             .manager
             .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
             .unwrap();
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(input("request-A adopted")).unwrap();
         fixture.gates[0].wait_entered().await;
         eligibility.until(AdoptionEligibility::Busy).await;
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         eligibility.until(AdoptionEligibility::Eligible).await;
         let next: serde_json::Value =
             serde_json::from_str(&fixture.provider.request_body(1)).unwrap();
@@ -5216,7 +5317,7 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         // Profile untouched.
         let source = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap();
         let provider = crate::local_runtime::configuration::settings::ProviderWrite {
@@ -5226,17 +5327,15 @@ async fn issue456_effective_invocation_decides_preparation_and_adoption() {
         let resources = runtime.runtime_resources();
         fixture
             .manager
-            .source_settings(
+            .write_source_settings(
                 &SourceTarget::User,
-                Some((
-                    source.user.revision,
-                    SourceMutation::Config {
-                        mutation: ConfigMutation::Provider {
-                            id: "local".into(),
-                            authored: Some(provider),
-                        },
+                source.user.revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Provider {
+                        id: "local".into(),
+                        authored: Some(provider),
                     },
-                )),
+                },
             )
             .await
             .unwrap();
@@ -5274,7 +5373,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
     Box::pin(bounded(async {
         let f = Fixture::with_session_count(None, 0).await;
         let target = SourceTarget::User;
-        let initial = f.manager.source_settings(&target, None).await.unwrap();
+        let initial = f.manager.source_settings(&target).await.unwrap();
         let path = initial.user.path.clone();
         let original = std::fs::read(&path).unwrap();
         let authored = initial.user.authored.clone().unwrap().models.unwrap()["local/a"].clone();
@@ -5300,7 +5399,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
             let manager = f.manager.clone();
             async move {
                 manager
-                    .source_settings(&SourceTarget::User, Some((revision, SourceMutation::Config { mutation })))
+                    .write_source_settings(&SourceTarget::User, revision, SourceMutation::Config { mutation })
                     .await
             }
         };
@@ -5361,8 +5460,8 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
         let table = text.parse::<toml::Table>().unwrap();
         let native = table["models"]["local/a"]["profiles"]["p"]["request_params"].as_str().unwrap();
         assert_eq!(crate::toml_authoring::parse_request_params_json(native).unwrap(), *value.as_object().unwrap());
-        let reread = f.manager.source_settings(&target, None).await.unwrap();
-        assert_eq!(reread.user.revision, written.user.revision);
+        let reread = f.manager.source_settings(&target).await.unwrap();
+        assert_eq!(reread.user.revision, written.revision);
         let projected = &reread.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"];
         assert_eq!(projected.profiles.as_ref().unwrap()[&ModelProfileId::new("p")].request_params.0, *value.as_object().unwrap());
         // The App Server response text, decoded the way a JSON client decodes it.
@@ -5380,7 +5479,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
             1,
         ) + "\n[providers.extra]\nbase_url = \"https://example.invalid/v1\"\napi_key = \"sk-SECRET_NEIGHBOR\"\n";
         std::fs::write(&path, &unsafe_text).unwrap();
-        let broken = f.manager.source_settings(&target, None).await.unwrap();
+        let broken = f.manager.source_settings(&target).await.unwrap();
         assert!(broken.user.authored.is_none());
         let diagnostic = broken.user.diagnostic.clone().unwrap();
         assert!(diagnostic.contains("models.local/a.profiles.p.request_params has a JSON number that is not exactly representable"), "{diagnostic}");
@@ -5390,15 +5489,9 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
         unrelated.context_window += 1;
         let refused = f
             .manager
-            .source_settings(
-                &target,
-                Some((
-                    broken.user.revision.clone(),
-                    SourceMutation::Config {
+            .write_source_settings(&target, broken.user.revision.clone(), SourceMutation::Config {
                         mutation: ConfigMutation::Model { id: "local/a".into(), authored: Some(unrelated) },
-                    },
-                )),
-            )
+                    })
             .await;
         assert!(refused.is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), unsafe_text);
@@ -5460,7 +5553,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         let id = f.sessions[0].id.clone();
         let runtime = f.manager.configuration_runtime(&id).unwrap();
         let user = SourceTarget::User;
-        let source = f.manager.source_settings(&user, None).await.unwrap();
+        let source = f.manager.source_settings(&user).await.unwrap();
         let path = source.user.path.clone();
         let original = std::fs::read(&path).unwrap();
         let authored = source.user.authored.clone().unwrap().models.unwrap()["local/a"].clone();
@@ -5565,7 +5658,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         }
         // Nothing was written, published, adopted or sent.
         assert_eq!(std::fs::read(&path).unwrap(), original);
-        assert_eq!(f.manager.source_settings(&user, None).await.unwrap().user.revision, source.user.revision);
+        assert_eq!(f.manager.source_settings(&user).await.unwrap().user.revision, source.user.revision);
         assert!(!path.parent().unwrap().join("agents/reviewer.toml").exists());
         assert_eq!(f.manager.configuration_application(&id), application);
         assert_eq!(runtime.model_view(), model);
@@ -5591,6 +5684,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         let MethodResult::SourceSettings { projection: settings } = super::protocol::call(&connection, 457, Method::SourcesRead { target: user.clone() }).await else {
             panic!("sources")
         };
+        let settings=settings.inline.expect("bounded fixture source");
         let projected = &settings.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"];
         assert_eq!(serde_json::Value::Object(projected.profiles.as_ref().unwrap()[&ModelProfileId::new("p")].request_params.0.clone()), expected);
         let candidate = settled(&f, 0).await.candidate.expect("the selected Model changed");
@@ -5612,11 +5706,11 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         let mut effective = expected.as_object().unwrap().clone();
         effective.insert("override".into(), serde_json::from_str(override_text).unwrap());
         assert_eq!(runtime.model_view().effective.as_ref().unwrap().request_params, effective);
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(input("exact literals")).unwrap();
         f.gates[0].wait_entered().await;
         f.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         let body: serde_json::Value = serde_json::from_str(&f.provider.request_body(0)).unwrap();
         for (key, value) in &effective {
             assert_eq!(&body[key], value, "{key}");
@@ -5660,6 +5754,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         else {
             panic!("sources")
         };
+        let projection = projection.inline.expect("bounded fixture source");
         assert!(
             !serde_json::to_string(&projection.application)
                 .unwrap()
@@ -5692,7 +5787,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         let local = ModelRef::parse("local/a").unwrap();
         let p = ModelProfileId::new("p");
         let user = SourceTarget::User;
-        let mut model = f.manager.source_settings(&user, None).await.unwrap().user.authored.unwrap().models.unwrap()
+        let mut model = f.manager.source_settings(&user).await.unwrap().user.authored.unwrap().models.unwrap()
             ["local/a"]
             .clone();
         model.request_params = None;
@@ -5751,7 +5846,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             let text = serde_json::to_string(&response).unwrap();
             quiet(&text);
             let Response::Failure(Failure {
-                error: RpcError { data: Some(ErrorData::ConfigurationAdoption { rejection: AdoptionError::Failed { diagnostic } }), .. },
+                error: RpcError { data: Some(ErrorData::ModelUnavailable { diagnostic }), .. },
                 ..
             }) = response
             else {
@@ -5766,15 +5861,14 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             assert_eq!(runtime.model_view(), view);
         }
         // An unrelated override key is no collision.
-        let MethodResult::Model { model } = super::protocol::call(
-            &connection,
-            2,
+        assert!(matches!(super::protocol::call(
+            &connection, 2,
             Method::ModelSet { target: target.clone(), config: Box::new(selection(json!({"top_k": 40}))) },
-        )
-        .await
-        else {
-            panic!("model")
-        };
+        ).await, MethodResult::ModelSet { .. }));
+        let model = super::protocol::read_model_result(
+            &connection, &target,
+            super::protocol::call(&connection, 10_002, Method::ModelGet { target: target.clone() }).await,
+        ).await;
         assert_eq!(model.effective.as_ref().unwrap().request_params, object(json!({KEY: null, "temperature": 0.5, "top_k": 40})));
         let view = runtime.model_view();
         let resources_after_selection = runtime.runtime_resources();
@@ -5820,13 +5914,9 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         assert_eq!(runtime.model_view(), view);
 
         let reviewer = crate::runtime::subagent::SubagentName::parse("reviewer").unwrap();
-        let source = f.manager.source_settings(&user, None).await.unwrap();
+        let source = f.manager.source_settings(&user).await.unwrap();
         f.manager
-            .source_settings(
-                &user,
-                Some((
-                    source.absent_resource_revision.clone(),
-                    SourceMutation::Agent {
+            .write_source_settings(&user, source.absent_resource_revision.clone(), SourceMutation::Agent {
                         name: reviewer.clone(),
                         authored: Some(AgentProfileDocument {
                             description: "Reviews".into(),
@@ -5838,9 +5928,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
                             }),
                             ..AgentProfileDocument::default()
                         }),
-                    },
-                )),
-            )
+                    })
             .await
             .unwrap();
         write(&f, 0, ConfigMutation::Agents { authored: Some(vec![reviewer.clone()]) }).await;
@@ -5886,10 +5974,7 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
         }
         let authored = f
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -5946,7 +6031,8 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             .manager
             .set_model(&pinned, explicit.clone())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(adopted.configured, explicit);
         assert_eq!(
             adopted.effective,
@@ -6034,9 +6120,8 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
 async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_authority() {
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
-    use crate::model::catalog::{ModelCatalogView, ModelProfileId, ModelRef};
+    use crate::model::catalog::{ModelProfileId, ModelRef};
     use crate::model::session::SessionModelConfig;
-    use crate::runtime_client::{RuntimeClientError, RuntimeClientResult};
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     type Authored<'a> = (&'a str, Option<u32>, serde_json::Value);
@@ -6054,7 +6139,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             .unwrap();
         let authored = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -6093,7 +6178,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             profile: Some(ModelProfileId::new(profile)),
             ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
         };
-        let entry = |catalog: &ModelCatalogView| {
+        let entry = |catalog: &super::protocol::ModelCatalogObservation| {
             let model = catalog
                 .models
                 .iter()
@@ -6109,10 +6194,8 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
         };
         // Discovery through the Runtime Client equals the App Server's read.
         let discovered = || {
-            let RuntimeClientResult::ModelCatalog { catalog } = client.model_catalog().unwrap()
-            else {
-                panic!("Runtime Client catalog")
-            };
+            let catalog =
+                super::protocol::read_native_catalog_result(client.model_catalog().unwrap());
             assert_eq!(catalog, runtime.model_catalog());
             entry(&catalog)
         };
@@ -6194,7 +6277,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             &[("balanced", None), ("creative", None), ("fast", Some(32))],
         ));
 
-        // A removed unselected Profile is no longer selectable on either path.
+        // A removed unselected Profile is no longer selectable by its Session owner.
         write(
             &fixture,
             0,
@@ -6206,12 +6289,13 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
         let view = runtime.model_view();
         assert!(matches!(
             fixture.manager.set_model(&id, pinned("creative")).await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
-        assert!(matches!(
-            client.model_set(pinned("creative")),
-            Err(RuntimeClientError::InvalidModelConfiguration { .. })
-        ));
+        let observed_model =
+            super::protocol::read_native_model_result(&client, client.model_get().unwrap()).await;
+        assert_eq!(observed_model, view);
         assert_eq!(runtime.model_view(), view);
 
         // A moved default never reaches the pinned selection.
@@ -6228,7 +6312,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
         let revision = runtime.runtime_resources().revision();
         let path = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -6306,10 +6390,12 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
 
         // Selection admission resolves the edited Profile from the published
         // catalog, never a retained older registry.
-        let RuntimeClientResult::ModelSet { model } = client.model_set(pinned("fast")).unwrap()
-        else {
-            panic!("model set")
-        };
+        let model = fixture
+            .manager
+            .set_model(&id, pinned("fast"))
+            .await
+            .unwrap()
+            .0;
         assert_eq!(
             model.effective.as_ref().unwrap().request_params,
             serde_json::from_value::<crate::model::invocation::RequestParams>(
@@ -6359,10 +6445,7 @@ fn issue459_profiles(
 async fn issue459_authored_a(fixture: &Fixture) -> crate::model::authoring::Model {
     fixture
         .manager
-        .source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            None,
-        )
+        .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
         .await
         .unwrap()
         .user
@@ -6406,7 +6489,7 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
         fixture.manager.load(&id, None).await.unwrap();
         let b = SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
         fixture.manager.set_model(&id, b.clone()).await.unwrap();
-        settled(&fixture, 0).await;
+        assert!(fixture.manager.configuration_application(&id).is_none());
         write(
             &fixture,
             0,
@@ -6469,7 +6552,8 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
             .manager
             .set_model(&id, issue459_pinned(None))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         assert_eq!(runtime.model_view(), view);
         assert!(fixture.provider.request_bodies().is_empty());
@@ -6485,7 +6569,6 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
 /// overtakes the candidate's expected binding so it can no longer adopt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
-    use crate::runtime_client::RuntimeClientResult;
     use serde_json::json;
     Box::pin(bounded(async {
         let fixture = Fixture::new().await;
@@ -6519,12 +6602,18 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
             .await
             .unwrap();
         settled(&fixture, 0).await;
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
         let invocation = runtime.model_snapshot();
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let admitted = host.snapshot().unwrap().0.attempt.unwrap().model;
+        let admitted = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .unwrap()
+            .0
+            .attempt
+            .unwrap()
+            .model;
 
         // The selected Profile's parameters change; it stays valid.
         write(
@@ -6551,23 +6640,30 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
         );
         assert_eq!(runtime.model_snapshot(), invocation);
         assert!(runtime.model_view().unavailable.is_none());
-        assert_eq!(host.snapshot().unwrap().0.attempt.unwrap().model, admitted);
+        assert_eq!(
+            host.checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                .unwrap()
+                .0
+                .attempt
+                .unwrap()
+                .model,
+            admitted
+        );
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         let body: serde_json::Value =
             serde_json::from_str(&fixture.provider.request_bodies()[0]).unwrap();
         assert_eq!(body["temperature"], json!(0.5));
 
         // A selection committed after preparation advances the binding the
-        // candidate expected: it cannot overwrite that selection. Settlement
-        // precedes the Attempt task's release; selection waits for idle.
-        eligibility.until(AdoptionEligibility::Busy).await;
-        eligibility.until(AdoptionEligibility::Eligible).await;
-        let RuntimeClientResult::ModelSet { model } =
-            client.model_set(issue459_pinned(Some("fast"))).unwrap()
-        else {
-            panic!("model set")
-        };
+        // candidate expected: it cannot overwrite that selection.
+        let model = fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("fast")))
+            .await
+            .unwrap()
+            .0;
         assert!(matches!(
             fixture.manager.adopt_configuration(
                 &id,
@@ -6576,7 +6672,7 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
             ),
             Err(AdoptionError::Conflict)
         ));
-        assert_eq!(runtime.model_view(), *model);
+        assert_eq!(runtime.model_view(), model);
         assert_eq!(
             model.effective.unwrap().request_params["temperature"],
             json!(1.0)
@@ -6595,7 +6691,6 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
 /// never replaced. Discovery and admission agree on that one catalog.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authority() {
-    use crate::runtime_client::RuntimeClientResult;
     use serde_json::json;
     Box::pin(bounded(async {
         let fixture = Fixture::new().await;
@@ -6649,7 +6744,8 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
             .manager
             .set_model(&id, issue459_pinned(Some("fast")))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(selected.unavailable.is_none());
         assert_eq!(
             selected.effective.as_ref().unwrap().request_params["temperature"],
@@ -6673,9 +6769,7 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
         assert_eq!(view.configured, issue459_pinned(Some("fast")));
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
         assert_eq!(view.effective, selected.effective);
-        let RuntimeClientResult::ModelCatalog { catalog } = client.model_catalog().unwrap() else {
-            panic!("Runtime Client catalog")
-        };
+        let catalog = super::protocol::read_native_catalog_result(client.model_catalog().unwrap());
         assert_eq!(catalog, runtime.model_catalog());
         let profiles: Vec<_> = catalog
             .models
@@ -6692,13 +6786,16 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
                 .manager
                 .set_model(&id, issue459_pinned(Some("fast")))
                 .await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
-        let RuntimeClientResult::ModelSet { model } =
-            client.model_set(issue459_pinned(Some("deep"))).unwrap()
-        else {
-            panic!("model set")
-        };
+        let model = fixture
+            .manager
+            .set_model(&id, issue459_pinned(Some("deep")))
+            .await
+            .unwrap()
+            .0;
         assert!(model.unavailable.is_none());
         assert_eq!(
             model.effective.unwrap().request_params["temperature"],
@@ -6775,7 +6872,8 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .manager
             .set_model(&id, with_summary(Some("deep"), summary_on("local/b")))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         let Some(SummaryModelView::Explicit(summary)) = &view.summary else {
             panic!("explicit summary")
@@ -6808,7 +6906,11 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             Err(InboundAdmissionError::ModelUnavailable { .. })
         ));
         // Switching only the primary keeps the invalid Summary and is refused.
-        let Err(AdoptionError::Failed { diagnostic }) = fixture
+        let Err(ModelSelectionError::Model(
+            crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(
+                diagnostic,
+            ),
+        )) = fixture
             .manager
             .set_model(&id, with_summary(None, summary_on("local/b")))
             .await
@@ -6822,7 +6924,8 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .manager
             .set_model(&id, with_summary(None, summary_on("local/a")))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         assert_eq!(view.configured.summary_model, summary_on("local/a"));
         assert!(fixture.provider.request_bodies().is_empty());
@@ -6864,7 +6967,7 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
 
         let path = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -7082,13 +7185,13 @@ async fn issue459_inbound_accepted_before_publication_waits_for_explicit_recover
 
         // The held item is not run on the removed Profile, and it does not
         // block the correction; committing the correction admits it.
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture
             .manager
             .set_model(&id, issue459_pinned(Some("deep")))
             .await
             .unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let bodies = fixture.provider.request_bodies();
         assert_eq!(bodies.len(), 1, "exactly one request, on the replacement");
         let held: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
@@ -7097,7 +7200,15 @@ async fn issue459_inbound_accepted_before_publication_waits_for_explicit_recover
             (&json!(0.1), &json!(9))
         );
         assert!(bodies[0].contains("queued"));
-        assert!(host.snapshot().unwrap().0.inbound.pending.is_empty());
+        assert!(
+            host.checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                .unwrap()
+                .0
+                .inbound
+                .pending
+                .is_empty()
+        );
         fixture.close().await;
     }))
     .await;
@@ -7109,7 +7220,7 @@ async fn issue459_edit(fixture: &Fixture, edit: impl FnOnce(&mut toml::Value)) {
     use crate::local_runtime::configuration::settings::SourceTarget;
     let path = fixture
         .manager
-        .source_settings(&SourceTarget::User, None)
+        .source_settings(&SourceTarget::User)
         .await
         .unwrap()
         .user
@@ -7204,7 +7315,6 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
     use crate::model::catalog::ModelRef;
     use crate::model::session::SessionModelConfig;
     use crate::runtime::conversation_runtime::InboundAdmissionError;
-    use crate::runtime_client::RuntimeClientResult;
     use serde_json::json;
     Box::pin(bounded(async {
         let fixture = Fixture::new().await;
@@ -7268,9 +7378,7 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
         assert_eq!(stale.expected_binding, binding + 1);
 
         // Discovery agrees on both native surfaces: `local/c`, never `local/a`.
-        let RuntimeClientResult::ModelCatalog { catalog } = client.model_catalog().unwrap() else {
-            panic!("Runtime Client catalog")
-        };
+        let catalog = super::protocol::read_native_catalog_result(client.model_catalog().unwrap());
         assert_eq!(catalog, runtime.model_catalog());
         assert_eq!(issue459_model_refs(&runtime), ["local/b", "local/c"]);
         // The Session keeps `local/a`, reported unavailable, nothing substituted.
@@ -7325,7 +7433,8 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             .manager
             .set_model(&id, model("local/c"))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         let effective = view.effective.as_ref().unwrap();
         assert_eq!(effective.model.to_string(), "local/c");
@@ -7348,9 +7457,9 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
         );
 
         fixture.gates[0].release();
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on c")).unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let body = issue459_body(&fixture, 0);
         assert_eq!(
             (&body["model"], &body["temperature"], &body["seed"]),
@@ -7375,11 +7484,11 @@ async fn issue459_removed_model_with_instructions_change_recovers_before_adoptio
             "issue459 new instructions"
         );
         assert_ne!(adopted.source_revisions, old.source_revisions);
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime
             .submit_inbound(issue459_text("after adoption"))
             .unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let body = issue459_body(&fixture, 1);
         assert_eq!(
             (&body["model"], &body["temperature"]),
@@ -7498,7 +7607,8 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
             .manager
             .set_model(&id, model("local/c"))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         assert!(matches!(
             fixture
@@ -7591,11 +7701,10 @@ fn issue459_admit_reviewer(document: &mut toml::Value) {
 async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
     use super::protocol::{attach, call, initialize};
     use crate::app_server::connection::AppServerConnection;
-    use crate::app_server::protocol::{Method, MethodResult};
+    use crate::app_server::protocol::Method;
     use crate::model::catalog::ModelRef;
     use crate::model::session::SessionModelConfig;
     use crate::runtime::conversation_runtime::InboundAdmissionError;
-    use crate::runtime_client::RuntimeClientResult;
     use serde_json::json;
     Box::pin(bounded(async {
         let fixture = Fixture::with_tool(Some("review")).await;
@@ -7656,21 +7765,18 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         );
         assert!(application.candidate.is_none());
         assert_eq!(issue459_model_refs(&runtime), ["local/b", "local/c"]);
-        let RuntimeClientResult::ModelCatalog { catalog } = client.model_catalog().unwrap() else {
-            panic!("Runtime Client catalog")
-        };
+        let catalog = super::protocol::read_native_catalog_result(client.model_catalog().unwrap());
         assert_eq!(catalog, runtime.model_catalog());
-        let MethodResult::Models { catalog: served } = call(
-            &connection,
-            100,
-            Method::ModelCatalog {
-                target: target.clone(),
-            },
-        )
-        .await
-        else {
-            panic!("session/models")
-        };
+        let served = super::protocol::read_catalog_result(
+            call(
+                &connection,
+                100,
+                Method::ModelCatalog {
+                    target: target.clone(),
+                },
+            )
+            .await,
+        );
         assert_eq!(served, catalog);
         // `local/a` stays configured, reported unavailable, nothing substituted.
         let view = runtime.model_view();
@@ -7726,18 +7832,31 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         ));
 
         // Explicit recovery through `session/setModel`, before that adoption.
-        let MethodResult::Model { model: view } = call(
+        assert!(matches!(
+            call(
+                &connection,
+                101,
+                Method::ModelSet {
+                    target: target.clone(),
+                    config: Box::new(model("local/c"))
+                },
+            )
+            .await,
+            crate::app_server::protocol::MethodResult::ModelSet { .. }
+        ));
+        let view = super::protocol::read_model_result(
             &connection,
-            101,
-            Method::ModelSet {
-                target: target.clone(),
-                config: Box::new(model("local/c")),
-            },
+            &target,
+            call(
+                &connection,
+                10_101,
+                Method::ModelGet {
+                    target: target.clone(),
+                },
+            )
+            .await,
         )
-        .await
-        else {
-            panic!("session/setModel")
-        };
+        .await;
         assert!(view.unavailable.is_none());
         let effective = view.effective.as_ref().unwrap();
         assert_eq!(effective.model.to_string(), "local/c");
@@ -7756,9 +7875,9 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
 
         // The next Attempt runs `local/c` with the still-adopted Tools.
         fixture.gates[0].release();
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on c")).unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         assert_eq!(fixture.provider.request_bodies().len(), 1);
         let body = issue459_body(&fixture, 0);
         assert_eq!(
@@ -7795,11 +7914,11 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         );
 
         // The Workflow child `reviewer` drives inherits `local/c` at admission.
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime
             .submit_inbound(issue459_text("after adoption"))
             .unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let bodies = fixture
             .provider
             .request_bodies()
@@ -7914,9 +8033,9 @@ async fn issue459_explicit_agent_edit(edit: Issue459AgentEdit) {
         let fixture = &fixture;
         let from = fixture.provider.request_bodies().len();
         async move {
-            let settlement = runtime.settlement_signal();
+            let mut settlement = SettlementReceiptWait::capture(&runtime);
             runtime.submit_inbound(issue459_text(text)).unwrap();
-            settlement.notified().await;
+            settlement.wait().await;
             issue459_bodies_from(fixture, from)
         }
     };
@@ -8088,7 +8207,7 @@ async fn issue459_admitted_child_stays_frozen_across_mixed_agent_publication() {
         let before = runtime.runtime_resources();
 
         fixture.gates[1].release();
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime
             .submit_inbound(issue459_text("request-B frozen"))
             .unwrap();
@@ -8122,7 +8241,7 @@ async fn issue459_admitted_child_stays_frozen_across_mixed_agent_publication() {
         ));
 
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         let bodies = issue459_bodies_from(&fixture, 0);
         assert!(
             bodies.iter().all(|body| body["model"] == json!("a")),
@@ -8160,11 +8279,11 @@ async fn issue459_admitted_child_stays_frozen_across_mixed_agent_publication() {
         ));
         settled(&fixture, 0).await;
         let from = fixture.provider.request_bodies().len();
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime
             .submit_inbound(issue459_text("request-B on c"))
             .unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let bodies = issue459_bodies_from(&fixture, from);
         assert!(
             bodies.iter().all(|body| body["model"] == json!("c")),
@@ -8253,7 +8372,6 @@ fn issue459_tool_names(body: &serde_json::Value) -> Vec<String> {
 #[allow(clippy::too_many_lines)] // one ordered acceptance sequence
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_removed_profile_with_capability_change_recovers_before_adoption() {
-    use crate::runtime_client::RuntimeClientResult;
     use serde_json::json;
     Box::pin(bounded(async {
         let fixture = Fixture::new().await;
@@ -8321,9 +8439,7 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         let stale = application.candidate.clone().expect("capabilities wait");
 
         // Discoverable before the Capability adoption, on both surfaces.
-        let RuntimeClientResult::ModelCatalog { catalog } = client.model_catalog().unwrap() else {
-            panic!("Runtime Client catalog")
-        };
+        let catalog = super::protocol::read_native_catalog_result(client.model_catalog().unwrap());
         assert_eq!(catalog, runtime.model_catalog());
         let profiles: Vec<_> = catalog
             .models
@@ -8368,7 +8484,8 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
             .manager
             .set_model(&id, issue459_pinned(Some("deep")))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         assert!(matches!(
             fixture
@@ -8385,9 +8502,9 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         let candidate = pending.candidate.clone().expect("recaptured capabilities");
         assert_ne!(candidate.identity, stale.identity);
         fixture.gates[0].release();
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on deep")).unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let body = issue459_body(&fixture, 0);
         assert_eq!(
             (&body["temperature"], &body["seed"]),
@@ -8445,11 +8562,11 @@ async fn issue459_removed_profile_with_capability_change_recovers_before_adoptio
         drop((before, capability));
         runtime.settle_configuration_resources().await;
         assert_eq!(Arc::strong_count(&registry), 1);
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime
             .submit_inbound(issue459_text("after adoption"))
             .unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let body = issue459_body(&fixture, 1);
         assert_eq!(body["temperature"], json!(0.1));
         assert!(!issue459_tool_names(&body).contains(&"job_status".to_owned()));
@@ -8495,10 +8612,16 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
             .clone();
         let mut eligibility = EligibilityStream::open(&fixture, &id);
 
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        let admitted = host.snapshot().unwrap().0.attempt.unwrap();
+        let admitted = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .unwrap()
+            .0
+            .attempt
+            .unwrap();
 
         issue459_edit(&fixture, |document| {
             issue459_replace_a_with_c(document);
@@ -8515,12 +8638,18 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
         // Future selection authority advanced; the admitted Attempt did not.
         assert_eq!(issue459_model_refs(&runtime), ["local/b", "local/c"]);
         assert!(runtime.model_view().unavailable.is_some());
-        let running = host.snapshot().unwrap().0.attempt.unwrap();
+        let running = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .unwrap()
+            .0
+            .attempt
+            .unwrap();
         assert_eq!(running.model, admitted.model);
         assert_eq!(running.attempt_id, admitted.attempt_id);
 
         fixture.gates[0].release();
-        settlement.notified().await;
+        settlement.wait().await;
         let bodies = fixture.provider.request_bodies();
         assert_eq!(bodies.len(), 2, "Tool proposal and its continuation");
         for sent in &bodies {
@@ -8549,12 +8678,13 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
             .manager
             .set_model(&id, model("local/c"))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         settled(&fixture, 0).await;
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on c")).unwrap();
-        settlement.notified().await;
+        settlement.wait().await;
         let bodies = fixture.provider.request_bodies();
         assert_eq!(bodies.len(), 3);
         let body: serde_json::Value = serde_json::from_str(&bodies[2]).unwrap();
@@ -8579,6 +8709,9 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
 struct Issue459Observations {
     _attachment: crate::runtime_client::RuntimeAttachment,
     subscription: crate::runtime_client::EventSubscription,
+    conversation_id: crate::runtime::identity::ConversationId,
+    resource_revision: crate::runtime::identity::RuntimeResourceRevision,
+    model_binding: Option<u64>,
 }
 
 impl Issue459Observations {
@@ -8587,11 +8720,19 @@ impl Issue459Observations {
         let (attachment, _) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        let (_, cursor) = host.snapshot().unwrap();
+        let (snapshot, cursor) = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .unwrap();
         let subscription = attachment.subscribe_events(cursor).unwrap();
         Self {
             _attachment: attachment,
             subscription,
+            conversation_id: snapshot.conversation_id,
+            resource_revision: snapshot.resources.revision,
+            model_binding: snapshot
+                .model_status
+                .and_then(|status| status.binding_revision),
         }
     }
 
@@ -8607,18 +8748,71 @@ impl Issue459Observations {
             let EventDelivery::Event(event) = self.subscription.next().await else {
                 panic!("observation stream ended")
             };
-            match event.event {
-                RuntimeClientEvent::SessionModelChanged { model } => {
-                    let done = model.configured == *marker;
-                    observed.push(("model", *model));
-                    if done {
-                        return observed;
+            for fact in event.event.facts() {
+                match fact {
+                    RuntimeClientEvent::SessionModelChanged {
+                        model,
+                        model_status,
+                    } => {
+                        let model = model.as_deref().expect("finite model fixture stays inline");
+                        self.model_binding = model_status.binding_revision;
+                        let done = model.configured == *marker;
+                        observed.push(("model", model.clone()));
+                        if done {
+                            return observed;
+                        }
                     }
+                    RuntimeClientEvent::ResourceGenerationUpdated {
+                        model,
+                        model_status,
+                        resources,
+                        ..
+                    } => {
+                        self.resource_revision = resources.revision;
+                        self.model_binding = model_status.binding_revision;
+                        observed.push((
+                            "resources",
+                            model
+                                .as_deref()
+                                .expect("finite resource model fixture stays inline")
+                                .clone(),
+                        ));
+                    }
+                    RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                        assert_eq!(checkpoint.snapshot.conversation_id, self.conversation_id);
+                        assert_eq!(checkpoint.cursor, event.cursor);
+                        let revision = checkpoint.snapshot.resources.revision;
+                        let binding = checkpoint
+                            .snapshot
+                            .model_status
+                            .and_then(|status| status.binding_revision);
+                        // These are the exact native owner revisions carried by
+                        // the complete replacement, not a guessed event label.
+                        let kind = if revision != self.resource_revision {
+                            Some("resources")
+                        } else if binding != self.model_binding {
+                            Some("model")
+                        } else {
+                            None
+                        };
+                        self.resource_revision = revision;
+                        self.model_binding = binding;
+                        if let Some(kind) = kind {
+                            let model = checkpoint
+                                .snapshot
+                                .model
+                                .as_ref()
+                                .expect("finite fixture model in native replacement");
+                            let done = kind == "model" && model.configured == *marker;
+                            observed.push((kind, model.clone()));
+                            eprintln!("model replacement at {:?}: {kind}", checkpoint.cursor);
+                            if done {
+                                return observed;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                RuntimeClientEvent::ResourceGenerationUpdated { model, .. } => {
-                    observed.push(("resources", *model));
-                }
-                _ => {}
             }
         }
     }
@@ -8720,7 +8914,8 @@ async fn issue459_publication_selection_race(selection_first: bool) {
             .manager
             .set_model(&id, issue459_pinned(Some("fast")))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(selected.unavailable.is_none());
         probe.before_catalog_publication.release();
         let application = settled(&fixture, 0).await;
@@ -8748,7 +8943,9 @@ async fn issue459_publication_selection_race(selection_first: bool) {
                 .manager
                 .set_model(&id, issue459_pinned(Some("fast")))
                 .await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
         assert_eq!(retained(), binding + 2);
         let marker = issue459_pinned(Some("deep"));
@@ -8802,7 +8999,9 @@ async fn issue459_publication_selection_race(selection_first: bool) {
                 .manager
                 .set_model(&id, issue459_pinned(Some("fast")))
                 .await,
-            Err(AdoptionError::Failed { .. })
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
         ));
         assert_eq!(runtime.model_view(), view);
         assert_eq!(retained(), binding + 1);
@@ -9354,7 +9553,6 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
     use crate::model::catalog::ModelRef;
     use crate::model::invocation::RequestParams;
     use crate::model::session::{SessionModelConfig, SummaryModelPolicy, SummaryModelView};
-    use crate::runtime_client::{RuntimeClientError, RuntimeClientResult};
     Box::pin(bounded(async {
         let fixture = Fixture::new().await;
         let id = fixture.sessions[0].id.clone();
@@ -9381,9 +9579,9 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .await
             .unwrap();
         settled(&fixture, 0).await;
-        // Both surfaces refuse `config` with a diagnostic naming `subject`,
-        // and the refusal changes nothing.
-        let refused_alike = |config: SessionModelConfig, subject: &'static str| {
+        // The Session owner refuses `config` with a diagnostic naming `subject`;
+        // Runtime Client readback and all authority remain unchanged.
+        let refused_by_owner = |config: SessionModelConfig, subject: &'static str| {
             let manager = fixture.manager.clone();
             let id = id.clone();
             let runtime = runtime.clone();
@@ -9391,18 +9589,19 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             async move {
                 let view = runtime.model_view();
                 let application = manager.configuration_application(&id).unwrap();
-                let Err(AdoptionError::Failed { diagnostic }) =
-                    manager.set_model(&id, config.clone()).await
+                let Err(ModelSelectionError::Model(
+                    crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(
+                        diagnostic,
+                    ),
+                )) = manager.set_model(&id, config.clone()).await
                 else {
                     panic!("session/setModel admitted {config:?}")
                 };
-                let Err(RuntimeClientError::InvalidModelConfiguration { message }) =
-                    client.model_set(config.clone())
-                else {
-                    panic!("Runtime Client admitted {config:?}")
-                };
+                let model =
+                    super::protocol::read_native_model_result(client, client.model_get().unwrap())
+                        .await;
                 assert!(diagnostic.contains(subject), "{diagnostic}");
-                assert!(message.contains(subject), "{message}");
+                assert_eq!(model, view);
                 assert_eq!(runtime.model_view(), view);
                 assert_eq!(manager.configuration_application(&id).unwrap(), application);
             }
@@ -9427,12 +9626,13 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
         let view = runtime.model_view();
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
         assert_eq!(view.configured.summary_model, summary_on("local/b"));
-        refused_alike(with_summary(Some("fast"), summary_on("local/b")), "fast").await;
+        refused_by_owner(with_summary(Some("fast"), summary_on("local/b")), "fast").await;
         let view = fixture
             .manager
             .set_model(&id, with_summary(Some("deep"), summary_on("local/b")))
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert!(view.unavailable.is_none());
         let Some(SummaryModelView::Explicit(summary)) = &view.summary else {
             panic!("explicit summary")
@@ -9461,30 +9661,28 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             view.configured,
             with_summary(Some("deep"), summary_on("local/b"))
         );
-        refused_alike(with_summary(None, summary_on("local/b")), "local/b").await;
+        refused_by_owner(with_summary(None, summary_on("local/b")), "local/b").await;
 
-        // A complete correction resolves alike on both surfaces.
+        // A complete correction committed by the owner is visible on both surfaces.
         let corrected = with_summary(None, summary_on("local/a"));
-        let RuntimeClientResult::ModelSet { model } = client.model_set(corrected.clone()).unwrap()
-        else {
-            panic!("model set")
-        };
-        assert!(model.unavailable.is_none());
-        // The client's commit advanced the binding the candidate expected.
+        let view = fixture
+            .manager
+            .set_model(&id, corrected.clone())
+            .await
+            .unwrap()
+            .0;
+        assert!(view.unavailable.is_none());
+        // The Session owner's commit advanced the binding the candidate expected.
         assert!(matches!(
             fixture
                 .manager
                 .adopt_configuration(&id, &pending.identity, pending.expected_binding),
             Err(AdoptionError::Conflict)
         ));
-        let view = fixture
-            .manager
-            .set_model(&id, corrected.clone())
-            .await
-            .unwrap();
+        let recaptured = settled(&fixture, 0).await.candidate.unwrap();
+        let model = Box::new(runtime.model_view());
         assert_eq!(view, *model);
         assert_eq!(runtime.model_view(), view);
-        let recaptured = settled(&fixture, 0).await.candidate.unwrap();
         fixture
             .manager
             .adopt_configuration(&id, &recaptured.identity, recaptured.expected_binding)
@@ -9580,7 +9778,7 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
         // The launch generation admits `reviewer` only.
         let user = fixture
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap()
             .user
@@ -9620,9 +9818,9 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
                 .unwrap(),
             admitted
         );
-        let settlement = runtime.settlement_signal();
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
         fixture.gates[1].release();
-        settlement.notified().await;
+        settlement.wait().await;
         runtime.wait_for_configuration_admissions().await;
         let held = issue462_offered_controls(&fixture, 0);
         assert_eq!(held.len(), 2, "the held Attempt made a second request");
@@ -9636,9 +9834,9 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
         let attempt = |text: &'static str| {
             let runtime = runtime.clone();
             async move {
-                let done = runtime.settlement_signal().notified();
+                let mut done = SettlementReceiptWait::capture(&runtime);
                 runtime.submit_inbound(input(text)).unwrap();
-                done.await;
+                done.wait().await;
                 runtime.wait_for_configuration_admissions().await;
             }
         };

@@ -1795,7 +1795,7 @@ and reproduced in `THIRD-PARTY-NOTICES.txt`. No runtime dependency was added.
 
 The main branch owns the bounded v37 navigation, outline demand scheduler and
 command menu presentation. This integration retains those owners and upgrades
-mandatory generated imports to the final v46 contract for the native Message window selector
+mandatory generated imports to the final v48 contract for the native Message window selector
 and the upstream committed-delivery contract.
 Fork source navigation performs one indexed native read and validates message
 identity before anchoring. Existing source references and immutable upstream
@@ -2082,7 +2082,7 @@ file/artifact access resolves the owned child conversation and workspace.
 
 WebUI reuses AgentComposer and AttachmentIntake, scopes both conversation and
 trajectory preview resources to the Agent, and retires native observation reads
-when navigation changes. No child model settings are introduced. App Server v46,
+when navigation changes. No child model settings are introduced. App Server v48,
 Runtime Client v68, child IPC v30 and Product Host file-read v3 are synchronized.
 The Browser plugin is unavailable; the repository's pinned Playwright browser
 validates real native child processes and deterministic provider streams.
@@ -2217,7 +2217,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v46 / Runtime Client v68 native
+The Inspect pill is pure presentation. App Server v48 / Runtime Client v68 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -2250,7 +2250,7 @@ TanStack/XState unit bridge); invalid, non-object or duplicate-key text stays a
 local buffer that blocks submission, and formatting-only edits begin no draft.
 Native Rust remains the configuration authority. No upstream source is added.
 Inventory hashes and dependency closures describe this final source, including
-the v46 import renames.
+the v48 import renames.
 
 The #456 selection review separates configured from effective Profiles in the
 Harness-derived `ModelSelect`: its Profile submenu gains a "Model default
@@ -2264,7 +2264,7 @@ configured Profile is pinned, so the pin can be cleared.
 
 ### PR #461: integrating the current main contracts
 
-The main integration keeps App Server v46 and Runtime Client v68, which remain
+The main integration keeps App Server v48 and Runtime Client v68, which remain
 newer than main's v39/v61, and SQLite 51's checkpoint/Model Profile contract.
 Subagent IPC becomes v31 because main and this branch had different v30
 vocabularies; either old peer is rejected. The current generated protocol and
@@ -2356,10 +2356,10 @@ The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
 The historical entries above retain the versions reviewed at those snapshots.
-The combined current contracts are App Server v46, Runtime Client v68, SQLite 57
+The combined current contracts are App Server v48, Runtime Client v68, SQLite 57
 and Child IPC 32; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
 for owners and rejection behavior. Imports and generated client contracts use
-App Server v46. The source inventory
+App Server v48. The source inventory
 records the resulting local hashes and actual dependency closure; upstream
 Harness pins, licenses and source attribution remain unchanged.
 
@@ -2433,14 +2433,22 @@ The Shell Navigation actor is the sole committed route and pending-intent owner.
 
 Each disposable preparation actor has one correlated completion path. Final intent, connection authority, exact destination and native proof validation precede one machine publication transition. Stopped actors cannot publish routes or navigation errors. Read authorization is also retained and checked at publication, so replaced Product Host admission cannot leak a late history result or error. Committed control proofs are independent of preparation. A native first submission obtains a Shell creation publication intent while FirstSubmissions continues to own its create/attach/upload/input settlement. Settings can retire only its publication; replacing the actual committed draft also fences future native admission. Neither cleanup nor failure renews old route authority. Catalog searches retain their own disposable directory request identity and never own routes.
 
-View Source now means history inspection. It authorizes the exact Session cwd through `admitSessionOperation`, resolves the recorded Node through `session/node`, then reads `session/history` at the exact Message with limit 64. Node Conversation, read cut and returned Message/target cursor must agree. The history surface uses the canonical transcript renderer without a SessionView or Composer; it exposes bounded cut-preserving earlier/later reads and return navigation. Its cache remains bounded to 256 entries and 8 MiB. ChatViewport remains the sole scroll writer. User scroll, newer route selection, Settings and authority replacement retire intended landing; stale results never publish a history window. Source Session attachment, selected Node, Attempt and execution state are untouched. No attach, detach, Switch, initialization or execution accompanies View Source, even for a cold or same-Session source.
+View Source now means history inspection. It authorizes the exact Session cwd through `admitSessionOperation`, resolves the recorded Node through `session/node`, then reads `session/history` at the exact Message with limit 32. Node Conversation, read cut and returned Message/target cursor must agree. The history surface uses the canonical transcript renderer without a SessionView or Composer; it exposes bounded cut-preserving earlier/later reads and return navigation. Its cache remains bounded to 256 entries and 8 MiB. ChatViewport remains the sole scroll writer. User scroll, newer route selection, Settings and authority replacement retire intended landing; stale results never publish a history window. Source Session attachment, selected Node, Attempt and execution state are untouched. No attach, detach, Switch, initialization or execution accompanies View Source, even for a cold or same-Session source.
 
 Session Lifecycle retains every dispatched Switch transaction. Fresh Host authorization and caller interest gate dispatch; proven-unsent retirement preserves the original native claim. Acknowledged Switch ends authoritatively detached at its exact new Node. If the UI has retired, no follow-up attachment or Retry starts: later explicit Session opening recovers the selected Node. A transmitted refusal may follow native unload and therefore remains fail-closed; uncertainty is retained without replay. Branch/Fork storage acknowledgement remains observable through catalog reading after presentation retirement, and committed-node durability diagnostics are retained at decode time. Retry uses native returned input once; queued input has a dispatch fence, and transmitted input settles independently without replay. Browser cancellation provides no rollback semantics for any admitted native effect.
 
 Four dark shell references deliberately retained the enabled Stop control in the preceding repair: settings-shell-dark, desktop-expanded-dark, mobile-rail-dark and mobile-expanded-dark. Their reference/actual/diff inspection showed 952 changed pixels per reference confined to Stop, with identical dimensions and surrounding pixels. This refactor retains that control contract. Screenshot comparator, noise, stabilization, timeout and retry policies remain unchanged.
 
-Fork metadata and exact history identity use App Server v46 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v68 and SQLite v57 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
+Fork metadata and exact history identity use App Server v48 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v69 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
 
 The intentional `mobile-settings-dark-linux.png` reference change removes the obsolete sidebar backdrop beneath the Settings modal after successful Settings navigation. The reference, actual and diff were inspected: modal content and geometry are identical, and the changed pixels are the surrounding backdrop. The pinned browser generator updates this one changed reference; screenshot thresholds, noise policy and stabilization are unchanged.
 
 Browser-lifetime Shell/Settings actors and Session admission are owned above AppSurface. The rendered projection may remount while those owners and native startup settlement continue. Native authority observation belongs to the Shell actor; React does not duplicate its route retirement. A creation acknowledgement stages its exact native identity as a non-executable Session draft; only matching attachment evidence publishes execution controls. Saved startup hints observe retained admission or failure without replaying attachment. Root owner retirement invalidates old control proofs.
+
+Issue #467 keeps the pinned Harness presentation sources and MIT attribution while replacing observation authority with native bounded checkpoints, complete cursor transitions, deferred content ranges and exact view fencing. Command capability inspection retains native pages and reads selected fields. A deferred Todo head remains visible without inventing task counts; composed-empty and absent Todo remain distinct native facts. The corresponding local hashes and import closures are recorded in `source-inventory.json`; upstream pins, screenshot thresholds and license closure remain unchanged.
+
+Issue #467 uses 32-item transcript/history windows independently of the 64-item native turn directory. TurnNavigator hover and ordinal page selection use the directory bound, while original transcript reads retain their smaller count and byte bounds. Its attribution, upstream pin and import closure are retained, with the changed local hash recorded in the inventory.
+
+Issue #467 retry disclosures read the advertised original failure field at its retained native Trace cut, using the existing bounded field reader and explicit large-field windows. Their presentation retains the Harness retry attribution; attachment, source and generation ownership belong to rustX. Settings leaves disabled button opacity to the Button primitive so module import order cannot change the reviewed appearance; its other form controls retain their existing opacity. These local adaptations and the added Trace reader imports are recorded in the source inventory.
+
+Issue #467 retains finite successful Trace detail descriptors separately from complete detail values. The existing Inspector exposes explicit original field pages and byte windows for Options, prompts, tools and Diff, using captured native cuts and exact predecessor evidence. Its presentation and localized labels retain their Harness attribution; the changed local hashes and actual import closures are recorded without changing upstream pins or license notices.

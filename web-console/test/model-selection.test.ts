@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { SessionModelConfig } from '../../protocol/app-server/v46';
+import type { SessionModelConfig } from '../../protocol/app-server/v48';
 import { nextModelSelection, selectionChanges } from '../src/bindings/model-catalog';
 import { offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../src/presentation/agent/ModelSelect';
 
@@ -7,23 +7,23 @@ const chat = 'example/chat';
 const pin = (profile: string): ModelSelectionIntent => ({ kind: 'profile', model: chat, profile });
 const followDefault: ModelSelectionIntent = { kind: 'model-default', model: chat };
 
-it('pinning the current default and returning to the Model default are configured changes; repeats are no-ops', () => {
+it('pinning the current default and returning to the Model default change configured values; repeats still produce complete selections', () => {
   // Following the default, which currently resolves to `balanced`.
   const following: SessionModelConfig = { model: chat };
   const pinned = nextModelSelection(following, pin('balanced'));
   expect(pinned).toEqual({ model: chat, profile: 'balanced' });
-  expect(nextModelSelection(pinned, pin('balanced'))).toBeUndefined();
+  expect(nextModelSelection(pinned, pin('balanced'))).toEqual(pinned);
   expect(nextModelSelection(pinned, followDefault)).toEqual({ model: chat });
-  expect(nextModelSelection(following, followDefault)).toBeUndefined();
+  expect(nextModelSelection(following, followDefault)).toEqual(following);
   // A native `null` Profile is the same absent intent.
-  expect(nextModelSelection({ model: chat, profile: null }, followDefault)).toBeUndefined();
+  expect(nextModelSelection({ model: chat, profile: null }, followDefault)).toEqual({ model: chat, profile: null });
   expect(nextModelSelection({ model: chat, profile: null }, pin('balanced'))).toEqual({ model: chat, profile: 'balanced' });
 });
 
 it('choosing the selected Model keeps a pinned Profile; only the default action clears it', () => {
   const fast: SessionModelConfig = { model: chat, profile: 'fast' };
   expect(selectionChanges(chat, 'fast', { kind: 'model', model: chat })).toBe(false);
-  expect(nextModelSelection(fast, { kind: 'model', model: chat })).toBeUndefined();
+  expect(nextModelSelection(fast, { kind: 'model', model: chat })).toEqual(fast);
   expect(nextModelSelection(fast, followDefault)).toEqual({ model: chat });
 });
 
@@ -51,6 +51,9 @@ it('a same-Model Profile change keeps every independent setting; a different Mod
     summaryModel,
   };
   const { profile: _, ...independent } = configured;
+  expect(nextModelSelection(configured, { kind: 'model', model: chat })).toEqual(configured);
+  expect(nextModelSelection(configured, pin('fast'))).toEqual(configured);
+  expect(nextModelSelection(independent, followDefault)).toEqual(independent);
   expect(nextModelSelection(configured, pin('balanced'))).toEqual({ ...independent, profile: 'balanced' });
   expect(nextModelSelection(configured, followDefault)).toEqual(independent);
   // A different Model gets its own default Profile (or the chosen one), no
@@ -101,10 +104,10 @@ it('a pinned Profile the Model no longer declares is cleared by the explicit def
   expect(offersModelDefault(withoutProfiles, 'example/other', 'fast')).toBe(false);
   expect(offersModelDefault(withOthers, chat, undefined)).toBe(true);
   // Choosing the selected Model keeps the stale pin; the default action
-  // removes only the pin, and repeating it is a no-op.
-  expect(nextModelSelection(stale, { kind: 'model', model: chat })).toBeUndefined();
+  // removes only the pin. Repeated choices still produce a native selection.
+  expect(nextModelSelection(stale, { kind: 'model', model: chat })).toEqual(stale);
   const recovered = nextModelSelection(stale, followDefault)!;
   expect(recovered).toEqual({ model: chat, requestParams: { top_k: 40 }, maxOutputTokens: 1024, summaryModel: { mode: 'explicit', model: 'example/summary' } });
   expect(Object.hasOwn(recovered, 'profile')).toBe(false);
-  expect(nextModelSelection(recovered, followDefault)).toBeUndefined();
+  expect(nextModelSelection(recovered, followDefault)).toEqual(recovered);
 });

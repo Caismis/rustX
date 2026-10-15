@@ -167,6 +167,16 @@ impl BashTestControl {
         self.runner.clone()
     }
 
+    /// Per-invocation native boundary evidence and explicit fixture gates.
+    #[must_use]
+    pub(crate) fn with_diagnostics(
+        mut self,
+        diagnostics: super::supervisor::diagnostics::FixtureControl,
+    ) -> Self {
+        self.runner.diagnostics = diagnostics;
+        self
+    }
+
     /// Arms the exact shell-exit boundary: the runner parks after the
     /// supervisor reported the shell's natural exit until the test releases
     /// it.

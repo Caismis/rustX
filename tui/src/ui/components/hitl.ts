@@ -1,3 +1,4 @@
+import { hasInteractionBody, type DisplayInteraction } from '../../presentation/interaction-display.ts';
 import { invocationLabel } from "../../presentation/invocation.ts";
 /**
  * The one human-input surface for every live runtime interaction.
@@ -119,15 +120,21 @@ export interface HumanInteractionOverlayOptions {
   /** Presentation-only disclosure toggle for one interaction's detail. */
   onToggleExpand: (interaction: InteractionRef) => void;
   onChange?: () => void;
+  onPage?: (direction: -1 | 1) => void;
+  pageLabel?: () => string | undefined;
+  onLoadBody?: (interaction: InteractionRef) => void;
+  onArguments?: (interaction: InteractionRef, next: boolean, field?: "arguments" | "reason" | "tool_name") => void;
+  argumentRange?: (interaction: InteractionRef) => {label:string;text:string} | undefined;
 }
 
 export class HumanInteractionOverlay implements PopupContent {
   readonly #options: HumanInteractionOverlayOptions;
-  #interactions: RoutedInteraction[] = [];
+  #interactions: DisplayInteraction[] = [];
   #focused: InteractionRef | undefined;
   #focusedKey = "";
   #preferences: PresentationPreferences | undefined;
   #approvalChoice: 0 | 1 = 0;
+  #deferredScroll = 0;
   /**
    * Approval responses this overlay instance has emitted and not yet seen
    * fail, keyed by the full routed identity.
@@ -178,9 +185,10 @@ export class HumanInteractionOverlay implements PopupContent {
    * response explicitly fails.
    */
   update(
-    interactions: RoutedInteraction[],
+    interactions: DisplayInteraction[],
     focused: InteractionRef,
     preferences: PresentationPreferences,
+    complete = true,
   ): void {
     const previousKey = this.#focusedKey;
     this.#interactions = interactions.slice();
@@ -189,18 +197,25 @@ export class HumanInteractionOverlay implements PopupContent {
     this.#preferences = preferences;
     if (this.#focusedKey !== previousKey) {
       this.#approvalChoice = 0;
+      this.#deferredScroll = 0;
       this.#editingFeedback = false;
     }
     const live = new Set(
       interactions.map((entry) => interactionKey(entry.interaction)),
     );
+    // A bounded viewport omits pending identities without settling them.
+    // Keep in-flight guards until their exact response or a complete set.
     // Authoritative removal settles the interaction: its local in-flight
     // guard and scroll position are obsolete and dropped with it.
-    for (const key of [...this.#inFlight]) {
-      if (!live.has(key)) {
-        this.#inFlight.delete(key);
+    if (complete) {
+      for (const key of [...this.#inFlight]) {
+        if (!live.has(key)) {
+          this.#inFlight.delete(key);
+        }
       }
     }
+    // Body/draft caches may be evicted when offscreen. This never answers or
+    // cancels an interaction, and keeps every viewport cache within 32 items.
     for (const key of [...this.#approvalScroll.keys()]) {
       if (!live.has(key)) {
         this.#approvalScroll.delete(key);
@@ -217,7 +232,7 @@ export class HumanInteractionOverlay implements PopupContent {
   }
 
   /** The interaction the surface currently shows, from the live projection. */
-  get focusedInteraction(): RoutedInteraction | undefined {
+  get focusedInteraction(): DisplayInteraction | undefined {
     const focused = this.#focused;
     if (focused === undefined) {
       return undefined;
@@ -241,7 +256,7 @@ export class HumanInteractionOverlay implements PopupContent {
     if (focused === undefined) {
       return;
     }
-    if (focused.request.kind.type !== "questionnaire") {
+    if (!hasInteractionBody(focused) || focused.request.kind.type !== "questionnaire") {
       // An in-flight response keeps its surface up: dismissal is
       // presentation-only and must not look like a second answer path.
       if (!this.#inFlight.has(interactionKey(focused.interaction))) {
@@ -287,14 +302,16 @@ export class HumanInteractionOverlay implements PopupContent {
     if (focused === undefined) {
       return [];
     }
+    if (!hasInteractionBody(focused) && focused.kind === "approval" && focused.approval) return ["↑↓ choose · Enter confirm (Deny preselected) · a arguments · r reason · t name · n next bytes · PgUp/PgDn inspect · b full body · Esc dismiss", ...(this.#options.pageLabel?.() ? [this.#options.pageLabel()!] : [])];
+    if (!hasInteractionBody(focused)) return ["Enter load selected body · a arguments · n next bytes · ↑↓ scroll · Ctrl+↑↓ pending · Esc dismiss", ...(this.#options.pageLabel?.() ? [this.#options.pageLabel()!] : [])];
     if (focused.request.kind.type === "review") {
-      return ["↑↓ choose · Enter confirm (Reject preselected) · Ctrl+F edit feedback · PgUp/PgDn inspect · Esc dismiss"];
+      return ["↑↓ choose · Enter confirm (Reject preselected) · Ctrl+F edit feedback · PgUp/PgDn inspect · Esc dismiss", ...(this.#options.pageLabel?.() ? [this.#options.pageLabel()!] : [])];
     }
     if (focused.request.kind.type === "approval") {
-      return [APPROVAL_FOOTER];
+      return [APPROVAL_FOOTER, ...(this.#options.pageLabel?.() ? [this.#options.pageLabel()!] : [])];
     }
     const panel = this.#questionnairePanel(focused);
-    return [...(panel?.popupFooter() ?? []), "Ctrl+↑↓ other pending"];
+    return [...(panel?.popupFooter() ?? []), "Ctrl+↑↓ other pending", ...(this.#options.pageLabel?.() ? [this.#options.pageLabel()!] : [])];
   }
 
   setBodyHeight(height: number): void {
@@ -302,6 +319,8 @@ export class HumanInteractionOverlay implements PopupContent {
   }
 
   handleInput(data: string): void {
+    if (matchesKey(data, Key.ctrl("pageUp"))) { this.#options.onPage?.(-1); return; }
+    if (matchesKey(data, Key.ctrl("pageDown"))) { this.#options.onPage?.(1); return; }
     const focused = this.focusedInteraction;
     if (focused === undefined) {
       return;
@@ -316,6 +335,23 @@ export class HumanInteractionOverlay implements PopupContent {
     }
     if (matchesKey(data, Key.ctrl("down"))) {
       this.#navigate(1);
+      return;
+    }
+    if (!hasInteractionBody(focused)) {
+      const approval = focused.kind === 'approval' && focused.approval;
+      if (matchesKey(data, Key.enter) && !approval || data === 'b') this.#options.onLoadBody?.(focused.interaction);
+      if (data === 'a') {this.#deferredScroll=0;this.#options.onArguments?.(focused.interaction,false);}
+      if (data === 'r' || data === 't') {this.#deferredScroll=0;this.#options.onArguments?.(focused.interaction,false,data === 'r' ? 'reason' : 'tool_name');}
+      if (data === 'n') {this.#deferredScroll=0;this.#options.onArguments?.(focused.interaction,true);}
+      if (approval) {
+        if(matchesKey(data,Key.pageDown)) {this.#deferredScroll+=Math.max(1,this.#bodyHeight-6);this.#changed();}
+        else if(matchesKey(data,Key.pageUp)) {this.#deferredScroll=Math.max(0,this.#deferredScroll-Math.max(1,this.#bodyHeight-6));this.#changed();}
+        else this.#approvalInput(focused.interaction,data);
+        return;
+      }
+      if (matchesKey(data,Key.down)) {this.#deferredScroll++;this.#changed();}
+      if (matchesKey(data,Key.up)) {this.#deferredScroll=Math.max(0,this.#deferredScroll-1);this.#changed();}
+      if (matchesKey(data, Key.escape)) this.#options.onDismiss(focused.interaction);
       return;
     }
     const kind = focused.request.kind;
@@ -356,7 +392,7 @@ export class HumanInteractionOverlay implements PopupContent {
     // anything else leaves no stale window to scroll.
     this.#detailViewport = undefined;
     const detail =
-      focused.request.kind.type === "approval"
+      !hasInteractionBody(focused) ? this.#deferredBody(focused, safeWidth, detailHeight) : focused.request.kind.type === "approval"
         ? this.#renderApproval(focused, safeWidth, detailHeight)
         : focused.request.kind.type === "review"
           ? this.#renderReview(focused, safeWidth, detailHeight)
@@ -367,12 +403,26 @@ export class HumanInteractionOverlay implements PopupContent {
       .map((line) => fitLine(line, safeWidth));
   }
 
+  #deferredBody(focused: DisplayInteraction, width: number, height: number): string[] {
+    if(hasInteractionBody(focused)) return [];
+    const range=this.#options.argumentRange?.(focused.interaction);
+    const approval=focused.kind==='approval'?focused.approval:undefined;
+    const rows=range ? [range.label,...hardWrapLossless(range.text,width)] : approval ? [...hardWrapLossless(approval.reason,width),'Arguments deferred · a inspects bounded bytes; n reads the next range.',...(approval.deferred_fields.length?['Deferred fields: '+approval.deferred_fields.map(path=>path.join('.')).join(', ')]:[])] : [`Pending ${focused.kind} body is deferred. Enter loads this selected request.`];
+    if (focused.workflow_node_deferred) rows.push("Workflow review metadata deferred · /observation reads its original source fields.");
+    const foot=approval ? this.#inFlight.has(interactionKey(focused.interaction)) ? ['Submitting response…'] : [`${this.#approvalChoice===0?'›':' '} Deny`,`${this.#approvalChoice===1?'›':' '} Allow once`] : [];
+    const head=approval ? [`Approval from ${interactionSourceName(focused.source)} · ${approval.tool_name||'Tool name deferred'} · ${approval.mode}`] : [];
+    const room=Math.max(1,height-foot.length-head.length);
+    this.#deferredScroll=Math.min(this.#deferredScroll,Math.max(0,rows.length-room));
+    return [...head,...rows.slice(this.#deferredScroll,this.#deferredScroll+room),...foot];
+  }
+
   /** One queue row: focus marker, source, kind, and a bounded summary. */
-  #queueRow(routed: RoutedInteraction, focused: boolean): string {
+  #queueRow(routed: DisplayInteraction, focused: boolean): string {
     const source = clipText(
       interactionSourceName(routed.source),
       HEADER_BUDGET.maxChars,
     );
+    if (!hasInteractionBody(routed)) return `${focused ? "›" : " "} [${source}] Pending ${routed.kind} · deferred`;
     const kind = routed.request.kind;
     const summary =
       kind.type === "approval"

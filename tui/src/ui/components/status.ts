@@ -1,3 +1,6 @@
+import {attemptIdentitySourceKey} from '../../../../protocol/app-server/attempt-identity.ts';
+import { compactQuantity as compact } from '../../protocol/quantities.ts';
+import { interactionKind, hasInteractionBody } from '../../presentation/interaction-display.ts';
 import { truncateToWidth } from "@earendil-works/pi-tui";
 /**
  * The working indicator and the footer/status bar.
@@ -49,11 +52,11 @@ export function workingStatus(state: PresentationState): string | undefined {
   }
   const waiting = state.pendingInteractions;
   if (waiting.length > 0) {
-    const kind = waiting[0]!.request.kind;
-    if (waiting.some((interaction) => interaction.request.kind.type !== kind.type)) {
+    const kind = interactionKind(waiting[0]!);
+    if (waiting.some((interaction) => interactionKind(interaction) !== kind)) {
       return `Waiting for ${waiting.length} human responses…`;
     }
-    switch (kind.type) {
+    switch (kind) {
       case "questionnaire":
         return waiting.length === 1
           ? "Waiting for questionnaire…"
@@ -64,12 +67,12 @@ export function workingStatus(state: PresentationState): string | undefined {
           : `Waiting for ${waiting.length} human reviews…`;
       case "approval":
         return waiting.length === 1
-          ? `Waiting for approval of ${kind.tool_name}…`
+          ? hasInteractionBody(waiting[0]!) && waiting[0]!.request.kind.type === "approval" ? `Waiting for approval of ${waiting[0]!.request.kind.tool_name}…` : "Waiting for approval…"
           : `Waiting for ${waiting.length} approvals…`;
     }
   }
   const attempt = state.attempt;
-  if (attempt === undefined || attempt.phase.type === "settled") {
+  if (attempt === undefined || attempt.phase.type === "settled" || attempt.phase.type === "incomplete") {
     return undefined;
   }
   if (attempt.phase.type === "admitted") {
@@ -91,7 +94,7 @@ export function workingStatus(state: PresentationState): string | undefined {
   }
 
   const streaming = state.transcript.findLast(
-    (entry) => entry.kind === "streaming" && entry.attemptId === attempt.attemptId,
+    (entry) => entry.kind === "streaming" && (entry.attemptId!=null ? entry.attemptId===attempt.attemptId : entry.attemptSource!=null&&attempt.attemptSource!=null&&attemptIdentitySourceKey(entry.attemptSource)===attemptIdentitySourceKey(attempt.attemptSource)),
   );
   if (streaming?.kind === "streaming") {
     const latest = streaming.blocks[streaming.blocks.length - 1];
@@ -133,8 +136,7 @@ function modelSegments(state: PresentationState): Segment[] {
   if (state.sessionModel === null) return [{ text: "historical model unavailable", priority: 1 }];
   const session = state.sessionModel;
   const configured = session.configured.model;
-  const attempt = state.attempt?.phase.type === "settled"
-    ? undefined : state.attempt?.model?.primary.model;
+  const attempt = state.attempt && ['admitted','running'].includes(state.attempt.phase.type) ? state.attempt.model?.primary.model : undefined;
   if (session.unavailable != null || session.effective == null) {
     // The published catalog no longer admits the selection: nothing new runs
     // until one it admits is chosen, so the footer says so and names no
@@ -331,14 +333,6 @@ function pack(segments: Segment[], width: number, separator: string): string[] {
 }
 
 /** Token counts, shortened but never rounded into a different number class. */
-function compact(tokens: number): string {
-  if (tokens < 10_000) {
-    return String(tokens);
-  }
-  const thousands = Number((tokens / 1_000).toFixed(1));
-  return `${thousands}k`;
-}
-
 /** Whether the compact welcome block still has a real turn to introduce. */
 export function startupVisible(state: PresentationState): boolean {
   return state.transcript.length === 0;
@@ -355,7 +349,7 @@ export function startupVisible(state: PresentationState): boolean {
 export function contextLabel(state: PresentationState): string {
   const occupancy = state.context.occupancy;
   if (occupancy == null) return "context unreported";
-  return `${occupancy.estimated ? "context ~" : "last context "}${compact(occupancy.input_tokens)}/${compact(occupancy.context_window_tokens)}`;
+  return `${occupancy.estimated ? "context ~" : "last context "}${compact(occupancy.input_tokens)}/${compact(occupancy.context_window_tokens)}${occupancy.model_deferred ? ' · model deferred (/context-model)' : ''}`;
 }
 
 /** The model's display provider, derived from the published model reference. */

@@ -104,7 +104,62 @@ pub fn capability_failure_reason(diagnostic: impl core::fmt::Display) -> String 
 ///
 /// Deterministic by construction (`BTreeMap` identity order). A source
 /// absent from the map was never evaluated (not configured).
-pub type CapabilityAvailability = BTreeMap<ToolSourceId, CapabilitySourceState>;
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapabilityAvailability {
+    states: std::sync::Arc<BTreeMap<ToolSourceId, CapabilitySourceState>>,
+    ordinals: std::sync::Arc<Vec<ToolSourceId>>,
+}
+impl CapabilityAvailability {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Updates the native map and its ordinal index before publishing this generation.
+    pub fn insert(
+        &mut self,
+        source: ToolSourceId,
+        state: CapabilitySourceState,
+    ) -> Option<CapabilitySourceState> {
+        if !self.states.contains_key(&source) {
+            let keys = std::sync::Arc::make_mut(&mut self.ordinals);
+            let ordinal = keys.binary_search(&source).unwrap_err();
+            keys.insert(ordinal, source.clone());
+        }
+        std::sync::Arc::make_mut(&mut self.states).insert(source, state)
+    }
+    pub(crate) fn at(&self, ordinal: usize) -> Option<(&ToolSourceId, &CapabilitySourceState)> {
+        let key = self.ordinals.get(ordinal)?;
+        self.states.get_key_value(key)
+    }
+}
+impl std::ops::Deref for CapabilityAvailability {
+    type Target = BTreeMap<ToolSourceId, CapabilitySourceState>;
+    fn deref(&self) -> &Self::Target {
+        &self.states
+    }
+}
+impl<const N: usize> From<[(ToolSourceId, CapabilitySourceState); N]> for CapabilityAvailability {
+    fn from(values: [(ToolSourceId, CapabilitySourceState); N]) -> Self {
+        values.into_iter().collect()
+    }
+}
+impl FromIterator<(ToolSourceId, CapabilitySourceState)> for CapabilityAvailability {
+    fn from_iter<T: IntoIterator<Item = (ToolSourceId, CapabilitySourceState)>>(values: T) -> Self {
+        let states: BTreeMap<_, _> = values.into_iter().collect();
+        let ordinals = std::sync::Arc::new(states.keys().cloned().collect());
+        Self {
+            states: std::sync::Arc::new(states),
+            ordinals,
+        }
+    }
+}
+impl<'a> IntoIterator for &'a CapabilityAvailability {
+    type Item = (&'a ToolSourceId, &'a CapabilitySourceState);
+    type IntoIter = std::collections::btree_map::Iter<'a, ToolSourceId, CapabilitySourceState>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.states.iter()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -112,6 +167,38 @@ mod tests {
         CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilitySourceState, TRUNCATION_MARKER,
         capability_failure_reason,
     };
+
+    #[test]
+    fn t15_native_availability_ordinals_follow_sorted_insertions_and_frozen_generations() {
+        let mut sources = super::CapabilityAvailability::new();
+        for ordinal in (0..73).rev() {
+            sources.insert(
+                super::ToolSourceId::ManagedPython(format!("source-{ordinal:03}")),
+                super::CapabilitySourceState::Ready,
+            );
+        }
+        let frozen = sources.clone();
+        sources.insert(
+            super::ToolSourceId::ManagedPython("source-000".into()),
+            super::CapabilitySourceState::Unprepared,
+        );
+        assert_eq!(sources.len(), 73);
+        for ordinal in 0..73 {
+            assert_eq!(
+                frozen.at(ordinal).unwrap().0,
+                &super::ToolSourceId::ManagedPython(format!("source-{ordinal:03}"))
+            );
+        }
+        assert_eq!(
+            frozen.at(0).unwrap().1,
+            &super::CapabilitySourceState::Ready
+        );
+        assert_eq!(
+            sources.at(0).unwrap().1,
+            &super::CapabilitySourceState::Unprepared
+        );
+        assert!(sources.at(73).is_none());
+    }
 
     /// A short diagnostic is stored verbatim.
     #[test]

@@ -64,7 +64,7 @@ pub enum ModelErrorKind {
 /// adapter that owned the provider protocol has already translated its own
 /// evidence into one of these, and [`ModelError::message`] carries the
 /// bounded human-readable detail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MalformedToolProposalSource {
     /// The provider itself declared the function/tool call malformed.
@@ -89,7 +89,7 @@ pub enum MalformedToolProposalSource {
 /// normalized runtime failure, such as a request deadline timeout. The Agent
 /// Loop always owns the retry budget, scheduling, and actual retry execution;
 /// provider-supplied delay remains separate in [`ModelError::retry_after_ms`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRetryDisposition {
     /// The failure is terminal for this request.
@@ -108,7 +108,9 @@ pub enum ModelRetryDisposition {
 ///
 /// Both numbers are optional because not every provider reports either one.
 /// An absent number is reported as absent; it is never guessed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct ContextOverflowReport {
     /// The provider-counted input size of the rejected request, in tokens.
     ///
@@ -134,7 +136,7 @@ impl ContextOverflowReport {
 }
 
 /// A normalized model error.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelError {
     /// The normalized error class.
     pub kind: ModelErrorKind,

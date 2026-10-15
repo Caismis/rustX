@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { AttachmentTarget, MethodResult, SessionNode, SessionSummary } from '../../../../protocol/app-server/v46';
+import type { AttachmentTarget, MethodResult, SessionNodeObservation, SessionSummary } from '../../../../protocol/app-server/v48';
 import { sameTarget, type AppServerClient, type SessionView } from '../../client/app-server';
 import { sessionDisplayTitle } from '../../bindings/session-title';
 import { useTranslation } from '../../locale/react';
 import { IconBranchOutline16 } from '../../presentation/primitives/icons';
 import css from './ForkPoint.module.css';
 
-export type ForkOrigin = Extract<SessionNode['origin'], { type: 'fork' }>;
+export type ForkOrigin = Extract<SessionNodeObservation['origin'], { type: 'fork' }>;
 export interface ForkPointInfo { origin: ForkOrigin; through: string; source?: SessionSummary; createdAt?: string }
 
 /** Read the attached node, independently of the Session's mutable default.

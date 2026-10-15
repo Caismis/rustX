@@ -376,11 +376,13 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
     let cursor = match initialized {
-        rustx::runtime_client::RuntimeClientResult::Initialized {
-            snapshot, cursor, ..
-        } => {
-            assert!(snapshot.attempt.is_none(), "no attempt precedes the cut");
-            cursor
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {
+            let checkpoint = runtime.host().checkpoint().expect("bounded checkpoint");
+            assert!(
+                checkpoint.snapshot.attempt.is_none(),
+                "no attempt precedes the cut"
+            );
+            checkpoint.cursor
         }
         other => panic!("attach result: {other:?}"),
     };
@@ -395,10 +397,12 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
             .await
             .expect("the observation stream stays open")
     {
-        if matches!(
-            published.event,
-            rustx::runtime_client::RuntimeClientEvent::AttemptSettled { .. }
-        ) {
+        if published.event.facts().iter().any(|fact| {
+            matches!(
+                fact,
+                rustx::runtime_client::RuntimeClientEvent::AttemptSettled { .. }
+            )
+        }) {
             settled = true;
             break;
         }
@@ -434,7 +438,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
             .unwrap()
             .persisted_session_ids()
     };
-    let historical = paths.clone().compose(&dependencies()).await.unwrap();
+    let mut historical = paths.clone().compose(&dependencies()).await.unwrap();
     let b_conversation = historical.runtime().conversation_id().clone();
     let b = sessions(&paths.runtime_root)[0].clone();
     let database = paths
@@ -457,9 +461,11 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
         ))
         .unwrap();
     drop(store);
-    historical.runtime().shutdown().await.unwrap();
+    // Join both semantic and presentation ownership before the same product
+    // root is cold-composed; logical handle drop alone is not that boundary.
+    historical.shutdown().await.unwrap();
     drop(historical);
-    let product = paths.clone().compose(&dependencies()).await.unwrap();
+    let mut product = paths.clone().compose(&dependencies()).await.unwrap();
     let a = sessions(&paths.runtime_root)
         .into_iter()
         .find(|id| *id != b)
@@ -523,6 +529,6 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     );
     assert_eq!(emulator.requests().await.len(), 1);
     assert!(product.runtime().is_activated());
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
     emulator.finish().await;
 }

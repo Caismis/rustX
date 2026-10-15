@@ -24,7 +24,7 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import { HistorySurface } from './navigation/HistorySurface';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v46';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v48';
 import type { ForkOrigin } from './agent/ForkPoint';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
@@ -51,6 +51,8 @@ import { LiveInspector } from './Inspector';
 import { SessionDeletion } from './SessionDeletion';
 import { userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './settings/projection';
 import { createOwnerLookup, settingsNavigationMachine } from './settings/machines/navigation';
+import { RepairNotice } from './RepairNotice';
+import { inspectionAcknowledger, RepairAcknowledgements } from './repair-notices';
 
 import type { ChatViewport } from '../presentation/layout/ChatViewport';
 import { ComposerDraft } from './composer/draft';
@@ -71,15 +73,21 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const admission = useMemo(() => new WorkspaceSessionAdmission(workspaceAuthority, client), [workspaceAuthority, client]);
   useEffect(() => client.setSessionAdmission(admission.admit), [client, admission]);
   const connection = useMemo(() => providedConnection ?? new ConnectionController(client), [providedConnection, client]);
-  const settings = useActorRef(settingsNavigationMachine, { input: { lookup: createOwnerLookup(workspaceHost, client) } });
+  // Repair acknowledgements of this browser, shared by the notice and by
+  // Settings, which completes a View details inspection.
+  const repairAcknowledgements = useMemo(() => new RepairAcknowledgements(), []);
+  const settings = useActorRef(settingsNavigationMachine, { input: {
+    lookup: createOwnerLookup(workspaceHost, client),
+    inspected: inspectionAcknowledger(client, repairAcknowledgements),
+  } });
   const [preferences] = useState(readPreferences);
   const first = preferences.endpoint === client.getSnapshot().endpoint ? preferences.openViews[0] : undefined;
   const navigation = useActorRef(shellNavigationMachine, { input: { client, settings, route: first && client.isAttachmentControlCurrent(first, client.getSnapshot().views[first]?.attachmentObservation) ? { kind: 'session', sessionId: first } : undefined } });
   const [composerDraft] = useState(() => new ComposerDraft());
-  return <AppSurface composerDraft={composerDraft} client={client} workspaceHost={workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation}/>;
+  return <AppSurface composerDraft={composerDraft} client={client} workspaceHost={workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements}/>;
 }
 /** Route rendering and gestures; it owns no native admission or actor lifetime. */
-export function AppSurface({ client, workspaceHost, workspaceAuthority, connection, navigation: shell, composerDraft }: { composerDraft: ComposerDraft; client: AppServerClient; workspaceHost: ProductHostWorkspaces; workspaceAuthority: WorkspaceAuthority; connection: ConnectionController; navigation: ShellNavigationActor }) {
+export function AppSurface({ client, workspaceHost, workspaceAuthority, connection, navigation: shell, composerDraft, repairAcknowledgements }: { composerDraft: ComposerDraft; client: AppServerClient; workspaceHost: ProductHostWorkspaces; workspaceAuthority: WorkspaceAuthority; connection: ConnectionController; navigation: ShellNavigationActor; repairAcknowledgements: RepairAcknowledgements }) {
   const fileWorkbench = useRef<WorkbenchHandle>(null);
   const tx = useTranslation();
   const state = useClientSelector(client, selectShell, sameValue);
@@ -294,6 +302,11 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     {(previews.problem || previews.downloadError) && <div className="notice error" role="alert">{previews.problem ? tx(`artifacts:workspace.limit-${previews.problem}`) : previews.downloadError}<Button size="sm" onClick={() => previewOwner.dismissProblem()}>{tx('common:app.dismiss-notice')}</Button></div>}
     {(error || routeState.context.error) && <div className="notice error" role="alert">{error || routeState.context.error}<Button size="sm" onClick={() => { setError(''); shell.send({ type: 'DISMISS.ERROR' }); }}>{tx('common:app.dismiss-notice')}</Button></div>}
     {routeState.matches('preparing') && <div className="notice" role="status"><span>{tx(routeState.context.pending?.destination.kind === 'history' ? 'agent:navigation.opening-history' : 'agent:navigation.opening-conversation')}</span><Button size="sm" onClick={() => shell.send({ type: 'CANCEL' })}>{tx('agent:navigation.stay')}</Button></div>}
+    {/* Native automatic configuration repairs: nonblocking, never a modal,
+        and silent for a healthy source. View details opens the exact owner,
+        which acknowledges the receipt once it has presented its details. */}
+    <RepairNotice client={client} acknowledgements={repairAcknowledgements}
+      viewDetails={({ source, authorityId, receiptId }) => shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.REPAIRS', source, inspection: { authorityId, receiptId } } })} />
     {state.uncertain.some(item => !item.sessionId) && <div className="notice" role="status">{tx('common:app.a-global-operation-needs-verification-inspect-global-other-sessi')}</div>}
     {deletingSession && <SessionDeletion key={JSON.stringify([state.authorityRevision, deletingSession])} client={client} sessionId={deletingSession} title={sessionDisplayTitle(tx, state.sessions.find(session => session.id === deletingSession) ?? state.views[deletingSession]?.summary)} close={() => setDeletingSession(undefined)} deleted={() => {
       const remaining = openViews.filter(id => id !== deletingSession);

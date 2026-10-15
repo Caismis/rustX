@@ -21,7 +21,8 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   const todo = page.getByRole('region', { name: 'To-dos' });
   const goal = page.getByRole('region', { name: 'Goal' });
   const queue = page.getByRole('region', { name: 'Queue' });
-  const revision = async () => Number(wire.notifications.filter(row => row.params?.event?.type === 'goal_changed').at(-1)?.params.event.view.current?.reference.revision ?? wire.responses.filter(row => row.result?.snapshot?.goal?.current).at(-1)?.result.snapshot.goal.current.reference.revision);
+  const checkpoint = () => wire.read('session/checkpoint', wire.responses.filter(row => row.method === 'session/attach').at(-1)!.result.target);
+  const revision = async () => BigInt((await checkpoint()).checkpoint.snapshot.goal!.current!.reference.revision);
   const aligned = async (docks: Locator[]) => {
     // ResizeObserver and the Harness grid transition settle independently of
     // the viewport call. Observe the geometry contract, never sleep for it.
@@ -130,6 +131,13 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await details.click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
+    // Acceptance and native publication arrive independently. Reveal a count
+    // disclosure when it appears, then wait for the exact authoritative row.
+    const queueDisclosure = queue.getByRole('button', { expanded: false });
+    await expect.poll(async () => {
+      if (await queueDisclosure.isVisible()) await queueDisclosure.click();
+      return queue.locator('[data-inbound-sequence]').filter({ hasText: 'Queued during the Goal round' }).isVisible();
+    }).toBe(true);
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
     await expect(queue.locator('[data-submission-echo]')).toHaveCount(0);
     const order = () => page.locator('[data-composer-context-stack] > *').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label') ?? (node.hasAttribute('data-context-seat') ? 'Context' : node.querySelector('[data-composer-card]') ? 'Composer' : 'unknown')));
@@ -173,10 +181,10 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     // the autonomous budget is already exhausted, no provider work follows.
     let before = await revision();
     await goal.getByRole('button', { name: 'Pause goal' }).click();
-    await expect(goal).toContainText('Paused Goal'); expect(await revision()).toBe(before + 1);
+    await expect(goal).toContainText('Paused Goal'); expect(await revision()).toBe(before + 1n);
     await expect(goal.getByRole('button', { name: 'Pause goal' })).toHaveCount(0);
     await goal.getByRole('button', { name: 'Resume goal' }).click();
-    await expect(goal).toContainText('Active Goal'); expect(await revision()).toBe(before + 2);
+    await expect(goal).toContainText('Active Goal'); expect(await revision()).toBe(before + 2n);
     // Active offers Pause and nothing else: no second activation control.
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toHaveCount(0);
     await expect(goal.locator('[data-goal-armed]')).toHaveCount(0);
@@ -186,7 +194,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await goal.getByRole('button', { name: 'Edit round budget' }).click();
     const budget = goal.getByRole('spinbutton', { name: 'Autonomous round budget' });
     await expect(budget).toBeFocused(); await budget.fill('3'); await budget.press('Enter');
-    await expect(goal).toContainText('1/3 rounds'); expect(await revision()).toBe(before + 1);
+    await expect(goal).toContainText('1/3 rounds'); expect(await revision()).toBe(before + 1n);
     await goal.getByRole('button', { name: 'Edit goal objective' }).click();
     const objective = goal.getByRole('textbox', { name: 'Goal objective' });
     await objective.fill('Verify the composer docks end to end'); await objective.press('Enter');
@@ -211,7 +219,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
 
     const beforeReload = await placement();
     await page.reload(); await connect();
-    // Reload rebuilds from the authoritative snapshot; disclosure state is presentation-local.
+    // Reload rebuilds from a bounded authoritative checkpoint; disclosure state is presentation-local.
     await expect(todo.getByRole('button', { expanded: false })).toContainText(/1 in progress\s·\s1 pending/);
     // Cold attach reconstructs exactly the placement that live observation produced.
     await expect(page.getByRole('note', { name: 'Agent Status', includeHidden: true })).toHaveCount(beforeReload.length);
@@ -230,17 +238,28 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
-    const history = wire.responses.filter(row => row.result?.snapshot?.trace).at(-1)!.result.snapshot.trace.records;
+    const history = (await checkpoint()).checkpoint.snapshot.trace.records;
     const request = history.find((row: any) => row.request?.context_additions.some((context: any) => context.context_kind === 'agent_status'));
     expect(request).toBeTruthy();
-    await trajectory.getByLabel('Search trajectory').fill(request.request.model);
+    if (!request?.request) throw new Error('Native Trace lacks the historical Agent Status request.');
+    const requestModel = request.request.model;
+    expect(typeof requestModel).toBe('string');
+    if (typeof requestModel !== 'string') throw new Error('Native fixture request model is deferred.');
+    await trajectory.getByLabel('Search trajectory').fill(requestModel);
     await trajectory.locator(`[data-request-owner="${request.id}"]`).click();
     const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
     await inspector.getByRole('tab', { name: 'Options', exact: true }).click();
-    await expect(inspector).toContainText(request.request.model);
+    await expect(inspector).toContainText(requestModel);
+    // The finite original model head is visible; reading original Options is explicit.
+    if (await inspector.getByRole('button', { name: 'Read original value', exact: true }).count()) {
+      await inspector.getByRole('button', { name: 'Read original value', exact: true }).click();
+      await expect(inspector.getByRole('tabpanel')).toContainText(JSON.stringify(requestModel));
+    }
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail').length).toBeGreaterThan(0);
-    const detail = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail.request;
+    const read = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!;
+    const detail = (await wire.traceDetail(wire.requests.filter(row => row.method === 'session/traceDetail').at(-1)!.params.target, read.result.page)).request!;
     const status = detail.contributions.find((entry: any) => entry.producer.Native === 'agent_status');
+    if (!status?.presentation?.AgentStatus) throw new Error('Native request detail lacks its typed Agent Status contribution.');
     expect(status.presentation.AgentStatus.status_message_id).toBe(status.message_id);
     expect(status.presentation.AgentStatus.sections.length).toBeGreaterThan(0);
     expect(status.presentation.AgentStatus.opportunities.fresh_inbound ?? status.presentation.AgentStatus.opportunities.post_tool_batch).toBeTruthy();

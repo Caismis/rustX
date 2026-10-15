@@ -42,5 +42,7 @@ pub struct FactQuery {
 /// Implementations may only enqueue; they never control execution or recovery.
 pub trait JournalObserver: Send + Sync {
     /// None fences the read model if a committed prefix cannot be established.
-    fn committed(&self, events: Option<Vec<crate::events::types::RuntimeEventEnvelope>>);
+    fn committed(&self, through: Option<u64>);
+    /// Native source publication became readable after its own storage commit.
+    fn ready(&self, _through: u64) {}
 }

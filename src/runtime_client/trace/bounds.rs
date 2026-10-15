@@ -25,8 +25,10 @@ pub const TRACE_DETAIL_TEXT_BYTES: usize = 16 * 1024;
 /// Most content blocks retained for one projected message.
 pub const TRACE_DETAIL_BLOCKS: usize = 32;
 /// Most reconstructed request messages retained in one request detail.
+#[cfg(test)]
 pub const TRACE_DETAIL_MESSAGES: usize = 64;
 /// Most historical Tool definitions retained in one request detail.
+#[cfg(test)]
 pub const TRACE_DETAIL_TOOLS: usize = 64;
 /// Deepest JSON nesting retained; deeper subtrees become an elision marker.
 pub const TRACE_JSON_DEPTH: usize = 12;
@@ -35,7 +37,7 @@ pub const TRACE_JSON_NODES: usize = 1024;
 /// Longest JSON string leaf retained.
 pub const TRACE_JSON_STRING_BYTES: usize = 4 * 1024;
 /// Encoded-byte ceiling of one pageable summary record.
-pub const TRACE_RECORD_BYTES: usize = 8 * 1024;
+pub const TRACE_RECORD_BYTES: usize = 64 * 1024;
 /// Encoded-byte ceiling of one page's records.
 pub const TRACE_PAGE_BYTES: usize = 128 * 1024;
 /// Encoded-byte ceiling of one detail response, well inside the 1 MiB frame.
@@ -50,8 +52,6 @@ const _: () =
     assert!(crate::runtime::identity::CertifiedExtensionIdentity::MAX_BYTES < TRACE_IDENTITY_BYTES);
 /// Most canonical request Context facts carried by one request summary.
 pub const TRACE_SUMMARY_CONTEXT: usize = 16;
-/// Most artifact references retained beside one summarized Context fact.
-pub const TRACE_SUMMARY_CONTEXT_ARTIFACTS: usize = 4;
 /// Encoded-byte ceiling of one summary's complete Context presentation list.
 ///
 /// Trace owns this bound. An upstream Context Assembly limit constrains how
@@ -272,8 +272,25 @@ pub fn identity_fits(identity: &str) -> bool {
 ///
 /// Measured after serialization because JSON escaping can multiply a bounded
 /// string several times over; a character-count bound alone would not hold.
+/// Values beyond the largest Trace budget, or serialization failures, return
+/// `usize::MAX`. Counting retains no encoded copy and stops at that budget.
 pub fn encoded_len<T: Serialize>(value: &T) -> usize {
-    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+    struct Length(usize);
+    impl std::io::Write for Length {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .filter(|length| *length <= TRACE_DETAIL_BYTES)
+                .ok_or_else(|| std::io::Error::other("Trace encoded byte budget exceeded"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut length = Length(0);
+    serde_json::to_writer(&mut length, value).map_or(usize::MAX, |()| length.0)
 }
 
 #[cfg(test)]
@@ -282,6 +299,39 @@ mod tests {
         TRACE_JSON_DEPTH, TRACE_JSON_NODES, TRACE_JSON_STRING_BYTES, TraceJson, TracePreview,
         TraceText, identity_fits,
     };
+
+    #[test]
+    fn t15_t20_trace_size_counter_preserves_encoded_boundaries_and_stops_a_growing_sequence() {
+        use serde::ser::SerializeSeq as _;
+        struct Growing<'a>(&'a std::cell::Cell<usize>);
+        impl serde::Serialize for Growing<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut sequence = serializer.serialize_seq(None)?;
+                let item = "x".repeat(1024);
+                for _ in 0..1_000_000 {
+                    self.0.set(self.0.get() + 1);
+                    sequence.serialize_element(&item)?;
+                }
+                sequence.end()
+            }
+        }
+        for value in [
+            serde_json::json!({"escaped": "\n\"水🙂"}),
+            serde_json::json!([null, true, 9_007_199_254_740_991_u64]),
+        ] {
+            assert_eq!(
+                super::encoded_len(&value),
+                serde_json::to_vec(&value).unwrap().len()
+            );
+        }
+        let exact = "x".repeat(super::TRACE_DETAIL_BYTES - 2);
+        assert_eq!(super::encoded_len(&exact), super::TRACE_DETAIL_BYTES);
+        assert_eq!(super::encoded_len(&format!("{exact}x")), usize::MAX);
+
+        let visited = std::cell::Cell::new(0);
+        assert_eq!(super::encoded_len(&Growing(&visited)), usize::MAX);
+        assert!(visited.get() <= super::TRACE_DETAIL_BYTES / 1024 + 2);
+    }
 
     /// JSON serialization stops at the byte bound and keeps a valid UTF-8 prefix.
     #[test]

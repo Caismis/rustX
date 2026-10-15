@@ -700,6 +700,24 @@ result `{ "cancelled": true, "answers": [] }`, while attempt cancellation
 remains `ToolExecutionStatus::Cancelled`; neither response can replace the
 original Tool arguments.
 
+The compiled model-facing schema keeps string lengths, array bounds, required
+fields, defaults and closed objects, but does not use regex patterns to guide
+text generation. Descriptions explain unique question text, unique option
+labels and the runtime-owned custom-answer choice. The native normalizer owns
+deserialization and native option cardinality; the shared Questionnaire
+validator remains the authority for text and choice semantics, including the
+wider MCP choice vocabulary.
+
+A preflight rejection creates one ordinary canonical failed Tool Result and
+never starts the executor or publishes an interaction. Validation diagnostics
+use zero-based field paths, identify both indexes for conflicts, and give a
+correction without echoing authored values. The next model request receives the
+committed result; `ToolExecutionResult::model_facing_projection()` renders its
+failed status even when tool-owned content is empty. Chat Completions,
+Responses and Anthropic adapters translate that shared projection through
+their existing tool-result surfaces. This path adds no retry policy or
+provider-specific validation. See the [offline regression evidence](issue-460-validation.md).
+
 ##### The typed question vocabulary (Issue #242)
 
 Those model-facing arguments are **`ask_user`'s** authoring surface, not the
@@ -1132,6 +1150,21 @@ inspected candidate/binding revision. Existing Attempts and every derived reques
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-automatic-application-and-session-adoption).
+
+Session Model/Profile selection has a separate commit responsibility. It resolves
+a complete selection against the Session's published catalog off the commit lock,
+then revalidates source, settings, binding, resource and runtime identities before
+durable publication under the existing Attempt admission gate. The committed
+selection becomes authoritative immediately even during execution. An independent
+Attempt admitted before the commit retains its complete old model/resource
+snapshot; one admitted afterward captures the new selection. Derived child work
+inherits its parent's snapshot. This path neither adopts pending context nor
+changes the physical resource retirement rules of existing snapshot/lease owners.
+Durable local composition marks this ownership before exposing any runtime or
+client handle. Runtime-only model mutation is rejected for those Sessions;
+standalone Conversation runtimes keep their in-memory mutation contract. A true
+identical explicit selection reports an unchanged commit and leaves the entire
+Configuration Application lifecycle, including Ready Candidates, untouched.
 
 The Runtime Client protocol carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
@@ -4939,7 +4972,7 @@ Message Ledger, Request Snapshots, transcript ordering spine, and Event
 Journal. The lease is an OS-lifetime routing marker, not a registry or
 conversation fact; the child removes it normally, and its lock disappears on
 abnormal death. The wire protocol remains the normal `initialize`,
-`snapshot_get`, `transcript_page_get`, and subscription shapes. There is no
+`checkpoint_get`, `transcript_page_get`, and subscription shapes. There is no
 transcript identifier, inspection identifier, child-specific payload, or
 protocol compatibility mode.
 
@@ -4977,7 +5010,7 @@ The durable host has no `ConversationRuntime`, mailbox, subagent registry,
 provider adapter, or lifecycle handle. Its attachment linearizes at the
 durable bootstrap reads used to construct the projection. Durable Event
 Journal facts are folded into that read model without allocating a live
-Runtime Client cursor or publishing an event. `snapshot_get` and a fresh
+Runtime Client cursor or publishing an event. `checkpoint_get` and a fresh
 attachment rebuild from the durable authorities, so a skipped projection or
 reconnect repairs from authoritative state rather than client-owned history.
 The durable fallback does not replace or reconstruct #181's disposable live
@@ -5293,10 +5326,11 @@ transcript or execution-history authority.
   attempt task and holds no lock when it observes. Every client lock
   acquisition drains the pending queue first, so queued observations fold
   in the coordinator's commit order.
-- **Snapshot/cursor invariant.** `snapshot_get` returns `{ snapshot,
-  cursor }` where the snapshot describes all Runtime Client state through
-  cursor C, and a subscription after C observes every subsequently
-  published event or fails explicitly with `resync_required`.   This holds
+- **Checkpoint/cursor invariant.** `checkpoint_get` returns a bounded checkpoint
+  at cursor C with one native read cut, finite display heads, collection
+  frontiers and deferred content evidence. A subscription after C observes
+  every subsequently published display transition or fails explicitly with
+  `resync_required`. Loading deferred bytes does not advance Applied.   This holds
   by construction (one boundary), not by luck. At bootstrap the same
   invariant holds at cursor 0: the seed is installed as snapshot state,
   never replayed through `apply`, so no pre-existing runtime fact
@@ -5343,7 +5377,7 @@ transcript or execution-history authority.
   with no unbounded queue hidden underneath it.
 - **Explicit projection failure.** Cursor allocation uses a checked add:
   overflow sets an exhausted flag rather than wrapping, publication
-  stops, and every read (`snapshot_get`, `capability_get`, `initialize`,
+  stops, and every read (`checkpoint_get`, `capability_get`, `initialize`,
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
@@ -5489,7 +5523,7 @@ transcript or execution-history authority.
   and `event(cursor + typed payload)` with no request ids on
   notifications. Every Runtime Client method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
-  `snapshot_get`, `subscribe_events`, `capability_get`,
+  `checkpoint_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
   Typed errors distinguish `unsupported_protocol_version`,
   `attachment_in_use`, `not_attached`, `invalid_request`,
@@ -5651,7 +5685,11 @@ inspected candidate, and `/model` changes Session intent. Web Settings separates
 source authoring from Session adoption. Save automatically transfers work to the
 native coordinator; the focused Session header owns explicit adoption. Preparation
 failure and process restart can appear together. Conflicts preserve target-scoped
-drafts; uncertain outcomes trigger reads, never blind replay.
+drafts; uncertain outcomes trigger reads, never blind replay. Web and TUI allow a
+valid model/Profile selection while execution is active and label the selected
+Session invocation separately from the frozen active Attempt, including same-Model
+Profile or parameter differences. Only native confirmation changes the displayed
+selection; reconnect reconstructs both facts from their native owners.
 
 
 ## Native YAML WorkflowRuntime (M9.5 / Issue #83)
@@ -6819,7 +6857,7 @@ facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v45).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v48).
 
 ## Image Tool and Bash presentation (#412)
 
@@ -6957,14 +6995,25 @@ work cannot guarantee progress without native cancellable-read settlement; this
 repair does not invent that protocol or release physical capacity on a timer.
 Other client instances have independent budgets; this is not a server-wide quota.
 
-The Composer model menu and `/model` picker consume the same native catalog and
+The Web Composer model menu and `/model` picker consume the same native catalog and
 selection policy. Model and profile identifiers retain native order and defaults;
 a different model without an explicit profile uses native defaults for its
-primary settings and keeps the independent Summary policy. Selecting the
-current model or its effective profile preserves the configured choice and sends
-no mutation. Both controls use the existing Session model mutation/confirmation
-owner; a cold choice is only local intent until native acknowledgement and the
-authoritative reread. Unknown outcomes remain visible and are never replayed.
+primary settings and keeps the independent Summary policy. Selecting the current
+model preserves the complete configured choice, including its pinned Profile,
+request overrides, output limit and independent Summary policy. A deliberate
+selection against an attached Session submits that complete choice through the
+existing Session model mutation/confirmation owner even when its values are
+unchanged. Only the native owner can distinguish inherited intent that must be
+persisted from an already-persisted NoOp. On the current model, Profile gestures
+change only the pin; the effective Profile is a display value, not proof of
+persisted selection.
+New-Session Drafts retain their local intent comparison. An existing Session
+that is still attaching queues the complete deliberate choice through the
+existing model-preparation owner, including a choice equal to the displayed
+default. The last unsent choice wins; native acknowledgement and an authoritative
+reread confirm the selection after attachment. Unknown outcomes remain visible
+and are never replayed, and a reread alone does not prove an unanswered mutation
+has settled.
 
 ### Per-input attachment admission
 

@@ -1,9 +1,10 @@
+import { compactReceipt } from './fixture';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v46';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v48';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -15,7 +16,7 @@ function compact() { act(() => { expect(server.client.compact('A')).toBe(true); 
 const count = () => server.requests.filter(item => item.request.method === 'context/compact').length;
 it.each([null, 'Exact pre-commit failure'])('exact native release frees only A while its RPC remains held: %s', async error => {
   server.held.add('context/compact');
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   compact(); expect(server.client.compact('A')).toBe(false);
   const a = await server.waitFor('context/compact', 1);
@@ -72,7 +73,7 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   expect(screen.getByRole('status').textContent).toContain('Summary provider rejected model fixture/exact');
   expect(count()).toBe(0);
 });
-it.each([undefined, { estimated: false, input_tokens: 25, context_window_tokens: 100, model: 'frozen/model', breakdown: { system_tokens: 5, tool_tokens: 10, message_tokens: 10 } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
+it.each([undefined, { estimated: false, model_deferred:false, model_source:null, input_tokens: '25', context_window_tokens: '100', model: 'frozen/model', breakdown: { system_tokens: '5', tool_tokens: '10', message_tokens: '10' } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   await observe({ ...base, occupancy: occupancy });
   expect(view.container.innerHTML).toBe('');
@@ -86,7 +87,7 @@ it.each([undefined, { estimated: false, input_tokens: 25, context_window_tokens:
 
 it('a replacement attachment rejects the held old response', async () => {
   server.held.add('context/compact');
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
   compact(); const pending = await server.waitFor('context/compact', 1);
   const old = server.client.target('A');
   await server.client.release('A'); await server.client.attach('A');
@@ -105,7 +106,7 @@ it('a replacement attachment rejects the held old response', async () => {
 });
 it.each(['conversation', 'incarnation', 'authority'] as const)('reconnect retires obsolete %s evidence and rejects the old socket', async replacement => {
   server.held.add('context/compact');
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
   compact(); const pending = await server.waitFor('context/compact', 1);
   const response = server.commit(pending), oldSocket = server.socket;
   await server.client.disconnect();
@@ -128,20 +129,25 @@ it.each(['conversation', 'incarnation', 'authority'] as const)('reconnect retire
   expect(server.client.getSnapshot()).toBe(current);
 });
 it('confirmed commit survives a failed refresh', async () => {
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
-  server.held.add('session/snapshot');
-  compact(); await server.waitFor('session/snapshot', 1);
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
+  server.held.add('session/checkpoint');
+  compact(); await server.waitFor('session/checkpoint', 2);
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
   await server.client.disconnect();
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
 });
 
-it('real acknowledgement frees the gesture guard before its held read repair', async () => {
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
-  server.held.add('session/snapshot');
-  compact(); await server.waitFor('session/snapshot', 1);
+it('real acknowledgement releases its gesture while bounded checkpoint repair fences new controls', async () => {
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
+  server.held.add('session/checkpoint');
+  compact(); const repair = await server.waitFor('session/checkpoint', 2);
   const a = server.client.getSnapshot().views.A.compactionRequest!;
   expect(a.status).toBe('succeeded');
+  expect(server.client.getSnapshot().views.A.observationState).toBe('checkpointLoading');
+  expect(() => server.client.compact('A')).toThrow('not authoritatively attached');
+  expect(count()).toBe(1);
+  await act(async () => server.reply(repair));
+  expect(server.client.getSnapshot().views.A.observationState).toBe('following');
   server.held.add('context/compact');
   compact(); await server.waitFor('context/compact', 2);
   const b = server.client.getSnapshot().views.A.compactionRequest!;
@@ -158,8 +164,8 @@ it('a committed checkpoint owns the completed notice even outside the loaded his
   const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
   await observe({ ...base, compaction_count: 1,
     manual_compaction: { request_id: requestId, released: true, error: null },
-    latest_compaction: { generation: '1', summary_message_id: 'checkpoint-outside-window', surface_revision: '4',
-      tokens_before: { input_tokens: 100, source: 'provider_reported' }, estimated_tokens_after: 20 },
+    latest_compaction: { generation: '1', summary_message_id: 'checkpoint-outside-window', summary_message_locator:{type:'by_message_id',message_id:'checkpoint-outside-window'}, summary_message_id_deferred:false, summary_message_id_source:null, surface_revision: '4',
+      tokens_before: { input_tokens: "100", source: 'provider_reported' }, estimated_tokens_after: "20" },
   });
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
   expect(view.container.innerHTML).toBe('');

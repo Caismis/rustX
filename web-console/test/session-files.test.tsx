@@ -8,10 +8,12 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest, DocumentResult } from '../shared/documents';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v46';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v48';
 import { Server } from './fixture';
+import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
 const file: SessionFileReference = { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'sub/报告 file.md', name: '报告 file.md', description: 'Explicit report', mime_type: 'text/markdown' };
-const source: PreviewSource = { kind: 'session_file', messageId: 'canonical-tool', index: 0, file };
+const source: Extract<PreviewSource,{kind:"session_file"}> = { kind: 'session_file', conversationId: 'conversation-A', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, index: 0, file };
+const otherSource={...source,conversationId:"conversation-B"};
 const bytes = '# Report\r\n\r\n**Native** bytes\r\n';
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (cause: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 let server: Server;
@@ -40,7 +42,7 @@ async function fixture() {
 it('one authorized original read supplies Markdown; Download invokes its distinct intent', async () => {
   const f = await fixture(), onDownload = vi.fn(), before = server.requests.length;
   const ui = render(<ArtifactPreview artifact={{ source, name: file.name, image: false, mimeType: file.mime_type }} resources={f.lease} {...viewState} onDownload={onDownload}/>);
-  expect(f.calls[0].read).toEqual({ target: server.client.target('A'), message_id: 'canonical-tool', delivery_index: 0 });
+  expect(f.calls[0].read).toEqual({ target: server.client.target('A'), locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, delivery_index: 0 });
   expect(JSON.stringify(f.calls[0].read)).not.toContain(file.path);
   await act(async () => f.reply(0));
   expect(ui.getByRole('heading', { name: 'Report' })).toBeTruthy(); expect(ui.getByText('Native').tagName).toBe('STRONG');
@@ -50,13 +52,35 @@ it('one authorized original read supplies Markdown; Download invokes its distinc
 });
 it('child delivery coordinates carry native ownership and cannot share a root or sibling preview occurrence', async () => {
   const f = await fixture();
-  const child = { ...source, agentId: 'child-agent' };
+  const child = { ...source, conversationId:'conversation-child', owned:()=>true, agentId: 'child-agent' };
   expect(samePreviewSource(source, child)).toBe(false);
   expect(samePreviewSource(child, { ...child, agentId: 'other-child' })).toBe(false);
   const lease = f.resources.acquire(2, child);
   const work = lease.load(file.mime_type);
-  expect(f.calls[0].read).toMatchObject({ agent_id: 'child-agent', message_id: 'canonical-tool', delivery_index: 0 });
+  expect(f.calls[0].read).toMatchObject({ agent_id: 'child-agent', locator: {type:'by_message_id' as const,message_id:'canonical-tool'}, delivery_index: 0 });
   f.reply(0); expect(await work).toMatchObject({ text: bytes });
+});
+it('the workspace clones child coordinates while retaining the live ownership guard through the byte response', async () => {
+  const f=await fixture(), workspace=new PreviewWorkspaceOwner(server.client,f.host,f.authority), stop=workspace.start();
+  let current=true;
+  const owned=()=>current;
+  const child={...structuredClone(source),conversationId:'conversation-child',agentId:'child-agent',owned};
+  try {
+    workspace.selectSession('A');
+    const id=workspace.openPreview({source:child,name:file.name,image:false,mimeType:file.mime_type});
+    expect(id).toBeDefined();
+    const retained=workspace.getSnapshot().workspace!.tabs[0].artifact.source;
+    expect(retained.kind).toBe('session_file');
+    if(retained.kind!=='session_file')throw Error('Original child source missing');
+    expect(retained.owned).toBe(owned);
+    expect(retained.locator).not.toBe(child.locator);expect(retained.file).not.toBe(child.file);expect(retained.file.scope).not.toBe(child.file.scope);
+    child.file.path='changed input';child.locator={type:'by_ledger_position',position:99};
+    expect(retained.file).toEqual(file);expect(retained.locator).toEqual(source.locator);
+    const work=workspace.getSnapshot().leases.get(id!)!.load(file.mime_type), rejected=expect(work).rejects.toThrow(/Obsolete/);
+    expect(f.calls[0].read).toEqual({target:server.client.target('A'),agent_id:'child-agent',locator:source.locator,delivery_index:0});
+    current=false;f.reply(0);await rejected;
+    expect(create).not.toHaveBeenCalled();
+  } finally {stop();}
 });
 it('a child artifact preview uses the native Agent namespace, even if a root artifact has the same id', async () => {
   const f = await fixture();
@@ -148,21 +172,21 @@ it('Markdown HTML, executable URLs and embedded images remain inert', async () =
 });
 it('typed committed cards distinguish Preview and Download; prose/JSON/failed facts cannot grant access', () => {
   const openPreview = vi.fn(), download = vi.fn(), intents = { openPreview, download };
-  const result: ToolExecutionResult = { status: { type: 'success' }, duration_ms: 0, content: [{ type: 'json', value: { deliveries: [file], path: file.path } }] };
-  const ui = render(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={result}/></PreviewContext.Provider>);
+  const result: ToolExecutionResult = { status: { type: 'success' }, duration_ms: "0", content: [{ type: 'json', value: { deliveries: [file], path: file.path } }] };
+  const ui = render(<PreviewContext.Provider value={intents}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={result}/></PreviewContext.Provider>);
   expect(ui.queryAllByRole('button')).toHaveLength(0);
-  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file] }}/></PreviewContext.Provider>);
+  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={{ ...result, deliveries: [file] }}/></PreviewContext.Provider>);
   fireEvent.click(ui.getByRole('button', { name: `Preview ${file.name} in sidebar` }));
   expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name }));
   fireEvent.click(ui.getByRole('button', { name: `Download ${file.name}` }));
   expect(download).toHaveBeenCalledWith(expect.objectContaining({ source, name: file.name })); expect(openPreview).toHaveBeenCalledOnce();
-  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries messageId="canonical-tool" result={{ ...result, deliveries: [file], status: { type: 'failed', error: 'bad declaration' } }}/></PreviewContext.Provider>);
+  ui.rerender(<PreviewContext.Provider value={intents}><ToolDeliveries conversationId="conversation-A" locator={{type:'by_message_id',message_id:'canonical-tool'}} result={{ ...result, deliveries: [file], status: { type: 'failed', error: 'bad declaration' } }}/></PreviewContext.Provider>);
   expect(ui.queryAllByRole('button')).toHaveLength(0);
 });
 it('typed source equality preserves declarations, delivery indexes, namespaces and managed Artifact distinction', () => {
   expect(samePreviewSource(source, { ...source, file: { ...file } })).toBe(true);
   for (const other of [
-    { ...source, messageId: 'another-declaration' }, { ...source, index: 1 },
+    { ...source, locator:{type:'by_message_id' as const,message_id:'another-declaration'} }, { ...source, index: 1 },
     { ...source, file: { ...file, path: 'other/report.md' } },
     { ...source, file: { ...file, scope: { ...file.scope, conversation_id: 'other' } } },
     { kind: 'artifact' as const, id: file.name },
@@ -213,7 +237,7 @@ it('a new Session coordinator waits for old aborted Office physical settlement',
   const old = f.lease.derive('docx', new Uint8Array([1]), new AbortController().signal), oldRejected = expect(old).rejects.toThrow('obsolete'); await entered.promise;
   f.resources.dispose();
   const replacement = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(replacement);
-  const lease = replacement.acquire(2, source), next = lease.derive('docx', new Uint8Array([1]), new AbortController().signal);
+  const lease = replacement.acquire(2, otherSource), next = lease.derive('docx', new Uint8Array([1]), new AbortController().signal);
   expect(derive).toHaveBeenCalledOnce();
   held.resolve({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }); await oldRejected; await next;
   expect(derive).toHaveBeenCalledTimes(2);
@@ -263,7 +287,7 @@ it.each([
   await expect(derivingLease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
   expect(derive).toHaveBeenCalledOnce();
   const next = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(next);
-  const lease = next.acquire(2, source);
+  const lease = next.acquire(2, otherSource);
   await expect(lease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
   const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
   try {
@@ -277,13 +301,13 @@ it.each([
       await expect(f.lease.load()).rejects.toThrow('File settlement unavailable');
       await expect(f.resources.download(source, file.name)).rejects.toThrow('File settlement unavailable');
       await expect(lease.load()).rejects.toThrow('File settlement unavailable');
-      await expect(next.download(source, file.name)).rejects.toThrow('File settlement unavailable');
+      await expect(next.download(otherSource, file.name)).rejects.toThrow('File settlement unavailable');
       expect(f.calls).toHaveLength(0); expect(create).not.toHaveBeenCalled(); expect(click).not.toHaveBeenCalled();
     }
     expect(derive).toHaveBeenCalledOnce();
     expect(derive.mock.calls[0][1].source).toEqual(sourceKind === 'artifact'
       ? { kind: 'artifact', artifact_id: artifactSource.id }
-      : { kind: 'session_file', message_id: source.messageId, delivery_index: source.index });
+      : { kind: 'session_file', locator: source.locator, delivery_index: source.index, agent_id:undefined });
     const otherArtifact = next.acquire(3, artifactSource);
     await expect(otherArtifact.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('converter_unavailable');
     const privateCalls = f.calls.length, urls = create.mock.calls.length, clicks = click.mock.calls.length;
@@ -310,7 +334,7 @@ it.each([
     await expect(lease.load()).rejects.toThrow('Obsolete');
     await expect(f.lease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('obsolete');
     const fresh = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(fresh);
-    const freshLease = fresh.acquire(3, source), count = f.calls.length, read = freshLease.load();
+    const freshLease = fresh.acquire(3, otherSource), count = f.calls.length, read = freshLease.load();
     expect(f.calls).toHaveLength(count + 1); f.reply(count); await read;
     derive.mockImplementation(async (_scope, request) => ({ digest: request.digest, file, preview: { kind: 'xlsx', sheets: [] } }));
     await freshLease.derive('xlsx', new Uint8Array([1]), signal);
@@ -333,9 +357,9 @@ it('a failed private raw read leaves the independent two-transfer Artifact owner
   await expect(f.resources.download(source, file.name)).rejects.toThrow('File settlement unavailable');
   const derive = vi.fn<NonNullable<ProductHostWorkspaces['previewDocument']>>(); f.host.previewDocument = derive;
   const other = new FilePreviewCoordinator(server.client, 'B', f.host, f.authority); owners.push(other);
-  const otherLease = other.acquire(1, source), signal = new AbortController().signal;
+  const otherLease = other.acquire(1, otherSource), signal = new AbortController().signal;
   await expect(otherLease.load()).rejects.toThrow('File settlement unavailable');
-  await expect(other.download(source, file.name)).rejects.toThrow('File settlement unavailable');
+  await expect(other.download(otherSource, file.name)).rejects.toThrow('File settlement unavailable');
   await expect(otherLease.derive('docx', new Uint8Array([1]), signal)).rejects.toThrow('File settlement unavailable');
   f.lease.dispose();
   const artifact = { kind: 'artifact' as const, id: 'managed-office' };
@@ -361,4 +385,14 @@ it('a failed private raw read leaves the independent two-transfer Artifact owner
     expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:2');
     f.resources.dispose(); expect(revoke.mock.calls.map(([url]) => url).sort()).toEqual(['blob:1', 'blob:2', 'blob:3']);
   } finally { click.mockRestore(); }
+});
+
+it('foreign locator source CID is refused before lookup and a retired Child owner cannot repaint or share a successor preview',async()=>{
+ const f=await fixture(),foreign={...source,conversationId:'conversation-B'};
+ const foreignLease=f.resources.acquire(7,foreign);await expect(foreignLease.load()).rejects.toThrow('Obsolete');expect(f.calls).toHaveLength(0);foreignLease.dispose();
+ let owned=true;
+ const child={...source,conversationId:'conversation-child',agentId:'child-agent',owned:()=>owned};
+ const work=f.resources.acquire(8,child).load(),rejected=expect(work).rejects.toThrow('Obsolete');expect(f.calls).toHaveLength(1);
+ owned=false;f.reply(0);await rejected;expect(create).not.toHaveBeenCalled();
+ expect(samePreviewSource(child,{...child,owned:()=>true})).toBe(false);
 });

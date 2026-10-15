@@ -1,4 +1,4 @@
-import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v46';
+import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v48';
 import type { ModelChoice, ModelSelectionIntent } from '../presentation/agent/ModelSelect';
 /** Native catalog order, Model Profiles and default profile, unchanged. */
 export function catalogChoices(catalog?: ModelCatalogView): ModelChoice[] {
@@ -13,11 +13,12 @@ export function intentProfile(intent: ModelSelectionIntent) {
   return intent.kind === 'profile' ? intent.profile : undefined;
 }
 
-/** Whether a selection gesture changes the configured selection: the authored
+/** Whether a selection gesture changes local configured values: the authored
  * Model and the pinned Profile, or none. Configured intent is compared, never
  * the effective Profile: pinning the Profile that is currently the Model's
  * default, or returning a pinned default to following the Model, is a change
- * even though the next invocation resolves alike. */
+ * even though the next invocation resolves alike. This comparison is useful
+ * for draft intent, but cannot decide whether a Session selection is persisted. */
 export function selectionChanges(model: string | undefined, pinned: string | undefined, intent: ModelSelectionIntent) {
   if (intent.model !== model) return true;
   switch (intent.kind) {
@@ -28,8 +29,8 @@ export function selectionChanges(model: string | undefined, pinned: string | und
 }
 
 /** The complete configured selection a gesture produces from the configured
- * one (native `SessionModelConfig` is whole-state), or `undefined` for a
- * genuine no-op.
+ * one (native `SessionModelConfig` is whole-state). Equivalent values still
+ * form an explicit selection: only native authority can decide a durable NoOp.
  *
  * A gesture changes primary-model-owned settings only; the Summary policy is
  * independently owned and always carried unchanged. A Profile gesture on the
@@ -39,9 +40,9 @@ export function selectionChanges(model: string | undefined, pinned: string | und
  * pinned Profile. A different Model starts from its own primary defaults — its
  * default Profile unless one is chosen, no request overrides, no output limit —
  * exactly as the TUI's `/model`. */
-export function nextModelSelection(configured: SessionModelConfig | undefined, intent: ModelSelectionIntent): SessionModelConfig | undefined {
+export function nextModelSelection(configured: SessionModelConfig | undefined, intent: ModelSelectionIntent): SessionModelConfig {
   const pinned = configured?.profile ?? undefined;
-  if (!selectionChanges(configured?.model, pinned, intent)) return undefined;
+  if (configured && !selectionChanges(configured.model, pinned, intent)) return configured;
   const profile = intentProfile(intent);
   if (!configured || configured.model !== intent.model) {
     const summaryModel = configured?.summaryModel;

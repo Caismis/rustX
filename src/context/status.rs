@@ -1333,7 +1333,14 @@ fn admit_sections(
 fn bound_background_snapshot(
     mut snapshot: BackgroundExecutionSnapshot,
 ) -> BackgroundExecutionSnapshot {
-    snapshot.tool_name = bound_status_text(snapshot.tool_name);
+    snapshot.tool_name = bound_status_text(
+        snapshot
+            .tool_name
+            .chars()
+            .take(MAX_BACKGROUND_STATUS_TEXT_BYTES)
+            .collect(),
+    )
+    .into();
     snapshot.progress = snapshot.progress.map(|progress| ToolProgress {
         message: progress.message.map(bound_status_text),
         completed: progress.completed,
@@ -1938,8 +1945,8 @@ mod tests {
             execution_id: ToolExecutionId::new(format!(
                 "exec_00000000-0000-7000-8000-{index:012x}"
             )),
-            tool_id: ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_id: std::sync::Arc::new(ToolId::new("tool-bash")),
+            tool_name: "bash".into(),
             state: BackgroundLifecycle::Running,
             progress: Some(ToolProgress {
                 message: Some(detail.to_owned()),
@@ -2345,7 +2352,7 @@ mod tests {
                 call_id: crate::runtime::identity::ToolCallId::new("call-freeze"),
             },
             tool_id: crate::runtime::identity::ToolId::new("tool-background"),
-            tool_name: "background".to_owned(),
+            tool_name: "background".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };
@@ -2924,7 +2931,7 @@ mod tests {
                 call_id: crate::runtime::identity::ToolCallId::new("call-1"),
             },
             tool_id: crate::runtime::identity::ToolId::new("tool-background"),
-            tool_name: "background".to_owned(),
+            tool_name: "background".into(),
             mode: crate::tools::types::ToolInvocationMode::Background,
             arguments: serde_json::json!({}),
         };

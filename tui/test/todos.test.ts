@@ -110,7 +110,7 @@ function committed(
   });
 }
 
-describe("the derived task list", () => {
+describe("the native observed task list", () => {
   it("is the list the runtime derived, whatever the loaded transcript holds", () => {
     const latest = snapshotOf([
       task(1, "Write the parser", { status: "completed" }),
@@ -143,7 +143,7 @@ describe("the derived task list", () => {
     assert.deepEqual(selectTodos(state), list, "the runtime's list is still the list");
   });
 
-  it("follows a committed todo result live", () => {
+  it("only the native read-domain fact replaces the current task list", () => {
     const first = snapshotOf([task(1, "Write the parser")]);
     const latest = snapshotOf([
       task(1, "Write the parser", { status: "completed" }),
@@ -155,7 +155,14 @@ describe("the derived task list", () => {
       toolMessage("m2", "c2", TODO_TOOL_ID, todoResult(latest)),
       2,
     );
+    assert.deepEqual(selectTodos(state), first, "canonical Tool content alone is not current Todo authority");
+    const native = clientSnapshot({ todos: latest });
+    state = reduce(state, { cursor: runtimeCursor(3), event: {
+      type: "read_domains_updated", transcript: native.transcript, trace: native.trace,
+      todos: latest, occupancy: native.context?.occupancy,
+    } });
     assert.deepEqual(selectTodos(state), latest);
+    assert.deepEqual(selectTodos(attached(latest)), selectTodos(state), "native checkpoint and event fold converge");
   });
 
   it("ignores results of other tools and rejected todo calls", () => {
@@ -488,7 +495,7 @@ describe("what the tool card may hand a terminal", () => {
         { type: "text", text: `[pending] #1 ${subject}` },
         { type: "json", value: { tasks: [{ subject }] } },
       ],
-      duration_ms: 0,
+      duration_ms: "0",
       artifacts: [],
     });
     const card = todoCard(
@@ -555,7 +562,7 @@ describe("what the tool card may hand a terminal", () => {
           },
           { type: "json", value: { subject: `${ESC}[8mhidden`, owner: `me${RLO}` } },
         ],
-        duration_ms: 0,
+        duration_ms: "0",
         exit_code: undefined,
         artifacts: [],
       },
@@ -577,7 +584,7 @@ describe("what the tool card may hand a terminal", () => {
       {
         status: { type: "failed", error: `${ESC}[8mrejected${ESC}]0;owned${BEL}` },
         content: [],
-        duration_ms: 0,
+        duration_ms: "0",
         artifacts: [],
       },
     );
@@ -766,4 +773,18 @@ describe("/todos", () => {
   it("says so when there is no list yet", () => {
     assert.match(plainText(renderTodoInspection(undefined)), /^No tasks yet/);
   });
+});
+
+
+it('T11 T15 empty loaded Todo prefix remains distinct from native empty and absent composition', () => {
+  const empty = snapshotOf([]);
+  const deferred = renderTodoPanel(empty, { columns: 80, deferredTasks: '1000' });
+  assert.match(deferred, /Todo content deferred/);
+  assert.match(deferred, /1000 native task records/);
+  assert.match(deferred, /\/observation todos\.tasks/);
+  assert.equal(renderTodoPanel(empty, { columns: 80 }), '');
+  assert.equal(renderTodoPanel(undefined, { columns: 80, deferredTasks: '1000' }), '');
+  assert.match(renderTodoInspection(empty, true, '1000'), /content deferred/);
+  assert.doesNotMatch(renderTodoInspection(empty, true, '1000'), /No tasks yet/);
+  assert.match(renderTodoInspection(undefined, false, '1000'), /Plugin is off/);
 });

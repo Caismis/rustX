@@ -1,9 +1,10 @@
+import { domainReceipt, jobReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v46';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v48';
 import { RpcFailure } from '../src/client/app-server';
 import { RuntimeFacts as OtherActivity } from '../src/app/agent/Activity';
 import { AgentCard } from '../src/app/components/ActivityCards';
@@ -22,16 +23,50 @@ export const agentFixture = (): RuntimeClientAgent => ({ title: 'Worker',
   observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 0, model_retries: 0, tool_executions: 0 } },
   workspace: '/workspace',
 });
+
+it('intent receipts leave Agent and Job execution unchanged until their complete Root settlement publication', async () => {
+  const server = new Server(); servers.push(server);
+  const agent = agentFixture(), job: RuntimeClientJob = { job_id: 'build', tool_id: 'tool-bash', tool_name: 'Build', state: 'running' };
+  const source = { ...snapshot(), agents: [agent], jobs: [job] }; server.snapshots.set('A', source);
+  server.handlers.set('agent/observe', () => childConversation({ entries: [] }, agent.agent_id, agent.activation_id, agent.child_conversation_id));
+  server.handlers.set('agent/interrupt', () => ({ type: 'agent_interruption_accepted', agent_id: agent.agent_id, activation_id: agent.activation_id }));
+  server.handlers.set('job/cancel', () => ({ type: 'job_cancellation_accepted', job_id: job.job_id }));
+  await server.attached('A');
+  function Harness() {
+    const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
+    return <RuntimeFacts snapshot={state.views.A.snapshot!} client={server.client} sessionId="A"/>;
+  }
+  const ui = render(<Harness/>), row = ui.container.querySelector('[data-agent-id="agent-worker"]');
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Stop' })));
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Cancel Job' })));
+  expect(row?.getAttribute('data-agent-state')).toBe('active');
+  expect(ui.container.querySelector('[data-job-state="running"]')).not.toBeNull();
+  expect(ui.queryByText('cancelled', { exact: true })).toBeNull();
+  await act(async () => server.update('A', { ...source,
+    agents: [{ ...agent, state: 'inactive', current_activation: null, activation_state: 'cancelled' }],
+    jobs: [{ ...job, state: 'cancelled', result: { status: { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' }, duration_ms: '1', content: [{ type: 'text', text: 'Process settled' }] } }],
+  }));
+  expect(ui.container.querySelector('[data-agent-id="agent-worker"]')).toBe(row);
+  expect(row?.getAttribute('data-agent-state')).toBe('inactive');
+  expect(within(document.getElementById('subagent-header-actions')!).getByRole('status').textContent).toBe('cancelled');
+  expect((ui.getByRole('button', { name: 'Cancel Job' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => fireEvent.click(ui.getByRole('button', { name: /^Build/ })));
+  expect(ui.getByText('Process settled')).toBeTruthy();
+  expect(server.requests.filter(({ request }) => request.method === 'agent/interrupt')).toHaveLength(1);
+  expect(server.requests.filter(({ request }) => request.method === 'job/cancel')).toHaveLength(1);
+});
 it('Active and Inactive send use one owner operation; wait remains interruptible and captures a native activation', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
   const s = snapshot(); const agent = agentFixture(); s.agents = [agent]; server.snapshots.set('A', s);
   server.handlers.set('agent/sendMessage', () => ({ type: 'agent_message', agent_id: agent.agent_id, activation_id: 'activation-a', resumed: false }));
-  server.handlers.set('agent/interrupt', () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: 'cancelled', agent: { ...agent, state: 'inactive', current_activation: null, activation_state: 'cancelled' } }));
+  server.handlers.set('agent/interrupt', () => ({ type: 'agent_interruption_accepted', agent_id: agent.agent_id, activation_id: agent.activation_id }));
   server.held.add('agent/wait');
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
   expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Stop' })); await server.waitFor('agent/interrupt', 1); });
+  expect(ui.queryByText('cancelled')).toBeNull();
+  await act(async () => server.socket.success(await server.waitFor('agent/wait', 1), { type: 'agent_wait', agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: 'cancelled' }));
   expect(ui.getByText('cancelled')).toBeTruthy();
   expect(ui.queryByRole('alert')).toBeNull();
   await act(async () => {
@@ -54,7 +89,7 @@ it('Job wait does not disable cancellation and terminal projections cannot resum
   const server = new Server(); servers.push(server); await server.attached('A');
   const s = snapshot(); const job: RuntimeClientJob = { job_id: 'job-a', tool_id: 'tool-bash', tool_name: 'bash', state: 'running' }; s.jobs = [job]; server.snapshots.set('A', s);
   server.held.add('job/wait');
-  server.handlers.set('job/cancel', () => ({ type: 'job', job: { ...job, state: 'cancelled' } }));
+  server.handlers.set('job/cancel', () => (jobReceipt({ ...job, state: 'cancelled' })));
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for Job' })); await server.waitFor('job/wait', 1); });
   expect((ui.getByRole('button', { name: 'Cancel Job' }) as HTMLButtonElement).disabled).toBe(false);
@@ -66,8 +101,8 @@ it('Job wait does not disable cancellation and terminal projections cannot resum
 
 it('native Tool renderers explicitly distinguish Jobs and durable Agents', () => {
   for (const [name, domain] of [['job_wait', 'job'], ['send_message', 'agent'], ['subagent', 'agent']] as const) {
-    const ui = render(<Tool tool={{ message_id: 'assistant', block_index: 0, call_id: `call-${name}`, tool_id: `tool-${name}`, name,
-      state: { type: 'settled', arguments: JSON.stringify(domain === 'job' ? { job_id: 'job-a' } : { agent_id: 'agent-a' }), result: { status: { type: 'success' }, duration_ms: 0 } } }}/>);
+    const ui = render(<Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'assistant'},block_index:0},assembly_complete:true, message_id: 'assistant', block_index: 0, call_id: `call-${name}`, tool_id: `tool-${name}`, name,
+      state: { type: 'settled', arguments: JSON.stringify(domain === 'job' ? { job_id: 'job-a' } : { agent_id: 'agent-a' }), result: { status: { type: 'success' }, duration_ms: "0" } } }}/>);
     expect(ui.container.querySelector(`[data-activity-domain="${domain}"]`)).toBeTruthy();
     ui.unmount();
   }
@@ -79,17 +114,26 @@ it.each(['agent/wait', 'agent/interrupt'] as const)('a completed %s response can
   const s = snapshot(); const agent = agentFixture(); s.agents = [agent]; server.snapshots.set('A', s);
   await server.client.refresh('A');
   server.held.add(method);
-  server.handlers.set(method, () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'activation-a', outcome: 'succeeded', agent: { ...agent, state: 'inactive', current_activation: null, activation_state: 'succeeded' } }));
+  server.handlers.set(method, () => method === 'agent/interrupt' ? { type: 'agent_interruption_accepted', agent_id: agent.agent_id, activation_id: 'activation-a' } : { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'activation-a', outcome: 'succeeded' });
+  if (method === 'agent/interrupt') {
+    server.held.add('agent/wait');
+    server.handlers.set('agent/wait', () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'activation-a', outcome: 'succeeded' }));
+  }
   function Harness() {
     const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
     return <RuntimeFacts snapshot={state.views.A.snapshot!} client={server.client} sessionId="A"/>;
   }
   const ui = render(<Harness/>);
   let waited: Awaited<ReturnType<Server['waitFor']>>;
+  if (method === 'agent/interrupt') await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: method === 'agent/wait' ? 'Wait for activation' : 'Stop' })); waited = await server.waitFor(method, 1); });
   const row = ui.container.querySelector('[data-agent-id="agent-worker"]');
   server.snapshots.set('A', { ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] });
-  await act(async () => { server.reply(waited!); await server.waitFor('session/snapshot', 2); });
+  await act(async () => {
+    server.reply(waited!);
+    if (method === 'agent/interrupt') server.reply(await server.waitFor('agent/wait', 1));
+    await server.waitFor('session/checkpoint', 2);
+  });
   expect(ui.container.querySelector('[data-agent-id="agent-worker"]')).toBe(row);
   expect(row?.getAttribute('data-activation-id')).toBe('activation-b');
   expect(row?.textContent).not.toContain('Inactive');
@@ -99,17 +143,18 @@ it.each(['agent/wait', 'agent/interrupt'] as const)('a completed %s response can
 it('selected child transcript refreshes canonical final content at settlement and stays open on resume', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
   const s = snapshot(); const agent = agentFixture(); s.agents = [agent]; server.snapshots.set('A', s);
-  let report = 'First committed child message';
-  server.handlers.set('agent/conversation', () => childConversation( { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'child-report', content: [{ type: 'text', text: report }] } } }] }));
+  let report='First committed child message',activation=agent.activation_id;
+  server.handlers.set('agent/observe', () => childConversation( { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'child-report', content: [{ type: 'text', text: report }] } } }] },agent.agent_id,activation));
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
-  await act(async () => { await server.waitFor('agent/conversation', 1); });
+  await act(async () => { await server.waitFor('agent/observe', 1); });
   expect(ui.getByText(report)).toBeTruthy();
   report = 'Final report from canonical child history';
   await act(async () => { ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, state: 'inactive', current_activation: null, activation_state: 'succeeded' }] }} client={server.client} sessionId="A"/>); });
-  await server.waitFor('agent/conversation', 2);
+  await server.waitFor('agent/observe', 2);
   expect(ui.getByText(report)).toBeTruthy();
+  activation='activation-b';
   await act(async () => { ui.rerender(<RuntimeFacts snapshot={{ ...s, agents: [{ ...agent, activation_id: 'activation-b', current_activation: 'activation-b' }] }} client={server.client} sessionId="A"/>); });
-  await server.waitFor('agent/conversation', 3);
+  await server.waitFor('agent/observe', 3);
   expect(ui.getByText(report)).toBeTruthy();
   expect(ui.getByText(report)).toBeTruthy();
 });
@@ -138,7 +183,7 @@ it('native admission remains waitable and interruptible while its send is pendin
   const s = snapshot(); const agent = { ...agentFixture(), state: 'inactive' as const, current_activation: null, activation_state: 'succeeded' as const };
   s.agents = [agent]; server.snapshots.set('A', s);
   server.held.add('agent/sendMessage'); server.held.add('agent/wait');
-  server.handlers.set('agent/interrupt', () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'admission-b', outcome: null, agent }));
+  server.handlers.set('agent/interrupt', () => ({ type: 'agent_interruption_accepted', agent_id: agent.agent_id, activation_id: 'admission-b' }));
   const ui = render(<RuntimeFacts snapshot={s} client={server.client} sessionId="A"/>);
   await act(async () => {
     fireEvent.change(ui.getByRole('textbox', { name: 'Message Agent Worker' }), { target: { value: 'Resume input' } });
@@ -152,6 +197,8 @@ it('native admission remains waitable and interruptible while its send is pendin
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
   expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Stop' })); await server.waitFor('agent/interrupt', 1); });
+  expect(ui.queryByText('Agent was inactive when the operation observed it.')).toBeNull();
+  await act(async () => server.socket.success(await server.waitFor('agent/wait', 1), { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'admission-b', outcome: null }));
   expect(ui.getByText('Agent was inactive when the operation observed it.')).toBeTruthy();
   expect((ui.getByRole('textbox', { name: 'Message Agent Worker' }) as HTMLInputElement).value).toBe('Resume input');
   expect(ui.queryByRole('alert')).toBeNull();
@@ -229,13 +276,13 @@ it.each(['job/wait', 'job/cancel'] as const)('%s finishes with native publicatio
 
 it('Job list returns the complete owner metadata through the Web client', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
-  const jobs = Array.from({ length: 64 }, (_, index): RuntimeClientJob => ({ job_id: `exec_00000000-0000-7000-8000-${(66 - index).toString(16).padStart(12, "0")}`, tool_id: 'tool-bash', tool_name: 'bash', state: 'succeeded' }));
-  const listing = { type: 'jobs' as const, jobs, returned: 64, matched: 67, limit: 64, truncated: true };
+  const jobs = Array.from({ length: 32 }, (_, index): RuntimeClientJob => ({ job_id: `exec_00000000-0000-7000-8000-${(66 - index).toString(16).padStart(12, "0")}`, tool_id: 'tool-bash', tool_name: 'bash', state: 'succeeded' }));
+  const listing = domainReceipt('jobs',jobs,{total:67,next:(jobs).length});
   server.handlers.set('job/list', () => listing);
-  const received = await server.client.request({ method: 'job/list', params: { target: server.client.target('A') } }, 'jobs');
+  const received = await server.client.request({ method: 'job/list', params: { target: server.client.target('A') } }, 'domain_page');
   expect(received).toEqual(listing);
-  expect(received.jobs[0].job_id).toBe('exec_00000000-0000-7000-8000-000000000042');
-  expect(received.jobs.at(-1)?.job_id).toBe('exec_00000000-0000-7000-8000-000000000003');
+  expect((received.page.items[0].value as RuntimeClientJob).job_id).toBe('exec_00000000-0000-7000-8000-000000000042');
+  expect((received.page.items.at(-1)?.value as RuntimeClientJob).job_id).toBe('exec_00000000-0000-7000-8000-000000000023');
 });
 
 it.each([['agent_not_delivered', 'input was not delivered'], ['agent_delivery_unknown', 'do not replay automatically']] as const)('send-message renders %s and preserves the unacknowledged draft', async (kind, expected) => {
@@ -270,7 +317,7 @@ it('a wait response from an obsolete attachment cannot publish an activation res
   const request = server.requests.find(row => row.request.method === 'agent/wait')!.request;
   await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
   const current = server.client.getSnapshot().views.A;
-  await act(async () => { server.socket.success(request, { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'obsolete-activation', outcome: 'succeeded', agent }); });
+  await act(async () => { server.socket.success(request, { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'obsolete-activation', outcome: 'succeeded' }); });
   expect(ui.queryByText(/obsolete-activation/)).toBeNull();
   expect(server.client.getSnapshot().views.A).toBe(current);
   expect(server.requests.filter(row => row.request.method === 'agent/wait')).toHaveLength(1);
@@ -279,9 +326,9 @@ it('a wait response from an obsolete attachment cannot publish an activation res
 
 it('child transcript cannot publish from a retained cleanup claim and fresh proof starts a fresh read', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
-  server.held.add('agent/conversation'); server.held.add('session/detach');
+  server.held.add('agent/observe'); server.held.add('session/detach');
   const ui = render(<AgentCard agent={agentFixture()} client={server.client} sessionId="A"/>);
-  const old = await server.waitFor('agent/conversation', 1);
+  const old = await server.waitFor('agent/observe', 1);
   let release!: Promise<void>;
   await act(async () => { release = server.client.release('A'); void release.catch(() => {}); await server.waitFor('session/detach', 1); });
   const page = (text: string) => ({ entries: [{ cursor: '1', item: { type: 'message' as const, message: { id: text, role: 'assistant' as const, content: [{ type: 'text' as const, text }] } } }] });
@@ -289,10 +336,10 @@ it('child transcript cannot publish from a retained cleanup claim and fresh proo
   expect(ui.queryByText('obsolete child result')).toBeNull(); expect(ui.queryByText('Reading child conversation…')).toBeNull();
   expect(server.claims()).toHaveLength(1);
   await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; await server.client.attach('A'); });
-  const fresh = await server.waitFor('agent/conversation', 2);
+  const fresh = await server.waitFor('agent/observe', 2);
   await act(async () => { server.socket.success(fresh, childConversation(page('current child result'))); });
   expect(ui.getByText('current child result')).toBeTruthy(); expect(ui.queryByText('obsolete child result')).toBeNull();
-  expect(server.requests.filter(row => row.request.method === 'agent/conversation')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'agent/observe')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
 });
@@ -300,22 +347,22 @@ it('child transcript cannot publish from a retained cleanup claim and fresh proo
 it('older child transcript retains its original observation proof through native response', async () => {
   const server = new Server(); servers.push(server); await server.attached('A');
   const page = (text: string, cursor: string) => ({ entries: [{ cursor, item: { type: 'message' as const, message: { id: text, role: 'assistant' as const, content: [{ type: 'text' as const, text }] } } }], next_cursor: cursor });
-  server.handlers.set('agent/conversation', () => childConversation(page('current child page', '10')));
+  server.handlers.set('agent/observe', () => childConversation(page('current child page', '10')));
   const ui = render(<AgentCard agent={agentFixture()} client={server.client} sessionId="A"/>);
-  await act(async () => { await server.waitFor('agent/conversation', 1); });
+  await act(async () => { await server.waitFor('agent/observe', 1); });
   expect(ui.getByText('current child page')).toBeTruthy();
-  server.held.add('agent/conversation'); server.held.add('agent/transcript'); server.held.add('session/detach');
+  server.held.add('agent/observe'); server.held.add('agent/transcript'); server.held.add('session/detach');
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Load earlier' })); await server.waitFor('agent/transcript', 1); });
   const older = await server.waitFor('agent/transcript', 1); let release!: Promise<void>;
   await act(async () => { release = server.client.release('A'); void release.catch(() => {}); await server.waitFor('session/detach', 1); });
-  await act(async () => { server.socket.success(older, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-worker', journal: '10', transcript: '10', mutation_revision: '0' }, page: page('obsolete older page', '1') } }); });
+  await act(async () => { server.socket.success(older, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-worker', journal: '10', transcript: '10', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: page('obsolete older page', '1') } }); });
   expect(ui.queryByText('obsolete older page')).toBeNull(); expect(ui.getByText('current child page')).toBeTruthy();
   expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
   await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; }); expect(server.claims()).toHaveLength(0);
   await act(async () => { await server.client.attach('A'); });
   expect(ui.queryByText('current child page')).toBeNull();
-  const fresh = await server.waitFor('agent/conversation', 2);
+  const fresh = await server.waitFor('agent/observe', 2);
   await act(async () => { server.socket.success(fresh, childConversation(page('fresh child page', '20'))); });
   expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.queryByText('current child page')).toBeNull();
   expect(server.requests.filter(row => row.request.method === 'agent/transcript')).toHaveLength(1);
@@ -339,12 +386,13 @@ it.each(['wait-release', 'interrupt-switch', 'message-release'] as const)('%s ca
   const retained = server.client.getSnapshot().views.A.target; expect(retained).toEqual(server.target('A')); expect(server.claims()).toHaveLength(1);
   await act(async () => { server.socket.success(old, kind === 'message-release'
     ? { type: 'agent_message', agent_id: agent.agent_id, activation_id: agent.activation_id, resumed: false }
-    : { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'obsolete', outcome: 'succeeded', agent }); });
+    : kind === 'interrupt-switch' ? { type: 'agent_interruption_accepted', agent_id: agent.agent_id, activation_id: 'obsolete' }
+    : { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'obsolete', outcome: 'succeeded' }); });
   expect(ui.queryByText('succeeded')).toBeNull(); expect(ui.queryByRole('alert')).toBeNull();
   // Native accepted input consumes its exact editor revision even though
   // the old observation has lost permission to publish Agent state.
   if (kind === 'message-release') expect((ui.getByRole('textbox') as HTMLTextAreaElement).value).toBe('');
-  expect(server.requests.filter(r => r.request.method === 'session/snapshot')).toHaveLength(0);
+  expect(server.requests.filter(r => r.request.method === 'session/checkpoint')).toHaveLength(1);
   expect(server.requests.filter(r => r.request.method === method)).toHaveLength(1);
   await act(async () => { server.reply(await server.waitFor(kind === 'interrupt-switch' ? 'session/switchNode' : 'session/detach', 1)); await cleanup; });
   expect(server.claims()).toHaveLength(0);
@@ -360,22 +408,70 @@ it('old child completion cannot clear a fresh proof operation or restore its err
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 2); });
   await act(async () => { server.socket.deliver({ jsonrpc: '2.0', id: old.id, error: { code: -32000, message: 'obsolete error', data: { kind: 'operation_failed' } } }); });
   expect(ui.queryByText('obsolete error')).toBeNull(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
-  await act(async () => { server.socket.success(await server.waitFor('agent/wait', 2), { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'fresh', outcome: 'cancelled', agent }); });
+  await act(async () => { server.socket.success(await server.waitFor('agent/wait', 2), { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'fresh', outcome: 'cancelled' }); });
   expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(false);
-  expect(server.requests.filter(r => r.request.method === 'agent/wait')).toHaveLength(2); expect(server.requests.filter(r => r.request.method === 'session/snapshot')).toHaveLength(1);
+  expect(server.requests.filter(r=>r.request.method==='agent/wait')).toHaveLength(2);expect(server.requests.filter(r=>r.request.method==='session/checkpoint')).toHaveLength(3);
   expect(server.claims()).toHaveLength(1); expect(server.maxClaims).toBe(1);
 });
 
 it('current wait settlement remains independent from interrupt completion', async () => {
   const server = new Server(); servers.push(server); await server.attached('A'); const agent = agentFixture();
-  const result = { type: 'agent_wait' as const, agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: 'cancelled' as const, agent };
-  server.held.add('agent/wait'); server.handlers.set('agent/interrupt', () => result);
+  const result = { type: 'agent_wait' as const, agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: 'cancelled' as const };
+  server.held.add('agent/wait'); server.handlers.set('agent/interrupt', () => ({ type: 'agent_interruption_accepted', agent_id: agent.agent_id, activation_id: agent.activation_id }));
   const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
   await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Wait for activation' })); await server.waitFor('agent/wait', 1); });
   expect((ui.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false);
-  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Stop' })); await server.waitFor('session/snapshot', 1); });
-  expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
-  await act(async () => { server.socket.success(await server.waitFor('agent/wait', 1), result); await server.waitFor('session/snapshot', 2); });
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Stop' })); await server.waitFor('agent/interrupt', 1); });
+  expect(ui.queryByText('cancelled')).toBeNull(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => { server.socket.success(await server.waitFor('agent/wait', 1), result); await server.waitFor('session/checkpoint', 1); });
   expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(false);
   expect(server.requests.filter(r => r.request.method === 'agent/wait')).toHaveLength(1); expect(server.requests.filter(r => r.request.method === 'agent/interrupt')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
+});
+
+it('T11/T17 hides cancel the child wait and reopening resumes its locally Applied Cursor', async () => {
+  const { checkpoint } = await import('./fixture');
+  const server = new Server(); servers.push(server); await server.attached('A');
+  const agent = agentFixture(), cursor = {agent_id:agent.agent_id,conversation_id:agent.child_conversation_id,activation_id:agent.activation_id,cursor:'10'};
+  server.held.add('agent/observe');
+  const card = (visible:boolean) => <AgentCard agent={agent} client={server.client} sessionId="A" visible={visible}/>;
+  const ui = render(card(true));
+  const first = await server.waitFor('agent/observe',1);
+  expect(first.params).toMatchObject({after:null});
+  await act(async () => server.socket.success(first,{type:'agent_observe',observation:{type:'checkpoint',agent_id:agent.agent_id,conversation_id:agent.child_conversation_id,activation_id:agent.activation_id,source:'live',cursor,checkpoint:{...checkpoint({...snapshot(),conversation_id:agent.child_conversation_id},'10'),read_cut:{...checkpoint({...snapshot(),conversation_id:agent.child_conversation_id},'10').read_cut,activation_id:agent.activation_id}}}}));
+  const oldWait = await server.waitFor('agent/observe',2);
+  expect(oldWait.params).toMatchObject({after:cursor});
+  await act(async () => { ui.rerender(card(false)); });
+  const cancelled = await server.waitFor('agent/observeCancel',1);
+  expect(cancelled.params).toEqual({request_id:oldWait.id});
+  await act(async () => { ui.rerender(card(true)); });
+  expect(server.requests.filter(row=>row.request.method==='agent/observe')).toHaveLength(2);
+  await act(async () => server.socket.success(oldWait,{type:'agent_observe',observation:{type:'events',after:cursor,cursor:{...cursor,cursor:'11'},events:[{cursor:'11',event:{type:'message_committed',message:{role:'assistant',id:'obsolete-view-message',content:[{type:'text',text:'Late hidden view content'}]}}}]}}));
+  expect(ui.queryByText('Late hidden view content')).toBeNull();
+  const resumed = await server.waitFor('agent/observe',3);
+  expect(resumed.params).toMatchObject({after:cursor});
+  await act(async () => server.socket.success(resumed,{type:'agent_observe',observation:{type:'events',after:cursor,cursor:{...cursor,cursor:'11'},events:[{cursor:'11',event:{type:'projection_transition',events:[{type:'trace_changed'}],metadata:{collections:[],content:[],read_cut:{...checkpoint({...snapshot(),conversation_id:agent.child_conversation_id},'11').read_cut,activation_id:agent.activation_id}}}}]}}));
+  const following = await server.waitFor('agent/observe',4);
+  expect(following.params).toMatchObject({after:{...cursor,cursor:'11'}});
+  expect(server.requests.some(row=>['agent/interrupt','conversation/cancel','job/cancel'].includes(row.request.method))).toBe(false);
+});
+
+it('T14/T17 actual Child watch rejects a stale inner revision and resumes only from explicit native repair', async () => {
+  const { checkpoint } = await import('./fixture');
+  const server = new Server(); servers.push(server); await server.attached('A'); server.held.add('agent/observe');
+  const agent = agentFixture(), identity = { agent_id: agent.agent_id, conversation_id: agent.child_conversation_id, activation_id: agent.activation_id };
+  const scoped = (cursor: string) => { const value = checkpoint({ ...snapshot(), conversation_id: identity.conversation_id }, cursor); value.read_cut.activation_id = identity.activation_id; return value; };
+  const ui = render(<AgentCard agent={agent} client={server.client} sessionId="A"/>);
+  const first = await server.waitFor('agent/observe', 1);
+  await act(async () => server.socket.success(first, { type: 'agent_observe', observation: { type: 'checkpoint', ...identity, source: 'live', cursor: { ...identity, cursor: '10' }, checkpoint: scoped('10') } }));
+  const waiting = await server.waitFor('agent/observe', 2);
+  await act(async () => server.socket.success(waiting, { type: 'agent_observe', observation: { type: 'events', after: { ...identity, cursor: '10' }, cursor: { ...identity, cursor: '11' }, events: [{ cursor: '11', event: { type: 'projection_transition', events: [{ type: 'message_committed', message: { role: 'assistant', id: 'refused-child-row', content: [{ type: 'text', text: 'stale inner cut must not render' }] } }], metadata: { read_cut: scoped('10').read_cut, collections: [], content: [] } } }] } }));
+  expect(ui.queryByText('stale inner cut must not render')).toBeNull(); expect(ui.getByRole('alert').textContent).toContain('Child event cut evidence mismatch');
+  expect(server.requests.filter(row => row.request.method === 'agent/observe')).toHaveLength(2);
+  await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Transcript' })); });
+  const repair = await server.waitFor('agent/observe', 3); expect(repair.params).toMatchObject({ after: null });
+  await act(async () => server.socket.success(repair, { type: 'agent_observe', observation: { type: 'checkpoint', ...identity, source: 'live', cursor: { ...identity, cursor: '11' }, checkpoint: scoped('11') } }));
+  const following = await server.waitFor('agent/observe', 4); expect(following.params).toMatchObject({ after: { ...identity, cursor: '11' } });
+  await act(async () => server.socket.success(following, { type: 'agent_observe', observation: { type: 'events', after: { ...identity, cursor: '11' }, cursor: { ...identity, cursor: '12' }, events: [{ cursor: '12', event: { type: 'projection_transition', events: [], metadata: { read_cut: scoped('12').read_cut, collections: [], content: [] } } }] } }));
+  expect((await server.waitFor('agent/observe', 5)).params).toMatchObject({ after: { ...identity, cursor: '12' } });
+  expect(ui.queryByRole('alert')).toBeNull(); expect(server.requests.some(row => ['agent/interrupt', 'conversation/cancel', 'job/cancel'].includes(row.request.method))).toBe(false);
 });

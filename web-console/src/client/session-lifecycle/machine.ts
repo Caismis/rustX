@@ -1,5 +1,5 @@
 import { assign, raise, setup, type ActorRefFrom } from 'xstate';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v46';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v48';
 import { emptyFacts, sameClaim, type Admission, type Attached, type LifecycleFacts, type Observation, type SessionLifecyclePort } from './port';
 
 type Kind = 'open' | 'release' | 'switch' | 'delete' | 'recover' | 'inspect';
@@ -114,7 +114,10 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
       if (f.target) {
         if (f.attachmentNodeId !== node) throw new Error('The previous Node still owns an attachment. Release it before opening another node.');
         if (!observationCurrent(context(), f.attachmentObservation)) throw new Error('Release the retained attachment before opening again.');
-        await port.refresh(f.target);
+        // Repeated local opens share the already following attachment. A
+        // second bounded checkpoint handoff would retire a concurrently
+        // admitted navigation proof despite unchanged native identity.
+        if (!controlCurrent(context(), f.attachmentObservation)) await port.refresh(f.target);
         if (current() && controlCurrent(context(), f.attachmentObservation)) op.command.attached?.(f.target);
       } else {
         const admission = await port.admit(current);
@@ -131,12 +134,16 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
             } });
             if (settlement()) {
               self.send({ type: 'ATTACH_ACK', token: op.token, result });
-              if (result.target.session_id !== context().id || result.target.conversation_id !== conversation || result.snapshot.conversation_id !== conversation) throw new Error('Mismatched attachment identity.');
+              if (result.target.session_id !== context().id || result.target.conversation_id !== conversation) throw new Error('Mismatched attachment identity.');
+              // A caller check can synchronously release the actual claim.
+              // Read its native proof again after that callback has returned.
+              const callerCurrent = current();
               const observation = context().facts.attachmentObservation;
-              if (controlCurrent(context(), observation)) {
-                if (op.command.current() && controlCurrent(context(), observation)) op.command.attached?.(result.target);
-                if (observationCurrent(context(), observation)) await port.observeAttached(result, () => observationCurrent(context(), observation));
-              }
+              // The acknowledged native claim survives a superseded Shell
+              // selection. Establish its bounded baseline under that claim's
+              // own proof; only navigation completion belongs to the caller.
+              if (observationCurrent(context(), observation)) await port.observeAttached(result, () => observationCurrent(context(), observation));
+              if (callerCurrent && current() && controlCurrent(context(), observation)) op.command.attached?.(result.target);
             }
           }
         }
@@ -213,7 +220,7 @@ export const sessionLifecycleMachine = setup({
     attached: assign(({ context: c, event }) => {
       if (event.type !== 'ATTACH_ACK' || !c.active || c.active.generation !== c.generation) return {};
       const { result } = event, op = c.active;
-      const valid = result.target.session_id === c.id && result.target.conversation_id === op.conversation && result.snapshot.conversation_id === op.conversation;
+      const valid = result.target.session_id === c.id && result.target.conversation_id === op.conversation;
       const target = Object.freeze({ ...result.target });
       const observation = valid && intentCurrent(c, op) && c.facts.nodeId === op.node ? Object.freeze({ generation: c.generation, target, nodeId: op.node!, intentRevision: op.revision }) : undefined;
       // A fresh native claim establishes current ownership; historical transport

@@ -146,7 +146,7 @@ describe("subagent activity section", () => {
   it("renders an in-flight tool execution without progress", () => {
     assert.match(
       render([
-        child({ type: "tool", tool_call_id: "call-1", tool_id: "tool-grep" }),
+        child({ type: "tool_group", active:1, representative:{tool_call_id: "call-1", tool_id: "tool-grep",progress:null} }),
       ]),
       /tool-grep/,
     );
@@ -155,10 +155,9 @@ describe("subagent activity section", () => {
   it("renders the latest bounded tool progress", () => {
     const rendered = render([
       child({
-        type: "tool",
-        tool_call_id: "call-1",
-        tool_id: "tool-grep",
-        progress: { message: "scanning src", completed: 1, total: 2 },
+        type: "tool_group", active:1,
+        representative:{tool_call_id: "call-1",tool_id: "tool-grep",
+          progress: { message: "scanning src", completed: 1, total: 2 }},
       }),
     ]);
     assert.match(rendered, /tool-grep · scanning src · 1\/2/);
@@ -168,10 +167,8 @@ describe("subagent activity section", () => {
     const huge = `${"x".repeat(50_000)}\nsecond line`;
     const rendered = render([
       child({
-        type: "tool",
-        tool_call_id: "call-1",
-        tool_id: "tool-grep",
-        progress: { message: huge },
+        type: "tool_group", active:1,
+        representative:{tool_call_id: "call-1",tool_id: "tool-grep",progress: { message: huge }},
       }),
       subagent(`agent-${"y".repeat(50_000)}`, "sha256:d1", "active", {
         agent_id: "conv_7563d0be-1638-75d5-8d79-6768bd57808c",

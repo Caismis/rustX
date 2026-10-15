@@ -69,7 +69,9 @@ pub(super) fn read(
             );
         }
     }
+    let raw_tool_arguments = super::content::canonical_raw_arguments(connection, &canonical)?;
     Ok(LineageReadCut {
+        raw_tool_arguments,
         read_cut,
         conversation_id: conversation.clone(),
         surface_revision: revision,

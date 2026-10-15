@@ -86,22 +86,43 @@ async fn run(
     let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
-    let result = AgentExecution::new(
+    let result = prepared_execution(model, lease, cancellation, &tool_runtime)
+        .run()
+        .await;
+    (
+        common::durable_agent_result(result, store.as_ref()),
+        coordinator,
+    )
+}
+
+fn prepared_execution<'a>(
+    model: &Arc<FakeModel>,
+    lease: rustx::capabilities::AttemptCapabilityLease,
+    cancellation: &'a AgentCancellation,
+    tool_runtime: &'a rustx::tools::runtime::ConversationToolRuntime,
+) -> AgentExecution<'a> {
+    AgentExecution::new(
         request(model),
         lease,
         cancellation,
         support::default_execution_policy(),
         runtime(model),
-        &tool_runtime,
+        tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
-    (
-        common::durable_agent_result(result, store.as_ref()),
-        coordinator,
-    )
+}
+
+/// The controller cannot retain a parked fixture after an execution/assertion panic.
+struct SequentialControllerGuard {
+    release: tokio::sync::watch::Sender<bool>,
+    controller: tokio::task::AbortHandle,
+}
+impl Drop for SequentialControllerGuard {
+    fn drop(&mut self) {
+        self.release.send_replace(true);
+        self.controller.abort();
+    }
 }
 
 fn started() -> ModelEvent {
@@ -298,6 +319,16 @@ async fn sequential_barrier_blocks_later_calls() {
     tool_b.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
 
+    // Native storage/capability setup and initial conversation durability are
+    // preparation; the unchanged scheduling guard starts with execution.
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let store = tool_runtime.durable_store();
+    let (lease, _capability) = common::capability_lease(tools, &tool_runtime)
+        .await
+        .into_lease_and_coordinator();
+    let execution = prepared_execution(&model, lease, &cancellation, &tool_runtime);
+    let release_on_unwind = release_a.clone();
+
     let controller = tokio::spawn(async move {
         await_started(&mut started_a, "A started").await;
         // A is still parked: B must not have started.
@@ -308,13 +339,15 @@ async fn sequential_barrier_blocks_later_calls() {
         release_a.send_replace(true);
         await_started(&mut started_b, "B started after A's result existed").await;
     });
-    let (result, _capability) = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        run(&model, tools, &cancellation),
-    )
-    .await
-    .expect("run terminates");
+    let _controller_guard = SequentialControllerGuard {
+        release: release_on_unwind,
+        controller: controller.abort_handle(),
+    };
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), execution.run())
+        .await
+        .expect("run terminates");
     controller.await.expect("controller task");
+    let result = common::durable_agent_result(result, store.as_ref());
     assert_eq!(
         tool_messages(&result)
             .iter()

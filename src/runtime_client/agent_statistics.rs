@@ -1,11 +1,15 @@
 //! Child-owned statistics, independent of transcript windows and live activation.
 //! Like Harness's session meters and subagent timing projection, durable facts
 //! supply all readings; clients only interpolate a currently running clock.
-use super::response::{ConversationStatistics, ConversationTurnClock};
-use crate::durable::presentation::{FactQuery, FactScope};
+use super::response::ConversationStatistics;
+#[cfg(test)]
+use super::response::ConversationTurnClock;
+#[cfg(test)]
 use crate::durable::response::{add_usage, timing::ActivityFold};
 use crate::durable::{ConversationStore, ConversationStoreError};
+#[cfg(test)]
 use crate::events::types::RuntimeEvent;
+#[cfg(test)]
 use crate::runtime::identity::AttemptId;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -15,7 +19,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct AgentStatistics {
     pub statistics: ConversationStatistics,
-    pub occupancy: Option<crate::context::occupancy::ContextOccupancy>,
+    pub occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
     pub duration: AgentDuration,
 }
 
@@ -38,31 +42,21 @@ pub struct AgentActiveInterval {
     pub running: bool,
 }
 
-/// Cache synchronization is per durable Conversation, never per process.
-#[derive(Default)]
-pub(crate) struct StatisticsCache(
-    std::sync::Mutex<
-        std::collections::BTreeMap<
-            crate::runtime::identity::ConversationId,
-            std::sync::Arc<std::sync::Mutex<StatisticsFold>>,
-        >,
-    >,
-);
-impl StatisticsCache {
-    pub(crate) fn entry(
-        &self,
-        id: crate::runtime::identity::ConversationId,
-    ) -> std::sync::Arc<std::sync::Mutex<StatisticsFold>> {
-        std::sync::Arc::clone(
-            self.0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry(id)
-                .or_default(),
-        )
+/// Reads one immutable native aggregate; no per-child read cache is retained.
+pub(crate) fn read(
+    store: &dyn ConversationStore,
+    through: u64,
+    running_since: impl FnOnce() -> Option<DateTime<Utc>>,
+) -> Result<AgentStatistics, ConversationStoreError> {
+    let mut view = store.observation_agent_statistics(through)?;
+    view.occupancy = super::occupancy::read(store, through)?;
+    if let Some(active) = &mut view.duration.active {
+        active.running = running_since().is_some_and(|since| active.started_at >= since);
     }
+    Ok(view)
 }
 
+#[cfg(test)]
 #[derive(Default, Clone)]
 pub(crate) struct StatisticsFold {
     through: u64,
@@ -71,6 +65,7 @@ pub(crate) struct StatisticsFold {
     active_attempt: Option<AttemptId>,
     has_assistant: bool,
 }
+#[cfg(test)]
 impl StatisticsFold {
     /// Commit the cache only after the complete finite read succeeds. Repeated
     /// reads at the same frontier do no event work; recovery simply replays.
@@ -81,57 +76,27 @@ impl StatisticsFold {
         running_since: impl FnOnce() -> Option<DateTime<Utc>>,
     ) -> Result<AgentStatistics, ConversationStoreError> {
         if through != self.through {
-            let mut next = if through < self.through {
-                Self::default()
-            } else {
-                self.clone()
-            };
-            let mut after = next.through;
-            loop {
-                let events = store.read_presentation_events(&FactQuery {
-                    scope: FactScope::All,
-                    kinds: vec![
-                        "attempt_started",
-                        "turn_started",
-                        "model_request_started",
-                        "model_request_completed",
-                        "model_request_failed",
-                        "assistant_message_committed",
-                        "attempt_completed",
-                        "attempt_cancelled",
-                        "attempt_failed",
-                        "attempt_timed_out",
-                        "attempt_limit_exceeded",
-                        "tool_execution_started",
-                        "tool_execution_completed",
-                        "tool_execution_failed",
-                        "compaction_started",
-                        "compaction_completed",
-                    ],
-                    before: None,
-                    after,
-                    ascending: true,
-                    through,
-                    limit: 128,
-                })?;
-                if events.is_empty() {
-                    break;
-                }
-                for event in events {
-                    after = event.sequence;
-                    next.apply(event.attempt_id, event.timestamp, &event.event);
-                }
-            }
-            next.view.statistics.timing = next.activity.summary();
-            next.view.occupancy = crate::context::occupancy::read(store, through)?;
-            next.through = through;
-            *self = next;
+            let mut view = store.observation_agent_statistics(through)?;
+            view.occupancy = super::occupancy::read(store, through)?;
+            self.view = view;
+            self.through = through;
         }
         let mut view = self.view.clone();
         if let Some(active) = &mut view.duration.active {
             active.running = running_since().is_some_and(|since| active.started_at >= since);
         }
         Ok(view)
+    }
+
+    pub(crate) fn reference_events(
+        events: &[crate::events::types::RuntimeEventEnvelope],
+    ) -> AgentStatistics {
+        let mut fold = Self::default();
+        for event in events {
+            fold.apply(event.attempt_id.clone(), event.timestamp, &event.event);
+        }
+        fold.view.statistics.timing = fold.activity.summary();
+        fold.view
     }
 
     fn settle(&mut self, at: DateTime<Utc>) {
@@ -168,7 +133,9 @@ impl StatisticsFold {
                 self.has_assistant = false;
                 stats.turns += 1;
                 stats.latest_turn = Some(ConversationTurnClock {
-                    attempt_id: id.clone(),
+                    attempt_id: Some(id.clone()),
+                    attempt_id_deferred: false,
+                    attempt_id_source: None,
                     started_at: at,
                     ended_at: None,
                 });
@@ -221,7 +188,7 @@ impl StatisticsFold {
                 if let Some(clock) = stats
                     .latest_turn
                     .as_mut()
-                    .filter(|clock| clock.attempt_id == id)
+                    .filter(|clock| clock.attempt_id.as_ref() == Some(&id))
                 {
                     clock.ended_at = Some(at);
                 }
@@ -238,68 +205,6 @@ impl StatisticsFold {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    #[tokio::test(flavor = "current_thread")]
-    async fn independent_conversations_do_not_share_the_blocked_fold_lock() {
-        use crate::durable::SqliteConversationStore;
-        use crate::runtime::identity::ConversationId;
-        use std::sync::Arc;
-        let cache = Arc::new(StatisticsCache::default());
-        let a = ConversationId::generate();
-        let b = ConversationId::generate();
-        let held = cache.entry(a.clone());
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let holder = tokio::task::spawn_blocking(move || {
-            let _lock = held.lock().unwrap();
-            entered_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-        });
-        entered_rx.await.unwrap();
-        let owner = Arc::clone(&cache);
-        let (requested_tx, requested_rx) = tokio::sync::oneshot::channel();
-        let waiting_read = tokio::task::spawn_blocking(move || {
-            let fold = owner.entry(a);
-            requested_tx.send(()).unwrap();
-            let _lock = fold.lock().unwrap();
-        });
-        requested_rx.await.unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let store =
-            SqliteConversationStore::open(b.clone(), &directory.path().join("b.sqlite")).unwrap();
-        let independent = tokio::task::spawn_blocking(move || {
-            let attempt = AttemptId::new("b");
-            store
-                .append_event(crate::events::types::RuntimeEventEnvelope {
-                    schema_version: 1,
-                    event_id: crate::runtime::identity::EventId::new("b-start"),
-                    sequence: 0,
-                    conversation_id: b.clone(),
-                    attempt_id: Some(attempt.clone()),
-                    turn_id: None,
-                    timestamp: Utc::now(),
-                    event: RuntimeEvent::AttemptStarted {
-                        attempt_id: attempt,
-                    },
-                })
-                .unwrap();
-            let through = store.presentation_frontier().unwrap();
-            cache
-                .entry(b)
-                .lock()
-                .unwrap()
-                .read(&store, through, || None)
-                .unwrap()
-        })
-        .await
-        .unwrap();
-        assert_eq!(independent.statistics.turns, 1);
-        assert!(!independent.duration.active.unwrap().running);
-        assert!(!waiting_read.is_finished());
-        release_tx.send(()).unwrap();
-        holder.await.unwrap();
-        waiting_read.await.unwrap();
-    }
-
     #[test]
     fn timeout_and_abandoned_intervals_never_include_inactive_gaps() {
         let mut fold = StatisticsFold::default();

@@ -1,4 +1,5 @@
-import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v46';
+import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
+import type { RuntimeClientTranscriptEntry, TurnProcessOutcome } from '../../../protocol/app-server/v48';
 import type { StepActivity, StepCounts } from '../presentation/agent/StepGroup';
 
 /** One member of a step group: an Assistant message's listed blocks, or a whole bodied entry. */
@@ -70,9 +71,9 @@ export function stepGroups(entries: readonly RuntimeClientTranscriptEntry[], bod
     const item = entry.item;
     // Interaction audits carry their Attempt but no process membership; they stay
     // inside the settled Attempt whose rows surround them.
-    const audit = !process && (item.type === 'interaction_requested' || item.type === 'interaction_settled') && item.attempt_id === ownerAttempt;
-    const key = audit ? owner : process && (SETTLED.has(process.outcome) || process.outcome === 'running') ? JSON.stringify([process.conversation_id, process.attempt_id]) : undefined;
-    if (key !== owner) { flush(); owner = key; ownerAttempt = key ? process?.attempt_id : undefined; }
+    const audit = !process && (item.type === 'interaction_requested' || item.type === 'interaction_settled') && ownerAttempt != null && item.attempt_id === ownerAttempt;
+    const key = audit ? owner : process && (SETTLED.has(process.outcome) || process.outcome === 'running') ? attemptOwnerKey(process) : undefined;
+    if (key !== owner) { flush(); owner = key; ownerAttempt = key ? process?.attempt_id ?? undefined : undefined; }
     if (!key) continue;
     // Frozen partial prose stays in transcript order like an Assistant reply,
     // never inside a Tool/reasoning group or a raw recovery disclosure.

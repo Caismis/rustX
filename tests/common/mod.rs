@@ -741,6 +741,8 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         _attempt_id: &AttemptId,
         _event: &RuntimeEvent,
         _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
     ) {
     }
 
@@ -748,11 +750,16 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<rustx::durable::TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, _observation: &AgentStatusObservation) {}
+    fn observe_status(
+        &self,
+        _observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
+    }
 
     fn observe_publication_opened(&self, _attempt_id: &AttemptId, start: &PublicationStreamStart) {
         self.opened
@@ -765,7 +772,12 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
             .push(PublicationObservation::Opened(start.stream_id.clone()));
     }
 
-    fn observe_publication(&self, _attempt_id: &AttemptId, frame: &PublicationFrame) {
+    fn observe_publication(
+        &self,
+        _attempt_id: &AttemptId,
+        frame: &PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
+    ) {
         self.frames
             .lock()
             .expect("publication frame lock")
@@ -777,7 +789,7 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         &self,
         _attempt_id: &AttemptId,
         audit: &PublicationAudit,
-        _transcript_cursor: rustx::durable::TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
         self.audits
             .lock()
@@ -1792,3 +1804,111 @@ pub fn discover_python_packages(
 
 #[path = "identity.rs"]
 pub mod identity;
+
+/// Typed materialization of one deliberately small native fixture row.
+/// A deferred row is a fixture failure, never silently replaced with an empty object.
+pub fn native_domain_single<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+    result: rustx::runtime_client::RuntimeClientResult,
+) -> T {
+    let rustx::runtime_client::RuntimeClientResult::DomainPage { mut page } = result else {
+        panic!("bounded native domain page");
+    };
+    assert_eq!(page.total, 1, "singleton fixture");
+    assert_eq!(page.items.len(), 1, "singleton row fully admitted");
+    assert!(
+        page.next_offset.is_none(),
+        "singleton fixture has no unread row"
+    );
+    let item = page.items.remove(0);
+    assert!(!item.deferred, "small fixture must materialize inline");
+    rustx::runtime_client::checkpoint::decode_domain_value(
+        item.value.expect("inline typed native row"),
+    )
+    .expect("valid native structural value")
+}
+
+/// Current finite model header; additional profile facts are checked explicitly.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeCatalogModelHeader {
+    model: rustx::model::catalog::ModelRef,
+    protocol: rustx::model::types::ModelProtocol,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    context_window: u64,
+    max_output_tokens: u32,
+    declared_capabilities: rustx::model::catalog::ModelCapabilities,
+    effective_capabilities: rustx::model::catalog::ModelCapabilities,
+    profiles: Vec<rustx::model::catalog::ModelProfileView>,
+    default_profile: Option<rustx::model::catalog::ModelProfileId>,
+    credential_source: rustx::model::catalog::CredentialSourceView,
+    profile_count: u64,
+    profiles_deferred: bool,
+}
+
+pub fn native_catalog_page(
+    page: rustx::runtime_client::checkpoint::CheckpointPage,
+) -> rustx::model::catalog::ModelCatalogView {
+    assert_eq!(page.domain, "model_catalog.models");
+    assert!(
+        page.next_offset.is_none(),
+        "fixture catalog is completely bounded"
+    );
+    assert_eq!(page.total, u64::try_from(page.items.len()).unwrap());
+    assert!(page.items.len() <= 32);
+    let models = page
+        .items
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, item)| {
+            assert_eq!(item.offset, u64::try_from(ordinal).unwrap());
+            assert!(!item.deferred, "fixture model header is inline");
+            let header: NativeCatalogModelHeader =
+                rustx::runtime_client::checkpoint::decode_domain_value(
+                    item.value.expect("finite model header value"),
+                )
+                .expect("current typed native model header");
+            assert!(
+                !header.profiles_deferred,
+                "small fixture has exact inline profiles"
+            );
+            assert_eq!(
+                header.profile_count,
+                u64::try_from(header.profiles.len()).unwrap()
+            );
+            assert!(header.profiles.len() <= 32);
+            if header.profile_count > 0 {
+                let frontier = page
+                    .collections
+                    .iter()
+                    .find(|frontier| {
+                        frontier.domain == format!("model_catalog.models.{}.profiles", item.offset)
+                    })
+                    .expect("advertised native profile collection");
+                assert_eq!(frontier.revision, page.read_cut.revision);
+                assert_eq!(frontier.total, header.profile_count);
+                assert_eq!(frontier.next_offset, Some(0));
+            }
+            rustx::model::catalog::CatalogModelView {
+                model: header.model,
+                protocol: header.protocol,
+                context_window: header.context_window,
+                max_output_tokens: header.max_output_tokens,
+                declared_capabilities: header.declared_capabilities,
+                effective_capabilities: header.effective_capabilities,
+                profiles: header.profiles,
+                default_profile: header.default_profile,
+                credential_source: header.credential_source,
+            }
+        })
+        .collect();
+    rustx::model::catalog::ModelCatalogView { models }
+}
+
+pub fn native_domain_catalog(
+    result: rustx::runtime_client::RuntimeClientResult,
+) -> rustx::model::catalog::ModelCatalogView {
+    let rustx::runtime_client::RuntimeClientResult::DomainPage { page } = result else {
+        panic!("bounded native catalog page");
+    };
+    native_catalog_page(page)
+}

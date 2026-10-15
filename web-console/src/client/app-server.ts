@@ -1,21 +1,32 @@
+import { readSourceRepairFields } from '../../../protocol/app-server/source-observation';
+import {interactionBody,readInteractionBody} from '../../../protocol/app-server/interaction';
+import { materializeApplication } from '../../../protocol/app-server/application-observation';
+import { sourceObservation } from '../../../protocol/app-server/source-observation';
+import { materializeFields } from '../../../protocol/app-server/field-observation';
+import { materializeEffective } from '../../../protocol/app-server/effective-observation';
+import { domainValue, type DomainReader } from '../../../protocol/app-server/domain-observation';
+import { materializeSettings } from '../../../protocol/app-server/settings-observation';
+import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
 import { SessionLifecycles } from './session-lifecycle/system';
 import { emptyFacts, type Observation, type LifecycleFacts, type SessionLifecyclePort } from './session-lifecycle/port';
 import { lifecycleAvailability, type LifecycleContext } from './session-lifecycle/machine';
 import { AgentMeters } from './agent-meters';
 import { UploadFailure, AttachmentIntakes } from './uploads';
-import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
+import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { FirstSubmissions } from '../app/new-conversation/first-submit';
 import { SessionExportController } from "./session-export";
-import { TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
+import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches,traceInterests, type TraceCache,type TraceFieldReader } from './trace';
 import type {
   TraceToolLocator, ConfigurationApplication, PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
-  Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
+  Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot, RuntimeClientEvent,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v46';
+  ConfigRepairReceipt, SourceTarget,
+} from '../../../protocol/app-server/v48';
 import { transferUpload, uploadOperationId } from '../../../protocol/app-server/upload';
-import { HISTORY_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, type TranscriptCache } from './transcript';
-import type { ConversationTurn, ConversationTurnPage } from '../../../protocol/app-server/v46';
+import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, prependTranscript, refreshTranscript, replaceTranscript, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
+import type { ObservedTurn, ObservedTurnPage } from '../../../protocol/app-server/v48';
 import { ProtocolLog, type WireContext } from './protocol-log';
+
 
 interface OutlineDemand {
   offset?: number;
@@ -23,8 +34,8 @@ interface OutlineDemand {
   paging?: OutlinePagingIntent;
   automatic: boolean;
   current: () => boolean;
-  work: Promise<ConversationTurnPage | undefined>;
-  resolve: (page?: ConversationTurnPage) => void;
+  work: Promise<ObservedTurnPage | undefined>;
+  resolve: (page?: ObservedTurnPage) => void;
 }
 interface OutlineRead {
   authority: () => boolean;
@@ -66,14 +77,18 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Last native catalog row, retained when the Sidebar reads a different page. */
   summary?: SessionSummary;
   snapshot?: RuntimeClientSnapshot;
+  checkpoint?: import('../../../protocol/app-server/v48').RuntimeClientCheckpoint;
+  observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
+  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v48').CheckpointReadCut;body:import('../../../protocol/app-server/v48').RoutedInteraction};
+  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v48').CheckpointPage;rows:import('../../../protocol/app-server/v48').RuntimeClientInteractionHeader[];offset:number};
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; statistics: import('../../../protocol/app-server/v46').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v46').ContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v48').CheckpointReadCut; statistics: import('../../../protocol/app-server/v48').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v48').RuntimeClientContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
-  turnOutline?: { paging: OutlinePagingIntent; page?: ConversationTurnPage; loading?: boolean; error?: string };
+  turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
   settings?: SessionPersistentState;
   /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
@@ -81,7 +96,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v46').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v48').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -113,8 +128,63 @@ export interface UncertainOperation {
   interactionKey?: string;
   generation: number;
 }
+/** The latest native automatic repair receipt of one configuration source
+ * (Issue #464). `receipt` is absent when native retains none for the
+ * source — withdrawn, never recorded, or forgotten by its finite ledger —
+ * which never says the source is valid. `authorityId` is the negotiated App Server
+ * authority that announced it: a receipt id names one repair occurrence
+ * within its authority only, so equal ids from distinct authorities are
+ * distinct repairs. `sequence` is the native repair-ledger sequence the
+ * observation is current at — a notice's `sequence` or a read's
+ * `repair_sequence` — which alone orders two observations of a source; a
+ * receipt id never does. */
+export interface SourceRepairObservation {
+  authorityId: string;
+  target: SourceTarget;
+  receipt?: ConfigRepairReceipt;
+  sequence: string;
+}
+/** The stable client key of one configuration source. */
+export function sourceRepairKey(target: SourceTarget): string {
+  return target.kind === 'user' ? 'user' : `workspace:${target.directory}`;
+}
+/** Workspaces whose repair observations the client keeps: as many as native
+ * repair interest and the native ledger retain. The User has its own slot. */
+export const SOURCE_REPAIR_WORKSPACES = 64;
+/** The client's one retention policy for per-source repair state: `value`
+ * becomes `key`'s entry, most recently observed last; beyond
+ * `SOURCE_REPAIR_WORKSPACES` Workspaces the least recently observed Workspace
+ * is forgotten, whether or not the User has an entry, and the User never is.
+ * `sources` is never modified. Returns the retained entries and the forgotten
+ * one. */
+export function retainSourceRepair<V>(sources: Readonly<Record<string, V>>, key: string, value: V): [Record<string, V>, V | undefined] {
+  const entries = Object.entries(sources).filter(([source]) => source !== key);
+  entries.push([key, value]);
+  const workspaces = entries.filter(([source]) => source !== 'user').length;
+  const at = workspaces > SOURCE_REPAIR_WORKSPACES ? entries.findIndex(([source]) => source !== 'user') : -1;
+  const forgotten = at < 0 ? undefined : entries.splice(at, 1)[0][1];
+  return [Object.fromEntries(entries), forgotten];
+}
+/** Whether native ledger sequence `a` is older than `b`; both are exact
+ * decimal sequences of one App Server authority. */
+function olderSequence(a: string, b: string): boolean {
+  return BigInt(a) < BigInt(b);
+}
+/** Whether two observations of one source state the same level: the same
+ * receipt occurrence, or no receipt on either side. */
+function sameLevel(a: SourceRepairObservation, b: SourceRepairObservation): boolean {
+  return a.receipt?.id === b.receipt?.id;
+}
 export interface ClientView {
   configuration?: Readonly<Record<string, ConfigurationApplication>>;
+  configurationObservation?: Readonly<Record<string,{version:string;phase:'deferred'|'loading'|'unavailable';error?:string}>>;
+  /** Source repair observations of this connection, by `sourceRepairKey`,
+   * least recently observed first. Source-scoped: never keyed by a Session or
+   * an application scope, replaced on every connection, whose server
+   * announces each latest receipt again, and finite: the User and
+   * `SOURCE_REPAIR_WORKSPACES` Workspaces (`retainSourceRepair`). Repair is
+   * not application: `configuration` reports that. */
+  sourceRepairs?: Readonly<Record<string, SourceRepairObservation>>;
   authorityRevision?: number;
   /** Native AppServerHost identity; unlike generation, stable across reconnect. */
   authorityId?: string;
@@ -138,6 +208,7 @@ export interface DetachedEvidence {
   sessions: readonly (Pick<SessionView, 'id' | 'error' | 'modelMutation' | 'cancellation'> & { deletion?: 'uncertain' | SessionView['deletionRecovery'] })[];
 }
 export interface Socket {
+  readonly readyState: number;
   onopen: ((event: Event) => unknown) | null;
   onmessage: ((event: MessageEvent) => unknown) | null;
   onclose: ((event: CloseEvent) => unknown) | null;
@@ -189,7 +260,7 @@ export class OutcomeUncertain extends Error {
   constructor() { super('Response lost after transmission. Outcome uncertain; the request was not replayed. Reconnect and inspect authoritative state.'); }
 }
 export function isOutcomeUncertain(error: unknown): boolean {
-  return error instanceof OutcomeUncertain || (error instanceof RpcFailure && error.error.data?.kind === "committed_durability_uncertain");
+  return error instanceof OutcomeUncertain || (error instanceof RpcFailure && ["committed_durability_uncertain", "outcome_unknown"].includes(error.error.data?.kind ?? ""));
 }
 export class RpcFailure extends Error {
   constructor(readonly error: Extract<Response, { error: unknown }>['error']) {
@@ -226,27 +297,25 @@ function goalRefusal(error: unknown) {
 }
 const READS = new Set<Request1['method']>([
   'session/traceLocateTool', 'agent/traceLocateTool', 'agent/trace', 'agent/traceDetail',
-  'agent/conversationCancel', 'agent/conversation', 'agent/artifactRead', 'agent/deliveryRead', 'agent/deliveryLocate', 'session/turns', 'session/uploadStatus',
+  'configuration/sourceValueRead', 'configuration/sourcePage', 'session/attachmentStatus', 'session/editorRead', 'conversation/contentRead', 'conversation/checkpointPage', 'conversation/checkpointValueRead', 'agent/observeCancel', 'agent/observe', 'agent/artifactRead', 'agent/deliveryRead', 'agent/deliveryLocate', 'session/turns', 'session/uploadStatus',
+  'delivery/read','delivery/locate','mcp/probe','server/diagnostics',
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/summary', 'session/node', 'session/tree', 'session/deletePreview',
-  'session/history', 'session/statistics', 'session/traceHistory', 'session/traceHistoryDetail', 'session/configuration', 'session/snapshot', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/model', 'session/models',
-  'configuration/sourcesRead', 'session/effectiveConfiguration', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'agent/turns', 'agent/statistics', 'session/boundaries',
+  'session/history', 'session/historyContentRead', 'session/historyPage', 'session/historyValueRead', 'session/nodeOriginHistory', 'session/nodeValueRead', 'session/traceContentRead', 'session/statistics', 'session/traceHistory', 'session/traceHistoryDetail', 'session/tracePage', 'session/traceValueRead', 'session/configuration', 'session/configurationValueRead', 'session/checkpoint', 'session/transcript', 'session/trace', 'session/traceDetail', 'session/settings', 'session/settingsValueRead', 'session/model', 'session/models',
+  'configuration/sourcesRead', 'session/effectiveConfiguration', 'session/effectiveConfigurationValueRead', 'session/effectiveConfigurationPage', 'resources/read', 'job/status', 'job/list', 'job/wait', 'agent/status', 'agent/list', 'agent/wait', 'agent/transcript', 'agent/turns', 'agent/statistics', 'session/boundaries',
 ]);
+const mayCommit = (operation: Request1) => !READS.has(operation.method) && !(operation.method === 'goal/control' && operation.params.control.action === 'show');
 /** Domain settlement has no RPC response deadline. Separate bounded lanes keep
  * observation/admission from occupying the slots needed to stop or inspect work. */
-function requestLane(method: Request1['method']): 'wait' | 'admission' | 'control' | 'observation' | 'rpc' {
+function requestLane(method: Request1['method']): 'control' | 'observation' | 'rpc' {
   switch (method) {
-    // Compaction awaits native summary generation and release, just like other
-    // long-lived domain waits. It must not expire the shared socket's RPC clock.
-    case 'mcp/probe': case 'context/compact': case 'agent/wait': case 'job/wait': return 'wait';
-    case 'agent/conversation': return 'observation';
-    case 'agent/conversationCancel': return 'control';
-    case 'agent/sendMessage': return 'admission';
-    case 'agent/interrupt': case 'job/cancel': case 'turn/cancel': return 'control';
+    case 'agent/observe': return 'observation';
+    case 'agent/observeCancel': case 'delivery/cancel': case 'turn/cancel': case 'agent/interrupt': case 'job/cancel': case 'session/detach': case 'interaction/cancel': return 'control';
     default: return 'rpc';
   }
 }
-const DOMAIN_CAPACITY = { wait: 4, admission: 2, control: 2, observation: 2 } as const;
-const RPC_CAPACITY = 8;
+const DOMAIN_CAPACITY = { control: 2, observation: 8 } as const;
+const RPC_CAPACITY = 6;
+const longWait = (method: Request1['method']) => ['mcp/probe', 'context/compact', 'agent/wait', 'job/wait'].includes(method);
 /** Operation-admission validations reserve ordinary RPC slots so the final check
  * stays adjacent to send, but at most two at once: a stalled Product Host read
  * can never take the remaining slots needed to cancel or control native work. */
@@ -281,6 +350,28 @@ export class AppServerClient {
   dispose() { this.attachmentIntakes.dispose(); this.firstSubmissions.dispose(); return this.disconnect(); }
   private socket?: Socket;
   private initialized = false;
+  /** Repair observations this connection delivered before its authority was
+   * negotiated; attributed to that authority once `initialize` succeeds.
+   * Finite, under the same retention as `sourceRepairs`. */
+  private unattributedRepairs: Record<string, Omit<SourceRepairObservation, 'authorityId'>> = {};
+  /** The highest native sequence at which this connection forgot a source.
+   * Whatever a source absent from `sourceRepairs` held was current at or
+   * before it, so a notice of an absent source ordered at or after it is never
+   * older than what was forgotten. One ordered before it may be the forgotten
+   * history of an evicted source, or the first notice of a source never seen:
+   * it is ambiguous, never applied, and the source is recovered by an
+   * authoritative read instead. One value, however many sources came and went. */
+  private repairsForgottenThrough = '0';
+  /** This connection's Workspace repair reads in flight, each with the
+   * highest sequence at which its own source was forgotten while it was in
+   * flight. Anything forgotten before a read was sent is older than its
+   * answer, since native snapshots after receiving it; anything forgotten
+   * meanwhile is compared exactly. Each leaves when its read settles. */
+  private repairReads = new Set<{ key: string; forgotten: string }>();
+  /** Workspaces awaiting a recovery read: one entry per source, finite
+   * (`retainSourceRepair`), read one at a time. */
+  private repairRecoveries: Record<string, SourceTarget> = {};
+  private recoveringRepairs = false;
   private nextId = 0;
   private listeners = new Set<() => void>();
   private pending = new Map<string, Pending>();
@@ -288,6 +379,20 @@ export class AppServerClient {
   private dirty = new Set<string>();
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
+  private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v48').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private retainAppliedObservations() {
+    for(const [id,chain] of this.observationChains) {
+      const view=this.state.views[id];
+      if(!view?.target||!view.snapshot||!view.checkpoint||!chain.applied||view.cursor!==chain.applied) {this.resumeSeeds.delete(id);continue;}
+      const bytes=new TextEncoder().encode(JSON.stringify(view.snapshot)).length;
+      if(bytes>1_048_576){this.resumeSeeds.delete(id);continue;}
+      this.resumeSeeds.delete(id);
+      this.resumeSeeds.set(id,{target:view.target,snapshot:view.snapshot,checkpoint:view.checkpoint,cursor:chain.applied,bytes});
+    }
+    let bytes=Array.from(this.resumeSeeds.values()).reduce((sum,value)=>sum+value.bytes,0);
+    while(this.resumeSeeds.size>32||bytes>16*1024*1024){const key=this.resumeSeeds.keys().next().value!;bytes-=this.resumeSeeds.get(key)!.bytes;this.resumeSeeds.delete(key);}
+  }
   private readonly lifecycles = new SessionLifecycles({
     transport: () => ({ generation: this.state.generation, connected: this.initialized }),
     port: id => this.lifecyclePort(id),
@@ -339,7 +444,8 @@ export class AppServerClient {
     return this.lifecycles.observes(id, admission);
   }
   isAttachmentControlCurrent(id: string, admission: SessionView['attachmentObservation']): boolean {
-    return this.lifecycles.controls(id, admission);
+    return !!this.state.views[id]?.snapshot && this.observationChains.get(id)?.phase === 'following'
+      && this.lifecycles.controls(id, admission);
   }
   private publish(patch: Partial<ClientView>) {
     this.state = { ...this.state, ...patch };
@@ -353,7 +459,7 @@ export class AppServerClient {
   private projectLifecycle(id: string, context: LifecycleContext, previous?: LifecycleContext) {
     const view = this.state.views[id] ?? { id, summary: this.state.sessions.find(row => row.id === id), ...emptyFacts };
     const facts = context.facts;
-    const changedNode = previous && facts.nodeId !== previous.facts.nodeId;
+    const changedNode=previous&&facts.nodeId!==undefined&&previous.facts.nodeId!==undefined&&facts.nodeId!==previous.facts.nodeId;
     const opening = facts.attachment === 'attaching' && previous?.epoch !== context.epoch;
     const revoked = !!previous?.facts.attachmentObservation && facts.attachmentObservation !== previous.facts.attachmentObservation;
     if (revoked) this.retireObservationWork(id);
@@ -362,7 +468,7 @@ export class AppServerClient {
     const result = context.attachmentResult;
     const projection: SessionView = { ...view, ...facts, lifecycle: lifecycleAvailability(context),
       ...(revoked ? {
-        history: view.history && { ...view.history, loading: false },
+        history:view.history?.loading?{...view.history,loading:false}:view.history,
         trace: view.trace && { ...view.trace, loading: false, details: Object.fromEntries(Object.entries(view.trace.details).filter(([, detail]) => !detail.loading)) },
         turnOutline: view.turnOutline && { ...view.turnOutline, loading: false },
         turnNavigation: view.turnNavigation && { intent: view.turnNavigation.intent },
@@ -370,8 +476,8 @@ export class AppServerClient {
       ...(changedNode ? { snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(opening ? { modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined } : {}),
-      ...(attached && result ? { snapshot: result.snapshot, cursor: result.cursor, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
-        history: replaceTranscript(result.snapshot.transcript, view.history), trace: this.supersedeTrace(id, replaceTrace(result.snapshot.trace, view.trace)), turnOutline: undefined, turnNavigation: undefined } : {}),
+      ...(attached && result ? { snapshot: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+        turnOutline: undefined, turnNavigation: undefined } : {}),
     };
     if (context.deleted) {
       this.retireAttachmentWork(id);
@@ -407,7 +513,20 @@ export class AppServerClient {
         return found.conversation_id;
       },
       admit: current => this.admitSessionOperation(id, current),
-      attach: (node_id, admission) => native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission),
+      attach: async (node_id, admission) => {
+        const generation = this.state.generation;
+        try { return await native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission); }
+        catch (error) {
+          // A bounded receipt can be lost after commitment. Reconcile the
+          // existing connection claim; never replay Attach to infer its outcome.
+          if (!isOutcomeUncertain(error) || generation !== this.state.generation || this.state.connection !== 'connected') throw error;
+          const status = await this.request({method:'session/attachmentStatus',params:{session_id:id}},'attachment_status',undefined,admission.current);
+          if (!status.target || status.target.session_id !== id) throw error;
+          const {node} = await this.request({method:'session/node',params:{session_id:id,node_id}},'node',undefined,admission.current);
+          if (node.id !== node_id || node.conversation_id !== status.target.conversation_id) throw error;
+          return {type:'attached' as const,target:status.target,configuration_revision:status.configuration_revision,attachment_kind:'controller' as const,observation_source:'live' as const};
+        }
+      },
       detach: async (target, admission) => { await native({ method: 'session/detach', params: { target } }, 'detached', admission); },
       switchNode: async (target, node_id, admission) => (await native({ method: 'session/switchNode', params: { target, node_id } }, 'session', admission)).session,
       delete: async (expected_target_revision, admission) => (await native({ method: 'session/delete', params: { session_id: id, expected_target_revision } }, 'deletion', admission)).result,
@@ -415,23 +534,49 @@ export class AppServerClient {
       inspectDeletion: async current => (await this.request({ method: 'session/deletePreview', params: { session_id: id } }, 'deletion', undefined, current)).result,
       observeAttached: async (result, current) => {
         if (!current()) return;
-        if (result.configuration) this.publish({ configuration: { ...this.state.configuration, [id]: result.configuration } });
-        this.reconcileInteractions(id); this.settleSubmissions(id);
-        const settings = await this.request({ method: 'session/settings', params: { session_id: id } }, 'settings', undefined, current);
-        if (!current()) return;
-        this.setSession(id, { settings: settings.settings });
-        void this.refreshDisplaySummary(id).catch(() => {});
-        if (this.dirty.delete(id)) {
-          if (this.resubscribe.has(id)) await this.refresh(id);
-          else {
-            try { await this.request({ method: 'session/subscribe', params: { target: result.target, after_cursor: result.cursor } }, 'subscribed', undefined, current); }
-            catch (error) {
-              if (!current()) return;
-              if (!(error instanceof RpcFailure) || error.error.data?.kind !== 'resync_required') throw error;
-              this.resubscribe.add(id); await this.refresh(id);
-            }
-          }
+        const previous=this.resumeSeeds.get(id);
+        this.resumeSeeds.delete(id);
+        const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
+          &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
+        let checkpoint:import('../../../protocol/app-server/v48').RuntimeClientCheckpoint;
+        let observed:RuntimeClientSnapshot;
+        if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
+        else {
+          this.setSession(id,{observationState:'checkpointLoading'});
+          checkpoint=(await this.request({method:'session/checkpoint',params:{target:result.target,trace_records:[]}},'checkpoint',undefined,current)).checkpoint;
+          validateRootCheckpoint(result.target, checkpoint);
+          observed=checkpointSnapshot(checkpoint);
         }
+        if(!current())return;
+        validateRootCheckpoint(result.target, checkpoint);
+        const chain=new ObservationChain<RuntimeClientEvent>();
+        chain.installCheckpoint(checkpoint.cursor);
+        this.observationChains.set(id,chain);
+        this.setSession(id,{snapshot:observed,checkpoint,cursor:checkpoint.cursor,observationState:'subscribePending',
+          ...(!resumable&&this.state.views[id]?.modelMutation?.generation!==this.state.generation?{modelMutation:undefined}:{}),
+          history:replaceTranscript(observed.transcript,this.state.views[id]?.history),
+          trace:this.supersedeTrace(id,({...replaceTrace(observed.trace,this.state.views[id]?.trace,checkpoint.read_cut),fields:this.liveTraceFields(result.target)}))});
+        chain.beginSubscription(checkpoint.cursor);
+        try {
+          const receipt=await this.request({method:'session/subscribe',params:{target:result.target,after_cursor:chain.applied!}},'subscribed',undefined,current);
+          if(!current()||this.observationChains.get(id)!==chain)return;
+          if(!sameTarget(receipt.target,result.target)||!chain.acceptReceipt(receipt.registration_id,receipt.after_cursor))throw new Error('Subscription recovery required.');
+        } catch(error) {
+          if(!current())return;
+          chain.requireRecovery();
+          this.setSession(id,{observationState:'resyncRequired'});
+          if(error instanceof RpcFailure&&error.error.data?.kind==='resync_required'){
+            this.resubscribe.add(id);await this.refresh(id);return;
+          }
+          throw error;
+        }
+        this.setSession(id, { observationState: chain.phase });
+        this.reconcileInteractions(id); this.settleSubmissions(id);
+        const settings=await this.readSettings(id,current);
+        if(!current())return;
+        this.setSession(id,{settings:settings.settings});
+        this.visitRepairs(settings.settings.cwd);
+        void this.refreshDisplaySummary(id).catch(() => {});
       },
       refresh: () => this.refresh(id),
       cold: current => { void this.readHistoryPreview(id, current); void this.readColdMetadata(id, current); void this.readTracePreview(id, current); },
@@ -468,6 +613,7 @@ export class AppServerClient {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.lifecycles.restore(id);
   }
   private retireAuthority() {
+    this.resumeSeeds.clear();
     this.attachmentIntakes.retireAll();
     this.firstSubmissions.retireAuthority();
     const sessions = Object.values(this.state.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation)
@@ -504,11 +650,15 @@ export class AppServerClient {
     if (replacing) {
       this.retireAuthority();
     }
-    this.publish({ configuration: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
+    this.configurationCuts.clear();this.configurationWeights.clear();
+    this.unattributedRepairs = {};
+    this.repairsForgottenThrough = '0';
+    this.repairRecoveries = {};
+    this.publish({ configuration: {}, configurationObservation: {}, sourceRepairs: {}, endpoint: url.href, connection: transition === 'reconnect' ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v46', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v48', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -526,12 +676,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 46, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 48, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 46 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v46 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 48 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v48 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -546,6 +696,9 @@ export class AppServerClient {
       }
       this.publish({ authorityId: hello.authority_id });
       this.initialized = true;
+      const unattributed = this.unattributedRepairs;
+      this.unattributedRepairs = {};
+      for (const observation of Object.values(unattributed)) this.observeRepair({ ...observation, authorityId: hello.authority_id });
       this.lifecycles.transport(generation, true);
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.listSessions();
@@ -589,13 +742,110 @@ export class AppServerClient {
     const views = { ...this.state.views }; delete views[id];
     this.publish({ views });
   }
+  /** Applies one native observation of this connection's authority unless
+   * it is not newer than what this connection holds, or may have held, of its
+   * source. A held source orders it by sequence alone: a higher sequence
+   * replaces it, even with the same receipt or with no receipt on either
+   * side, so a withdrawal retires the receipt and an unchanged one advances
+   * without being presented again (presentation follows receipt ids). Two
+   * observations at one sequence agree; one that disagrees is inconsistent,
+   * never newer, so the held one stays and a notice's source is read again.
+   * An absent source may have been forgotten through `forgotten` — for a
+   * read, its own bound; for a notice, the connection's frontier — and an
+   * observation older than that is never applied; an ambiguous notice is
+   * recovered by reading its source again. */
+  private observeRepair(observation: SourceRepairObservation, forgotten?: string) {
+    const key = sourceRepairKey(observation.target);
+    const known = this.state.sourceRepairs?.[key];
+    if (known) {
+      if (olderSequence(observation.sequence, known.sequence)) return;
+      if (!olderSequence(known.sequence, observation.sequence)) {
+        if (!sameLevel(observation, known) && forgotten === undefined) this.recoverRepairs(observation.target);
+        return;
+      }
+    } else if (key !== 'user' && olderSequence(observation.sequence, forgotten ?? this.repairsForgottenThrough)) {
+      if (forgotten === undefined) this.recoverRepairs(observation.target);
+      return;
+    }
+    const [sourceRepairs, evicted] = retainSourceRepair(this.state.sourceRepairs ?? {}, key, observation);
+    if (evicted) this.forgetRepairs(evicted);
+    this.publish({ sourceRepairs });
+  }
+  /** Records that this connection no longer holds `evicted`'s source. */
+  private forgetRepairs({ target, sequence }: SourceRepairObservation) {
+    if (olderSequence(this.repairsForgottenThrough, sequence)) this.repairsForgottenThrough = sequence;
+    const key = sourceRepairKey(target);
+    for (const read of this.repairReads) if (read.key === key && olderSequence(read.forgotten, sequence)) read.forgotten = sequence;
+  }
+  /** Reads `target`'s repair observations authoritatively and folds them in:
+   * `configuration/sourcesRead` is read-only on the server and answers for
+   * exactly the canonical target it was asked about. An answer older than
+   * what this connection meanwhile observed of the source — and then forgot —
+   * changes nothing, and an answer from a connection that has since ended is
+   * dropped. */
+  private async readRepairs(target: SourceTarget) {
+    const generation = this.state.generation;
+    const authorityId = this.state.authorityId;
+    if (!authorityId) return;
+    const read = target.kind === 'workspace' ? { key: sourceRepairKey(target), forgotten: '0' } : undefined;
+    if (read) this.repairReads.add(read);
+    try {
+      const current = () => this.current(generation) && this.initialized && !!authorityId && this.state.authorityId === authorityId;
+      const result = await this.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings', undefined, current);
+      const projection = await readSourceRepairFields(result.projection, async (reference, offset) =>
+        (await this.request({ method: 'configuration/sourceValueRead', params: { target, reference, offset, max_bytes: 65_536 } }, 'source_value_chunk', undefined, current)).chunk, current);
+      if (!current()) return;
+      const sequence = projection.repair_sequence;
+      // The User is never forgotten, so nothing it held can be newer.
+      this.observeRepair({ authorityId, target: { kind: 'user' }, receipt: projection.user_repair ?? undefined, sequence }, '0');
+      if (read) this.observeRepair({ authorityId, target, receipt: projection.workspace_repair ?? undefined, sequence }, read.forgotten);
+    } finally {
+      if (read) this.repairReads.delete(read);
+    }
+  }
+  /** Reads `target` again because what this connection holds of it may be
+   * missing: a notice of it was ambiguous, or a Session of its Workspace was
+   * attached while the client held nothing of it. Nonblocking, sequential and
+   * bounded: one read in flight, one queued entry per source; a source asked
+   * for again while its read is in flight is read once more after it, since
+   * that read may predate the reason. A failed read proves nothing, and
+   * nothing is read once the connection ended. */
+  private recoverRepairs(target: SourceTarget) {
+    [this.repairRecoveries] = retainSourceRepair(this.repairRecoveries, sourceRepairKey(target), target);
+    if (this.recoveringRepairs) return;
+    this.recoveringRepairs = true;
+    const generation = this.state.generation;
+    void (async () => {
+      try {
+        for (let next = Object.entries(this.repairRecoveries)[0]; next && this.current(generation) && this.initialized; next = Object.entries(this.repairRecoveries)[0]) {
+          delete this.repairRecoveries[next[0]];
+          await this.readRepairs(next[1]).catch(() => undefined);
+        }
+      } finally {
+        this.recoveringRepairs = false;
+      }
+    })();
+  }
+  /** A Session of Workspace `directory` was attached: native now observes
+   * that source for this connection. Native announces the current level of
+   * each source it newly admits for this connection — a receipt or none — so
+   * a source native admits anew needs no read. But native forgets by
+   * addressing and this client by observation: once this client has
+   * forgotten a source, an absent one may be one native still observes and
+   * so never announces again, and it is read rather than assumed healthy. */
+  private visitRepairs(directory: string) {
+    const target: SourceTarget = { kind: 'workspace', directory };
+    if (olderSequence('0', this.repairsForgottenThrough) && !this.state.sourceRepairs?.[sourceRepairKey(target)]) this.recoverRepairs(target);
+  }
   private lose(generation: number) {
     if (this.current(generation)) this.endConnection('stale');
   }
   private endConnection(connection: ConnectionState) {
     const oldSocket = this.socket;
+    this.retainAppliedObservations();
     this.socket = undefined;
     this.initialized = false;
+    this.unattributedRepairs = {};
     const uncertain = [...this.state.uncertain];
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
@@ -615,6 +865,7 @@ export class AppServerClient {
     this.pending.clear();
     for (const pending of this.modelPreparations.values()) pending.retire();
     this.modelPreparations.clear();
+    for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
     this.refreshes.clear(); this.traceReads.clear(); this.traceAuthorities.clear(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
@@ -622,7 +873,7 @@ export class AppServerClient {
     this.lifecycles.transport(this.state.generation + 1, false);
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, modelIntent: undefined, history: undefined, turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
+        ...view,modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -645,7 +896,7 @@ export class AppServerClient {
     // attachment proof, captured once and checked again adjacent to socket send.
     let authority: (() => boolean) | undefined;
     if ('target' in operation.params && 'session_id' in operation.params.target
-      && !READS.has(operation.method) && !(operation.method === 'goal/control' && operation.params.control.action === 'show')
+      && mayCommit(operation)
       && operation.method !== 'session/detach' && operation.method !== 'session/switchNode' && operation.method !== 'session/subscribe') {
       const target = operation.params.target, id = target.session_id;
       const admission = this.state.views[id]?.attachmentObservation;
@@ -660,7 +911,7 @@ export class AppServerClient {
     }
     if (this.pending.size >= 64) throw new RequestAdmissionDeferred(this.admissionRevision);
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
-    if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new RequestNotDispatched('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
+    if (mayCommit(operation) && this.state.uncertain.length + this.pending.size >= 64) throw new RequestNotDispatched('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
     const generation = this.state.generation;
     const id = `${generation}:${++this.nextId}`;
     const request: Request = { jsonrpc: '2.0', id, ...operation };
@@ -672,13 +923,13 @@ export class AppServerClient {
       const params = operation.params;
       const context = { method: operation.method,
         sessionId: 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
-      this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      this.pending.set(id, { request, context, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
-        if (operation.method !== 'agent/conversation') return;
+        if (operation.method !== 'agent/observe') return;
         const pending = this.pending.get(id);
         if (!pending) return;
         if (!pending.sent) { this.refuse(pending, new Error('Observation retired before dispatch')); this.pump(); }
-        else void this.request({method:'agent/conversationCancel',params:{request_id:id}},'agent_conversation_cancelled').catch(() => {});
+        else void this.request({method:'agent/observeCancel',params:{request_id:id}},'agent_observe_cancelled').catch(() => {});
       };
       observationSignal?.addEventListener('abort', abortObservation, {once:true});
       if (observationSignal?.aborted) abortObservation();
@@ -701,6 +952,17 @@ export class AppServerClient {
     }
     catch (cause) { this.refuse(pending, cause); return false; }
   }
+  /** A cancelled read remains the native admission owner until its correlated
+   * terminal response arrives. Replacements wait in the existing bounded queue;
+   * cancellation and reads of other exact targets retain their own lanes. */
+  private observeOccupied(pending: Pending): boolean {
+    const request = pending.request;
+    if (request.method !== 'agent/observe') return false;
+    return [...this.pending.values()].some(other => other !== pending && other.sent
+      && other.request.method === 'agent/observe'
+      && other.request.params.agent_id === request.params.agent_id
+      && sameTarget(other.request.params.target, request.params.target));
+  }
   private pump() {
     // An obsolete proof releases its reservation now, never after its Host read.
     for (const pending of this.pending.values()) if (pending.validation && !this.dispatchAllowed(pending)) this.refuse(pending);
@@ -712,6 +974,7 @@ export class AppServerClient {
       const lane = requestLane(pending.request.method);
       if (pending.sent || pending.validation || (lane === 'rpc' && occupied >= RPC_CAPACITY) || (lane === 'observation' && observing >= DOMAIN_CAPACITY.observation)) continue;
       if (!this.dispatchAllowed(pending)) { this.refuse(pending); continue; }
+      if (this.observeOccupied(pending)) continue;
       const proof = typeof pending.dispatchCurrent === 'object' ? pending.dispatchCurrent : undefined;
       // A waiting validation holds nothing, so later requests are never blocked behind it.
       if (proof && validating >= VALIDATION_CAPACITY) continue;
@@ -756,17 +1019,19 @@ export class AppServerClient {
     if (!this.dispatchAllowed(pending)) { this.refuse(pending); return; }
     if (!socket || this.socket !== socket || !this.current(generation)
       || this.pending.get(String(pending.request.id)) !== pending || pending.sent) return;
+    if (this.observeOccupied(pending)) return;
+    if (socket.readyState !== 1) { this.lose(generation); return; }
     // No external observer runs between this final proof and send invocation.
     // sent means transmission attempted, never native acceptance.
     pending.sent = true;
     this.log.observe('out', generation, raw, pending.context);
-    if (requestLane(pending.request.method) === 'rpc') pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
+    if (requestLane(pending.request.method) === 'rpc' && !longWait(pending.request.method)) pending.timer = setTimeout(() => this.lose(generation), this.timeoutMs);
     try { socket.send(raw); } catch { this.lose(generation); }
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
     catch (error) { console.error('App Server dispatch observer failed', error); }
   }
   private receive(data: unknown, generation: number) {
-    if (typeof data !== 'string') { this.lose(generation); return; }
+    if (typeof data !== 'string' || data.length > 1_048_576 || new TextEncoder().encode(data).length > 1_048_576) { this.lose(generation); return; }
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch {
       this.log.observe('in', generation, data); this.lose(generation); return;
@@ -822,10 +1087,33 @@ export class AppServerClient {
       return;
     }
     if (value.method === 'configuration/changed') {
-      const application = value.params.application;
-      const previous = this.state.configuration?.[application.scope];
-      if (!previous || BigInt(application.version) > BigInt(previous.version)) {
-        this.publish({ configuration: { ...this.state.configuration, [application.scope]: application } });
+      const cut=value.params.application;
+      const previous=this.configurationCuts.get(cut.scope);
+      if(previous&&BigInt(cut.version)<=BigInt(previous.version))return;
+      this.configurationCuts.set(cut.scope,cut);
+      this.pruneConfiguration();
+      if(cut.inline)this.retainConfiguration(cut.inline);
+      else {
+        const configuration={...this.state.configuration};delete configuration[cut.scope];this.publish({configuration,configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'deferred'}}});
+        this.loadApplication(cut,generation);
+      }
+      return;
+    }
+    if (value.method === 'configuration/sourceRepairChanged') {
+      // Source-scoped (Issue #464): it addresses a configuration source, never
+      // a Session, and never changes runtime application or conversation state.
+      const { target } = value.params;
+      if (target?.kind !== 'user' && (target?.kind !== 'workspace' || typeof target.directory !== 'string')) { this.lose(generation); return; }
+      const receipt = value.params.receipt ?? undefined;
+      const sequence = value.params.sequence;
+      if (typeof sequence !== 'string' || !/^\d+$/.test(sequence)) { this.lose(generation); return; }
+      // Until this connection's `initialize` succeeds, `authorityId` may still
+      // name the authority of a previous connection to the same endpoint.
+      if (this.initialized && this.state.authorityId) this.observeRepair({ authorityId: this.state.authorityId, target, receipt, sequence });
+      else {
+        const key = sourceRepairKey(target);
+        const held = this.unattributedRepairs[key];
+        if (!held || olderSequence(held.sequence, sequence)) [this.unattributedRepairs] = retainSourceRepair<Omit<SourceRepairObservation, 'authorityId'>>(this.unattributedRepairs, key, { target, receipt, sequence });
       }
       return;
     }
@@ -854,51 +1142,151 @@ export class AppServerClient {
       const observation = this.lifecycles.observe(target.session_id);
       if (!observation || !sameTarget(observation.target, target)) return;
       const { proof } = observation;
-      if (value.method === 'session/resyncRequired') {
+      const chain = this.observationChains.get(target.session_id);
+      if (!chain) return;
+      const repairResync=value.method==='session/resyncRequired'&&chain.phase==='resyncRequired'&&chain.registrationId===value.params.registration_id;
+      const result = chain.deliver(value.method === 'session/resyncRequired'
+        ? { registrationId: value.params.registration_id, resync: true }
+        : { registrationId: value.params.registration_id, cursor: value.params.cursor, event: value.params.event },
+      (event, cursor) => this.applyObservation(target.session_id, target, event, cursor));
+      if ((result === 'recovery'||repairResync) && observation.current() && this.observationChains.get(target.session_id)===chain) {
+        this.invalidateReading(target.session_id);this.retireOutline(target.session_id);
+        if(!observation.current())return;
         this.lifecycles.event(target.session_id, { type: 'OBSERVATION', proof, status: 'resynchronizing' });
-        if (!observation.current()) return;
-        this.readingAuthorities.set(target.session_id, (this.readingAuthorities.get(target.session_id) ?? 0) + 1);
-        this.retireOutline(target.session_id);
-        this.invalidateReading(target.session_id);
-        if (!observation.current()) return;
-        this.setSession(target.session_id, { turnOutline: undefined });
-        if (!observation.current()) return;
+        this.setSession(target.session_id, { observationState: 'resyncRequired' });
         this.resubscribe.add(target.session_id);
-        if (this.acquiring.has(target.session_id)) return;
-        void this.refresh(target.session_id).catch(() => {});
-        return;
-      }
-      if (this.acquiring.has(target.session_id)) { this.resubscribe.add(target.session_id); return; } // Server replay owns overlap.
-      // Native registration may publish replay before its RPC ACK. After the
-      // acquired cut N, an exhausted old registration cannot emit N+1: only
-      // the replacement registration can advance that immutable cursor stream.
-      // Consume its contiguous replay while controls remain resynchronizing.
-      const replaying = view.attachment === 'resynchronizing' && this.refreshes.has(target.session_id) && !this.resubscribe.has(target.session_id);
-      if (!view.snapshot || view.cursor === undefined || (view.attachment !== 'attached' && !replaying)) return;
-      const cursor = BigInt(value.params.cursor), previous = BigInt(view.cursor);
-      if (cursor <= previous) return;
-      if (cursor !== previous + 1n) {
-        this.resubscribe.add(target.session_id);
-        void this.refresh(target.session_id).catch(() => {});
-        return;
-      }
-      if (value.params.event.type === 'pending_inbound_changed') {
-        this.invalidateReading(target.session_id);
-        if (!observation.current()) return;
-        this.retireOutline(target.session_id);
-        const error = 'History changed. Reload the Turn outline to navigate again.';
-        this.setSession(target.session_id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error },
-          ...(view.history?.window ? { history: { ...replaceTranscript(view.snapshot.transcript, view.history), error } } : {}) });
-      }
-      if (!observation.current()) return;
-      const snapshot = foldRuntimeEvent(view.snapshot, value.params.event);
-      this.setSession(target.session_id, { snapshot, cursor: value.params.cursor,
-        history: snapshot.transcript === view.snapshot.transcript ? this.state.views[target.session_id].history : refreshTranscript(this.state.views[target.session_id].history, snapshot.transcript) });
-      this.reconcileInteractions(target.session_id); this.settleSubmissions(target.session_id);
-      if (value.params.event.type === 'trace_changed') {
-        void this.refreshTraceDomain(target.session_id).catch(() => {});
+        // The active checkpoint already has a fresh subscription handoff.
+        // If its cut is too old, Subscribe returns typed replay unavailability.
+        if(!this.acquiring.has(target.session_id))void this.refresh(target.session_id).catch(() => {});
       }
     }
+  }
+  private applyObservation(id: string, target: AttachmentTarget, event: RuntimeClientEvent, cursor: string) {
+    const view = this.state.views[id], observation = this.lifecycles.observe(id);
+    if (!observation?.current() || !sameTarget(observation.proof.target, target) || !view?.snapshot) throw new Error('Observation view was replaced.');
+    validateRootEvent(target, event, cursor);
+    if (transitionFacts(event).some(fact=>fact.type==='pending_inbound_changed')) {
+      this.invalidateReading(id);
+      if(!observation.current())throw new Error('Observation view was replaced during invalidation.');
+      this.retireOutline(id);
+      const error = 'History changed. Reload the Turn outline to navigate again.';
+      this.setSession(id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error },
+        ...(view.history?.window ? { history: { ...replaceTranscript(view.snapshot.transcript, view.history), error } } : {}) });
+    }
+    // Presentation subscribers may retire this exact observation synchronously.
+    if(!observation.current()||!sameTarget(this.state.views[id]?.target,target))throw new Error('Observation view was replaced during publication.');
+    const snapshot = foldRuntimeEvent(view.snapshot, event);
+    const checkpointAdvanced = transitionFacts(event).some(fact => fact.type === 'checkpoint_advanced');
+    const traceAdvanced = checkpointAdvanced || transitionFacts(event).some(fact => fact.type === 'read_domains_updated');
+    this.setSession(id, { snapshot, ...(traceAdvanced ? {trace:this.supersedeTrace(id,refreshTrace(view.trace,snapshot.trace,snapshot.trace_updates,observationCheckpoint(snapshot,cursor)?.read_cut))} : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
+      history: snapshot.transcript === view.snapshot.transcript ? this.state.views[id].history : refreshTranscript(this.state.views[id].history, snapshot.transcript) });
+    const settled=transitionFacts(event).filter(fact=>fact.type==='interaction_settled'||fact.type==='interaction_removed');
+    if(settled.length){
+      const keys=new Set(settled.map(fact=>interactionKey((fact as Extract<RuntimeClientEvent,{type:'interaction_settled'|'interaction_removed'}>).interaction)));
+      this.publish({interactionOperations:Object.fromEntries(Object.entries(this.state.interactionOperations).filter(([key])=>!keys.has(key))),
+        uncertain:this.state.uncertain.filter(value=>!value.interactionKey||!keys.has(value.interactionKey))});
+    }
+    this.reconcileInteractions(id); this.settleSubmissions(id);
+    if (checkpointAdvanced) void this.refreshDisplaySummary(id);
+    if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.refreshTraceDomain(id).catch(() => {});
+  }
+
+  domainReader(target: AttachmentTarget, current: () => boolean, agentId?: string): DomainReader {
+    return {current,
+      page:async(page,offset)=>(await this.request({method:'conversation/checkpointPage',params:{target,agent_id:agentId??null,cut:page.read_cut,domain:page.domain,offset,limit:32}},'checkpoint_page',undefined,current)).page,
+      value:async(page,item,offset)=>(await this.request({method:'conversation/checkpointValueRead',params:{target,agent_id:agentId??null,cut:page.read_cut,domain:page.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,current)).chunk};
+  }
+  async modelRead(target: AttachmentTarget, current: () => boolean) {
+    const {page}=await this.request({method:'session/model',params:{target}},'domain_page',undefined,current);
+    return domainValue<import('../../../protocol/app-server/v48').SessionModelView>(page,this.domainReader(target,current));
+  }
+  async modelCatalogRead(target: AttachmentTarget, current: () => boolean, previous?: import('../../../protocol/app-server/v48').CheckpointPage) {
+    const reader=this.domainReader(target,current);
+    const page=previous?.next_offset!=null ? await reader.page(previous,Number(previous.next_offset)) : (await this.request({method:'session/models',params:{target}},'domain_page',undefined,current)).page;
+    if (!current() || page.items.length > 32) throw new Error('Model catalog observation was replaced or exceeded its bound.');
+    // A picker retains the finite published headers. Deferred native identities
+    // and profile collections remain explicitly readable through their page;
+    // opening this menu never downloads every growing catalog row.
+    const models = page.items.flatMap(item => {
+      const row = item.value as import('../../../protocol/app-server/v48').CatalogModelView | null;
+      return row && typeof row.model === 'string' && row.model.length <= 256
+        && (row.profiles?.length ?? 0) <= 32
+        && (row.profiles ?? []).every(profile => typeof profile.id === 'string' && profile.id.length <= 256)
+        && (row.defaultProfile == null || row.defaultProfile.length <= 256) ? [row] : [];
+    });
+    return {catalog:{models},page};
+  }
+  async sourceModelCatalogRead(source: import('../../../protocol/app-server/v48').SourceSettings, current: () => boolean, offset = 0) {
+    const cut = sourceObservation(source);
+    if (!cut || !current()) throw new Error('Model source observation is unavailable.');
+    const {page} = await this.request({method:'configuration/sourcePage',params:{target:cut.target,revision:cut.revision,field:'session_models',offset,limit:32}},'source_page',undefined,current);
+    if (page.revision !== cut.revision || page.field !== 'session_models' || page.items.length > 32) throw new Error('Model source page cut changed.');
+    const models: import('../../../protocol/app-server/v48').CatalogModelView[] = [];
+    for (const [index,item] of page.items.entries()) {
+      if (Number(item.index) !== offset + index || !current()) throw new Error('Model source page failed to advance.');
+      const value = await materializeFields<{model:import('../../../protocol/app-server/v48').CatalogModelView},import('../../../protocol/app-server/v48').SourceFieldRef>(
+        {revision:cut.revision,fields:[{name:'model',value:item.value,reference:item.reference}]},
+        async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target:cut.target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current);
+      models.push(value.model);
+    }
+    if (page.next_offset != null && (page.items.length === 0 || page.next_offset !== offset + page.items.length)) throw new Error('Model source continuation did not advance.');
+    return {catalog:{models},page};
+  }
+  async effectiveConfigurationRead(target: AttachmentTarget, current: () => boolean) {
+    const {projection}=await this.request({method:'session/effectiveConfiguration',params:{target}},'effective_configuration',undefined,current);
+    return materializeEffective(projection,async(reference,offset)=>(await this.request({method:'session/effectiveConfigurationValueRead',params:{target,reference,offset,max_bytes:65536}},'configuration_value_chunk',undefined,current)).chunk,current);
+  }
+  private readonly configurationCuts=new Map<string,import('../../../protocol/app-server/v48').BoundedSessionApplication>();
+  private readonly configurationReads=new Map<string,Promise<void>>();
+  private readonly configurationWeights=new Map<string,number>();
+  private retainConfiguration(application:ConfigurationApplication) {
+    // Each source read is bounded; the aggregate cache must also stay finite.
+    const bytes=new TextEncoder().encode(JSON.stringify(application)).byteLength;
+    if(bytes>16*1024*1024)throw new Error('Configuration observation exceeds the local cache budget.');
+    this.configurationWeights.delete(application.scope);this.configurationWeights.set(application.scope,bytes);
+    const diagnostics={...this.state.configurationObservation};delete diagnostics[application.scope];
+    this.publish({configuration:{...this.state.configuration,[application.scope]:application},configurationObservation:diagnostics});
+    this.pruneConfiguration();
+  }
+  private pruneConfiguration() {
+    const retired=new Set<string>();
+    while(this.configurationCuts.size>32){const scope=this.configurationCuts.keys().next().value!;this.configurationCuts.delete(scope);retired.add(scope);this.configurationWeights.delete(scope);}
+    let bytes=[...this.configurationWeights.values()].reduce((sum,value)=>sum+value,0);
+    while(this.configurationWeights.size>32||bytes>16*1024*1024){const scope=this.configurationWeights.keys().next().value!;bytes-=this.configurationWeights.get(scope)!;this.configurationWeights.delete(scope);this.configurationCuts.delete(scope);retired.add(scope);}
+    if(!retired.size)return;
+    const configuration={...this.state.configuration},diagnostics={...this.state.configurationObservation};
+    for(const scope of retired){delete configuration[scope];delete diagnostics[scope];}
+    this.publish({configuration,configurationObservation:diagnostics});
+  }
+
+  private loadApplication(cut:import('../../../protocol/app-server/v48').BoundedSessionApplication,generation:number) {
+    if(this.configurationReads.has(cut.scope))return;
+    const current=()=>this.current(generation)&&this.configurationCuts.get(cut.scope)===cut;
+    const load=async()=>{
+      if(this.state.views[cut.scope])return materializeApplication(cut,async(reference,offset)=>(await this.request({method:'session/configurationValueRead',params:{session_id:cut.scope,reference,offset,max_bytes:65536}},'session_application_value_chunk',undefined,current)).chunk,current);
+      const target=cut.sources[0];if(!target)throw new Error('Configuration source is unavailable.');
+      const {projection}=await this.request({method:'configuration/sourcesRead',params:{target}},'source_settings',undefined,current);
+      const application=projection.inline?.application ?? (await materializeFields<{application:ConfigurationApplication},import('../../../protocol/app-server/v48').SourceFieldRef>({revision:projection.revision,fields:projection.fields.filter(field=>field.name==='application')},async(reference,offset)=>(await this.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk',undefined,current)).chunk,current)).application;
+      if(application?.version!==cut.version||application.scope!==cut.scope)throw new Error('Configuration source cut changed.');return application;
+    };
+    this.publish({configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'loading'}}});
+    const work=load().then(application=>{if(current()&&application){const diagnostics={...this.state.configurationObservation};delete diagnostics[cut.scope];this.publish({configurationObservation:diagnostics});this.retainConfiguration(application);}}).catch(error=>{if(current())this.publish({configurationObservation:{...this.state.configurationObservation,[cut.scope]:{version:cut.version,phase:'unavailable',error:String(error).slice(0,512)}}});}).finally(()=>{
+      if(this.configurationReads.get(cut.scope)!==work)return;this.configurationReads.delete(cut.scope);
+      const latest=this.configurationCuts.get(cut.scope);if(latest&&latest!==cut)this.loadApplication(latest,generation);
+    });
+    this.configurationReads.set(cut.scope,work);
+  }
+  async readApplication(id:string,current:()=>boolean) {
+    const {projection}=await this.request({method:'session/configuration',params:{session_id:id}},'session_configuration',undefined,current);
+    return materializeApplication(projection,async(reference,offset)=>(await this.request({method:'session/configurationValueRead',params:{session_id:id,reference,offset,max_bytes:65536}},'session_application_value_chunk',undefined,current)).chunk,current);
+  }
+  async readSettings(id: string, current: () => boolean = () => true) {
+    const {projection} = await this.request({method:'session/settings',params:{session_id:id}},'settings',undefined,current);
+    const settings = await materializeSettings(projection, async(reference,offset)=>(await this.request({method:'session/settingsValueRead',params:{session_id:id,reference,offset,max_bytes:65_536}},'settings_value_chunk',undefined,current)).chunk, current);
+    return {revision:projection.revision,settings};
+  }
+  async readContent(target: AttachmentTarget, agentId: string | undefined, content_ref: import('../../../protocol/app-server/v48').ContentRef, offset: number, current: () => boolean) {
+    return (await this.request({ method: 'conversation/contentRead', params: { target, agent_id: agentId ?? null, content_ref, offset, max_bytes: 65_536 } }, 'content_chunk', undefined, current)).chunk;
   }
   private listEpoch = 0;
   private listOffset = 0;
@@ -1118,8 +1506,8 @@ export class AppServerClient {
     const { node, conversation, current } = scope;
     await Promise.allSettled([
       this.request({ method: 'session/statistics', params: { session_id: id, node_id: node } }, 'session_statistics', undefined, current)
-        .then(result => { if (current() && result.conversation_id === conversation) this.setSession(id, { statisticsPreview: { conversationId: result.conversation_id, statistics: result.statistics, occupancy: result.occupancy } }); }),
-      this.request({ method: 'session/settings', params: { session_id: id } }, 'settings', undefined, current)
+        .then(result => { if (current() && result.conversation_id === conversation && result.read_cut.conversation_id === conversation) this.setSession(id, { statisticsPreview: { conversationId: result.conversation_id, nodeId: node, cut: result.read_cut, statistics: result.statistics, occupancy: result.occupancy } }); }),
+      this.readSettings(id, current)
         .then(result => { if (current()) this.setSession(id, { settings: result.settings }); }),
     ]);
   }
@@ -1140,14 +1528,15 @@ export class AppServerClient {
       const result = await this.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
       if (!current()) return;
       if (result.conversation_id !== conversation) throw new Error('Trace conversation changed.');
-      this.setSession(id, { tracePreview: { conversationId: result.conversation_id, cache: older ? prependTrace(this.state.views[id].tracePreview!.cache, result.page) : replaceTrace(result.page) } });
+      standaloneTraceCut(result.page,conversation);
+      this.setSession(id, { tracePreview: { conversationId: result.conversation_id, cache:{...(older ? prependTrace(this.state.views[id].tracePreview!.cache, result.page) : replaceTrace(result.page)),fields:this.coldTraceFields(id,node,conversation,current)} } });
     } catch (error) {
       if (current()) this.setSession(id, { tracePreview: { conversationId: previous?.conversationId ?? '', cache: { ...(this.state.views[id]?.tracePreview?.cache ?? cache), loading: false, error: String(error) } } });
     }
   }
   private async readTracePreviewDetail(id: string, record: string) {
     const preview = this.state.views[id]?.tracePreview;
-    if (!preview || preview.cache.details[record]?.loading || preview.cache.details[record]?.detail) return;
+    if (!preview || preview.cache.details[record]?.loading || preview.cache.details[record]?.detail || preview.cache.details[record]?.page) return;
     const scope = this.coldReadScope(id); if (!scope || preview.conversationId !== scope.conversation) return;
     const node = scope.node;
     const pending = beginTraceDetail(preview.cache, record);
@@ -1160,7 +1549,15 @@ export class AppServerClient {
       const result = await this.request({ method: 'session/traceHistoryDetail', params: { session_id: id, node_id: node, record_id: record } }, 'session_trace_history_detail', undefined, admission);
       if (!current()) return;
       if (result.conversation_id !== preview.conversationId) throw new Error('Trace conversation changed.');
-      this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache, record, pending.epoch, result.detail ?? undefined) } });
+      const detail=inlineTraceDetail(result.page,record),page=retainedTraceDetailPage(result.page,record);
+      if(page&&(page.read_cut.conversation_id!==scope.conversation||page.read_cut.activation_id!=null))throw new Error('Historical Trace detail source changed.');
+      if(!current())return;
+      const reader=page&&preview.cache.fields?bindTraceDetailReader(preview.cache.fields,page,()=>scope.current()&&this.state.views[id]?.tracePreview?.cache.epoch===pending.epoch&&this.state.views[id]?.tracePreview?.cache.details[record]?.page===page):undefined;
+      this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache,record,pending.epoch,detail,undefined,result.page.items.flatMap(item=>item.content),async(ref,offset,ownsView)=>{
+        const valid=()=>ownsView()&&scope.current()&&this.state.views[id]?.tracePreview?.cache.epoch===pending.epoch;
+        if(!valid())throw new Error('Trace content view was replaced.');
+        return (await this.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut:result.page.read_cut,content_ref:ref,offset,max_bytes:65536}},'content_chunk',undefined,valid)).chunk;
+      },page,reader) } });
     } catch (error) {
       if (current()) this.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.state.views[id].tracePreview!.cache, record, pending.epoch, undefined, String(error)) } });
     }
@@ -1191,6 +1588,8 @@ export class AppServerClient {
   refresh(id: string): Promise<void> {
     const observation = this.lifecycles.observe(id);
     if (!observation) return Promise.resolve();
+    this.observationChains.get(id)?.requireRecovery();
+    this.lifecycles.event(id, { type: 'OBSERVATION', proof: observation.proof, status: 'resynchronizing' });
     this.dirty.add(id);
     const existing = this.refreshes.get(id);
     if (existing) return existing;
@@ -1217,26 +1616,37 @@ export class AppServerClient {
         }
         if (!current()) return;
         this.acquiring.add(id);
-        const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot', undefined, current);
+        const recoveringChain = this.observationChains.get(id) ?? new ObservationChain<RuntimeClientEvent>();
+        recoveringChain.beginCheckpointLoading();
+        this.observationChains.set(id, recoveringChain);
+        this.setSession(id, { observationState: 'checkpointLoading' });
+        const { checkpoint } = await this.request({ method: 'session/checkpoint', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'checkpoint', undefined, current);
         if (!current()) return;
-        if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
-        if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, preview: undefined, statisticsPreview: undefined, tracePreview: undefined, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: this.supersedeTrace(id, refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates)), error: undefined });
-          this.reconcileInteractions(id); this.settleSubmissions(id);
-          await this.refreshDisplaySummary(id);
-          if (!current()) return;
-        }
+        validateRootCheckpoint(target, checkpoint, recoveringChain.applied);
+        const chain = this.observationChains.get(id) ?? new ObservationChain<RuntimeClientEvent>();
+        chain.installCheckpoint(checkpoint.cursor);
+        this.observationChains.set(id, chain);
+        this.setSession(id, { snapshot: checkpointSnapshot(checkpoint), checkpoint, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+          cursor:checkpoint.cursor,observationState:'subscribePending',
+          ...(this.state.views[id]?.modelMutation?.generation!==this.state.generation?{modelMutation:undefined}:{}),history: refreshTranscript(this.state.views[id]?.history, checkpoint.snapshot.transcript),
+          trace: this.supersedeTrace(id, ({...refreshTrace(this.state.views[id]?.trace, checkpoint.snapshot.trace, checkpoint.snapshot.trace_updates,checkpoint.read_cut),fields:this.liveTraceFields(target)})), error: undefined });
+        this.reconcileInteractions(id); this.settleSubmissions(id);
         this.acquiring.delete(id);
-        const replay = this.resubscribe.delete(id);
-        if (resync || replay) {
-          try { await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed', undefined, current); }
-          catch (error) {
-            if (current() && error instanceof RpcFailure && error.error.data?.kind === 'resync_required' && ++replayRepairs < 3) {
-              this.resubscribe.add(id); this.dirty.add(id);
-            } else throw error;
-          }
+        this.resubscribe.delete(id);
+        chain.beginSubscription(checkpoint.cursor);
+        try {
+          const receipt = await this.request({ method: 'session/subscribe', params: { target, after_cursor: checkpoint.cursor } }, 'subscribed', undefined, current);
+          if (!current() || this.observationChains.get(id) !== chain) return;
+          if (!sameTarget(receipt.target, target) || !chain.acceptReceipt(receipt.registration_id, receipt.after_cursor)) throw new Error('Subscription recovery required.');
+          this.setSession(id, { observationState: chain.phase });
+        } catch (error) {
+          if (current() && error instanceof RpcFailure && error.error.data?.kind === 'resync_required' && ++replayRepairs < 2) {
+            this.resubscribe.add(id); this.dirty.add(id);
+          } else throw error;
         }
-        if (current() && !this.dirty.has(id)) this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });
+        if (current() && !this.dirty.has(id)) {this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'attached' });void this.refreshDisplaySummary(id);
+          if(traceInterestBatches(this.state.views[id]?.trace).length>1)void this.refreshTraceDomain(id).catch(error=>{if(current()&&this.state.views[id]?.trace)this.setSession(id,{trace:{...this.state.views[id].trace!,error:String(error)}});});
+        }
       }
     } catch (error) {
       if (current()) { this.acquiring.delete(id); this.resubscribe.add(id); this.lifecycles.event(id, { type: 'OBSERVATION', proof, status: 'stale', error: String(error) }); }
@@ -1245,13 +1655,40 @@ export class AppServerClient {
   }
   // Trace authority is independent of Runtime Client cursors and cache interval
   // epochs (an overlapping snapshot can preserve the latter).
+  private readonly traceFieldScopes=new WeakMap<TraceFieldReader,{generation:number;target:AttachmentTarget}>();
+  private liveTraceFields(target:AttachmentTarget):TraceFieldReader {
+    const existing=this.state.views[target.session_id]?.trace?.fields,scope=existing&&this.traceFieldScopes.get(existing);
+    if(existing&&scope?.generation===this.state.generation&&sameTarget(scope.target,target))return existing;
+    const generation=this.state.generation;
+    const current=()=>generation===this.state.generation&&sameTarget(this.lifecycles.observe(target.session_id)?.target,target);
+    const valid=(cut:import('../../../protocol/app-server/v48').CheckpointReadCut,owns:()=>boolean)=>{
+      if(!current()||!owns()||cut.conversation_id!==target.conversation_id||cut.activation_id!=null)throw new Error('Trace field source was replaced.');
+    };
+    const reader:TraceFieldReader={
+      value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'conversation/checkpointValueRead',params:{target,agent_id:null,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
+      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Trace content source changed.');return this.readContent(target,undefined,reference,offset,()=>current()&&owns());},
+      page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns());valid(cut,owns);return result.page;},
+    };
+    this.traceFieldScopes.set(reader,{generation:this.state.generation,target});
+    return reader;
+  }
+  private coldTraceFields(id:string,node:string|null|undefined,conversation:string,current:()=>boolean):TraceFieldReader {
+    const valid=(cut:import('../../../protocol/app-server/v48').CheckpointReadCut,owns:()=>boolean)=>{
+      if(!current()||!owns()||cut.conversation_id!==conversation||cut.activation_id!=null)throw new Error('Historical Trace field source was replaced.');
+    };
+    return {
+      value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.request({method:'session/traceValueRead',params:{session_id:id,node_id:node,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
+      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==conversation)throw new Error('Historical Trace content source changed.');return (await this.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut,content_ref:reference,offset,max_bytes:65536}},'content_chunk',undefined,()=>current()&&owns())).chunk;},
+      page:async(cut,domain,offset,owns)=>{valid(cut,owns);return (await this.request({method:'session/tracePage',params:{session_id:id,node_id:node,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns())).page;},
+    };
+  }
   private traceAuthorities = new Map<string, number>();
   private supersedeTrace(id: string, trace: TraceCache): TraceCache {
     this.traceAuthorities.set(id, (this.traceAuthorities.get(id) ?? 0) + 1);
     // Old paging/detail requests may no longer complete. Release their loading
-    // markers with the new authority so explicit reads remain available.
+    // markers and reader-owned evidence with the new authority so explicit reads remain available.
     return { ...trace, loading: false, details: Object.fromEntries(
-      Object.entries(trace.details).filter(([, entry]) => !entry.loading),
+      Object.entries(trace.details).filter(([, entry]) => !entry.loading&&!entry.page&&!entry.content?.length),
     ) };
   }
   private traceReads = new Map<string, { dirty: boolean; work: Promise<void> }>();
@@ -1269,16 +1706,16 @@ export class AppServerClient {
           // while it awaits owns a separate, coalesced follow-up obligation.
           read.dirty = false;
           const authority = this.traceAuthorities.get(id);
-          let result;
-          try {
-            result = await this.request({ method: 'session/trace', params: { target, before: null, limit: TRACE_PAGE_SIZE, records: traceInterests(this.state.views[id]?.trace) } }, 'trace', undefined, current);
-          } catch (error) {
-            // Failure cannot create work or erase work already owed. Callers
-            // share the final owed read's outcome, not an earlier failure.
-            if (!read.dirty || !current()) throw error;
-            continue;
+          const batches=traceInterestBatches(this.state.views[id]?.trace);
+          for(const [index,records] of batches.entries()) {
+            if(!current()||this.traceAuthorities.get(id)!==authority)break;
+            let result;
+            try {
+              result=await this.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
+            }catch(error){if(!read.dirty||!current())throw error;break;}
+            standaloneTraceCut(result.page,target.conversation_id);
+            if(current()&&this.traceAuthorities.get(id)===authority)this.setSession(id,{trace:{...refreshTrace(this.state.views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveTraceFields(target)}});
           }
-          if (current() && this.traceAuthorities.get(id) === authority) this.setSession(id, { trace: refreshTrace(this.state.views[id]?.trace, result.page, result.page.updates ?? []) });
         }
       } finally {
         // Retire in the same continuation that decides to exit, so a new call
@@ -1309,6 +1746,7 @@ export class AppServerClient {
     this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
       const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
+      standaloneTraceCut(result.page,target.conversation_id);
       if (current()) {
         this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
         // Include newly loaded identities in a repair even if their terminal
@@ -1331,7 +1769,8 @@ export class AppServerClient {
     const result = await this.request({ method: 'session/traceLocateTool', params: { target: observation.target, locator } }, 'trace_tool_location', undefined, current);
     if (!current()) return false;
     if (!result.location) throw new Error('This tool occurrence has no native execution record.');
-    const cache = replaceTrace(result.location.page, this.state.views[id]?.trace);
+    standaloneTraceCut(result.location.page,observation.target.conversation_id);
+    const cache = {...replaceTrace(result.location.page, this.state.views[id]?.trace),fields:this.liveTraceFields(observation.target)};
     this.setSession(id, { trace: selectTrace({ ...cache, located: true }, result.location.record_id) });
     return true;
   }
@@ -1369,7 +1808,7 @@ export class AppServerClient {
     const epoch = cache.epoch;
     const authority = this.traceAuthorities.get(id);
     const existing = cache.details[record];
-    if (existing && (existing.loading || existing.detail)) return;
+    if (existing && (existing.loading || existing.detail || existing.page)) return;
     const pending = beginTraceDetail(cache, record);
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
@@ -1377,9 +1816,13 @@ export class AppServerClient {
       && this.state.views[id]?.trace?.details[record] === pending.details[record];
     this.setSession(id, { trace: pending });
     try {
-      const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'trace_detail', undefined, current);
+      const result = await this.request({ method: 'session/traceDetail', params: { target, record_id: record } }, 'domain_page', undefined, current);
       if (!current()) return;
-      this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, result.detail ?? undefined) });
+      const detail=inlineTraceDetail(result.page,record),page=retainedTraceDetailPage(result.page,record);
+      if(page&&(page.read_cut.conversation_id!==target.conversation_id||page.read_cut.activation_id!=null))throw new Error('Trace detail source changed.');
+      if(!current())return;
+      const reader=page?bindTraceDetailReader(this.liveTraceFields(target),page,()=>observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch&&this.state.views[id]?.trace?.details[record]?.page===page):undefined;
+      this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!,record,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.readContent(target,undefined,ref,offset,()=>ownsView()&&observation.current()&&this.traceAuthorities.get(id)===authority&&this.state.views[id]?.trace?.epoch===epoch),page,reader) });
     } catch (error) {
       if (current()) this.setSession(id, { trace: completeTraceDetail(this.state.views[id].trace!, record, epoch, undefined, String(error)) });
     }
@@ -1411,16 +1854,16 @@ export class AppServerClient {
   }
   /** One in-flight RPC plus one replaceable latest demand. A skipped demand never
    * masquerades as a completed page. Equivalent demands share the native read. */
-  readTurns(id: string, offset?: number, userCurrent: () => boolean = () => true): Promise<ConversationTurnPage | undefined> {
+  readTurns(id: string, offset?: number, userCurrent: () => boolean = () => true): Promise<ObservedTurnPage | undefined> {
     return this.demandOutline(id, offset, offset === undefined ? { type: 'latest' } : { type: 'page', offset }, userCurrent);
   }
   /** Shares the bounded outline pipeline without publishing a reading destination. */
-  previewTurns(id: string, offset: number, current: () => boolean): Promise<ConversationTurnPage | undefined> {
+  previewTurns(id: string, offset: number, current: () => boolean): Promise<ObservedTurnPage | undefined> {
     const intent = this.readingIntents.get(id);
     const valid = () => current() && this.readingIntents.get(id) === intent;
     return this.demandOutline(id, offset, undefined, valid).then(page => valid() ? page : undefined);
   }
-  private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent | undefined, userCurrent: () => boolean, automatic = false): Promise<ConversationTurnPage | undefined> {
+  private demandOutline(id: string, offset: number | undefined, paging: OutlinePagingIntent | undefined, userCurrent: () => boolean, automatic = false): Promise<ObservedTurnPage | undefined> {
     const view = this.state.views[id];
     if (!view || !userCurrent() || !this.lifecycles.observe(id)) return Promise.resolve(undefined);
     let read = this.outlineReads.get(id);
@@ -1456,18 +1899,20 @@ export class AppServerClient {
     const demand = read.active;
     const owned = () => this.outlineReads.get(id) === read && read.authority();
     const current = () => owned() && !(read.pending?.paging && read.pending.current()) && demand.current() && owned();
-    let page: ConversationTurnPage | undefined;
+    let page: ObservedTurnPage | undefined;
     try {
       if (!current()) return;
       const target = this.lifecycles.observe(id)!.target;
-      const result = await this.request({ method: 'session/turns', params: { target, offset: demand.offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, owned);
+      const result = await this.request({ method: 'session/turns', params: { target, offset: demand.offset ?? null, limit: TURN_PAGE_SIZE } }, 'conversation_turns', undefined, owned);
       if (current()) {
-        if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native turn outline.');
+        if (result.page.cut.conversation_id !== target.conversation_id || result.page.turns.length > TURN_PAGE_SIZE) throw new Error('Invalid native turn outline.');
         page = result.page;
+        turnPageCount(result.page);
         if (demand.paging) this.setSession(id, { turnOutline: { paging: demand.paging, page } });
       }
     } catch (error) {
-      if (demand.paging && current()) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...this.state.views[id]?.turnOutline, loading: false, error: String(error) } });
+      if (demand.paging && current()) this.setSession(id, { turnOutline: { paging: { type: 'latest' }, ...this.state.views[id]?.turnOutline, ...(page?{page}:{}), loading: false, error: String(error) } });
+      page=undefined;
     } finally {
       // A superseded automatic read still owes a refresh of the surviving presentation.
       if (owned() && demand.automatic && !current()) read.refresh = true;
@@ -1489,18 +1934,19 @@ export class AppServerClient {
     }
   }
   /** Native resolves the exact Turn at its outline cut in one bounded read. */
-  async navigateTurn(id: string, selection: ConversationTurn | number, userCurrent: () => boolean = () => true) {
+  async navigateTurn(id: string, selection: TurnSelection, userCurrent: () => boolean = () => true) {
     const view = this.state.views[id];
     if (!view?.history || !userCurrent() || !this.lifecycles.observe(id)) return false;
     const authority = this.readingAuthority(id), intent = this.invalidateReading(id);
     const current = () => userCurrent() && authority() && this.readingIntents.get(id) === intent;
-    let turn: ConversationTurn, cut = view.turnOutline?.page?.cut;
+    let turn: ObservedTurn, cut: ObservedTurnPage['cut'] | undefined;
     if (typeof selection === 'number') {
       this.setSession(id, { turnNavigation: { intent, pending: `ordinal:${selection}` } });
-      const total = view.turnOutline?.page?.total ?? 0;
-      const offset = Math.floor((selection - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE;
+      if (!Number.isSafeInteger(selection) || selection < 1) { this.setSession(id,{turnNavigation:{intent,error:'Invalid native Turn ordinal.'}}); return false; }
+      const total = BigInt(view.turnOutline?.page?.total ?? '0');
+      const offset = Math.floor((selection - 1) / TURN_PAGE_SIZE) * TURN_PAGE_SIZE;
       // Identity lookup is fixed even when presentation should continue following latest.
-      const paging: OutlinePagingIntent = offset >= Math.floor((total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE ? { type: 'latest' } : { type: 'page', offset };
+      const paging: OutlinePagingIntent = BigInt(offset) >= (total - 1n) / BigInt(TURN_PAGE_SIZE) * BigInt(TURN_PAGE_SIZE) ? { type: 'latest' } : { type: 'page', offset };
       const page = await this.demandOutline(id, offset, paging, current);
       if (!current()) return false;
       if (!page) { this.setSession(id, { turnNavigation: { intent } }); return false; }
@@ -1508,11 +1954,11 @@ export class AppServerClient {
       if (!found) { this.setSession(id, { turnNavigation: { intent, error: 'This Turn is no longer in the native outline.' } }); return false; }
       turn = found; cut = page.cut;
     } else {
-      turn = selection;
+      turn = selection.turn; cut = selection.cut;
       const outline = this.state.views[id]?.turnOutline;
       if (outline?.page) {
-        const offset = Math.floor((turn.ordinal - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE;
-        const paging: OutlinePagingIntent = offset >= Math.floor((outline.page.total - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE ? { type: 'latest' } : { type: 'page', offset };
+        const offset = Math.floor((turn.ordinal - 1) / TURN_PAGE_SIZE) * TURN_PAGE_SIZE;
+        const paging: OutlinePagingIntent = BigInt(offset) >= (BigInt(outline.page.total) - 1n) / BigInt(TURN_PAGE_SIZE) * BigInt(TURN_PAGE_SIZE) ? { type: 'latest' } : { type: 'page', offset };
         this.setSession(id, { turnOutline: { ...outline, paging } });
       }
     }
@@ -1521,11 +1967,12 @@ export class AppServerClient {
     if (cursor == null) { this.setSession(id, { turnNavigation: { intent } }); return false; }
     const anchored = () => !!this.state.views[id]?.history?.page.entries?.some(entry => entry.cursor === cursor
       && (entry.turn_process && turnKey(entry.turn_process) === key || entry.item.type === 'attempt_terminal' && turnKey(entry.item.turn) === key));
+    if (turn.ordinal > 0 && (!cut || cut.conversation_id !== view.target!.conversation_id)) { this.setSession(id, { turnNavigation: { intent, error: 'Reload the native Turn outline before navigating.' } }); return false; }
     if (anchored()) { this.setSession(id, { turnNavigation: { intent } }); return turn; }
-    if (!cut) { this.setSession(id, { turnNavigation: { intent, error: 'Reload the native Turn outline before navigating.' } }); return false; }
+    if (!cut || !Number.isSafeInteger(turn.ordinal) || turn.ordinal < 1) { this.setSession(id, { turnNavigation: { intent, error: 'The live Turn has no loaded native anchor.' } }); return false; }
     this.setSession(id, { turnNavigation: { intent, pending: key } });
     try {
-      const result = await this.request({ method: 'session/transcript', params: { target: view.target!, at: { type: 'turn', id: turn.id, cut }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+      const result = await this.request({ method: 'session/transcript', params: { target: view.target!, at: { type: 'turn_ordinal', ordinal: turn.ordinal, cut }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
       if (!current()) return false;
       if (!sameReadCut(result.window.cut, cut) || result.window.cut.conversation_id !== view.target!.conversation_id || result.window.target_cursor !== cursor || !result.window.target || turnKey(result.window.target) !== key) throw new Error('Invalid native Turn window.');
       const history = installTranscriptWindow(result.window, this.state.views[id]?.history);
@@ -1579,7 +2026,7 @@ export class AppServerClient {
     return this.readHistoryPage(id, { type: 'older', before: history.page.next_cursor, cut: history.window?.cut ?? null });
   }
   /** One gesture, one read. Navigation intent fences both page and anchor reads. */
-  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v46').ConversationWindowAt) {
+  private async readHistoryPage(id: string, at: import('../../../protocol/app-server/v48').ConversationWindowAt) {
     const history = this.state.views[id]?.history;
     const observation = this.lifecycles.observe(id);
     if (!history || !observation) return;
@@ -1625,6 +2072,9 @@ export class AppServerClient {
     if (mutation && mutation.generation !== this.state.generation) this.setSession(id, { modelMutation: undefined });
     const cancellation = this.state.views[id].cancellation;
     if (cancellation && (snapshot.attempt?.attempt_id !== cancellation.attemptId || snapshot.attempt.phase.type === 'settled')) this.setSession(id, { cancellation: undefined });
+    const frontier=observationCheckpoint(snapshot,this.state.views[id].cursor??'0')?.collections.find(value=>value.domain==='pending_interactions');
+    // A bounded head cannot establish absence from the complete native set.
+    if(frontier&&BigInt(frontier.total)>BigInt(snapshot.pending_interactions?.length??0))return;
     const pending = new Set(snapshot.pending_interactions?.map(item => interactionKey(item.interaction)));
     const operations = { ...this.state.interactionOperations };
     // Only an authoritative fresh snapshot can establish absence. Include routed
@@ -1704,8 +2154,8 @@ export class AppServerClient {
     if (preparation) await preparation.work;
     if (!this.current(generation)) throw new Error('Connection changed before sending.');
     if (this.state.views[id]?.modelIntent) throw new Error(this.state.views[id].modelIntent?.error ?? 'Model selection is not ready.');
-    const target = this.target(id);
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before sending.');
+    const target = this.target(id);
     // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
     // The request pipeline owns unresolved transport and its acknowledgement
@@ -1741,13 +2191,35 @@ export class AppServerClient {
    * `observed` is true only when a snapshot read requested after the outcome
    * succeeded for this attachment. A lost response stays uncertain. Nothing is
    * retried and no newer revision is ever substituted. */
+  /** Load the original typed Goal objective at one exact native read cut. */
+  async goalObjective(id: string, expected: GoalRef): Promise<string> {
+    const view = this.state.views[id], target = view?.target, cut = view?.checkpoint?.read_cut, generation = this.state.generation;
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+      && this.state.views[id]?.snapshot?.goal?.current?.reference.id === expected.id
+      && this.state.views[id]?.snapshot?.goal?.current?.reference.revision === expected.revision;
+    if (!target || !cut || !current()) throw new Error('Goal observation was replaced.');
+    const path = ['current', 'objective'];
+    const { chunk } = await this.request({ method: 'conversation/checkpointValueRead', params: {
+      target, agent_id: null, cut, domain: 'goal', item_offset: 0, path, offset: 0, max_bytes: 65_536,
+    } }, 'checkpoint_value_chunk', undefined, current);
+    if (!current()) throw new Error('Goal observation was replaced.');
+    if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
+    const bytes = Uint8Array.from(atob(chunk.bytes_base64), value => value.charCodeAt(0));
+    if (JSON.stringify(chunk.cut) !== JSON.stringify(cut) || chunk.domain !== 'goal' || chunk.item_offset !== 0
+      || JSON.stringify(chunk.path) !== JSON.stringify(path) || chunk.offset !== 0 || chunk.next_offset != null
+      || !Number.isSafeInteger(chunk.readable_end) || chunk.readable_end !== bytes.length || bytes.length > 65_536) throw new Error('Goal objective range changed.');
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const original: unknown = chunk.representation === 'utf8_text' ? text : chunk.representation === 'canonical_json_v1' ? JSON.parse(text) : undefined;
+    if (typeof original !== 'string' || new TextEncoder().encode(original).length > 8192) throw new Error('Goal objective exceeds its native bound.');
+    return original;
+  }
   async controlGoal(id: string, expected: GoalRef, mutation: GoalMutation): Promise<GoalControlOutcome> {
     const generation = this.state.generation;
     let target: AttachmentTarget;
     try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: error instanceof Error ? error.message : String(error), observed: false }; }
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     try {
-      await this.request({ method: 'goal/control', params: { target, control: { action: 'mutate', expected, mutation } } }, 'goal');
+      await this.request({ method: 'goal/control', params: { target, control: { action: 'mutate', expected, mutation } } }, 'goal_mutation');
     } catch (error) {
       if (error instanceof OutcomeUncertain) return { status: 'uncertain' };
       if (!current()) return { status: 'obsolete' };
@@ -1796,10 +2268,10 @@ export class AppServerClient {
     if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
     return observed;
   }
-  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v46').SessionModelConfig>; retire: () => void }>();
+  private modelPreparations = new Map<string, { work: Promise<import('../../../protocol/app-server/v48').SessionModelConfig>; retire: () => void }>();
   /** Client-owned selection while native resources initialize. Last unsent choice
    * wins; the existing native mutation and authoritative reread still own apply. */
-  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
+  prepareAgentModel(id: string, config: import('../../../protocol/app-server/v48').SessionModelConfig) {
     const view = this.state.views[id];
     if (view?.attachment !== 'attaching' || view.attachmentIntent !== 'wanted' || view.deleting)
       return Promise.reject(new Error('Conversation is no longer connecting.'));
@@ -1835,16 +2307,32 @@ export class AppServerClient {
     void work.finally(() => { if (this.modelPreparations.get(id)?.work === work) this.modelPreparations.delete(id); }).catch(() => {});
     return work;
   }
+  /** Native catalog defaults at the exact generation whose ordinals were read. */
+  async selectCatalogModel(id:string,choice:import('../../../protocol/app-server/v48').CatalogModelSelection,owned:()=>boolean=()=>true) {
+    const target=this.target(id),generation=this.state.generation;
+    if(this.state.views[id].modelMutation)throw new Error('Reread native model state before another mutation.');
+    const current=()=>owned()&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target);
+    if(!current())return;
+    const operation={generation,status:'in-flight' as const};this.setSession(id,{modelMutation:operation});
+    try {
+      await this.request({method:'session/selectModel',params:{target,choice}},'model_set',undefined,current);
+      if(this.current(generation)&&sameTarget(this.state.views[id]?.target,target))this.setSession(id,{modelMutation:{generation,status:'acknowledged'}});
+    }catch(error){
+      if(this.state.views[id]?.modelMutation===operation)this.setSession(id,{modelMutation:error instanceof RequestNotDispatched?undefined:{generation,status:isOutcomeUncertain(error)?'uncertain':'acknowledged'}});
+      throw error;
+    }
+  }
+
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: import('../../../protocol/app-server/v46').SessionModelConfig) {
+  async setAgentModel(id: string, config: import('../../../protocol/app-server/v48').SessionModelConfig) {
     const target = this.target(id), generation = this.state.generation;
     if (this.state.views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     const operation = { generation, status: 'in-flight' as const };
     this.setSession(id, { modelMutation: operation });
     try {
-      await this.request({ method: 'session/setModel', params: { target, config } }, 'model');
+      await this.request({ method: 'session/setModel', params: { target, config } }, 'model_set');
       if (!current()) return;
       this.setSession(id, { modelMutation: { generation, status: 'acknowledged' }, ...(this.state.views[id]?.modelIntent?.phase === 'failed' ? { modelIntent: undefined } : {}) });
     } catch (error) {
@@ -1865,7 +2353,7 @@ export class AppServerClient {
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
       && this.state.views[id]?.compactionRequest?.requestId === operation.requestId;
     const release = () => { if (this.compactionRequests.get(id) === operation) this.compactionRequests.delete(id); };
-    void this.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, 'context', undefined, current)
+    void this.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, 'context_compacted', undefined, current)
       .then(async () => {
         release();
         if (!current()) return;
@@ -1882,20 +2370,27 @@ export class AppServerClient {
   }
 
   async repairAgentModel(id: string) {
-    const observation = this.lifecycles.observe(id);
-    if (!observation) return;
+    const view = this.state.views[id], target = view?.target;
+    if (!target || !this.lifecycles.observe(id)) return;
+    const generation = this.state.generation, operation = view.modelMutation, intent = view.modelIntent;
+    if (operation?.status === 'in-flight') return;
     await this.refresh(id);
-    if (observation.current() && this.state.views[id].modelMutation?.status !== 'in-flight') {
-      const view = this.state.views[id], intent = view.modelIntent, observed = view.snapshot?.model?.configured;
-      const confirmed = intent?.phase === 'failed' && observed?.model === intent.config.model
-        && (observed.profile ?? undefined) === (intent.config.profile ?? undefined);
-      this.setSession(id, { modelMutation: undefined, ...(confirmed ? { modelIntent: undefined } : {}) });
-    }
+    const latest = this.state.views[id];
+    // Recovery installs a fresh observation proof. Fence this reconciliation
+    // by its connection, attachment and exact operation, rather than the proof
+    // that the authoritative checkpoint necessarily replaced.
+    if (!this.current(generation) || !sameTarget(latest?.target, target)
+      || latest.modelMutation !== operation || latest.modelIntent !== intent
+      || latest.observationState !== 'following') return;
+    const observed = latest.snapshot?.model?.configured;
+    const confirmed = intent?.phase === 'failed' && observed?.model === intent.config.model
+      && (observed.profile ?? undefined) === (intent.config.profile ?? undefined);
+    if (operation || confirmed) this.setSession(id, { modelMutation: undefined, ...(confirmed ? { modelIntent: undefined } : {}) });
   }
   cancellationTarget(id: string): CancellationTarget | undefined {
     const view = this.state.views[id], attempt = view?.snapshot?.attempt;
     if (!this.isAttachmentControlCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
-      || !view.target || view.deleting || view.cancellation || !attempt || attempt.phase.type === 'settled'
+      || !view.target || view.deleting || view.cancellation || !attempt || attempt.attempt_id == null || !['admitted','running'].includes(attempt.phase.type)
       || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length) return;
     return { generation: this.state.generation, target: view.target, attemptId: attempt.attempt_id };
   }
@@ -1913,7 +2408,7 @@ export class AppServerClient {
         return current() && this.initialized && this.state.connection === 'connected' && view?.attachmentIntent === 'wanted'
           && view.attachment === 'attached' && !view.deleting && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure
           && !view.snapshot?.pending_interactions?.length && view.snapshot?.attempt?.attempt_id === attemptId
-          && view.snapshot.attempt.phase.type !== 'settled' && view.cancellation === operation;
+          && ['admitted','running'].includes(view.snapshot.attempt.phase.type) && view.cancellation === operation;
       });
       if (current() && this.state.views[id].cancellation?.attemptId === attemptId) {
         this.setSession(id, { cancellation: { attemptId, status: 'acknowledged' } });
@@ -1928,11 +2423,67 @@ export class AppServerClient {
       throw error;
     }
   }
+  pendingInteractions(id:string) {
+    const view=this.state.views[id],loaded=view?.interactionPage;
+    if(loaded&&sameTarget(view.target,loaded.target)&&this.interactionCutCurrent(view,loaded.page.read_cut))return loaded.rows;
+    return view?.snapshot?.pending_interactions??[];
+  }
+  interactionBody(id:string,header:import('../../../protocol/app-server/v48').RuntimeClientInteractionHeader) {
+    const view=this.state.views[id],detail=view?.interactionDetail;
+    if(detail&&sameTarget(view.target,detail.target)&&this.interactionCutCurrent(view,detail.cut)&&interactionKey(detail.body.interaction)===interactionKey(header.interaction))return detail.body;
+    return interactionBody(header);
+  }
+  async loadInteractionBody(id:string,index:number,ownsView:()=>boolean=()=>true) {
+    const view=this.state.views[id],observation=this.lifecycles.observe(id),header=this.pendingInteractions(id)[index];
+    if(!observation||!header||!view.checkpoint)throw new Error('Interaction observation is unavailable.');
+    const viewport=view.interactionPage;
+    const selected=viewport&&sameTarget(view.target,viewport.target)&&this.interactionCutCurrent(view,viewport.page.read_cut)?viewport:undefined;
+    const cut=selected?.page.read_cut??view.checkpoint.read_cut,target=observation.target;
+    const offset=Number(header.source_offset);
+    if(!Number.isSafeInteger(offset)||offset<0)throw new Error("Invalid native interaction source offset.");
+    const current=()=>ownsView()&&observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut)
+      &&this.pendingInteractions(id)[index]?.request_id===header.request_id;
+    const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:1}},'checkpoint_page',undefined,current);
+    if(page.items.length!==1)throw new Error('Interaction body is unavailable.');
+    const body=await readInteractionBody(page,page.items[0]!,header,this.domainReader(target,current));
+    if(current())this.setSession(id,{interactionDetail:{target,cut,body}});
+  }
+  async interactionValueChunk(id:string,index:number,path:string[],offset:number,ownsView:()=>boolean) {
+    const view=this.state.views[id],observation=this.lifecycles.observe(id),header=this.pendingInteractions(id)[index];
+    if(!observation||!header||!view.checkpoint)throw new Error('Interaction observation is unavailable.');
+    const selected=view.interactionPage&&sameTarget(view.target,view.interactionPage.target)&&this.interactionCutCurrent(view,view.interactionPage.page.read_cut)?view.interactionPage:undefined;
+    const cut=selected?.page.read_cut??view.checkpoint.read_cut,item_offset=Number(header.source_offset);
+    if(!Number.isSafeInteger(item_offset)||item_offset<0)throw new Error("Invalid native interaction source offset.");
+    const current=()=>ownsView()&&observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut)&&this.pendingInteractions(id)[index]?.request_id===header.request_id;
+    const {chunk}=await this.request({method:'conversation/checkpointValueRead',params:{target:observation.target,agent_id:null,cut,domain:'pending_interactions',item_offset,path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,current);
+    if(!current()||JSON.stringify(chunk.cut)!==JSON.stringify(cut)||chunk.domain!=='pending_interactions'||chunk.item_offset!==item_offset||JSON.stringify(chunk.path)!==JSON.stringify(path)||chunk.offset!==offset)throw new Error('Interaction range identity changed.');
+    if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
+    const bytes=Uint8Array.from(atob(chunk.bytes_base64),value=>value.charCodeAt(0));
+    if(bytes.length>65536||!Number.isSafeInteger(chunk.readable_end)||offset+bytes.length>chunk.readable_end||offset<chunk.readable_end&&!bytes.length||(chunk.next_offset??null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null))throw new Error('Interaction range failed to advance exactly.');
+    return {bytes,next:chunk.next_offset??undefined,readableEnd:chunk.readable_end};
+  }
+  private interactionCutCurrent(view:SessionView,cut:import('../../../protocol/app-server/v48').CheckpointReadCut) {
+    const current=view.checkpoint?.read_cut;
+    return !!current&&current.conversation_id===cut.conversation_id&&current.activation_id===cut.activation_id
+      &&(cut.domain_revisions.pending_interactions!==undefined
+        ?current.domain_revisions.pending_interactions===cut.domain_revisions.pending_interactions:current.revision===cut.revision);
+  }
+  async interactionPage(id:string,offset:number) {
+    const view=this.state.views[id],observation=this.lifecycles.observe(id),checkpoint=view?.checkpoint;
+    if(!observation||!checkpoint||!Number.isSafeInteger(offset)||offset<0)throw new Error('Interaction observation is unavailable.');
+    const cut=checkpoint.read_cut,target=observation.target;
+    const current=()=>observation.current()&&!!this.state.views[id]&&this.interactionCutCurrent(this.state.views[id],cut);
+    const {page}=await this.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain:'pending_interactions',offset,limit:32}},'checkpoint_page',undefined,current);
+    if(page.items.length>32)throw new Error('Interaction page exceeds its item bound.');
+    const rows=page.items.map(item=>{if(item.value==null)throw new Error('Interaction descriptor is missing.');return item.value as import('../../../protocol/app-server/v48').RuntimeClientInteractionHeader;});
+    if(!current())throw new Error('Interaction observation was replaced.');
+    this.setSession(id,{interactionPage:{target,page,rows,offset}});
+  }
   async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {
     const key = interactionKey(interaction);
     if (this.state.interactionOperations[key]) throw new Error('Response already in flight or uncertain. Refresh authoritative state.');
     const target = this.target(id);
-    if (!this.state.views[id].snapshot?.pending_interactions?.some(item => interactionKey(item.interaction) === key)) throw new Error('Interaction is no longer pending.');
+    if (!this.pendingInteractions(id).some(item => interactionKey(item.interaction) === key)) throw new Error('Interaction is no longer pending.');
     const generation = this.state.generation;
     this.publish({ interactionOperations: { ...this.state.interactionOperations, [key]: { sessionId: id, status: 'in-flight' } } });
     let acknowledged = false;
@@ -1971,7 +2522,7 @@ export class AppServerClient {
     this.retireObservationWork(id);
     this.summarySettled.delete(id);
     this.summaryObservedEpoch.delete(id);
-    this.setSession(id, { history: undefined, submissions: undefined, turnOutline: undefined, turnNavigation: undefined });
+    this.setSession(id,{history:this.initialized?undefined:this.state.views[id]?.history,submissions:undefined,turnOutline:undefined,turnNavigation:undefined});
   }
   /** Resample admission proofs after their browser owner retires. No native
    * transaction is cancelled after dispatch. */

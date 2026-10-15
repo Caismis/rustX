@@ -55,9 +55,11 @@ test('native interrupt and wait capture one activation; the same Agent resumes w
     await expect(agent.getByRole('status').filter({ hasText: /^cancelled$/ })).toBeVisible();
     await initialSettlements;
     expect(settlements.filter(row => row.result.activation_id === first)).toHaveLength(2);
-    expect(settlements).toEqual(expect.arrayContaining(['agent/wait', 'agent/interrupt'].map(method => ({
-      method, result: expect.objectContaining({ type: 'agent_wait', agent_id: agentId, activation_id: first, outcome: 'cancelled', agent: expect.objectContaining({ agent_id: agentId, state: 'inactive' }) }),
-    }))));
+    expect(settlements).toEqual(expect.arrayContaining([
+      { method: 'agent/wait', result: expect.objectContaining({ type: 'agent_wait', agent_id: agentId, activation_id: first, outcome: 'cancelled' }) },
+      { method: 'agent/interrupt', result: expect.objectContaining({ type: 'agent_interruption_accepted', agent_id: agentId, activation_id: first }) },
+    ]));
+    expect(settlements.find(row => row.method === 'agent/interrupt')!.result).not.toHaveProperty('outcome');
     await expect(agent.getByRole('alert')).toHaveCount(0);
     await fixture.release(childGate);
     await agent.getByRole('textbox', { name: 'Message Agent Review workspace' }).fill('WEB_AGENT_RESUME: continue the same review');

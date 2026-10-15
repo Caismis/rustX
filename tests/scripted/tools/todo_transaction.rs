@@ -346,7 +346,11 @@ async fn a_fresh_attach_carries_the_list_even_when_the_result_is_off_the_page() 
     .durable_history(history)
     .build()
     .await;
-    let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+    let (snapshot, _) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
 
     assert!(
         !snapshot.transcript.entries.iter().any(|entry| matches!(
@@ -374,7 +378,11 @@ async fn a_conversation_without_a_list_attaches_to_the_empty_one() {
     .todo_extension()
     .build()
     .await;
-    let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+    let (snapshot, _) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(snapshot.todos, Some(TodoSnapshot::empty()));
 }
 
@@ -410,10 +418,12 @@ async fn the_projection_follows_a_committed_todo_result() {
             else {
                 panic!("the subscription must stay open");
             };
-            if matches!(
-                event.event,
-                rustx::runtime_client::RuntimeClientEvent::AttemptSettled { .. }
-            ) {
+            if event.event.facts().iter().any(|fact| {
+                matches!(
+                    fact,
+                    rustx::runtime_client::RuntimeClientEvent::AttemptSettled { .. }
+                )
+            }) {
                 return;
             }
         }
@@ -421,7 +431,11 @@ async fn the_projection_follows_a_committed_todo_result() {
     .await
     .expect("the attempt settles");
 
-    let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+    let (snapshot, _) = fixture
+        .host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     let projected = snapshot.todos.clone().expect("the runtime composes Todo");
     assert_eq!(projected.tasks.len(), 1);
     assert_eq!(projected.tasks[0].subject, "Write the parser");

@@ -112,7 +112,7 @@ use crate::tools::types::{ToolExecutionResult, ToolProgress};
 /// Normal children settle through the native parent-inbound publication path.
 /// Workflow children settle directly into the `WorkflowRuntime` boundary and
 /// must never be recovered as parent notifications.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentOwnershipKind {
     /// The ordinary named-Subagent parent-inbound protocol.
@@ -132,9 +132,18 @@ pub enum SubagentOwnershipKind {
 /// Bump this only when the envelope's own shape changes.
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
 
+/// Finite canonical C evidence returned by the existing Journal append transaction.
+/// The original provider and Message identities remain in their authoritative stores.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolObservationOccurrence {
+    pub tool_ordinal: u64,
+    pub ledger_position: u64,
+    pub block_index: crate::message::types::ContentBlockIndex,
+}
+
 /// The envelope around every durable runtime event.
 #[allow(clippy::struct_field_names)] // `event_id` and `event` are protocol-specified field names.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeEventEnvelope {
     /// Explicit event schema version; never inferred from the crate version.
     pub schema_version: u16,
@@ -143,6 +152,15 @@ pub struct RuntimeEventEnvelope {
     /// Monotonic sequence within the conversation. Allocation is committed
     /// by the native durable `ConversationStore` before publication.
     pub sequence: u64,
+    /// Finite native append receipt evidence; absent from the durable Event schema.
+    /// Only the committing store may populate this canonical Tool occurrence.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub tool_occurrence: Option<ToolObservationOccurrence>,
+    /// Finite immutable source receipt; never part of the durable Event protocol.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub observation: Option<std::sync::Arc<crate::durable::observation::NativeObservationBatch>>,
     /// The conversation this event belongs to.
     pub conversation_id: ConversationId,
     /// The attempt this event belongs to, when applicable.
@@ -157,13 +175,27 @@ pub struct RuntimeEventEnvelope {
     pub event: RuntimeEvent,
 }
 
+// Derived append evidence does not change equality of the durable fact.
+impl PartialEq for RuntimeEventEnvelope {
+    fn eq(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.event_id == other.event_id
+            && self.sequence == other.sequence
+            && self.conversation_id == other.conversation_id
+            && self.attempt_id == other.attempt_id
+            && self.turn_id == other.turn_id
+            && self.timestamp == other.timestamp
+            && self.event == other.event
+    }
+}
+
 /// An execution/process fact produced by the runtime.
 ///
 /// Event payloads are self-describing: they carry the identities they need
 /// even when the envelope also carries the enclosing attempt or turn. Unknown
 /// payload fields are rejected so stale or contradictory encodings cannot
 /// silently deserialize.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeEvent {
     /// Observational Goal facts; never replayed as Goal state.
@@ -887,14 +919,14 @@ pub fn contribution_emission_event_id(
 }
 
 /// Durable precommit physical-staging boundary for one Agent activation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentActivationAdmissionPhase {
     Reserved,
     RolledBack { physical_settlement_proven: bool },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentTerminalState {
     /// The child completed and its bounded answer was durably accepted by
@@ -914,7 +946,7 @@ pub enum SubagentTerminalState {
 }
 
 /// The durable terminal outcome of a detached background execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BackgroundTerminalState {
     /// The executor completed successfully.
@@ -952,7 +984,7 @@ pub enum BackgroundTerminalState {
 /// failures. This keeps provider failure information intact without creating
 /// a runtime-to-model dependency: the model layer remains below this event
 /// layer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AttemptFailure {
     /// A model request exhausted its retry policy.
@@ -1058,6 +1090,8 @@ mod tests {
 
     fn example_envelope() -> RuntimeEventEnvelope {
         RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: EventId::new("evt-1"),
             sequence: 1,

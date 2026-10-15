@@ -1,3 +1,4 @@
+import {traceAttemptKey,traceStepKey,traceFields} from '../../../../protocol/app-server/trace-identity';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -72,8 +73,8 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   // Loaded-window ordinals, like the Turn labels: identity stays native.
   const requestNumbers = useMemo(() => new Map(records.filter(record => record.kind === 'request').map((record, index) => [record.id, index + 1])), [records]);
   const foldableTurns = useMemo(() => new Set(projection.sections.flatMap(section => section.kind === 'turn'
-    && allItems.filter(item => isInspectable(item) && item.type !== 'SystemPromptCell' && item.type !== 'RequestBoundary' && item.record.location.attempt_id === section.nativeAttemptId).length > 1
-    ? [section.nativeAttemptId] : [])), [projection, allItems]);
+    && allItems.filter(item => isInspectable(item) && item.type !== 'SystemPromptCell' && item.type !== 'RequestBoundary' && traceAttemptKey(item.record.location) === section.ownerKey).length > 1
+    ? [section.ownerKey] : [])), [projection, allItems]);
   // Timeline focus is valid only within the Trace read domain that created it.
   // Within one epoch (prepend, lifecycle refresh) it persists as native record
   // identities, so renumbered Turns and moved coordinates keep its ownership.
@@ -137,7 +138,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   // Reveal a record from the inspector or the overview: unfold its Turn and
   // its Assistant's calls, and drop a search or focus that would hide it.
   const open = (item: InspectableDisplayItem, facet?: TrajectoryFacet) => {
-    const attempt = item.record.location.attempt_id;
+    const attempt = traceAttemptKey(item.record.location);
     if (attempt) setCollapsedTurns(current => { const next = new Set(current); next.delete(attempt); return next; });
     setCalls(current => new Set([...current].filter(owner => !executions.get(owner)?.some(record => record.id === item.owner_record_id))));
     if (matches && !matches.has(item.display_key)) setQuery('');
@@ -152,20 +153,20 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers };
   // Harness locates a detail by its section and group: "Turn 2 · Step 1".
   const location = (() => {
-    const attempt = selected?.location.attempt_id;
+    const attempt = selected&&traceAttemptKey(selected.location);
     if (!attempt) return undefined;
-    const step = selected.location.step_id ?? undefined;
-    const turn = allItems.find((item): item is StructuralDisplayItem => item.type === 'TurnHeader' && item.attempt_id === attempt);
-    const group = allItems.find((item): item is StructuralDisplayItem => item.type === 'GroupHeader' && item.attempt_id === attempt && item.step_id === step);
+    const step = traceStepKey(selected.location);
+    const turn = allItems.find((item): item is StructuralDisplayItem => item.type === 'TurnHeader' && item.ownerKey === attempt);
+    const group = allItems.find((item): item is StructuralDisplayItem => item.type === 'GroupHeader' && item.ownerKey === attempt && item.stepKey === step);
     return { turn: turn?.label, group: group?.label };
   })();
   const inspector = selected && selection && selectedItem
-    ? <TrajectoryInspector key={selection.display_key} item={selectedItem} detail={selectedDetail?.detail} loading={selectedDetail?.loading} error={selectedDetail?.error}
+    ? <TrajectoryInspector key={selection.display_key} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} error={selectedDetail?.error} fieldSources={selectedItem.type==='ContextRow'?selectedItem.context.fields:traceFields(selected)} fieldCut={cache.readCuts?.[selected.id]} fieldReader={cache.fields} deferredContent={selectedDetail?.content} readContent={selectedDetail?.readContent}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={!cache.page.next_cursor} onOpen={openRecord} />
     : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;
-  const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.nativeAttemptId] : []);
+  const turnIds = projection.sections.flatMap(section => section.kind === 'turn' ? [section.ownerKey] : []);
   const allTurnsCollapsed = foldableTurns.size > 0 && [...foldableTurns].every(id => collapsedTurns.has(id));
   const allCallsCollapsed = callOwners.size > 0 && [...callOwners].every(id => calls.has(id));
   return <section className={css.root} data-conversation-composer-overlay="" aria-label={tx('trajectory:view.trajectory')} onFocusCapture={event => {

@@ -1,3 +1,7 @@
+import { checkpointSnapshot } from '../../protocol/app-server/projection.ts';
+import { checkpoint } from './support/fixtures.ts';
+import { nativeInteraction } from './support/fixtures.ts';
+import { contentAdvance, utf8Length } from './support/fixtures.ts';
 /**
  * The presentation reducer over scripted runtime facts.
  *
@@ -10,6 +14,7 @@ import { describe, it } from "node:test";
 
 import {
   mergeTranscriptPage,
+  presentationCheckpoint,
   reduce,
   replaceFromSnapshot,
 } from "../src/presentation/projection.ts";
@@ -270,6 +275,7 @@ describe("presentation projection", () => {
       cursor: runtimeCursor(42),
       event: {
         type: "assistant_publication_settled",
+        settlement_head: [],
         attempt_id: "attempt-1",
         transcript_cursor: transcriptCursor(12),
         audit: {
@@ -402,7 +408,7 @@ describe("presentation projection", () => {
   it("folds live approvals and repairs them from snapshot/resync state", () => {
     const interaction = approvalInteraction();
     const pending = fold(initial(), [
-      { type: "interaction_pending", interaction },
+      { type: "interaction_pending", interaction: nativeInteraction(interaction) },
     ]);
 
     assert.deepEqual(pending.pendingInteractions, [interaction]);
@@ -430,7 +436,7 @@ describe("presentation projection", () => {
   it("folds Questionnaires without changing published approval policy", () => {
     const question = questionnaireInteraction();
     const state = fold(initial(), [
-      { type: "interaction_pending", interaction: question },
+      { type: "interaction_pending", interaction: nativeInteraction(question) },
     ]);
 
     assert.deepEqual(state.pendingInteractions, [question]);
@@ -447,10 +453,10 @@ describe("presentation projection", () => {
           compaction_count: 2,
           latest_compaction: {
             generation: "2",
-            summary_message_id: "conv_be682c07-c8cf-7a0f-9f06-17a4288267dd",
+            summary_message_id: "conv_be682c07-c8cf-7a0f-9f06-17a4288267dd", summary_message_locator:{type:'by_message_id',message_id:"conv_be682c07-c8cf-7a0f-9f06-17a4288267dd"}, summary_message_id_deferred:false, summary_message_id_source:null,
             surface_revision: "7",
-            tokens_before: { input_tokens: 4_700, source: "estimated" },
-            estimated_tokens_after: 1_800,
+            tokens_before: { input_tokens: "4700", source: "estimated" },
+            estimated_tokens_after: "1800",
           },
         },
       },
@@ -516,10 +522,10 @@ describe("presentation projection", () => {
 
   it("updates turn and normalized usage incrementally and reconstructs the same values", () => {
     const usage = {
-      input_tokens: 10,
-      output_tokens: 4,
-      total_tokens: 14,
-      details: { cached_input_tokens: 2 },
+      input_tokens: "10",
+      output_tokens: "4",
+      total_tokens: "14",
+      details: { cached_input_tokens: "2" },
     };
     const incremental = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
@@ -552,41 +558,11 @@ describe("presentation projection", () => {
     const state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m1" },
-      {
-        type: "assistant_reasoning_delta",
-        attempt_id: "a1",
-        message_id: "m1",
-        block_index: 0,
-        delta: "let me ",
-      },
-      {
-        type: "assistant_reasoning_delta",
-        attempt_id: "a1",
-        message_id: "m1",
-        block_index: 0,
-        delta: "think",
-      },
-      {
-        type: "assistant_text_delta",
-        attempt_id: "a1",
-        message_id: "m1",
-        block_index: 1,
-        delta: "Hello",
-      },
-      {
-        type: "assistant_text_delta",
-        attempt_id: "a1",
-        message_id: "m1",
-        block_index: 1,
-        delta: " world",
-      },
-      {
-        type: "assistant_refusal_delta",
-        attempt_id: "a1",
-        message_id: "m1",
-        block_index: 2,
-        delta: "I cannot",
-      },
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'reasoning',delta:"let me "}, 0, 1),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'reasoning',delta:"think"}, utf8Length(["let me "].join('')), 2),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:1,kind:'text',delta:"Hello"}, 0, 1),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:1,kind:'text',delta:" world"}, utf8Length(["Hello"].join('')), 2),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:2,kind:'refusal',delta:"I cannot"}, 0, 1),
     ]);
 
     const streaming = streamingOf(state);
@@ -608,9 +584,9 @@ describe("presentation projection", () => {
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m1" },
       // Interleaved blocks: index 1 opens before index 0 finishes.
-      { type: "assistant_text_delta", attempt_id: "a1", message_id: "m1", block_index: 0, delta: "A" },
-      { type: "assistant_text_delta", attempt_id: "a1", message_id: "m1", block_index: 1, delta: "B" },
-      { type: "assistant_text_delta", attempt_id: "a1", message_id: "m1", block_index: 0, delta: "A2" },
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'text',delta:"A"}, 0, 1),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:1,kind:'text',delta:"B"}, 0, 1),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'text',delta:"A2"}, utf8Length(["A"].join('')), 2),
     ]);
 
     const streaming = streamingOf(state);
@@ -626,7 +602,7 @@ describe("presentation projection", () => {
     const state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m1" },
-      { type: "assistant_text_delta", attempt_id: "a1", message_id: "m1", block_index: 0, delta: "hi" },
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'text',delta:"hi"}, 0, 1),
       {
         type: "message_committed",
         attempt_id: "a1",
@@ -674,24 +650,25 @@ describe("presentation projection", () => {
   it("tracks foreground tool lifecycle by logical call identity", () => {
     const state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
-      { type: "tool_call_started", attempt_id: "a1", message_id: "m1", block_index: 2, call: { id: "c1", tool_id: "tool-bash", name: "bash" } },
+      {type:"assistant_message_started",attempt_id:"a1",message_id:"m1"},
+      { type: "tool_call_started", position: 0, foreground_position: 0, attempt_id: "a1", message_id: "m1", block_index: 2, call: { id: "c1", tool_id: "tool-bash", name: "bash" } },
       {
         type: "tool_execution_started",
         attempt_id: "a1",
-        tool_call_id: "c1",
+        tool_call_id: "c1", occurrence:{locator:{type:"by_message_id" as const,message_id:"m1"},block_index:2},
         tool_id: "tool-bash",
       },
       {
         type: "tool_execution_progress",
         attempt_id: "a1",
-        tool_call_id: "c1",
+        tool_call_id: "c1", occurrence:{locator:{type:"by_message_id" as const,message_id:"m1"},block_index:2},
         tool_id: "tool-bash",
         progress: { message: "halfway", completed: 1, total: 2 },
       },
       {
         type: "tool_execution_settled",
         attempt_id: "a1",
-        tool_call_id: "c1",
+        tool_call_id: "c1", occurrence:{locator:{type:"by_message_id" as const,message_id:"m1"},block_index:2},
         tool_id: "tool-bash",
         result: toolResult(),
       },
@@ -708,15 +685,16 @@ describe("presentation projection", () => {
   it("keeps parallel foreground calls on their own identities", () => {
     const state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
-      { type: "tool_call_started", attempt_id: "a1", message_id: "m1", block_index: 0, call: { id: "c1", tool_id: "t1", name: "one" } },
-      { type: "tool_call_started", attempt_id: "a1", message_id: "m1", block_index: 1, call: { id: "c2", tool_id: "t2", name: "two" } },
-      { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c1", tool_id: "t1" },
-      { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c2", tool_id: "t2" },
+      {type:"assistant_message_started",attempt_id:"a1",message_id:"m1"},
+      { type: "tool_call_started", position: 0, foreground_position: 0, attempt_id: "a1", message_id: "m1", block_index: 0, call: { id: "c1", tool_id: "t1", name: "one" } },
+      { type: "tool_call_started", position: 1, foreground_position: 1, attempt_id: "a1", message_id: "m1", block_index: 1, call: { id: "c2", tool_id: "t2", name: "two" } },
+      { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c1", occurrence:{locator:{type:"by_message_id" as const,message_id:"m1"},block_index:0}, tool_id: "t1" },
+      { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c2", occurrence:{locator:{type:"by_message_id" as const,message_id:"m1"},block_index:1}, tool_id: "t2" },
       // The second call settles first; the first must not be corrupted.
       {
         type: "tool_execution_settled",
         attempt_id: "a1",
-        tool_call_id: "c2",
+        tool_call_id: "c2", occurrence:{locator:{type:"by_message_id" as const,message_id:"m1"},block_index:1},
         tool_id: "t2",
         result: toolResult(),
       },
@@ -751,7 +729,7 @@ describe("presentation projection", () => {
     let state = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       {
-        type: "job_updated",
+        type: "job_updated", position:0,
         job: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running"),
       },
       {
@@ -767,7 +745,7 @@ describe("presentation projection", () => {
 
     state = fold(state, [
       {
-        type: "job_updated",
+        type: "job_updated", position:0,
         job: backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "succeeded", {
           result: toolResult(),
         }),
@@ -784,7 +762,7 @@ describe("presentation projection", () => {
     assert.equal(state.transcript.length, 1);
   });
 
-  it("settles a never-started foreground call from its canonical ToolMessage", () => {
+  it("folds the native terminal receipt for a never-started call beside its canonical ToolMessage", () => {
     const result = toolResult({
       status: {
         type: "cancelled",
@@ -795,8 +773,9 @@ describe("presentation projection", () => {
     const message = toolMessage("m2", "c1", "tool-bash", result);
     const assembled = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      {type:"assistant_message_started",attempt_id:"a1",message_id:"m1"},
       {
-        type: "tool_call_started",
+        type: "tool_call_started", position: 0, foreground_position: 0,
         attempt_id: "a1",
         message_id: "m1",
         block_index: 0,
@@ -804,6 +783,7 @@ describe("presentation projection", () => {
       },
     ]);
     const incremental = fold(assembled, [
+      {type:"tool_execution_settled",attempt_id:"a1",tool_call_id:"c1",tool_id:"tool-bash",occurrence:{locator:{type:"by_message_id",message_id:"m1"},block_index:0},result},
       {
         type: "message_committed",
         attempt_id: "a1",
@@ -827,11 +807,11 @@ describe("presentation projection", () => {
             outcome: { type: "cancelled", reason: "runtime_shutdown" },
           },
           foreground: [
-            { ...foreground("c1", "tool-bash", "bash", {
+            {...foreground("c1", "tool-bash", "bash", {
               type: "settled",
               arguments: "",
               result,
-            }), message_id: "m1" },
+            }), message_id: "m1", occurrence:{locator:{type:"by_message_id",message_id:"m1"},block_index:0},assembly_complete:false,metadata_ref:undefined },
           ],
         }),
       }),
@@ -883,7 +863,7 @@ describe("presentation projection", () => {
       {
         type: "tool_execution_settled",
         attempt_id: "a1",
-        tool_call_id: "c1",
+        tool_call_id: "c1", occurrence:{locator:{type:"by_message_id" as const,message_id:"m1"},block_index:0},
         tool_id: "tool-bash",
         result: toolResult(),
       },
@@ -1129,7 +1109,7 @@ describe("presentation projection", () => {
           type: "model" as const,
           kind: "rate_limit" as const,
           message: "slow down",
-          retry_after_ms: 1_000,
+          retry_after_ms: "1000",
         },
       },
     ];
@@ -1316,7 +1296,7 @@ describe("presentation projection", () => {
     const streamed = fold(initial(), [
       { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m2" },
-      { type: "assistant_text_delta", attempt_id: "a1", message_id: "m2", block_index: 0, delta: "hi" },
+      contentAdvance({attempt_id:"a1",message_id:"m2",block_index:0,kind:'text',delta:"hi"}, 0, 1),
       {
         type: "message_committed",
         attempt_id: "a1",
@@ -1355,10 +1335,11 @@ describe("presentation projection", () => {
 
 
 it("goal351 folds every durable Goal phase change at its stream cursor", () => {
-  const goal: import("../src/protocol/app-server.ts").GoalSnapshot = {
+  const goal: import("../src/protocol/app-server.ts").RuntimeClientGoalSnapshot = {
     reference: { id: "goal-1", revision: "1" }, objective: "Deliver", phase: "active",
     blocked_reason: null, autonomous_round_budget: 2, autonomous_rounds_consumed: 0,
     origin: { kind: "runtime_control" }, last_round_message_id: null,
+    objective_deferred:false,blocked_reason_deferred:false,last_round_message_id_deferred:false,fields:[],
   };
   const paused = { ...goal, reference: { id: "goal-1", revision: "2" }, phase: "paused" as const };
   const seed = snapshot({ goal: { current: null } });
@@ -1374,4 +1355,60 @@ it("goal351 folds every durable Goal phase change at its stream cursor", () => {
   assert.ok(!Object.hasOwn(stopped.goal!, "armed"));
   assert.ok(stopped.cursor > created.cursor);
   assert.deepEqual(replaceFromSnapshot(snapshot({ goal: stopped.goal }), stopped.cursor).goal, stopped.goal);
+});
+
+
+it('T14 T19 canonical Tool result commitment is separate from execution-terminal settlement', () => {
+  const result=toolResult();
+  const occurrence={locator:{type:'by_message_id' as const,message_id:'m1'},block_index:0};
+  const started=fold(initial(),[
+    {type:'attempt_started',attempt_id:'a1',execution_settings:null,model:attemptModel('alpha/model-a')},
+    {type:'assistant_message_started',attempt_id:'a1',message_id:'m1'},
+    {type:'tool_call_started',position:0,foreground_position:0,attempt_id:'a1',message_id:'m1',block_index:0,call:{id:'call',tool_id:'tool',name:'native Tool'}},
+    {type:'tool_call_assembled',position:0,foreground_position:0,attempt_id:'a1',message_id:'m1',block_index:0,call:{id:'call',tool_id:'tool',name:'native Tool',arguments:'{}'},arguments_json:'{}'},
+    {type:'tool_execution_started',attempt_id:'a1',tool_call_id:'call',tool_id:'tool',occurrence},
+  ]);
+  const committed=fold(started,[{result_deferred:false,type:'tool_result_committed',attempt_id:'a1',occurrence,result,result_metadata_ref:null}]);
+  assert.equal(committed.attempt?.foreground[0]?.state.type,'running');
+  assert.deepEqual(committed.attempt?.foreground[0]?.committed_result,result);
+  const settled=fold(committed,[{type:'tool_execution_settled',attempt_id:'a1',tool_call_id:'call',tool_id:'tool',occurrence,result}]);
+  assert.equal(settled.attempt?.foreground[0]?.state.type,'settled');
+  assert.deepEqual(settled.attempt?.foreground[0]?.committed_result,result);
+});
+
+
+it('T14 T17 native Trace read-domain head remains in the locally Applied checkpoint', () => {
+  const initial = snapshot();
+  const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
+  const trace: import('../../protocol/app-server/v48.ts').TracePage = {records: [{
+    id: 'request:J1', position: 'native-trace-1', kind: 'request', state: 'running', fields: [], collections: [],
+    location: {attempt_id: 'attempt-1', step_id: 'turn-1'}, timing: {started_at: '2026-01-01T00:00:00Z'},
+    calls: [], attachments: [], has_detail: true, truncated: false,
+  }]};
+  const next = reduce(state, {cursor: '1', event: {type: 'read_domains_updated', transcript: initial.transcript, trace, occupancy: null, todos: null}});
+  assert.deepEqual(presentationCheckpoint(next)?.snapshot.trace, trace);
+  assert.equal(next.cursor, '1');
+  assert.deepEqual(next.attempt, state.attempt);
+});
+
+it('T14 T19 deferred publication settlement retains source facts without settling execution', () => {
+  const initial = snapshot({attempt: attemptView({attempt_id:'attempt-1'})});
+  const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
+  const sourceCut: import('../../protocol/app-server/v48.ts').ObservationReadCut = {
+    read: {conversation_id: initial.conversation_id, journal:'0', transcript:'1', mutation_revision:'0', ledger_through:'0', surface_revision:'0', transcript_total:'1', pending_through:'0', pending_total:'0'},
+    ledger_through:'0', transcript_total:'1', surface_revision:'0', inherited_through:'0',
+  };
+  const settlement = {stream_id:null, message_id:null, attempt_id:'attempt-1', turn_id:'turn-1', request_id:'request-1', kind:'incomplete' as const, settled_at:'2026-01-01T00:00:00Z', block_count:'100'};
+  const record = {settlement, transcript_cursor:'1', read_cut:sourceCut};
+  const next = reduce(state, {cursor:'1', event: {type:'assistant_publication_deferred_settled', attempt_id:'attempt-1', audit:null,
+    settlement, settlement_head:[record],
+    transcript_cursor:'1', read_cut:sourceCut, content:[], collections:[],
+  }});
+  assert.equal(next.attempt?.phase.type, state.attempt?.phase.type);
+  assert.deepEqual(next.publicationSettlements, [record]);
+  assert.deepEqual(presentationCheckpoint(next)?.snapshot.publication_settlements, [record]);
+  assert.deepEqual(next.deferredTranscriptEntries, state.deferredTranscriptEntries);
+  const repaired = replaceFromSnapshot(checkpointSnapshot(presentationCheckpoint(next)!), next.cursor);
+  assert.deepEqual(repaired.publicationSettlements, next.publicationSettlements);
+  assert.equal(repaired.attempt?.phase.type, next.attempt?.phase.type);
 });

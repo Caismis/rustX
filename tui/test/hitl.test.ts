@@ -1,3 +1,4 @@
+import {hasInteractionBody, type DisplayInteraction} from '../src/presentation/interaction-display.ts';
 /**
  * The unified human-input surface (Issue #185).
  *
@@ -36,6 +37,7 @@ import {
   childApprovalInteraction,
   childQuestionnaireInteraction,
   questionnaireInteraction,
+  nativeInteraction,
 } from "./support/fixtures.ts";
 
 const ENTER = "\r";
@@ -60,7 +62,7 @@ interface Recorded {
 }
 
 function surface(initial?: {
-  interactions?: RoutedInteraction[];
+  interactions?: DisplayInteraction[];
   focused?: InteractionRef;
   preferences?: PresentationPreferences;
 }): { overlay: HumanInteractionOverlay; recorded: Recorded } {
@@ -923,8 +925,35 @@ describe("plan Review in the unified queue", () => {
     overlay.handleInput("\r");
     assert.equal(recorded.reviews[0]!.response.decision.type, "accepted");
     overlay.update([question], question.interaction, defaultPreferences());
-    assert.equal(overlay.focusedInteraction?.request.kind.type, "questionnaire");
+    const focused=overlay.focusedInteraction;
+    assert.ok(focused && hasInteractionBody(focused));
+    assert.equal(focused.request.kind.type,"questionnaire");
     assert.equal(recorded.submissions.length, 0);
     assert.equal(recorded.declines.length, 0);
   });
+});
+
+it("T15 partial interaction viewport eviction cannot settle an in-flight identity", () => {
+  const first=approvalInteraction("first"), second=approvalInteraction("second");
+  const {overlay,recorded}=surface({interactions:[first]});
+  overlay.handleInput(ENTER); assert.equal(recorded.decisions.length,1);
+  overlay.update([second],second.interaction,defaultPreferences(),false);
+  overlay.update([first],first.interaction,defaultPreferences(),false);
+  overlay.handleInput(ENTER); assert.equal(recorded.decisions.length,1,"omission from a partial page is not settlement");
+  overlay.submissionFailed(first.interaction);
+  overlay.handleInput(ENTER); assert.equal(recorded.decisions.length,2,"exact failed response reopens only its own authority");
+});
+
+it("T15 finite approval metadata remains actionable while arguments stay deferred",()=>{
+ const approval=approvalInteraction('deferred-approval');
+ const header={...nativeInteraction(approval),body:null,body_complete:false,approval:{tool_id:'tool-bash',tool_name:'bash',reason:'Native prepared permission',mode:'foreground' as const,deferred_fields:[['request','kind','arguments']]}};
+ const denied=surface({interactions:[header]});
+ assert.match(rendered(denied.overlay),/Arguments deferred/);
+ denied.overlay.handleInput(ENTER);
+ assert.deepEqual(denied.recorded.decisions,[{interaction:approval.interaction,decision:{type:'deny',reason:'denied by the user'}}]);
+ denied.overlay.handleInput(ENTER);assert.equal(denied.recorded.decisions.length,1);
+ const allowed=surface({interactions:[header]});
+ allowed.overlay.handleInput(DOWN);allowed.overlay.handleInput(ENTER);
+ assert.deepEqual(allowed.recorded.decisions,[{interaction:approval.interaction,decision:{type:'allow'}}]);
+ assert.equal(allowed.recorded.submissions.length,0,'deferred metadata does not fabricate a Questionnaire');
 });

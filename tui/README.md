@@ -30,10 +30,20 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v46. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v48. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
+
+Trace inspection uses the terminal’s existing focused inspection viewport and
+byte readers. `/observation` lists bounded native domains and the currently
+loaded Trace record IDs. `/observation trace <native-record-id>` explicitly loads
+one finite inspection head. `/content` then lists its original fields, including
+an available Tool Definition; absence and unavailable definition evidence remain
+distinct. Message heads advertise their own `/observation <domain>` pages and
+continuations. These reads retain the returned native cut across unrelated
+publications; a replaced selection or attachment rejects late results. No command
+automatically loads an entire Tool result, request context, or historical body.
 
 ## The one architectural rule
 
@@ -127,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server protocol v46. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v48. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -163,16 +173,18 @@ application to the native coordinator; context adoption remains explicit.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v46)
+  -> initialize (App Server protocol v48)
   -> session/create or choose a durable Session
-  -> session/attach (authoritative snapshot, cursor, subscription)
+  -> session/attach (bounded identity receipt)
+  -> session/checkpoint (bounded authoritative cut and cursor)
+  -> session/subscribe (receipt accepted before following events)
   -> interactive
 ```
 
 `/new`, `/resume`, `/clone`, `/fork`, and `/tree` use App Server operations.
 Changing Sessions only changes client focus; other attachments and running
 Sessions remain live in the same server process. Returning to a Session reads an
-authoritative snapshot and repairs its subscription. The server supports one live
+bounded authoritative checkpoint and repairs its subscription. The server supports one live
 node per Session: selecting another node uses **Switch to this branch**
 confirmation. Native retirement is internal to that switch. A/B Session focus
 changes never unload either runtime. Fork/branch editor
@@ -197,10 +209,21 @@ The conversation popup has no Composer or controls. Esc returns to Main without
 a request, preserving the parent's draft, cursor and presentation. It shares the
 normal transcript renderer, including canonical Tool occurrence correlation and
 completed-response metadata. It holds one bounded page (32 entries): PageUp
-replaces it with the explicit older page, Home reads newest again. Newest polling
-runs every 1.5 seconds and reads transcript authority even while the Agent is inactive;
-older browsing pauses polling. Missing/unreadable child history displays an
-explicit error, never an empty successful conversation.
+replaces it with the explicit older page, and Home resumes observation from the
+locally Applied Child cursor. The native observation source distinguishes live
+following from retained DurableOnly history.
+
+Within this popup, `t` selects the next loaded non-Request Trace record and opens
+its finite inspection head. `m` selects a message head, `b` selects one of its advertised canonical
+collections, and `p` advances the current message or canonical collection by one
+bounded page. A Tool head exposes its advertised result collections directly
+through `b`. `c` selects the next advertised original field,
+including an available frozen Tool Definition, and `n` reads its next byte
+window, at most 65,536 bytes. Definition absence and unavailable source evidence
+remain distinct. These reads use the current parent connection and retain the
+selected Child conversation, Registry Activation, source mode, and returned
+inspection cut. Closing the popup or replacing its owner retires late reads.
+Missing or unreadable history displays its source error.
 
 Selection/read generations and parent attachment epochs reject stale responses.
 Resync and reconnect keep only the selected durable AgentId and reread it
@@ -228,7 +251,7 @@ terminal inference, or activation generation is performed.
 | `app-server/child-process.ts` | spawn, stdio, bounded stderr tail, stdin close, wait, fallback termination | anything semantic; it never reads stdout |
 | `protocol/jsonl.ts` | LF framing, CRLF, the 1 MiB bound in encoded bytes | protocol meaning |
 | `app-server/client.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
-| `app-server/session.ts` | attach, snapshot install, subscribe, resync repair, detach | agent/session semantics |
+| `app-server/session.ts` | attach receipt, checkpoint install, subscribe, resync repair, detach | agent/session semantics |
 | `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `presentation/todos.ts` | reading the runtime's task-list projection and folding newly committed `todo` results into it | task identity, status, and dependencies, which the runtime owns |
@@ -353,6 +376,13 @@ does not implement a parallel Session system.
   reporting an empty list: there is no task list and no `todo` tool to create
   one.
 - `/status` — show the runtime-composed Agent Status and diagnostics.
+- `/observation` — list finite native domains and loaded Trace record IDs.
+- `/observation trace <native-record-id>` — open that record’s finite inspection
+  head and advertise its original fields, Tool Definition, or message collection.
+- `/observation <domain> [page-offset]` — read one advertised collection page;
+  use its returned continuation offset to advance at the same captured cut.
+- `/content [index [byte-offset]]` — list advertised original content and fields,
+  or read one selected byte window while retaining its source identity and cut.
 
 ### Control and presentation
 
@@ -385,6 +415,17 @@ Each either renders projection state, changes a client display preference, or
 invokes exactly one canonical App Server operation. `/model` opens the
 searchable selector over `model_catalog_get` and applies a choice through
 `session/setModel`, while `/model show` renders the projection's own model view;
+selection remains available during active execution. Native confirmation changes
+the Session's selection for future independent Attempts; the running Attempt's
+frozen model/Profile remains separately labelled, even for same-Model changes.
+Profile changes preserve independent request/output overrides and Summary Model
+policy; choosing another Model resets only primary overrides. Uncertain outcomes
+repair displayed state by reading authority, never by replaying the mutation.
+Readback does not settle an unanswered native request; the TUI keeps that
+diagnostic across reconnect. Deliberately selecting the current Model submits
+the complete preserved configuration so native authority decides explicit intent
+versus a no-op.
+
 `/tools`, `/skills`, and `/todos` read the projection the client already
 holds; `/status` prints the
 runtime's own Agent Status rendering; `/compact` invokes one
@@ -466,7 +507,21 @@ read to reconstruct effective capabilities.
 `/settings user` reads User sources; `/settings workspace "/canonical/path"` reads
 an explicit Workspace. Add `approval policy`, `approval full_access`, or `approval
 inherit` to save typed source intent with exact revision CAS. Add `rescan` for native
-reconciliation. No Session is required. `/session settings` reports native preparation,
+reconciliation. No Session is required.
+
+Native automatic `rustx.toml` repair (#464) is presented, never performed, here.
+`/settings repairs` inspects the latest repair receipts of the User source and the
+current Workspace (this client's Session directory); `/settings user repairs` and
+`/settings workspace repairs` inspect one of them, and `/settings workspace
+"/canonical/path" repairs` names another Workspace explicitly. Each is one
+authoritative `configuration/sourcesRead` in the scrollable inspection view, with
+redacted `-`/`~` change lines, reasons, revisions and backup availability — never a
+value or the file. A newly observed receipt shows one nonblocking status line under
+the transcript, combined for User and Workspace; an `unresolved` or
+`commit_uncertain` receipt shows as a warning or error. The first keystroke
+acknowledges it, a receipt identity is announced once across reconnects, and the
+line is never a conversation Turn or model input. Source notices are routed by the
+host itself, independently of any attached Session. `/session settings` reports native preparation,
 candidate and eligibility; `/session adopt` submits the inspected candidate and
 binding. Uncertain mutations are reread, never replayed. Runtime approval prompts
 remain independent of these source-authoring commands.

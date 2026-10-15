@@ -256,7 +256,7 @@ pub(crate) mod create_profile {
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
 /// Version 15 persists execution ownership generations at the active-node visibility commit.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 15;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 16;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -271,6 +271,7 @@ pub const SESSION_LIST_PAGE_LIMIT: usize = 32;
 /// The largest page a native Session tree/history request may return.
 pub const SESSION_TREE_PAGE_LIMIT: usize = 32;
 
+pub mod observation;
 pub use crate::runtime::identity::{SessionId, SessionNodeId};
 
 /// Why one `SessionNode` was created.
@@ -301,6 +302,8 @@ pub enum SessionNodeOrigin {
         source_surface_revision: SurfaceRevision,
         /// Exact selected source message; `side` determines the retained prefix.
         source_message: MessageId,
+        /// Exact immutable canonical location, captured by the Fork owner before publication.
+        source_locator: crate::runtime_client::content::CanonicalContentLocator,
         /// Explicit retained side of the selected message.
         side: LineageSide,
     },
@@ -798,6 +801,7 @@ pub struct SessionCatalog {
     root: PathBuf,
     path: PathBuf,
     document: CatalogDocument,
+    node_observation_index: Arc<BTreeMap<SessionId, Vec<SessionNodeId>>>,
     /// Whether `document` has ever been written to `path`.
     ///
     /// A first launch composes against a catalog that exists only in
@@ -838,6 +842,7 @@ impl SessionCatalog {
             product: (**controller).clone(),
             path: root.join("catalog.json"),
             root,
+            node_observation_index: Arc::default(),
             document: CatalogDocument {
                 retired: RetiredIdentities::default(),
                 generation: 0,
@@ -867,6 +872,96 @@ impl SessionCatalog {
     {
         self.lifecycle.clone().ok_or_else(|| SessionError::Catalog {
             detail: "storage recovery requires ProductController".into(),
+        })
+    }
+    pub(crate) fn acquire_read(
+        &self,
+        id: &SessionId,
+        selected: Option<&SessionNodeId>,
+    ) -> Result<super::session_controller::SessionReadAccess, SessionError> {
+        if self.document.deletions.contains_key(id) {
+            return Err(SessionError::DeletingSession {
+                session_id: id.clone(),
+            });
+        }
+        let session =
+            self.document
+                .sessions
+                .get(id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: id.clone(),
+                })?;
+        let node_id = selected.unwrap_or(&session.active_node);
+        let node = session
+            .nodes
+            .get(node_id)
+            .ok_or_else(|| SessionError::UnknownNode {
+                session_id: id.clone(),
+                node_id: node_id.clone(),
+            })?;
+        let path = self.database_path(id, &node.conversation_id);
+        let allocation =
+            crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                self.controller()?,
+                path.parent().expect("allocation"),
+            )
+            .map_err(|error| SessionError::Catalog {
+                detail: error.to_string(),
+            })?;
+        Ok(super::session_controller::SessionReadAccess {
+            conversation_id: node.conversation_id.clone(),
+            database_path: path,
+            allocation: Arc::new(allocation),
+        })
+    }
+    pub(crate) fn read_origin(
+        &self,
+        id: &SessionId,
+        node_id: &SessionNodeId,
+    ) -> Result<super::session_controller::SessionReadOrigin, SessionError> {
+        if self.document.deletions.contains_key(id) {
+            return Err(SessionError::DeletingSession {
+                session_id: id.clone(),
+            });
+        }
+        let node = self
+            .document
+            .sessions
+            .get(id)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: id.clone(),
+            })?
+            .nodes
+            .get(node_id)
+            .ok_or_else(|| SessionError::UnknownNode {
+                session_id: id.clone(),
+                node_id: node_id.clone(),
+            })?;
+        let SessionNodeOrigin::Fork {
+            source_session,
+            source_node,
+            source_surface_revision,
+            source_locator,
+            side,
+            ..
+        } = &node.origin
+        else {
+            return Err(SessionError::Catalog {
+                detail: "Node has no immutable fork origin".into(),
+            });
+        };
+        if !matches!(source_locator, crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position } if *position > 0)
+        {
+            return Err(SessionError::Catalog {
+                detail: "Fork origin requires a finite native ledger position".into(),
+            });
+        }
+        Ok(super::session_controller::SessionReadOrigin {
+            source_session: source_session.clone(),
+            source_node: source_node.clone(),
+            source_surface_revision: *source_surface_revision,
+            source_locator: source_locator.clone(),
+            side: *side,
         })
     }
     pub(crate) fn acquire_session(
@@ -1060,6 +1155,7 @@ impl SessionCatalog {
             product: guard.clone(),
             root,
             path,
+            node_observation_index: Arc::new(observation::node_index(&document)),
             document,
             published: true,
             lifecycle: None,
@@ -1256,6 +1352,7 @@ impl SessionCatalog {
             product,
             root,
             path,
+            node_observation_index: Arc::new(observation::node_index(&document)),
             document,
             published: false,
             lifecycle: None,
@@ -2607,6 +2704,7 @@ impl SessionCatalog {
             .collect();
         let committed = self.persist(&next);
         if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
+            self.node_observation_index = Arc::new(observation::node_index(&next));
             self.document = next;
             self.published = true;
             for (id, generation) in retired {
@@ -2821,6 +2919,7 @@ fn lineage_cut(
             })
             .cloned()
             .collect::<Vec<_>>(),
+        &source.raw_tool_arguments,
     )
 }
 
@@ -2866,6 +2965,7 @@ pub(crate) fn remap_seed(
     source_checkpoints: &BTreeMap<MessageId, crate::durable::inbox::CompactionCheckpointStatistics>,
     completed_responses: &[crate::durable::response::CompletedResponseProvenance],
     turns: &[crate::durable::reading::TurnReadingProvenance],
+    raw_tool_arguments: &[crate::durable::inbox::CanonicalRawToolArguments],
 ) -> Result<LineageSeed, SessionError> {
     let messages = canonical;
     let mut message_ids = BTreeMap::new();
@@ -2955,14 +3055,33 @@ pub(crate) fn remap_seed(
         .iter()
         .filter_map(|(id, stats)| message_ids.get(id).map(|mapped| (mapped.clone(), *stats)))
         .collect();
+    let raw = remap_raw_tool_arguments(raw_tool_arguments, &message_ids);
     LineageSeed::replayed(canonical, surface_history, checkpoints)
         .and_then(|seed| seed.with_completed_responses(responses))
         .and_then(|seed| seed.with_turns(turns))
+        .and_then(|seed| seed.with_raw_tool_arguments(raw))
         .map_err(|error| SessionError::Seed {
             detail: error.to_string(),
         })
 }
 
+fn remap_raw_tool_arguments(
+    raw_tool_arguments: &[crate::durable::inbox::CanonicalRawToolArguments],
+    message_ids: &BTreeMap<MessageId, MessageId>,
+) -> Vec<crate::durable::inbox::CanonicalRawToolArguments> {
+    raw_tool_arguments
+        .iter()
+        .filter_map(|item| {
+            message_ids.get(&item.message_id).map(|id| {
+                crate::durable::inbox::CanonicalRawToolArguments {
+                    message_id: id.clone(),
+                    block_index: item.block_index,
+                    bytes: item.bytes.clone(),
+                }
+            })
+        })
+        .collect()
+}
 fn remap_message(
     message: &MessageBlock,
     message_ids: &BTreeMap<MessageId, MessageId>,
@@ -3205,22 +3324,39 @@ fn normalize_name(name: &str) -> Result<String, SessionError> {
 /// a Session opened with only an image has no first line to show, and saying
 /// so with `None` is more honest than inventing one.
 pub(crate) fn preview_of(message: &UserMessageBlock) -> Option<String> {
-    let text = message
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            UserContentBlock::Text(block) => Some(block.text.as_str()),
-            UserContentBlock::UploadedFile(_)
-            | UserContentBlock::Image(_)
-            | UserContentBlock::File(_) => None,
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let text = single_line(text.as_str());
-    if text.is_empty() {
-        return None;
+    // Only the first normalized 121 characters can affect the exact 120
+    // character preview. Stream the native blocks without joining their bodies.
+    let mut preview = String::with_capacity(SESSION_PREVIEW_LIMIT * 4);
+    let (mut count, mut gap, mut first) = (0_usize, false, true);
+    for block in &message.content {
+        let UserContentBlock::Text(block) = block else {
+            continue;
+        };
+        if !first {
+            gap = !preview.is_empty();
+        }
+        first = false;
+        for character in block.text.chars() {
+            if character.is_whitespace() {
+                gap = !preview.is_empty();
+                continue;
+            }
+            if gap {
+                preview.push(' ');
+                count += 1;
+                gap = false;
+            }
+            if count > SESSION_PREVIEW_LIMIT {
+                return Some(truncate(preview, SESSION_PREVIEW_LIMIT));
+            }
+            preview.push(character);
+            count += 1;
+            if count > SESSION_PREVIEW_LIMIT {
+                return Some(truncate(preview, SESSION_PREVIEW_LIMIT));
+            }
+        }
     }
-    Some(truncate(text, SESSION_PREVIEW_LIMIT))
+    (!preview.is_empty()).then(|| truncate(preview, SESSION_PREVIEW_LIMIT))
 }
 
 /// Derives a prepared lineage's display projection from its **frozen seed**,
@@ -3634,6 +3770,19 @@ pub(crate) mod tests {
         CatalogCommitError, LineageReadCut, PreparedLineage, SessionCatalog, SessionError,
         SessionId, SessionNodeOrigin, SessionPersistentState,
     };
+    fn fixture_source_locator(
+        store: &dyn crate::durable::ConversationStore,
+        id: &str,
+    ) -> crate::runtime_client::content::CanonicalContentLocator {
+        let position = store
+            .message_header(&crate::runtime::identity::MessageId::new(id))
+            .unwrap()
+            .unwrap()
+            .ledger_position
+            .unwrap();
+        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+    }
+
     use crate::context::assembly::ContextGeneration;
     use crate::conversation::{SurfaceRevision, SurfaceSpan};
     use crate::durable::{CompactionCommitInput, ConversationStore, SqliteConversationStore};
@@ -4430,6 +4579,8 @@ model = "provider/model"
         let store = store_for(&catalog, &session, &conversation);
         let attempt = AttemptId::new("prompted-attempt");
         let event = |kind| RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: 1,
             event_id: EventId::new(format!(
                 "prompted-event-{}",
@@ -4534,6 +4685,8 @@ model = "provider/model"
             attempt_id: AttemptId::new("same-r-attempt"),
         };
         let event = |kind| RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: 1,
             event_id: EventId::new(format!(
                 "same-r-event-{}",
@@ -4710,7 +4863,11 @@ model = "provider/model"
                     assert_eq!(window.page.entries[0].cursor.get(), 2);
                     let mut page =
                         crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
-                    crate::runtime_client::response::decorate(copied_store, &mut page).unwrap();
+                    crate::runtime_client::response::native_oracle_decorate(
+                        copied_store,
+                        &mut page,
+                    )
+                    .unwrap();
                     let process = page.entries[0].turn_process.as_ref().unwrap();
                     assert_eq!(process.outcome, TurnProcessOutcome::from(expected.clone()));
                     assert!(process.event_id.is_none(), "no destination execution owner");
@@ -4739,6 +4896,8 @@ model = "provider/model"
         let (conversation, session, _) = append_history(&catalog, &[]);
         let store = store_for(&catalog, &session, &conversation);
         let append = |kind| RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: 1,
             event_id: EventId::new(format!(
                 "cut-event-{}",
@@ -4891,7 +5050,8 @@ model = "provider/model"
                 assert_eq!(window.page.entries[0].cursor.get(), 2);
                 let mut page =
                     crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
-                crate::runtime_client::response::decorate(&destination, &mut page).unwrap();
+                crate::runtime_client::response::native_oracle_decorate(&destination, &mut page)
+                    .unwrap();
                 let process = page.entries[0].turn_process.as_ref().unwrap();
                 assert_eq!(process.outcome, TurnProcessOutcome::from(expected.clone()));
                 assert!(process.event_id.is_none());
@@ -4956,6 +5116,8 @@ model = "provider/model"
         let (conversation, session, _) = append_history(&catalog, &[]);
         let store = store_for(&catalog, &session, &conversation);
         let event = |name: &str, kind| RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: 1,
             event_id: EventId::new(format!(
                 "reading-event-{}",
@@ -5415,6 +5577,7 @@ model = "provider/model"
                     source_node: clone_node.id.clone(),
                     source_surface_revision: revision,
                     source_message: MessageId::new("only-prompt"),
+                    source_locator: fixture_source_locator(&clone_store, "only-prompt"),
                     side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
@@ -6275,6 +6438,7 @@ model = "provider/model"
                     source_node: node.clone(),
                     source_surface_revision: revision,
                     source_message: MessageId::new("u1"),
+                    source_locator: fixture_source_locator(&store, "u1"),
                     side: super::LineageSide::Before,
                 },
             )
@@ -6524,6 +6688,7 @@ model = "provider/model"
                     source_node: source_node.clone(),
                     source_surface_revision: revision,
                     source_message: MessageId::new("source-user-c"),
+                    source_locator: fixture_source_locator(&source_store, "source-user-c"),
                     side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
@@ -7042,6 +7207,7 @@ model = "provider/model"
                     source_node,
                     source_surface_revision: revision,
                     source_message: MessageId::new("after-B"),
+                    source_locator: fixture_source_locator(&source_store, "after-B"),
                     side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
@@ -7298,6 +7464,7 @@ model = "provider/model"
                     source_node,
                     source_surface_revision: revision,
                     source_message: MessageId::new("source-user-c"),
+                    source_locator: fixture_source_locator(&source_store, "source-user-c"),
                     side: crate::local_runtime::session::LineageSide::Before,
                 },
             ),
@@ -8171,6 +8338,7 @@ model = "provider/model"
                     source_node,
                     source_surface_revision: revision,
                     source_message: MessageId::new("source-user-c"),
+                    source_locator: fixture_source_locator(&source_store, "source-user-c"),
                     side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
@@ -8270,6 +8438,7 @@ model = "provider/model"
                     source_node: source_node.clone(),
                     source_surface_revision: revision,
                     source_message: MessageId::new("source-user-a"),
+                    source_locator: fixture_source_locator(&source_store, "source-user-a"),
                     side: crate::local_runtime::session::LineageSide::Before,
                 },
             )
@@ -8293,6 +8462,7 @@ model = "provider/model"
                     source_node: source_node.clone(),
                     source_surface_revision: revision,
                     source_message: MessageId::new("source-user-c"),
+                    source_locator: fixture_source_locator(&source_store, "source-user-c"),
                     side: crate::local_runtime::session::LineageSide::Before,
                 },
             )

@@ -8,7 +8,7 @@ import { useTranslation } from '../../locale/react';
 // rustX Todo is the conversation-owned authority and is never cleared locally on
 // input, turn start, Assistant completion, navigation, reconnect or disclosure.
 import { useEffect, useId, useState } from 'react';
-import type { TodoTask } from '../../../../protocol/app-server/v46';
+import type { TodoTask } from '../../../../protocol/app-server/v48';
 import type { TodoDockState } from '../../bindings/composer-context';
 import { IconChecklistOutline14, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import css from './TodoDock.module.css';
@@ -45,22 +45,22 @@ export function TodoDock({ state }: { state: TodoDockState }) {
   // A list that disappears and returns is a new presentation, not a restored one.
   // Ordinary non-empty updates — a task completing, a new task arriving — leave an
   // open disclosure open; only the visible list going away resets it.
-  const listed = state.kind === 'current' && state.tasks.length > 0;
+  const listed = state.kind === 'current' && (state.tasks.length > 0 || !!state.deferred);
   useEffect(() => { if (!listed) setCollapsed(true); }, [listed]);
   // Harness renders no panel for an empty plan, and rustX keeps that result for
   // both native facts: extension absent and extension composed with an empty
   // current list are distinct runtime facts with one ordinary visual outcome —
   // no dock, no wrapper and no reserved composer-stack height. An empty card is
   // not capability discovery; that belongs to the capability/settings surfaces.
-  if (state.kind === 'absent' || !state.tasks.length) return null;
+  if (state.kind === 'absent' || !listed) return null;
   const { tasks } = state;
   return <section className={css.root} aria-label={tx('agent:todo-dock.to-dos')} data-todo-state="current">
     <button type="button" className={css.header} aria-expanded={!collapsed} aria-controls={collapsed ? undefined : listId} onClick={() => setCollapsed(value => !value)}>
       <span className={css.lead}><ChecklistGlyph /></span><span className={css.title}>{tx('agent:todo-dock.to-dos')}</span>
-      <span className={css.progress}>{progress(tx, tasks)}</span>
+      <span className={css.progress}>{progress(tx, tasks)}{state.deferred && <>{tasks.length ? ' · ' : ''}{tx('common:activity.content-deferred')}</>}</span>
       <span className={css.chevron} data-collapsed={collapsed} aria-hidden><IconChevronDownOutline14 /></span>
     </button>
-    {!collapsed && <ol id={listId} className={css.list}>{tasks.map(task => {
+    {!collapsed && <><ol id={listId} className={css.list}>{tasks.map(task => {
       const text = task.status === 'in_progress' && task.active_form ? task.active_form : task.subject;
       return <li key={task.id} className={css.item} data-status={task.status} data-task-id={task.id}>
         <span className={css.glyph} aria-hidden><StatusGlyph status={task.status} /></span>
@@ -68,6 +68,6 @@ export function TodoDock({ state }: { state: TodoDockState }) {
         <span className={css.hidden}>{STATUS[task.status]}</span>
         {!!task.blocked_by?.length && <span className={css.dependency}>{tx('agent:todo-dock.after')}{' '}{task.blocked_by.map(id => `#${id}`).join(', ')}</span>}
       </li>;
-    })}</ol>}
+    })}</ol>{state.deferred && <p role="status">{tx('common:activity.content-deferred')}</p>}</>}
   </section>;
 }

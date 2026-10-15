@@ -1,3 +1,6 @@
+import { readSourceRepairFields, type SourceRepairRead } from '../../../protocol/app-server/source-observation.ts';
+import { materializeSettings } from '../../../protocol/app-server/settings-observation.ts';
+import { readEditor } from '../../../protocol/app-server/editor.ts';
 import { archiveDownloadUrl } from "../../../protocol/app-server/download.ts";
 import { saveSessionArchive } from "./archive.ts";
 /**
@@ -39,10 +42,11 @@ import {
   type SessionDeleteResult,
   type SessionId,
   type SurfaceRevision,
-  type MessageId,
   type UserInputBlock,
   type Notification,
+  type SourceTarget,
 } from "../protocol/app-server.ts";
+import { olderSequence, retainSource, sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
 import { AppServerClient } from "./client.ts";
 import {
   AppServerChild,
@@ -107,18 +111,22 @@ export interface AppServerHostComposition {
 }
 
 /**
- * The Session a notification addresses.
+ * The Session a notification addresses, if it addresses one.
  *
- * Every server notification names exactly one Session, but not all of them do
- * it through an attachment target: configuration application is scoped by
- * Session, and `session/summaryInvalidated` (Issue #386) is addressed by
- * Session identity alone, because durable Session metadata belongs to the
- * Session rather than to whichever Conversation of it a client displays.
+ * Session notifications do not all address a Session through an attachment
+ * target: configuration application is scoped by Session, and
+ * `session/summaryInvalidated` (Issue #386) is addressed by Session identity
+ * alone, because durable Session metadata belongs to the Session rather than
+ * to whichever Conversation of it a client displays. A source-scoped
+ * notification (`configuration/sourceRepairChanged`, Issue #464) addresses a
+ * configuration source and no Session at all.
  */
-function sessionIdOf(notification: Notification): string {
+function sessionIdOf(notification: Notification): string | undefined {
   switch (notification.method) {
     case "configuration/changed":
       return notification.params.application.scope;
+    case "configuration/sourceRepairChanged":
+      return undefined;
     case "session/ownershipRetired":
     case "session/summaryInvalidated":
       return notification.params.session_id;
@@ -127,12 +135,51 @@ function sessionIdOf(notification: Notification): string {
   }
 }
 
+/** Observes a source's latest native repair receipt. Presentation only. */
+export type SourceRepairListener = (observation: SourceRepairObservation) => void;
+
 export class AppServerHost {
   readonly endpoint: string | undefined;
   readonly client: AppServerClient;
   readonly ownership: ProcessOwnership;
   readonly #child: AppServerChild | undefined;
   readonly #sessions = new Map<string, AppServerSession>();
+  /**
+   * The newest native repair observation of each configuration source this
+   * connection observed, by source. Source-scoped and Session-independent:
+   * kept here so a notice that arrives before any presentation subscribes is
+   * still there to present. Notices and authoritative reads are ordered by
+   * their native ledger sequence, never by arrival: an older one — a read
+   * answered after a newer notice, or a notice produced before a fresher read
+   * — changes nothing. Finite (`retainSource`): the User and 64 Workspaces,
+   * the least recently observed Workspace going first.
+   */
+  readonly #sourceRepairs = new Map<string, SourceRepairObservation>();
+  /**
+   * The highest native sequence at which this connection forgot a source.
+   * Whatever a source absent from `#sourceRepairs` held was current at or
+   * before it, so a notice of an absent source ordered at or after it is
+   * never older than what was forgotten. One ordered before it may be the
+   * forgotten history of an evicted source, or the first notice of a source
+   * never seen: it is ambiguous, never applied, and the source is recovered
+   * by an authoritative read instead. One value, however many sources ever
+   * came and went.
+   */
+  #forgottenThrough = "0";
+  /**
+   * This connection's Workspace reads in flight, each with the highest
+   * sequence at which its own source was forgotten while it was in flight.
+   * Anything forgotten before a read was sent is older than its answer, since
+   * native snapshots after receiving it; anything forgotten meanwhile is
+   * compared exactly. Each leaves when its read settles.
+   */
+  readonly #reads = new Set<{ key: string; forgotten: string }>();
+  /** Workspaces whose ambiguous notice awaits its recovery read; one entry
+   * per source, finite (`retainSource`), read one at a time. */
+  readonly #recoveries = new Map<string, SourceTarget>();
+  #recovering = false;
+  readonly #sourceRepairListeners = new Set<SourceRepairListener>();
+  readonly #unknownModelSelections = new Set<string>();
   #shutdown: Promise<ChildExit | undefined> | undefined;
   readonly #exports = new Set<AbortController>();
 
@@ -149,11 +196,18 @@ export class AppServerHost {
     this.ownership = ownership;
     this.#child = child;
 
-    // One subscription routes every notification. A notification names its full
-    // attachment target; each attachment decides whether that target is its
-    // own, so a superseded incarnation cannot reach its replacement.
+    // One subscription routes every notification. A Session notification names
+    // its full attachment target; each attachment decides whether that target
+    // is its own, so a superseded incarnation cannot reach its replacement.
+    // Source-scoped notices go to the host's source observations instead.
     client.onNotification((notification) => {
-      const session = this.#sessions.get(sessionIdOf(notification));
+      if (notification.method === "configuration/sourceRepairChanged") {
+        const { target, receipt, sequence } = notification.params;
+        this.#observeSourceRepair({ target, receipt: receipt ?? undefined, sequence });
+        return;
+      }
+      const sessionId = sessionIdOf(notification);
+      const session = sessionId === undefined ? undefined : this.#sessions.get(sessionId);
       session?.applyNotification(notification);
     });
   }
@@ -234,6 +288,117 @@ export class AppServerHost {
     } finally { this.#exports.delete(abort); }
   }
 
+  // -------------------------------------------------------------------------
+  // Configuration source repair observations (Issue #464)
+  // -------------------------------------------------------------------------
+
+  /** The App Server authority this connection negotiated; read-only. */
+  get authorityId(): string {
+    return this.client.authorityId;
+  }
+
+  /** The latest receipt of every source observed on this connection. */
+  sourceRepairs(): SourceRepairObservation[] {
+    return [...this.#sourceRepairs.values()];
+  }
+
+  /** Subscribes to changed source repair observations. */
+  onSourceRepair(listener: SourceRepairListener): () => void {
+    this.#sourceRepairListeners.add(listener);
+    return () => this.#sourceRepairListeners.delete(listener);
+  }
+
+  /**
+   * Reads sources authoritatively and folds their repair receipts in.
+   *
+   * The recovery path after a notification gap or a reconnect: a read, never
+   * a guess. `configuration/sourcesRead` is read-only on the server, and
+   * answers for exactly the canonical target it was asked about. An answer
+   * older than what this connection meanwhile observed of the source — and
+   * then forgot — changes nothing; it is still returned to the caller as the
+   * snapshot it is.
+   */
+  async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceRepairRead> {
+    const read = target.kind === "workspace" ? { key: sourceKey(target), forgotten: "0" } : undefined;
+    if (read !== undefined) this.#reads.add(read);
+    try {
+      const client = this.client;
+      const authorityId = this.authorityId;
+      const current = () => this.client === client && this.authorityId === authorityId && !client.closed;
+      const result = await client.call("configuration/sourcesRead", { target }, "source_settings");
+      const projection = await readSourceRepairFields(result.projection, async (reference, offset) =>
+        (await client.call("configuration/sourceValueRead", { target, reference, offset, max_bytes: 65_536 }, "source_value_chunk")).chunk, current);
+      const sequence = projection.repair_sequence;
+      // The User is never forgotten, so nothing it held can be newer.
+      this.#observeSourceRepair({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined, sequence }, "0");
+      if (read !== undefined) this.#observeSourceRepair({ target, receipt: projection.workspace_repair ?? undefined, sequence }, read.forgotten);
+      return projection;
+    } finally {
+      if (read !== undefined) this.#reads.delete(read);
+    }
+  }
+
+  /**
+   * Applies one native observation unless it is not newer than what this
+   * connection holds, or may have held, of its source. A held source orders
+   * it by sequence alone: a higher sequence replaces it, even with the same
+   * receipt or with no receipt on either side. Two observations at one
+   * sequence agree; one that disagrees is inconsistent, never newer, so the
+   * held one stays and a notice's source is read again. An absent one may
+   * have been forgotten through `forgotten` — for a read, its own bound; for
+   * a notice, the connection's frontier — and an observation older than that
+   * is never applied; an ambiguous notice is recovered by reading its source
+   * again.
+   */
+  #observeSourceRepair(observation: SourceRepairObservation, forgotten?: string): void {
+    const key = sourceKey(observation.target);
+    const known = this.#sourceRepairs.get(key);
+    if (known !== undefined) {
+      if (olderSequence(observation.sequence, known.sequence)) return;
+      if (!olderSequence(known.sequence, observation.sequence)) {
+        if (observation.receipt?.id !== known.receipt?.id && forgotten === undefined) this.#recover(observation.target);
+        return;
+      }
+    } else if (key !== "user" && olderSequence(observation.sequence, forgotten ?? this.#forgottenThrough)) {
+      if (forgotten === undefined) this.#recover(observation.target);
+      return;
+    }
+    const evicted = retainSource(this.#sourceRepairs, key, observation);
+    if (evicted !== undefined) this.#forget(evicted);
+    for (const listener of [...this.#sourceRepairListeners]) listener(observation);
+  }
+
+  /** Records that this connection no longer holds `evicted`'s source. */
+  #forget({ target, sequence }: SourceRepairObservation): void {
+    if (olderSequence(this.#forgottenThrough, sequence)) this.#forgottenThrough = sequence;
+    const key = sourceKey(target);
+    for (const read of this.#reads) {
+      if (read.key === key && olderSequence(read.forgotten, sequence)) read.forgotten = sequence;
+    }
+  }
+
+  /**
+   * Reads `target` again because a notice of it was ambiguous or disagreed
+   * with what this connection holds at the same sequence. Sequential
+   * and bounded: one read in flight, one queued entry per source; a source
+   * noticed again while its read is in flight is read once more after it,
+   * since that read may predate the notice. A failed read proves nothing,
+   * and nothing is read once the connection closed.
+   */
+  #recover(target: SourceTarget): void {
+    retainSource(this.#recoveries, sourceKey(target), target);
+    if (this.#recovering) return;
+    this.#recovering = true;
+    void (async () => {
+      for (let next = this.#recoveries.entries().next().value; next !== undefined && this.client.closed === undefined;
+        next = this.#recoveries.entries().next().value) {
+        this.#recoveries.delete(next[0]);
+        await this.readSourceRepairs(next[1]).catch(() => undefined);
+      }
+      this.#recovering = false;
+    })();
+  }
+
   /** Every Session currently attached through this connection. */
   get attached(): readonly AppServerSession[] {
     return [...this.#sessions.values()];
@@ -271,13 +436,14 @@ export class AppServerHost {
   async attach(
     sessionId: SessionId,
     nodeId?: SessionNodeId,
+    previous?: AppServerSession,
   ): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
       if (nodeId === undefined || nodeId === existing.nodeId) return existing;
       throw new Error("use branch switching to open a different Session node");
     }
-    const session = await AppServerSession.attach(this.client, sessionId, nodeId);
+    const session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
     this.#sessions.set(sessionId, session);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
@@ -287,6 +453,13 @@ export class AppServerHost {
       }
     });
     return session;
+  }
+
+  /** Carry local unanswered-request evidence across reconnection, not model authority. */
+  inheritModelSelectionUncertainty(previous: AppServerHost): void {
+    for (const sessionId of previous.#unknownModelSelections) {
+      this.#unknownModelSelections.add(sessionId);
+    }
   }
 
   /** User-confirmed branch switch; the manager owns native retirement. */
@@ -358,7 +531,7 @@ export class AppServerHost {
   }
 
   async createSession(settings: SessionPersistentState): Promise<SessionTransition> {
-    return transitionOf(
+    return transitionOf(this.client,
       await this.client.call(
         "session/create",
         { settings },
@@ -401,10 +574,10 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: MessageId,
+    boundary?: import("../../../protocol/app-server/v48.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
-    return transitionOf(
+    return transitionOf(this.client,
       await this.client.call(
         "session/fork",
         {
@@ -424,9 +597,9 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: MessageId,
+    boundary: import("../../../protocol/app-server/v48.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
-    return transitionOf(
+    return transitionOf(this.client,
       await this.client.call(
         "session/branch",
         {
@@ -488,7 +661,8 @@ export class AppServerHost {
       { session_id: sessionId },
       "settings",
     );
-    return { revision: read.revision, settings: read.settings };
+    const settings = await materializeSettings(read.projection, async(reference,offset)=>(await this.client.call('session/settingsValueRead',{session_id:sessionId,reference,offset,max_bytes:65_536},'settings_value_chunk')).chunk, ()=>true);
+    return { revision: read.projection.revision, settings };
   }
 
   // -------------------------------------------------------------------------
@@ -528,14 +702,16 @@ export class AppServerHost {
   }
 }
 
-function transitionOf(result: {
+async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor_content?: UserInputBlock[] | null;
+  editor?: import('../../../protocol/app-server/v48.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
-}): SessionTransition {
+}): Promise<SessionTransition> {
   return {
     session: result.session,
-    editorContent: result.editor_content ?? undefined,
+    editorContent: result.editor ? await readEditor(result.editor,
+      async (block_index, offset) => (await client.call('session/editorRead', { locator: result.editor!, block_index, offset, max_bytes: 65_536 }, 'editor_page')).page,
+      () => true) : undefined,
     durabilityDiagnostic: result.durability_diagnostic ?? undefined,
   };
 }

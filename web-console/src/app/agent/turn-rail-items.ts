@@ -1,5 +1,5 @@
-import type { ConversationTurn, ConversationTurnId, ConversationTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v46';
-import { turnKey } from '../../client/transcript';
+import type { ObservedTurn, ObservedTurnIdentity, ObservedTurnPage, RuntimeClientSnapshot } from '../../../../protocol/app-server/v48';
+import { turnKey, turnPageCount } from '../../client/transcript';
 
 /** One rail mark. A loaded mark carries its native turn; an unloaded one is
  * known only by ordinal and pages its outline in before navigating. */
@@ -10,21 +10,21 @@ export interface TurnRailItem {
   readonly id?: string;
   /** One-based native ordinal; zero is the pinned live identity. */
   readonly ordinal: number;
-  readonly turn?: ConversationTurn;
+  readonly turn?: ObservedTurn;
 }
 
 /** Native identity/location only. A live identity is independent of a frozen outline. */
 export function currentTurnLocation(snapshot?: RuntimeClientSnapshot): string | undefined {
   const attempt=snapshot?.attempt;
-  if (!snapshot || !attempt || attempt.phase.type==='settled') return;
-  const id={conversation_id:snapshot.conversation_id,attempt_id:attempt.attempt_id};
+  if (!snapshot || !attempt || !['admitted','running'].includes(attempt.phase.type)) return;
+  const id={conversation_id:snapshot.conversation_id,attempt_id:attempt.attempt_id,attempt_id_source:attempt.attempt_id_source};
   return snapshot.transcript.entries?.find(entry=>entry.turn_process && turnKey(entry.turn_process)===turnKey(id))?.turn_process?.control_cursor;
 }
 
 /** Retains only the native page and at most one live identity. Ordinal indexes
  * are arithmetic; unloaded marks are created only for the visible range. */
-export function turnRail(page?: ConversationTurnPage, current?: ConversationTurnId, location?: string) {
-  const total = page?.total ?? 0;
+export function turnRail(page?: ObservedTurnPage, current?: ObservedTurnIdentity, location?: string) {
+  const total = page ? turnPageCount(page) : 0;
   const newest = !page || page.offset + page.turns.length >= total;
   const pinned = current && newest && !page?.turns.some(turn => turnKey(turn.id) === turnKey(current))
     ? { id: current, ordinal: 0, cursor: location && page && BigInt(location) <= BigInt(page.cut.transcript) ? location : null, prompt: '', response: '' } : undefined;

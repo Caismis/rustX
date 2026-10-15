@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, onTestFailed, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, realpathSync, renameSync, openSync, closeSync, constants, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -161,6 +161,10 @@ it.each(['Session deletion', 'active-node retirement'])('%s settles the owned re
 it.each(['replacement', 'ABA', 'coalesced'] as const)('delayed %s retirement preserves the successor real PTY', async scenario => {
   const root = directory();
   let native = { active_node: 'node-A', ownershipGeneration: '1' };
+  let stage='workspace scope',failedStage:string|undefined,retiredThrough:string|undefined;
+  const units:{id:string;node:string;generation:string;phase:string;cursor:number;polls:number;output:string;pid?:number}[]=[];
+  onTestFailed(()=>console.error('PTY retirement failure',JSON.stringify({scenario,stage,failedStage,native,retiredThrough,units:units.map(unit=>({...unit,alive:unit.pid==null?undefined:(()=>{try{process.kill(unit.pid,0);return true;}catch{return false;}})()}))})));
+
   let retire!: (session: string, through: string) => void;
   const retirement = vi.spyOn(WorkspaceTerminals.prototype, 'retireOwnership');
   const host = new LocalWorkspaceHost({ roots:[{id:'root',cwd:root,displayName:'Root'}], picker:false, metadataFile:join(root,'metadata.json'), nativeFilesystem:'shared', transportToken:'test', endpoint:'ws://localhost:8080', terminalSupervisor:fileURLToPath(new URL('../../target/debug/interactive-supervisor',import.meta.url)) }, undefined,
@@ -169,12 +173,16 @@ it.each(['replacement', 'ABA', 'coalesced'] as const)('delayed %s retirement pre
   const scope = await host.listWorkspaces();
   const start = async () => {
     const target={session_id:'A',active_node:native.active_node},id=randomUUID();
+    const unit:typeof units[number]={id,node:target.active_node,generation:native.ownershipGeneration,phase:'create',cursor:0,polls:0,output:''};units.push(unit);
+    stage=`${unit.generation}: native supervisor admission`;
     await host.workbench(scope,{target,request:{kind:'create',id,shell:'/bin/sh'}});
+    unit.phase='input';stage=`${unit.generation}: shell input`;
+
     // Exercise ownership retirement with a cooperative shell. TERM-resistant
     // descendants are covered above; serial grace periods are not a race barrier.
     await host.workbench(scope,{target,request:{kind:'input',id,data:"trap 'exit 0' TERM; printf 'OWNER_%s_READY\\n' \"$$\"\r"}});
-    let cursor=0,output='';
-    for(;;){const result=await host.workbench(scope,{target,request:{kind:'poll',id,cursor}});if(!('cursor' in result))throw Error('Missing poll');cursor=result.cursor!;output+=result.output;const match=/OWNER_(\d+)_READY/.exec(output);if(match)return {target,id,pid:Number(match[1]),cursor};}
+    let cursor=0,output='';unit.phase='ready marker';stage=`${unit.generation}: OWNER marker`;
+    for(;;){const result=await host.workbench(scope,{target,request:{kind:'poll',id,cursor}});if(!('cursor' in result))throw Error('Missing poll');cursor=result.cursor!;output+=result.output;unit.cursor=cursor;unit.polls++;unit.output=output.slice(-1024);const match=/OWNER_(\d+)_READY/.exec(output);if(match){unit.pid=Number(match[1]);unit.phase='ready';return {target,id,pid:unit.pid,cursor};}if(result.exited)throw Error('Shell exited before its OWNER marker');}
   };
   try {
     const first=await start();
@@ -182,16 +190,20 @@ it.each(['replacement', 'ABA', 'coalesced'] as const)('delayed %s retirement pre
     const middle=scenario==='coalesced'?await start():undefined;
     if(scenario!=='replacement')native={active_node:scenario==='ABA'?'node-A':'node-C',ownershipGeneration:'3'};
     const successor=await start();
-    retire('A',scenario==='coalesced'?'2':'1');
+    retiredThrough=scenario==='coalesced'?'2':'1';stage='native retirement physical settlement';
+    retire('A',retiredThrough);
     await retirement.mock.results.at(-1)!.value;
+    stage='retired and successor PID assertions';
     expect(()=>process.kill(first.pid,0)).toThrow();
     if(middle)expect(()=>process.kill(middle.pid,0)).toThrow();
     expect(()=>process.kill(successor.pid,0)).not.toThrow();
+    stage='successor input';
     await host.workbench(scope,{target:successor.target,request:{kind:'input',id:successor.id,data:"printf 'SUCCESSOR_%s\\n' FUNCTIONAL\r"}});
-    let output='',cursor=successor.cursor;
-    while(!output.includes('SUCCESSOR_FUNCTIONAL')){const result=await host.workbench(scope,{target:successor.target,request:{kind:'poll',id:successor.id,cursor}});if(!('cursor' in result)||result.exited)throw Error('Successor terminated');cursor=result.cursor!;output+=result.output;}
+    let output='',cursor=successor.cursor;stage='successor functional output';
+    while(!output.includes('SUCCESSOR_FUNCTIONAL')){const result=await host.workbench(scope,{target:successor.target,request:{kind:'poll',id:successor.id,cursor}});if(!('cursor' in result)||result.exited)throw Error('Successor terminated');cursor=result.cursor!;output+=result.output;const unit=units.at(-1)!;unit.cursor=cursor;unit.polls++;unit.output=output.slice(-1024);}
+    stage='stale terminal refusal';
     await expect(host.workbench(scope,{target:successor.target,request:{kind:'input',id:first.id,data:'stale\r'}})).rejects.toThrow('belong');
-  } finally { await host.close(); retirement.mockRestore(); }
+  } catch(error){failedStage=stage;throw error;} finally {stage='Host close physical settlement';try{await host.close();stage='Host closed';}finally{retirement.mockRestore();}}
 });
 
 it.each(['native loss', 'Host shutdown'] as const)('%s fences a held native read and stale observer callbacks', async reason => {

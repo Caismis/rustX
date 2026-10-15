@@ -119,7 +119,15 @@ for (const intent of ['explicit', 'preference', 'omitted'] as const) test(`creat
   if (intent === 'omitted') expect(preference).toBeNull();
   else expect(JSON.parse(preference!)['ws://127.0.0.1:8080/']).toEqual({ model: 'fixture/second' });
   expect((await methods(page)).filter(m => m === 'session/setModel')).toHaveLength(0);
-  expect((await methods(page)).filter(m => m === 'session/snapshot')).toHaveLength(0);
+  const requests = await page.evaluate(() => (window as any).startupFixture.requests());
+  const checkpoints = requests.filter((request: any) => request.method === 'session/checkpoint');
+  const subscriptions = requests.filter((request: any) => request.method === 'session/subscribe');
+  const observation = await page.evaluate(() => (window as any).startupFixture.observation());
+  expect(checkpoints).toHaveLength(1); expect(subscriptions).toHaveLength(1);
+  expect(checkpoints[0].params.target).toEqual(observation.target);
+  expect(subscriptions[0].params).toEqual({ target: observation.target, after_cursor: observation.cursor });
+  expect(observation.revision).toBe(observation.cursor); expect(observation.state).toBe('following');
+  for (const method of ['session/create', 'session/attach', 'turn/start']) expect(requests.filter((request: any) => request.method === method)).toHaveLength(1);
 });
 
 for (const language of ['en', 'zh']) test(`lost ready read is reconciled from the original operation after remount (${language})`, async ({ page }) => {

@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v46.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v48.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v46.schema.json
+ * protocol/app-server/v48.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v46.ts       (generated)
+ * protocol/app-server/v48.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -49,17 +49,29 @@ import type {
   Response,
   RpcError,
   RuntimeClientEvent,
+  RoutedInteraction as NativeRoutedInteraction,
   RuntimeClientSnapshot,
-  SessionNode,
+  SessionNodeObservation as SessionNode,
   SessionPersistentState,
   SessionSnapshot,
   SessionSummary,
-  SessionUserMessageBoundary,
+  SessionUserMessageBoundaryObservation,
   Success,
-} from "../../../protocol/app-server/v46.ts";
+} from "../../../protocol/app-server/v48.ts";
 
 export type {
+  AttemptIdentitySource,
+  CanonicalContentLocator,
+  CheckpointReadCut,
+  RuntimeClientDeliveryHead,
+  RuntimeClientDeliveryItem,
+  ConfigRepairChange,
+  ConfigRepairReceipt,
+  ConfigRepairStatus,
   ConfigurationApplication,
+  NativeToolRemoval,
+  SourceSettings,
+  SourceTarget,
   AdoptionEligibility,
   AvailableConfiguration,
   AdmittedSettings,
@@ -78,8 +90,8 @@ export type {
   GoalControl,
   GoalMutation,
   GoalRef,
-  GoalSnapshot,
-  GoalView,
+  RuntimeClientGoalSnapshot,
+  RuntimeClientGoalView,
   InboundSequence,
   InitializeParams,
   InteractionRef,
@@ -99,25 +111,26 @@ export type {
   QuestionnaireSpecification,
   Request,
   Request1,
-  RequestId,
+  AppServerRequestId,
   Response,
   ReviewResponse,
   RpcError,
   RuntimeClientCursor,
   RuntimeClientEvent,
+  RoutedInteraction as NativeRoutedInteraction,
   RuntimeClientSnapshot,
   RuntimeClientTranscriptCursor,
   RuntimeDurabilityFailure,
   RuntimeIncarnationId,
   ServerCapabilities,
   SessionId,
-  SessionNode,
+  SessionNodeObservation as SessionNode,
   SessionNodeId,
   SessionFileReference,
   SessionPersistentState,
   SessionSnapshot,
   SessionSummary,
-  SessionUserMessageBoundary,
+  SessionUserMessageBoundaryObservation,
   SettingsEvidence,
   SkillProvenance,
   SourceResolutionFailure,
@@ -133,7 +146,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v46.ts";
+} from "../../../protocol/app-server/v48.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -209,7 +222,7 @@ export type RuntimeClientContextView = NonNullable<
 export type RuntimeClientResourcesView = NonNullable<
   RuntimeClientSnapshot["resources"]
 >;
-export type CapabilityInspectionView = RuntimeClientResourcesView["inspection"];
+export type CapabilityInspectionView = NonNullable<RuntimeClientResourcesView["inspection"]>;
 export type SkillDiagnostic = NonNullable<
   CapabilityInspectionView["skill_diagnostics"]
 >[number];
@@ -242,9 +255,7 @@ export type ForegroundToolExecution = NonNullable<
 export type ForegroundToolState = ForegroundToolExecution["state"];
 
 export type InboundDiagnostics = RuntimeClientSnapshot["inbound"];
-export type RoutedInteraction = NonNullable<
-  RuntimeClientSnapshot["pending_interactions"]
->[number];
+export type RoutedInteraction = NativeRoutedInteraction;
 export type InteractionRequest = RoutedInteraction["request"];
 /** What a *live* interaction is asking for. */
 export type InteractionKind = InteractionRequest["kind"];
@@ -348,7 +359,7 @@ export type InteractionSubject = Extract<
 >["subject"];
 
 /** The canonical user message, as the fork/branch boundary page carries it. */
-export type UserMessageBlock = SessionUserMessageBoundary["message"];
+export type UserMessageBlock = NonNullable<SessionUserMessageBoundaryObservation["message"]>;
 /** One committed model generation. */
 export type AssistantMessageBlock = Extract<MessageBlockValue, { role: "assistant" }>;
 /** One ordered block of a committed assistant message. */
@@ -517,6 +528,17 @@ export function describeRpcError(error: RpcError): string {
       return "the connection has not completed initialize";
     case "already_initialized":
       return "the connection has already completed initialize";
+    case "duplicate_request_id": return "this request identity is already in flight";
+    case "subscription_superseded": return "this observation registration was superseded";
+    case "observation_unavailable": return `observation unavailable: ${data.diagnostic}`;
+    case "content_source_unavailable": return "the retained content source is unavailable";
+    case "invalid_range": return "the requested range is outside the retained source";
+    case "read_cut_expired": return "the read cut expired; reload authoritative state";
+    case "observation_capacity_exceeded": return "observation capacity reached";
+    case "observation_in_use": return "this Child already has an active observation wait";
+    case "response_too_large": return "the response exceeds the encoded record budget";
+    case "response_serialization_failed": return "the response could not be encoded";
+    case "outcome_unknown": return "the operation outcome is unknown; inspect authoritative state before retrying";
     case "observation_cancelled":
       return "the child conversation observation was cancelled";
     case "delivery_cancelled":
@@ -567,5 +589,5 @@ export function sameSession(
 export type { SessionNode as SessionNodeView };
 export type { SessionSnapshot as SessionView };
 export type SessionSummaryView = SessionSummary;
-export type { SessionUserMessageBoundary as SessionUserMessageBoundaryView };
+
 export type { SessionPersistentState as SessionSettings };

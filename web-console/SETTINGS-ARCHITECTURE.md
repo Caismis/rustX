@@ -574,6 +574,123 @@ Settings surface states (`connecting`/`loading`/`ready`/`stale`/`failed`) and
 change behavior (`Applies immediately`/`Requires App Server restart`) are likewise
 projected rather than inferred.
 
+### Automatic repair (#464)
+
+Native repairs the two `rustx.toml` sources by itself at its own boundaries;
+the browser classifies nothing, repairs nothing and never triggers a repair by
+reading. It presents two native facts:
+
+```text
+configuration/sourceRepairChanged ──▶ client `sourceRepairs` (per source key)
+                                       └─▶ RepairNotice: one nonblocking notice
+                                             View details ─▶ OPEN.REPAIRS(source, inspection)
+configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repair
+                               └─▶ Advanced → Auto Repair (AutoRepairSection)
+                                     presented ─▶ INSPECTED ─▶ acknowledge one receipt
+```
+
+- The client keeps the latest receipt of each source this connection observed,
+  keyed by source and never by Session or application scope, replaced on every
+  connection (whose server announces each latest receipt again). It is a
+  separate fact from `configuration`, the application publication. It is
+  finite, exactly as native repair interest and the TUI are: the User and
+  `SOURCE_REPAIR_WORKSPACES` (64) Workspaces, the least recently observed
+  Workspace forgotten first and the User never (`retainSourceRepair`), retired
+  from the published state itself, which is replaced, never mutated. Two
+  observations of a source are ordered by their native repair-ledger
+  sequence — a notice's `sequence`, a read's `repair_sequence` — never by
+  arrival or receipt id. A higher sequence always replaces what the client
+  holds, even with the same receipt id or with no receipt on either side: a
+  withdrawal retires the receipt, and an unchanged receipt advances its
+  sequence and retention without being presented again, since presentation
+  follows receipt ids. Two observations at one sequence agree; one that
+  disagrees is never applied, and a notice's source is read again. Native
+  announces each source's current level — a receipt or none — whenever it
+  admits the source for this connection, including when it re-admits a
+  Workspace it forgot, so a stale receipt is replaced by native's next
+  admission of its source; and while it keeps observing a Workspace whose
+  delivered receipt its finite ledger forgets, it delivers that absence once,
+  at a higher sequence, with no new admission. An absent receipt says only
+  that native retains none — withdrawn, never recorded or forgotten — never
+  that the source is valid: it retires a presented warning and nothing else,
+  with no success notice, Settings draft or CAS change, write or
+  application. Native forgets by addressing and the client by
+  observation, so the client recovers what it may have missed itself. One
+  frontier records the highest sequence at which
+  the connection forgot a source: a notice of an absent source ordered before
+  it is ambiguous and never applied; that source is read again instead, as is
+  an absent Workspace whose Session is attached once the connection has
+  forgotten anything. Those reads are `configuration/sourcesRead` — read-only
+  — one at a time with one queued entry per source, and an answer older than
+  what the connection meanwhile observed (and possibly forgot) of the source,
+  or from a connection that has since ended, changes nothing. There is no
+  polling and no watcher. Each
+  observation carries the `authorityId` its connection negotiated: a receipt
+  id names one repair occurrence within its authority — a second commit of
+  identical bytes has another id — so equal ids from two App Server
+  authorities, or from a new process at the same endpoint, are different
+  repairs. A receipt
+  delivered before this connection's `initialize` succeeds is held and
+  attributed to the authority `initialize` then returns, never to the one the
+  client knew from an earlier connection.
+- `RepairNotice` (`app/RepairNotice.tsx`) presents each unacknowledged receipt
+  once: a combined sentence for simultaneous User and Workspace repairs, an
+  alert for `unresolved` / `commit_uncertain` naming the most severe source —
+  `commit_uncertain`, which may have published and must be reread before an
+  edit or retry, before `unresolved`, which published nothing — and nothing at
+  all for a source without a receipt. View details opens that same source. Dismiss acknowledges every
+  receipt presented, immediately. View details acknowledges nothing itself: it
+  sends `OPEN.REPAIRS` with the inspection `(authorityId, receipt id)` of the
+  one source it names, and that receipt is acknowledged only once the exact
+  owner's Advanced → Auto Repair has presented it (see below), so the other
+  source of a combined notice stays presented, and a navigation that fails or
+  is abandoned acknowledges nothing. Acknowledgements are opaque
+  `(authorityId, receipt id)` pairs in one bounded `RepairAcknowledgements`
+  ledger that `App` shares between the notice and Settings, so reconnects,
+  rereads and reloads of the same authority never repeat a notice. Its bound
+  (`4 × 65`) holds at least every receipt one notice can present — the User
+  and 64 Workspaces — so one Dismiss never leaves a presented receipt behind. There is no
+  dialog and no automatic navigation.
+- Tabs converge without being linearizable. The ledger persists to
+  `localStorage`; every write first merges the identities currently persisted,
+  so a tab never erases another tab's earlier acknowledgements with a stale
+  snapshot, and a `storage` event from another tab merges its acknowledgements
+  and re-renders the notice. `localStorage` has no compare-and-swap: two tabs
+  writing at the same instant can each persist a list lacking the other's
+  newest entry, which stays in that tab's memory, is persisted by its next
+  write, and at worst presents one notice once more elsewhere. Where storage is
+  denied, the ledger lives in the page's memory.
+- The navigation machine owns the inspection. `OPEN.REPAIRS` records it — as
+  `pendingInspection` while a Workspace owner lookup is in flight, as
+  `inspection` once navigation has landed at the owner's Advanced → Auto
+  Repair — and every other navigation decision (`OPEN`, `OPEN.OWNER`,
+  `OPEN.CONNECTION`, `SELECT`, `FOCUS`, `CLOSE`, `RETIRE` on authority
+  replacement, or an unregistered, failed or retired lookup) discards it.
+  `AutoRepairSection` reports `INSPECTED` with the receipt id it displays and
+  the source of the authoritative read, only after it rendered from a current
+  read (not stale data, not a failed read). The machine completes the
+  inspection only when that receipt and source equal the landed inspection, so
+  an older navigation never acknowledges a newer receipt; `App` then
+  acknowledges it, and only while the client is still connected to the
+  authority that produced it.
+- `OPEN.REPAIRS` is a navigation event: the User owner opens directly at
+  Advanced with the `{ kind: 'auto_repair' }` focus, which every owner admits;
+  a Workspace source resolves its exact owner through the Product Host lookup
+  like `OPEN.OWNER` and lands there on resolution. A stale lookup has no
+  completion path, as for every other navigation decision.
+- Advanced → Auto Repair renders the receipt from the target's own
+  authoritative read: status, change count, field paths, Tool names with
+  reasons, the schema version update, revisions and whether a private backup
+  exists. A failed repair keeps the native diagnostic beside the existing
+  Repair malformed source editor; it never claims the configuration is applied,
+  which Application observation reports.
+
+A receipt is presentation only. It is not a transaction input: a repair commits
+a new source revision exactly like an external edit, so an unsaved draft stays
+in its unit transaction with its pinned CAS base, is never submitted or
+rebased, and needs the explicit review gesture before it can save against the
+repaired revision.
+
 ## Authoring intent
 
 `UnitForm` keeps these facts distinct and never collapses them into one form value:

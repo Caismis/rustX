@@ -46,6 +46,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     let mut admitted = snapshot(&mut process).await;
     // Issue #462: the Root admits `explore`, so the whole Agent control group
     // is active, exactly once each.
+    let tools = process.capability_tools().await;
     for control in [
         "subagent",
         "list_agents",
@@ -54,12 +55,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
         "interrupt_agent",
     ] {
         assert_eq!(
-            admitted
-                .capabilities
-                .tools
-                .iter()
-                .filter(|tool| tool.name == control)
-                .count(),
+            tools.iter().filter(|tool| tool.name == control).count(),
             1,
             "{control}"
         );
@@ -82,6 +78,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     assert_eq!(settled.agents[0].state, AgentState::Inactive);
     assert_eq!(settled.agents[0].activation_state, SubagentState::Succeeded);
     assert_eq!(report_count(&settled, "CHILD-ANSWER"), 1);
+    let first_trace = cold_trace_evidence(&mut process, &first).await;
 
     let Ok(MethodResult::ConversationTurns {
         page: first_outline,
@@ -99,8 +96,35 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     assert_eq!(first_outline.total, 1);
     let first_turn = first_outline.turns[0].clone();
     assert_eq!(first_turn.id.conversation_id, first.child_conversation_id);
+    assert!(first_turn.id.attempt_id_source.is_none());
+    let native_first_turn = rustx::durable::reading::ConversationTurnId {
+        conversation_id: first_turn.id.conversation_id.clone(),
+        attempt_id: first_turn
+            .id
+            .attempt_id
+            .clone()
+            .expect("normal native owner"),
+    };
     assert!(first_turn.prompt.contains("count the workspace files"));
     assert!(first_turn.response.contains("CHILD-ANSWER"));
+    let frozen_location = child_turn_window(
+        &mut process,
+        &first.agent_id,
+        first_turn.ordinal,
+        &first_outline.cut,
+    )
+    .await;
+    assert_eq!(frozen_location.cut, first_outline.cut);
+    assert_eq!(frozen_location.target.as_ref(), Some(&first_turn.id));
+    assert_eq!(
+        frozen_location.target_cursor,
+        first_turn.cursor.map(Into::into)
+    );
+    assert_eq!(frozen_location.page.entries.len(), 1);
+    assert_eq!(
+        frozen_location.page.entries[0].cursor,
+        frozen_location.target_cursor.unwrap()
+    );
 
     // Resume must use the admitted Agent authority, never re-read this
     // changed named definition or current model configuration from disk.
@@ -153,6 +177,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
         Some(&accepted_activation)
     );
     assert_eq!(second.state, AgentState::Active);
+    assert_trace_cut_rejected(&mut process, &first, &first_trace, &first_trace.cut).await;
     assert_eq!(second.definition_digest, first.definition_digest);
     assert_eq!(second.profile_digest, first.profile_digest);
     let bodies = server.request_bodies();
@@ -234,30 +259,44 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     };
     assert_eq!(older_outline.total, 2);
     assert_eq!(older_outline.turns[0], first_turn);
-    // Appended turns cannot move a previously captured location/cut.
-    let Ok(MethodResult::TranscriptWindow { window: located }) = process
+    // Native pending adoption advances M, so the old full read cut expires;
+    // its immutable original Turn/C location remains exactly the same.
+    assert!(older_outline.cut.mutation_revision > first_outline.cut.mutation_revision);
+    let expired = process
         .call(Method::AgentTranscript {
             target: process.target(),
             agent_id: first.agent_id.clone(),
-            at: rustx::durable::reading::ConversationWindowAt::Turn {
-                id: first_turn.id.clone(),
+            at: rustx::durable::reading::ConversationWindowAt::TurnOrdinal {
+                ordinal: first_turn.ordinal,
                 cut: first_outline.cut.clone(),
             },
             limit: 1,
         })
-        .await
-    else {
-        panic!("native child turn location");
-    };
-    assert_eq!(located.cut, first_outline.cut);
+        .await;
+    assert!(
+        matches!(expired, Err(failure) if matches!(failure.error.data, Some(ErrorData::ContentSourceUnavailable)))
+    );
+    let located = child_turn_window(
+        &mut process,
+        &first.agent_id,
+        first_turn.ordinal,
+        &older_outline.cut,
+    )
+    .await;
+    assert_eq!(located.cut, older_outline.cut);
     assert_eq!(located.target.as_ref(), Some(&first_turn.id));
-    assert_eq!(located.target_cursor, first_turn.cursor.map(Into::into));
+    assert_eq!(located.target_cursor, frozen_location.target_cursor);
     assert_eq!(located.page.entries.len(), 1);
     assert_eq!(
         located.page.entries[0].cursor,
-        located.target_cursor.unwrap()
+        frozen_location.page.entries[0].cursor
     );
-    let mut foreign_turn = first_turn.id.clone();
+    assert_eq!(
+        located.page.entries[0].item,
+        frozen_location.page.entries[0].item
+    );
+    assert_eq!(frozen_location.cut, first_outline.cut);
+    let mut foreign_turn = native_first_turn.clone();
     foreign_turn.conversation_id = process.target().conversation_id;
     assert!(
         process
@@ -282,7 +321,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
                 target: process.target(),
                 agent_id: first.agent_id.clone(),
                 at: rustx::durable::reading::ConversationWindowAt::Turn {
-                    id: first_turn.id.clone(),
+                    id: native_first_turn.clone(),
                     cut: foreign_cut
                 },
                 limit: 1,
@@ -361,7 +400,8 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
         resumed: third_resumed,
     }) = third
     else {
-        panic!("recovered resume: {third:?}");
+        let diagnostic = recovered_resume_diagnostic(recovered, root.path(), &first.agent_id).await;
+        panic!("recovered resume: {third:?}\n{diagnostic}");
     };
     assert!(third_resumed);
     assert_eq!(third_agent, first.agent_id);
@@ -445,4 +485,263 @@ async fn snapshot_with_reports(
     })
     .await
     .expect("parent commits the admitted final reports")
+}
+
+/// Failure-only native evidence: no configuration or provider payload is printed.
+async fn recovered_resume_diagnostic(
+    mut process: Parent,
+    root: &std::path::Path,
+    agent_id: &rustx::runtime::identity::AgentId,
+) -> String {
+    use rustx::durable::ConversationStore;
+    let target = process.target();
+    let session = process.session_id.clone();
+    let result = process
+        .call(Method::SessionCheckpoint {
+            target: target.clone(),
+            trace_records: Vec::new(),
+        })
+        .await;
+    let Ok(MethodResult::Checkpoint { checkpoint }) = result else {
+        let (status, stderr) = process.shutdown().await;
+        return format!(
+            "failure checkpoint={result:?} shutdown={status} stderr tail={}",
+            stderr_tail(&stderr)
+        );
+    };
+    let owner = checkpoint
+        .snapshot
+        .agents
+        .iter()
+        .find(|agent| &agent.agent_id == agent_id)
+        .map(|agent| {
+            (
+                agent.activation_id.clone(),
+                agent.state,
+                agent.activation_state,
+            )
+        });
+    let Some(cut) = checkpoint.read_cut.source_cut else {
+        let (status, stderr) = process.shutdown().await;
+        return format!(
+            "failure checkpoint has no native source cut shutdown={status} stderr tail={}",
+            stderr_tail(&stderr)
+        );
+    };
+    assert_eq!(cut.read.conversation_id, target.conversation_id);
+    let (status, stderr) = process.shutdown().await;
+    let shutdown = format!(
+        "parent shutdown={status} stderr tail:\n{}",
+        stderr_tail(&stderr)
+    );
+    eprintln!("{shutdown}");
+    // The product owner has physically exited before any cold catalog handle.
+    let controller = match rustx::local_runtime::session_controller::SessionController::open(
+        &root.join("private"),
+    ) {
+        Ok(controller) => controller,
+        Err(error) => return format!("{shutdown}\ncold diagnostic catalog={error}"),
+    };
+    let access = match controller.acquire_session(&session, None).await {
+        Ok(access) => access,
+        Err(error) => return format!("{shutdown}\ncold diagnostic identity={error}"),
+    };
+    assert_eq!(access.node.conversation_id, target.conversation_id);
+    let store = match rustx::durable::SqliteConversationStore::open_existing(
+        access.node.conversation_id.clone(),
+        &access.database_path,
+    ) {
+        Ok(store) => store,
+        Err(error) => return format!("{shutdown}\ncold diagnostic Journal={error}"),
+    };
+    let mut after = 0;
+    let mut admissions = Vec::new();
+    while after < cut.read.journal {
+        let page = store.read_events(Some(after), 32).unwrap();
+        assert!(!page.events.is_empty());
+        for envelope in page.events {
+            assert!(envelope.sequence > after);
+            after = envelope.sequence;
+            if after > cut.read.journal {
+                break;
+            }
+            if let rustx::events::types::RuntimeEvent::AgentActivationAdmission {
+                agent_id: original_agent,
+                activation_id,
+                phase,
+                ..
+            } = envelope.event
+                && &original_agent == agent_id
+            {
+                admissions.push((envelope.sequence, activation_id, phase));
+            }
+        }
+    }
+    let native = format!(
+        "native Owner={owner:?} RootCut={:?} admissionJ={admissions:?}",
+        cut.read
+    );
+    format!("{native}\n{shutdown}")
+}
+
+fn stderr_tail(stderr: &str) -> &str {
+    let mut tail = stderr.len().saturating_sub(4096);
+    while !stderr.is_char_boundary(tail) {
+        tail += 1;
+    }
+    &stderr[tail..]
+}
+
+async fn child_turn_window(
+    process: &mut Parent,
+    agent_id: &rustx::runtime::identity::AgentId,
+    ordinal: u64,
+    cut: &rustx::durable::reading::ConversationReadCut,
+) -> rustx::runtime_client::snapshot::ConversationWindow {
+    let result = process
+        .call(Method::AgentTranscript {
+            target: process.target(),
+            agent_id: agent_id.clone(),
+            at: rustx::durable::reading::ConversationWindowAt::TurnOrdinal {
+                ordinal,
+                cut: cut.clone(),
+            },
+            limit: 1,
+        })
+        .await;
+    let Ok(MethodResult::TranscriptWindow { window }) = result else {
+        panic!("advertised native Child ordinal at its exact cut: {result:?}");
+    };
+    window
+}
+
+struct ColdTraceEvidence {
+    cut: rustx::runtime_client::checkpoint::CheckpointReadCut,
+    domain: String,
+    item_offset: u64,
+    path: Vec<String>,
+}
+
+/// The actual inactive Child page owns the exact original terminal selection.
+async fn cold_trace_evidence(
+    process: &mut Parent,
+    agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
+) -> ColdTraceEvidence {
+    use rustx::runtime_client::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
+    let trace = process
+        .call(Method::AgentTrace {
+            target: process.target(),
+            agent_id: agent.agent_id.clone(),
+            before: None,
+            limit: 32,
+            records: Vec::new(),
+        })
+        .await;
+    let Ok(MethodResult::Trace { page }) = trace else {
+        panic!("inactive Child's original Trace: {trace:?}");
+    };
+    let cut = page.read_cut.expect("standalone cold Trace read evidence");
+    assert_eq!(cut.conversation_id, agent.child_conversation_id);
+    assert_eq!(cut.activation_id.as_ref(), Some(&agent.activation_id));
+    assert_eq!(cut.revision, 0);
+    assert_eq!(cut.source_cut.as_ref().unwrap().read.journal, cut.through);
+    let terminal = page
+        .records
+        .iter()
+        .find(|record| record.kind == TraceKind::Attempt && record.state == TraceState::Completed)
+        .expect("genuine Child completion");
+    let TraceFieldSource::Value {
+        domain,
+        item_offset,
+        path,
+        encoded_bytes,
+        ..
+    } = terminal
+        .fields
+        .iter()
+        .find(|field| {
+            matches!(
+                field,
+                TraceFieldSource::Value {
+                    field: TraceFieldKind::Result,
+                    ..
+                }
+            )
+        })
+        .expect("original terminal finish reason")
+    else {
+        unreachable!()
+    };
+    assert!(*encoded_bytes > 0);
+    let evidence = ColdTraceEvidence {
+        cut,
+        domain: domain.clone(),
+        item_offset: *item_offset,
+        path: path.clone(),
+    };
+    let original = process
+        .selected_value(
+            Some(agent.agent_id.clone()),
+            &evidence.cut,
+            &evidence.domain,
+            evidence.item_offset,
+            &evidence.path,
+        )
+        .await;
+    assert_eq!(
+        original,
+        serde_json::to_value(rustx::model::ModelFinishReason::Stop).unwrap()
+    );
+    let request = page
+        .records
+        .iter()
+        .find(|record| record.kind == TraceKind::Request)
+        .unwrap();
+    let detail_domain = format!(
+        "trace.records.{}.detail",
+        request.id.strip_prefix("trace:").unwrap()
+    );
+    let detail = process
+        .call(Method::ConversationCheckpointPage {
+            target: process.target(),
+            agent_id: Some(agent.agent_id.clone()),
+            cut: evidence.cut.clone(),
+            domain: detail_domain.clone(),
+            offset: 0,
+            limit: 32,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointPage { page: detail }) = detail else {
+        panic!("cold Trace selected page at its own cut: {detail:?}");
+    };
+    assert_eq!(detail.read_cut, evidence.cut);
+    assert_eq!(detail.domain, detail_domain);
+    assert!(!detail.items.is_empty());
+    let mut inconsistent = evidence.cut.clone();
+    inconsistent.source_cut.as_mut().unwrap().read.journal += 1;
+    assert_trace_cut_rejected(process, agent, &evidence, &inconsistent).await;
+    evidence
+}
+
+async fn assert_trace_cut_rejected(
+    process: &mut Parent,
+    agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
+    evidence: &ColdTraceEvidence,
+    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+) {
+    let result = process
+        .call(Method::ConversationCheckpointValueRead {
+            target: process.target(),
+            agent_id: Some(agent.agent_id.clone()),
+            cut: cut.clone(),
+            domain: evidence.domain.clone(),
+            item_offset: evidence.item_offset,
+            path: evidence.path.clone(),
+            offset: 0,
+            max_bytes: 65_536,
+        })
+        .await;
+    assert!(
+        matches!(result, Err(failure) if matches!(failure.error.data, Some(ErrorData::ReadCutExpired)))
+    );
 }

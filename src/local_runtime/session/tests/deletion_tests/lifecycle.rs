@@ -497,6 +497,7 @@ fn deletion_tree_and_children_cascade_but_fork_clone_and_external_resources_surv
                 source_node: node,
                 source_surface_revision: revision,
                 source_message: MessageId::new("source-user-a"),
+                source_locator: fixture_source_locator(&store, "source-user-a"),
                 side: crate::local_runtime::session::LineageSide::Before,
             },
         )

@@ -1,6 +1,7 @@
+import { statusIdentity } from '../../../protocol/app-server/projection';
 import { jobStateLabel } from './status-labels';
 import type { Translate } from '../locale/translation';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v46';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask } from '../../../protocol/app-server/v48';
 
 /** Agent Status is historical, request-scoped model context. Nothing here is a
  * current-state authority: current Todo is `snapshot.todos`, current Goal is
@@ -20,7 +21,11 @@ export type AgentStatusAnchor =
 
 export function agentStatusAnchor(status: AgentStatusView): AgentStatusAnchor {
   const fresh = status.opportunities.fresh_inbound;
-  if (fresh) return { kind: 'inbound_message', messageId: fresh.target_message_id };
+  if (fresh) {
+    if (fresh.target_message_id != null) return { kind: 'inbound_message', messageId: fresh.target_message_id };
+    if (fresh.transcript_anchor != null) return { kind: 'transcript_position', cursor: fresh.transcript_anchor };
+    return { kind: 'unplaced' };
+  }
   const anchor = status.opportunities.post_tool_batch?.transcript_anchor;
   if (anchor != null) return { kind: 'transcript_position', cursor: anchor };
   return { kind: 'unplaced' };
@@ -47,8 +52,9 @@ export function agentStatusPlacement(statuses?: readonly AgentStatusView[]): Age
   const seen = new Set<string>();
   let order = 0;
   for (const status of statuses ?? []) {
-    if (seen.has(status.status_message_id)) continue;
-    seen.add(status.status_message_id);
+    const identity = statusIdentity(status);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     const anchor = agentStatusAnchor(status);
     const anchored = { status, order: order++ };
     if (anchor.kind === 'inbound_message') append(placement.byMessageId, anchor.messageId, anchored);

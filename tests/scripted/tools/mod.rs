@@ -5,6 +5,7 @@
 //! ([`todo_plane`]), and the task list's atomic settlement where its results
 //! become canonical ([`todo_transaction`]).
 
+mod ask_user_feedback;
 mod native_contracts;
 mod todo_plane;
 mod todo_transaction;

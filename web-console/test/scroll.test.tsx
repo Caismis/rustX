@@ -4,7 +4,7 @@ import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';
 import { turnAnchor } from '../src/client/transcript';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v46';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v48';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
@@ -189,9 +189,9 @@ it('follow publishes the live native turn without a locate cursor; navigated anc
 for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome} long-turn regions own reading and rail through reflow and the final tail`, async () => {
   const server = new Server();
   await server.attached('A');
-  const owner = (attempt: string, cursor: string): TurnProcessView => ({
+  const owner = (attempt: string, cursor: string): TurnProcessView & { attempt_id: string } => ({attempt_id_source:null,
     conversation_id: 'conversation-A', attempt_id: attempt, control_cursor: cursor,
-    outcome, message_count: 2, tool_call_count: 0, final_message_id: `${attempt}-body`,
+    outcome, message_count: 2, tool_call_count: 0, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: `${attempt}-body`,
   });
   const a = owner('A', '1'), b = owner('B', '3');
   const entry = (cursor: string, id: string, turn_process: TurnProcessView): RuntimeClientTranscriptEntry => ({
@@ -199,8 +199,8 @@ for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome}
   });
   const entries = [entry('1', 'A-start', a), entry('2', 'A-body', a), entry('3', 'B-start', b), entry('4', 'B-body', b)];
   server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: {
-    cut: { conversation_id: 'conversation-A', journal: '6', transcript: '4', mutation_revision: '0' },
-    offset: 0, total: 2, turns: [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, prompt: '', response: '' })),
+    cut: { conversation_id: 'conversation-A', journal: '6', transcript: '4', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'},
+    offset: 0, total: "2", turns: [a, b].map((turn, index) => ({ id:{conversation_id:turn.conversation_id,attempt_id:turn.attempt_id,attempt_id_source:turn.attempt_id_source}, ordinal: index + 1, cursor: turn.control_cursor, prompt: '', response: '' })),
   } }));
   let frame: FrameRequestCallback | undefined, height = 2000;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
@@ -264,18 +264,18 @@ it('the final native turn remains active beyond its location marker', () => {
 async function clippedReading(outcome: 'completed' | 'timed_out', later = true) {
   const server = new Server();
   await server.attached('A');
-  const owner = (attempt: string, cursor: string): TurnProcessView => ({
+  const owner = (attempt: string, cursor: string): TurnProcessView & { attempt_id: string } => ({attempt_id_source:null,
     conversation_id: 'conversation-A', attempt_id: attempt, control_cursor: cursor,
-    outcome, message_count: 2, tool_call_count: 1, final_message_id: `${attempt}-body`,
+    outcome, message_count: 2, tool_call_count: 1, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: `${attempt}-body`,
   });
   const a = owner('A', '90'), b = owner('B', '120');
   const row = (cursor: string, id: string, turn_process: TurnProcessView): RuntimeClientTranscriptEntry => ({
     cursor, turn_process, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text: id }] } },
   });
   const entries = [row('100', 'A-prefix', a), row('101', 'A-body', a), ...(later ? [row('120', 'B-start', b), row('121', 'B-body', b)] : [])];
-  const cut = { conversation_id: 'conversation-A', journal: '130', transcript: '121', mutation_revision: '0' };
-  const turns = [a, b].map((turn, index) => ({ id: turn, ordinal: index + 1, cursor: turn.control_cursor, prompt: '', response: '' }));
-  server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut, offset: 0, total: 2, turns } }));
+  const cut = { conversation_id: 'conversation-A', journal: '130', transcript: '121', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};
+  const turns = [a, b].map((turn, index) => ({ id:{conversation_id:turn.conversation_id,attempt_id:turn.attempt_id,attempt_id_source:turn.attempt_id_source}, ordinal: index + 1, cursor: turn.control_cursor, prompt: '', response: '' }));
+  server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut, offset: 0, total: "2", turns } }));
   let frame: FrameRequestCallback | undefined, height = 2200;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
@@ -361,9 +361,9 @@ it('an older page prepends above the reading position and clipped ownership come
     const current = () => [...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark => mark.getAttribute('data-turn-id'));
     expect(current()).toEqual([turnAnchor(v.b).slice(5)]);
     const older = v.server.client.loadEarlier('A'), read = await v.server.waitFor('session/transcript', 1);
-    expect(read.params).toMatchObject({ limit: 64 }); expect(read.params).toHaveProperty('at', { type: 'older', before: '120', cut: null });
+    expect(read.params).toMatchObject({ limit: 32 }); expect(read.params).toHaveProperty('at', { type: 'older', before: '120', cut: null });
     await act(async () => {
-      v.server.socket.success(read, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: { entries: v.entries.slice(0, 2), next_cursor: '100' } } });
+      v.server.socket.success(read, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: v.entries.slice(0, 2), next_cursor: '100' } } });
       await older;
     });
     v.flush();
@@ -486,7 +486,7 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
   fireEvent.click(ui.getByRole('button',{name:'Jump to turn 1'}));
   const intent=v.server.client.getSnapshot().views.A.turnNavigation!.intent;
   const read=await v.server.waitFor('session/transcript',1);
-  const respond=()=>v.server.socket.success(read,{type:'transcript_window',window:{cut:v.cut,target:v.a,target_cursor:'90',page:{entries:[{...v.entries[0],cursor:'90'},...v.entries]}}});
+  const respond=()=>v.server.socket.success(read,{type:'transcript_window',window:{cut:v.cut,target:{conversation_id:v.a.conversation_id,attempt_id:v.a.attempt_id,attempt_id_source:v.a.attempt_id_source},target_cursor:'90',page:{entries:[{...v.entries[0],cursor:'90'},...v.entries]}}});
   if(when==='before layout')await act(async()=>respond());
   const valid=v.server.client.getSnapshot().views.A.history;
   viewport.scrollTop=1400;fireEvent.scroll(viewport);

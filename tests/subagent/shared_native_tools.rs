@@ -185,6 +185,7 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
         snapshot.agents[0].workspace.canonicalize().unwrap(),
         workspace.canonicalize().unwrap()
     );
+    let tools = process.capability_tools().await;
     for control in [
         "subagent",
         "list_agents",
@@ -192,15 +193,7 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
         "wait_agent",
         "interrupt_agent",
     ] {
-        assert_eq!(
-            snapshot
-                .capabilities
-                .tools
-                .iter()
-                .filter(|tool| tool.name == control)
-                .count(),
-            1
-        );
+        assert_eq!(tools.iter().filter(|tool| tool.name == control).count(), 1);
     }
     assert_eq!(
         std::fs::read_to_string(workspace.join("child.txt")).unwrap(),

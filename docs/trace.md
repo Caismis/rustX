@@ -49,6 +49,41 @@ both negotiated versions advance, with no aliases or alternate decoder. SQLite s
 generation evidence. The Event Journal envelope framing is unchanged; this is
 request terminal event data, not a new Trace store.
 
+## Selected finite inspection
+
+A selected Request uses its indexed request-detail page and original field
+readers. Other Trace kinds return a `TraceInspectionHead`, with the exact
+returned read cut, a finite durable record and a closed content family: Tool,
+canonical messages, or lifecycle. Its page item is deferred and
+`body_complete: false`; the head is not a partial `TraceDetail` or a complete
+original body. An Inspector keeps current live lifecycle evidence separate
+from this durable content head.
+
+Tool Payload and Result expose their original advertised Value/Content fields.
+Raw arguments retain their original encoding. Reads are explicit bounded
+windows under the selected head's cut; opening a head never materializes the
+whole Tool result, request, or schema. Its exact Tool name and typed artifact
+references remain usable even if an optional field is unavailable. Artifact
+preview and download retain the existing protected artifact authorization.
+
+Tool Schema names the exact frozen request that produced the accepted
+Assistant proposal. Optional read evidence is captured from the original
+request's provisional identity and native owner, then paired with the accepted
+canonical Ledger position, Tool block and original catalog ordinal. It never
+uses the latest request, a repeated wire call ID, or the current Tool registry.
+The selected Definition Value source reads the original request's
+`tools[ordinal]`, including its name, description and opaque input schema.
+Proved absence of a matching original definition and unavailable relationship
+or field evidence remain distinct. A missing or corrupt optional relationship
+cannot refuse original J/C commits or suppress their own lifecycle facts.
+
+User/Context adoptions expose advancing original ordinal-to-Ledger pages with
+an exact total and continuation; their first eight previews do not claim the
+entire batch is loaded. Each selected page validates its bounded native members
+at the captured J/C cut. Assistant and Compaction message views use their own
+original canonical relationship. These private optional SQLite read indexes
+are derived evidence, never another canonical history or execution authority.
+
 ## Server-resolved presentation relationships
 
 Some facts a reader needs are relationships *between* records, not facts about
@@ -213,7 +248,7 @@ anchor      native identity, own grouping, own durable terminal    shared
 A lifecycle refresh resolves only the facts a `TraceLifecycle` transmits. It
 performs no System Prompt predecessor lookup, reads no predecessor
 `RequestSnapshot`, joins no canonical Context out of the Message Ledger, and
-resolves no recorded Tool name. A refresh may cover up to 512 records, so
+resolves no recorded Tool name. One refresh may cover up to eight records, so
 this is a correctness rule and not only a cost one: an error reached solely
 while resolving a request's immutable Context presentation must not be able
 to make that record's lifecycle repair unavailable, and a path that is never
@@ -281,8 +316,8 @@ snapshot collection. Expression indexes accelerate existing rows and introduce
 no semantic authority. Reads do not advance the Runtime Client subscription
 cursor, change revisions, consume inbound work or settle/cancel anything.
 
-The ordinary attach/snapshot response includes a bounded newest Trace window.
-Its linearization point is `RuntimeClientProjection::snapshot_cut()` under the
+The independent checkpoint response includes a bounded newest Trace window;
+attachment itself returns an identity receipt. Its cut capture is under the
 host projection mutex, after draining pending observations. The structured cut
 captures the snapshot, Runtime Client cursor and represented Journal prefix.
 Trace queries run **after releasing that mutex**, bounded by that captured prefix.
@@ -339,14 +374,16 @@ Inactive durable inspection instead captures its own SQLite frontier; it has no
 live publication boundary and receives no live lifecycle overlay: a durable start
 alone remains incomplete. Paging cursors remain Trace-specific in both cases.
 Exact positive lifecycle evidence applies regardless of anchor age. For loaded
-records outside the newest tail, `session/trace` accepts at most 512 opaque
+records outside the newest tail, `session/trace` accepts at most eight opaque
 `records` positions and returns `page.updates`, resolved at the same represented
-read cut. Explicit `session/snapshot` reconciliation can also return those repairs
-via `trace_records` / `snapshot.trace_updates`; normal Session events require no
-full snapshot. These bounded typed patches carry lifecycle/timing, safe
-request usage/failure details and canonical artifact references (at most 1 KiB
-per update; oversized optional references are omitted with `truncated`); no arbitrary
-payload or raw event is exposed. Background execution ID, Subagent ID, structured
+read cut. Recovery acquires a bounded `session/checkpoint` and independently
+reloads the Trace window at its native read cut. `trace_changed` schedules a
+coalesced bounded Trace read. These typed patches carry lifecycle/timing, safe
+request usage/failure details and original source references. Each update is
+bounded to 64 KiB, retaining its complete own lifecycle source and outcome facts;
+original payload bytes remain behind their advertised selected-field or Content
+readers. Optional inline attachment/detail previews may be omitted with
+`truncated`; a lifecycle that still cannot fit fails explicitly. Background execution ID, Subagent ID, structured
 Workflow run ID, and the existing exact Attempt/request/Tool/interaction identities
 are the only correlations. Durable terminal facts win; absent native evidence
 stays incomplete. No in-flight duration is synthesized.
@@ -357,12 +394,16 @@ represents one contiguous server-proven interval. An overlapping newest tail
 updates that interval by stable identity. A tail without overlap rebases to its
 own interval, cursor and a new epoch; it never concatenates disconnected ranges.
 Connection generation, full attachment target and Trace epoch fence older replies.
-Paging after rebase starts from the new tail's cursor.
+Paging after rebase starts from the new tail's cursor. Details are independently
+bounded to eight entries and 16 MiB of aggregate encoded UTF-8, with selection
+priority. Deferred source content loads through 65,536-byte reads into a 4 MiB
+byte cache; evicting either cache does not change Applied Cursor.
 
 At most one selected entry is retained separately from history. It stays
 inspector-visible after a no-overlap rebase and receives server lifecycle patches
 through the existing bounded interests request. It is not inserted into the
-historical list. Selection receives first priority within the 512-interest bound.
+historical list. Selection receives first priority within each eight-interest
+batch; subsequent batches cover the other retained records at their returned cuts.
 Paging completion requests another repair so settlement while an older read was
 pending cannot leave newly loaded entries stale. Reconnect/reattach/resync and
 explicit latest replace the domain, including retained selection. Notifications
@@ -405,7 +446,7 @@ references are projected. Truncation retains a deterministic prefix in frozen
 order, surfaces `context_truncated`, and releases an entry's content before its
 identity, so an adversarial fact can never erase the identity it names. Oversized object keys are omitted
 rather than aliased by shortening. Identities over 512 bytes are omitted whole.
-Summary records are at most 8 KiB, page records 128 KiB and one detail 512 KiB
+Summary records are at most 64 KiB, page records 128 KiB and one detail 512 KiB
 encoded JSON. Every omitted or shortened value carries a truncation indication.
 
 ### Generation clock contract

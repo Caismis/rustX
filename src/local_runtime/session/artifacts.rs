@@ -120,7 +120,8 @@ pub(super) fn materialize(
         .with_completed_responses(seed.completed_responses().to_vec())?
         // Message identities were remapped before materialization. Artifact IDs
         // are content references, so copying them cannot change native ownership.
-        .with_turns(seed.turns().to_vec())?)
+        .with_turns(seed.turns().to_vec())?
+        .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?)
     };
     copy().map_err(|e| SessionError::Io {
         path: root.into(),

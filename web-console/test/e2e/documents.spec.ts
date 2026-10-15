@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { copyFileSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
@@ -30,7 +31,36 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
   const expandDeliveries = async () => { for (const toggle of await page.getByRole('button', { name: /^(Show all \d+ delivered files|展开全部 \d+ 个交付文件)$/ }).all()) await toggle.click(); };
   const open = async (name: string) => {
     await expandDeliveries();
+    const office=name.endsWith('.docx')||name.endsWith('.pptx');
+    const index=names.indexOf(name);
+    // Admission headers are not physical derivation settlement. Observe the
+    // original operation's complete terminal body before the DOM render budget.
+    const original=office?page.waitForResponse(response=>response.request().method()==='POST'
+      &&response.url().endsWith('/product-host/file-read')&&response.request().postDataJSON()?.read?.delivery_index===index):undefined;
+    const derivation=office?page.waitForResponse(response=>response.request().method()==='POST'
+      &&response.url().endsWith('/product-host/document-preview')&&response.request().postDataJSON()?.request?.source?.delivery_index===index):undefined;
     await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await expect(panel).toBeVisible();
+    if(original&&derivation){
+      const sourceResponse=await original,sourceRequest=sourceResponse.request().postDataJSON();
+      expect(sourceRequest.operationId).toMatch(/^[a-f0-9-]{36}$/);
+      expect(sourceResponse.headers()['x-rustx-file-operation']).toBe(sourceRequest.operationId);
+      const source=await sourceResponse.json();
+      expect(source.ok).toBe(true);
+      const response=await derivation,request=response.request().postDataJSON();
+      expect(request.operationId).toMatch(/^[a-f0-9-]{36}$/);
+      expect(response.headers()['x-rustx-document-operation']).toBe(request.operationId);
+      expect(request.scope).toEqual(sourceRequest.scope);
+      expect(request.request.target).toEqual(sourceRequest.read.target);
+      expect(request.request.source).toEqual({kind:'session_file',locator:sourceRequest.read.locator,delivery_index:index});
+      expect(request.request.extension).toBe(name.split('.').at(-1));
+      expect(request.request.digest).toBe(createHash('sha256').update(readFileSync(join(fixture.workspaceA,name))).digest('hex'));
+      const terminal=await response.json();
+      expect(terminal.ok).toBe(true);
+      expect(terminal.value.digest).toBe(request.request.digest);
+      expect(terminal.value.file).toEqual(source.value.file);
+      expect(terminal.value.file.name).toBe(name);
+      expect(terminal.value.preview.kind).toBe('pdf');
+    }
   };
   const close = async () => {
     await panel.getByRole('button', { name: /^Close preview / }).first().click();

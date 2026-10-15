@@ -1,9 +1,10 @@
+import {applicationReceipt} from './fixture';
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { OutcomeUncertain } from '../src/client/app-server';
-import type { AdoptionEligibility, ConfigurationApplication, MethodResult } from '../../protocol/app-server/v46';
+import type { AdoptionEligibility, ConfigurationApplication, MethodResult } from '../../protocol/app-server/v48';
 import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
 import { snapshot } from './fixture';
@@ -92,7 +93,7 @@ it('C16 late success A cannot hide newly observed candidate B; acknowledgement a
  s.source.application = { ...cfg3Application(), version: '4', candidate: { identity: { input_revision: 'B', attempt: '4' }, expected_binding: '2', impact: 'prefix_changed' } };
  configurationPublished(s, s.source.application);
  expect(reads(s)).toHaveLength(1);
- await act(async () => { release({ type: 'configuration_application', application: { ...cfg3Application(), version: '3', candidate: null } }); await pending; });
+ await act(async () => { release({type:'configuration_receipt',scope:({ ...cfg3Application(), version: '3', candidate: null })?.scope??'configuration',version:({ ...cfg3Application(), version: '3', candidate: null })?.version??'0'}); await pending; });
  // A's response owes exactly its own authoritative reread.
  await waitFor(() => expect(reads(s)).toHaveLength(2));
  await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(false));
@@ -218,7 +219,7 @@ it('C17 a superseded lifetime\'s reread cannot clear the busy state of the adopt
  holdAdopt = true;
  fireEvent.click(screen.getByRole('button', { name: 'Adopt configuration' }));
  await waitFor(() => expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true));
- await act(async () => { held({ type: 'session_configuration', application: cfg3Application() } as never); await pending; });
+ await act(async () => { held({ type: 'session_configuration', projection:(applicationReceipt((cfg3Application()))) } as never); await pending; });
  // The superseded lifetime's settlement owns none of the current attempt's
  // state: the in-flight adoption stays in flight.
  expect((screen.getByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement).disabled).toBe(true);

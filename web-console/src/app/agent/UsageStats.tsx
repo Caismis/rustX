@@ -1,3 +1,4 @@
+import { JournalValue } from './JournalValue';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Adapted from DeepSeek Harness ui-chat TurnUsagePanel and StatsPills
 // (Detailed mode) and ui-conversation ContextMeter: the completed Turn's usage
@@ -5,29 +6,30 @@
 // under the composer. Every figure is a native rustX reading; the browser
 // tokenizes and times nothing. Harness's Compact mode, plugin dock slots and
 // cache-write bucket have no rustX counterpart and are excluded.
-import type { ContextOccupancy, ConversationStatistics, ModelUsage } from '../../../../protocol/app-server/v46';
+import type { RuntimeClientContextOccupancy, ConversationStatistics, ModelUsage } from '../../../../protocol/app-server/v48';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { IconDatabaseOutline16, IconGaugeOutline16 } from '../../presentation/primitives/icons';
 import { StatDialog, StatHeading, statCss } from '../../presentation/primitives/StatDialog';
-import { formatCacheHitPercent, formatDuration, formatExactTokens, formatTokens, formatTokensPerSecond } from './token-format';
+import { formatCacheHitPercent, formatDuration, formatExactTokens, formatTokens, formatTokensPerSecond, type TokenCount } from './token-format';
 import css from './UsageStats.module.css';
+import { OccupancyModelValue } from './OccupancyModelValue';
 
-const count = (tx: Translate, value: number) => tx('agent:usage.count', { count: formatTokens(value, tx) });
-const exact = (tx: Translate, value: number) => tx('agent:usage.count', { count: formatExactTokens(value, tx) });
+const count = (tx: Translate, value: TokenCount) => tx('agent:usage.count', { count: formatTokens(value, tx) });
+const exact = (tx: Translate, value: TokenCount) => tx('agent:usage.count', { count: formatExactTokens(value, tx) });
 
 /** Input buckets of one usage: uncached and cached when the provider split them. */
 function inputRows(tx: Translate, usage: ModelUsage) {
   const cached = usage.details?.cached_input_tokens;
-  if (cached == null || cached > usage.input_tokens) return <><dt>{tx('agent:usage.input-total')}</dt><dd>{exact(tx, usage.input_tokens)}</dd></>;
+  if (cached == null || BigInt(cached) > BigInt(usage.input_tokens)) return <><dt>{tx('agent:usage.input-total')}</dt><dd>{exact(tx, usage.input_tokens)}</dd></>;
   return <>
-    <dt>{tx('agent:usage.input')}</dt><dd>{exact(tx, usage.input_tokens - cached)}</dd>
+    <dt>{tx('agent:usage.input')}</dt><dd>{exact(tx, BigInt(usage.input_tokens) - BigInt(cached))}</dd>
     <dt>{tx('agent:usage.cache-read')}</dt><dd>{exact(tx, cached)}</dd>
   </>;
 }
 function cacheHit(usage: ModelUsage, decimalPlaces: 0 | 1) {
   const cached = usage.details?.cached_input_tokens;
-  return cached == null || cached > usage.input_tokens ? null : formatCacheHitPercent(cached, usage.input_tokens, decimalPlaces);
+  return cached == null || BigInt(cached) > BigInt(usage.input_tokens) ? null : formatCacheHitPercent(cached, usage.input_tokens, decimalPlaces);
 }
 
 /** The completed Turn's usage pill and its accounting dialog. */
@@ -81,7 +83,7 @@ function ActivityPill({ statistics }: { statistics: ConversationStatistics }) {
 function UsagePill({ statistics }: { statistics: ConversationStatistics }) {
   const tx = useTranslation();
   const usage = statistics.reported_usage;
-  if (!usage || (usage.input_tokens === 0 && usage.output_tokens === 0)) return null;
+  if (!usage || (BigInt(usage.input_tokens) === 0n && BigInt(usage.output_tokens) === 0n)) return null;
   const hit = cacheHit(usage, 0);
   const hitText = hit === null ? null : tx('agent:usage.cache-hit-percent', { percent: hit });
   const total = count(tx, usage.total_tokens);
@@ -110,17 +112,18 @@ const ROWS = [
 ] as const;
 
 /** Latest native request reading or committed compacted-context estimate. */
-function ContextMeter({ occupancy }: { occupancy: ContextOccupancy }) {
+function ContextMeter({ occupancy }: { occupancy: RuntimeClientContextOccupancy }) {
   const tx = useTranslation();
-  if (!(occupancy.context_window_tokens > 0)) return null;
-  const percent = Math.min(100, Math.round(occupancy.input_tokens / occupancy.context_window_tokens * 100));
+  const capacity = BigInt(occupancy.context_window_tokens), input = BigInt(occupancy.input_tokens);
+  if (capacity <= 0n) return null;
+  const percent = Number(input >= capacity ? 100n : (input * 200n + capacity) / (capacity * 2n));
   const reading = `${percent}%`;
   const [before = '', after = ''] = tx('agent:usage.context-aria', { percent: READING_SLOT }).split(READING_SLOT).map(part => part.trim());
   const breakdown = occupancy.breakdown;
-  const parts = breakdown.system_tokens + breakdown.tool_tokens + breakdown.message_tokens;
+  const parts = BigInt(breakdown.system_tokens) + BigInt(breakdown.tool_tokens) + BigInt(breakdown.message_tokens);
   // Native reading owns the percent; heuristic composition proportions its parts.
-  const segments = (parts === 0 ? [{ key: 'total', color: undefined, width: percent }]
-    : ROWS.map(row => ({ key: row.key, color: row.color, width: percent * breakdown[row.key] / parts }))).filter(part => part.width > 0);
+  const segments = (parts === 0n ? [{ key: 'total', color: undefined, width: percent }]
+    : ROWS.map(row => ({ key: row.key, color: row.color, width: Number(BigInt(percent) * BigInt(breakdown[row.key]) * 10_000n / parts) / 10_000 }))).filter(part => part.width > 0);
   return <StatDialog triggerClassName={css.meter} label={tx('agent:usage.context-aria', { percent: reading })} title={tx('agent:usage.context-used')} panelClassName={css.contextPanel}
     trigger={<><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
       <circle className={css.track} cx="7" cy="7" r={RADIUS}/>
@@ -140,16 +143,18 @@ function ContextMeter({ occupancy }: { occupancy: ContextOccupancy }) {
         <dd>{`~${formatTokens(breakdown[row.key], tx)}`}</dd>
       </div>)}
     </dl>
+    <OccupancyModelValue occupancy={occupancy}/>
   </StatDialog>;
 }
 
 /** The composer dock: native whole-conversation totals and current context reading. */
-export function ConversationStats({ statistics, occupancy }: { statistics?: ConversationStatistics | null; occupancy?: ContextOccupancy | null }) {
+export function ConversationStats({ statistics, occupancy }: { statistics?: ConversationStatistics | null; occupancy?: RuntimeClientContextOccupancy | null }) {
   const tx = useTranslation();
   if (!statistics && !occupancy) return null;
   return <div className={css.dock} aria-label={tx('agent:usage.session-title')} data-composer-dock="">
     {statistics && <ActivityPill statistics={statistics}/>}
     {statistics && <UsagePill statistics={statistics}/>}
+    {statistics?.latest_turn?.attempt_id_deferred && <JournalValue field={statistics.latest_turn.attempt_id_source ?? undefined}/>}
     {occupancy && <ContextMeter occupancy={occupancy}/>}
   </div>;
 }

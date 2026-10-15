@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from 'react';
+import {applicationReceipt} from './fixture';
+import { useMemo, useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationComposer } from '../src/app/new-conversation/ConversationComposer';
@@ -8,7 +9,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/app-server';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v46';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v48';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -31,6 +32,13 @@ function workspaceSource(session_models: SourceSettings['session_models'] = { ki
     resolved: { models: { 'fixture/configuration-only': authored, 'fixture/native': authored } }, session_models };
 }
 async function mount({ current = () => true, source = workspaceSource(), configureWorkspace, ready = true, workspaceHost }: { workspaceHost?: Partial<ProductHostWorkspaces>; current?: () => boolean; source?: SourceSettings; configureWorkspace?: (id: string) => Promise<{ kind: 'read'; projection: SourceSettings }>; ready?: boolean } = {}) {
+  // As in App, the route fence is a new function for every connection
+  // generation, so every transport transition hands the composer a new one.
+  function Composer() {
+    const generation = useSyncExternalStore(server.client.subscribe, () => server.client.getSnapshot().generation);
+    const fenced = useMemo(() => () => current(), [generation]);
+    return <ConversationComposer authority={authority} associations={associations} binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={fenced} preparePublication={() => opened}/>;
+  }
   server = new Server(); await server.connect();
   const base = { ...server.workspaceHost, ...workspaceHost };
   const host = { ...base,
@@ -39,7 +47,7 @@ async function mount({ current = () => true, source = workspaceSource(), configu
     configureWorkspace: vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(configureWorkspace ?? (async () => ({ kind: 'read' as const, projection: source }))),
   };
   const opened = vi.fn(), authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
-  await act(async () => { render(<ConversationComposer authority={authority} associations={associations} binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={current} preparePublication={() => opened}/>); });
+  await act(async () => { render(<Composer/>); });
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Preserved draft' } });
   if (ready) await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
   return { host, opened, authority, associations };
@@ -208,9 +216,9 @@ it('a draft model the native catalog stops publishing blocks Send instead of rea
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/second' })));
   const reads = host.configureWorkspace.mock.calls.length;
   projection = workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high')] } });
-  await act(async () => { server.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: {
+  await act(async () => { server.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: (applicationReceipt(({
     scope: 'source:workspace:/workspace', sources: [{ kind: 'workspace', directory: '/workspace' }], version: '2',
-    desired: { input_revision: 'input-2', attempt: '2' }, units: {}, candidate: null } } }); });
+    desired: { input_revision: 'input-2', attempt: '2' }, units: {}, candidate: null }))) } }); });
   await waitFor(() => expect(host.configureWorkspace.mock.calls.length).toBeGreaterThan(reads));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true));
   expect(screen.getByText(/not in this Workspace's native model catalog/)).toBeTruthy();

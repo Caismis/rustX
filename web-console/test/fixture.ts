@@ -1,6 +1,7 @@
+import { selectedRevision, revisionSelector } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
-import type { TraceDetail } from '../../protocol/app-server/v46';
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v46';
+import type { TraceDetail } from '../../protocol/app-server/v48';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v48';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { cfg3Source } from './cfg3-data';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -15,11 +16,29 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
     settings_evidence: 'live_session', configuration_adoption_eligibility: { status: 'eligible' },
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
     workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { records: [] },
-    inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
+    message_descriptors:[], publication_settlements:[], inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
   };
 }
-export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): RoutedInteraction {
-  return { interaction: { conversation_id: `conversation-${id}`, interaction_id: interactionId }, source: { type: 'primary' },
+export function checkpoint(value: RuntimeClientSnapshot, cursor = '0'): import('../../protocol/app-server/v48').RuntimeClientCheckpoint {
+  const attempt=value.attempt;
+  const content:import('../../protocol/app-server/v48').ContentBinding[]=[];
+  if(attempt?.in_flight&&attempt.attempt_id!=null)for(const [index,block] of (attempt.in_flight.blocks??[]).entries()){
+    const text='text' in block?block.text:'arguments' in block?block.arguments:undefined;
+    if(typeof text!=='string'||!text.length)continue;
+    const bytes=new TextEncoder().encode(text).length;
+    const event=contentAdvance({attempt_id:attempt.attempt_id,message_id:attempt.in_flight.message_id,block_index:block.block_index,kind:block.type==='tool_call'?'tool_call_arguments':block.type,delta:text},0,Math.max(1,bytes),value.conversation_id);
+    content.push({path:['attempt','in_flight','blocks',String(index),block.type==='tool_call'?'arguments':'text'],content_ref:event.content_ref,deferred:false});
+  }
+  return {snapshot:value,cursor,read_cut:{conversation_id:value.conversation_id,revision:cursor,through:cursor,domain_revisions:{},collection_cuts:{}},content,collections:[]};
+}
+export function boundedSettings(value:import('../../protocol/app-server/v48').SourceSettings):Extract<MethodResult,{type:'source_settings'}>['projection'] {
+ return {target:value.target,revision:'fixture-native-source',inline:value,fields:[],collections:[]};
+}
+export function sourceReceipt(value: import('../../protocol/app-server/v48').SourceSettings, mutation?: import('../../protocol/app-server/v48').SourceMutation) {
+  return {target:value.target,revision:selectedRevision(value, mutation ? revisionSelector(mutation) : {kind:'config'})};
+}
+export function interaction(type: 'approval' | 'questionnaire', id = 'A', interactionId = `interaction-${type}`): import('../../protocol/app-server/v48').RuntimeClientInteractionHeader {
+  const routed:RoutedInteraction = { interaction: { conversation_id: `conversation-${id}`, interaction_id: interactionId }, source: { type: 'primary' },
     request: { id: interactionId, conversation_id: `conversation-${id}`, attempt_id: 'attempt-A', turn: 1,
       kind: type === 'approval' ? {
         type, invocation_id: { caller: 'agent', call_id: 'call-bash' }, tool_id: 'bash', tool_name: 'bash',
@@ -31,10 +50,21 @@ export function interaction(type: 'approval' | 'questionnaire', id = 'A', intera
       },
     },
   };
+  return {workflow_node:null,workflow_node_deferred:false,workflow_node_path:null,source_offset:0,interaction:routed.interaction,source:routed.source,request_id:routed.request.id,conversation_id:routed.request.conversation_id,attempt_id:routed.request.attempt_id,turn:routed.request.turn,kind:routed.request.kind.type,approval:null,body:routed.request,body_complete:true};
 }
-export function childConversation(page: RuntimeClientSnapshot['transcript'], agentId = 'agent-worker', activationId = 'activation-a', conversationId = 'conversation-worker'): Extract<MethodResult, {type:'agent_conversation'}> {
-  return {type:'agent_conversation', conversation:{agent_id:agentId, activation_id:activationId, cursor:null,
-    snapshot:{...snapshot(), conversation_id:conversationId, transcript:page}}};
+export function childConversation(page: RuntimeClientSnapshot['transcript'], agentId='agent-worker', activationId='activation-a', conversationId='conversation-worker'): Extract<MethodResult,{type:'agent_observe'}> {
+ return {type:'agent_observe',observation:{type:'checkpoint',agent_id:agentId,conversation_id:conversationId,activation_id:activationId,source:'durable_only',cursor:null,checkpoint:{...checkpoint({...snapshot(),conversation_id:conversationId,transcript:page}),read_cut:{...checkpoint({...snapshot(),conversation_id:conversationId,transcript:page}).read_cut,activation_id:activationId}}}};
+}
+type SubscribedSeed=Omit<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'> & Partial<Pick<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'>>;
+type FixtureNotification=Exclude<Notification,{method:'session/event'|'session/resyncRequired'}> | {jsonrpc:'2.0',method:'session/event',params:Omit<Extract<Notification,{method:'session/event'}>['params'],'registration_id'> & {registration_id?:string}} | {jsonrpc:'2.0',method:'session/resyncRequired',params:Omit<Extract<Notification,{method:'session/resyncRequired'}>['params'],'registration_id'|'reason'|'checkpoint_required'> & {registration_id?:string,reason?:Extract<Notification,{method:'session/resyncRequired'}>['params']['reason'],checkpoint_required?:boolean}};
+export function editorPage(locator:import('../../protocol/app-server/v48').EditorLocator,content:import('../../protocol/app-server/v48').UserInputBlock[],block_index:number,offset:number,max_bytes:number):Extract<MethodResult,{type:'editor_page'}> {
+ const block=content[block_index],next_block=block_index+1<content.length?block_index+1:null;
+ if(!block)return {type:'editor_page',page:{locator,block_index,next_block:null,chunk:null,upload:null}};
+ if(block.type==='upload')return {type:'editor_page',page:{locator,block_index,next_block,chunk:null,upload:{session_id:block.session_id,batch_id:block.batch_id,token:block.token}}};
+ const bytes=new TextEncoder().encode(block.text),end=Math.min(offset+max_bytes,bytes.length);
+ if(offset>bytes.length)throw new Error('Invalid fixture editor range');
+ const ref={conversation_id:'conv_01900000-0000-7000-8000-000000000002',source:{type:'canonical_message_block' as const,component:'payload' as const,locator:{type:'by_message_id' as const,message_id:`fixture-editor-${locator.node_id}`},block_index},representation:'utf8_text' as const,version:1,content_revision:1,readable_end:bytes.length};
+ return {type:'editor_page',page:{locator,block_index,next_block,upload:null,chunk:{content_ref:ref,offset,data_base64:btoa(String.fromCharCode(...bytes.slice(offset,end))),end_offset:end,readable_end:bytes.length,next_offset:end<bytes.length?end:null,complete:end===bytes.length}}};
 }
 export class FakeSocket implements Socket {
   onopen: Socket['onopen'] = null;
@@ -43,12 +73,23 @@ export class FakeSocket implements Socket {
   onerror: Socket['onerror'] = null;
   requests: Request[] = [];
   closed = false;
-  constructor(private handle: (request: Request, socket: FakeSocket) => void, private releaseClaims: () => void) {}
+  readyState = 0;
+  constructor(private handle: (request: Request, socket: FakeSocket) => void, private releaseClaims: () => void,private registration:(target:AttachmentTarget)=>string|undefined,private installRegistration:(target:AttachmentTarget)=>string) {}
   send(raw: string) { const request = JSON.parse(raw) as Request; this.requests.push(request); this.handle(request, this); }
-  open() { this.onopen?.(new Event('open')); }
-  deliver(value: Response | Notification) { this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(value) })); }
-  success(request: Request, result: MethodResult) { this.deliver({ jsonrpc: '2.0', id: request.id, result }); }
-  close() { if (!this.closed) { this.closed = true; this.releaseClaims(); this.onclose?.(new CloseEvent('close')); } }
+  open() { this.readyState = 1; this.onopen?.(new Event('open')); }
+  deliver(value: Response | FixtureNotification) {
+    if ('method' in value && (value.method==='session/event'||value.method==='session/resyncRequired')) {
+      const params={...value.params,registration_id:value.params.registration_id??this.registration(value.params.target)??'unregistered'};
+      if(value.method==='session/resyncRequired') Object.assign(params,{reason:'replay_unavailable',checkpoint_required:true,...value.params});
+      value={...value,params} as Notification;
+    }
+    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(value) }));
+  }
+  success(request: Request, result: MethodResult|SubscribedSeed) {
+    if(result.type==='subscribed' && request.method==='session/subscribe') result={...result,target:request.params.target,registration_id:result.registration_id??this.installRegistration(request.params.target)};
+    this.deliver({ jsonrpc: '2.0', id: request.id, result:result as MethodResult });
+  }
+  close() { if (!this.closed) { this.readyState = 3; this.closed = true; this.releaseClaims(); this.onclose?.(new CloseEvent('close')); } }
 }
 export class Server {
   readonly workspaceHost: ProductHostWorkspaces = {
@@ -69,7 +110,16 @@ export class Server {
   summaries = new Map<string, Partial<SessionSummary>>();
   nodeSnapshots = new Map<string, RuntimeClientSnapshot>();
   cursor = 0n;
+  private checkpointSources=new Map<string,{cursor:string;value:string}>();
   private attachmentSequence = 0;
+  private registrationSequence = 0;
+  readonly registrations = new Map<string,string>();
+  private readonly editors=new Map<string,import("../../protocol/app-server/v48").UserInputBlock[]>();
+  editor(session:{id:string,active_node:string,[key:string]:unknown},content:import("../../protocol/app-server/v48").UserInputBlock[]|null|undefined):import("../../protocol/app-server/v48").EditorLocator|null {
+    if(content==null)return null;
+    const locator={session_id:session.id,node_id:session.active_node,source_session:"A",source_node:"node-A",source_surface_revision:"1"};
+    this.editors.set(JSON.stringify(locator),structuredClone(content));return locator;
+  }
   private completed = new Map<Request, Response>();
   private reservations = new WeakMap<FakeSocket, Set<string>>();
   loaded = new Set<string>();
@@ -80,13 +130,13 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 46;
+  version = 48;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
   capabilities = capabilities;
   socketFactory = (_url: string, protocols: string[]) => {
-    if (protocols[0] !== 'rustx.app-server.v46' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
-    const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
+    if (protocols[0] !== 'rustx.app-server.v48' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); },target=>this.registrations.get(JSON.stringify(target)),target=>{const id=`registration-${++this.registrationSequence}`;this.registrations.set(JSON.stringify(target),id);return id;}); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   };
   carrierTransfers = 0;
@@ -172,9 +222,14 @@ export class Server {
         const nodes = [{ id: this.summary(id).active_node, conversation_id: (this.nodeSnapshots.get(this.summary(id).active_node) ?? this.snapshots.get(id)!).conversation_id }, ...[...this.nodeSnapshots].map(([id, snapshot]) => ({ id, conversation_id: snapshot.conversation_id }))];
         result = { type: 'tree', nodes: nodes.slice(request.params.offset, request.params.offset + request.params.limit).map((node, i) => ({ ...node, ordinal: String(i), origin: { type: 'new' }, created_at: '0' })), next_offset: null }; break;
       }
-      case 'session/statistics': result = { type: 'session_statistics', conversation_id: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).conversation_id, statistics: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).transcript.statistics ?? { turns: '0', steps: '0', completed_responses: '0', model_requests: '0', requests_with_usage: '0' } }; break;
-      case 'session/traceHistory': result = { type: 'session_trace_history', conversation_id: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).conversation_id, page: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).trace }; break;
-      case 'session/traceHistoryDetail': result = { type: 'session_trace_history_detail', conversation_id: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).conversation_id, detail: null }; break;
+      case 'session/statistics': {
+        const selected = this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!;
+        result = { type: 'session_statistics', conversation_id: selected.conversation_id,
+          read_cut: checkpoint(selected).read_cut, occupancy: selected.context?.occupancy,
+          statistics: selected.transcript.statistics ?? { turns: '0', steps: '0', completed_responses: '0', model_requests: '0', requests_with_usage: '0' } }; break;
+      }
+      case 'session/traceHistory': {const selected=this.nodeSnapshots.get(request.params.node_id??'')??this.snapshots.get(id)!;result={type:'session_trace_history',conversation_id:selected.conversation_id,page:{...selected.trace,read_cut:selected.trace.read_cut??checkpoint(selected).read_cut}};break;}
+      case 'session/traceHistoryDetail': result = { type: 'session_trace_history_detail', conversation_id: (this.nodeSnapshots.get(request.params.node_id ?? '') ?? this.snapshots.get(id)!).conversation_id, page:traceReceipt(null).page }; break;
       case 'session/history': {
         const history = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(request.params.session_id)!;
         if (!history) throw new RpcFailure({ code: -32000, message: 'Unknown Session' });
@@ -182,7 +237,7 @@ export class Server {
         const target = at.type === 'message' ? entries.find(entry => entry.item.type === 'message' && entry.item.message.id === at.id) : undefined;
         if (at.type === 'message' && !target) throw new RpcFailure({ code: -32000, message: 'Unknown Message', data: { kind: 'operation_failed' } });
         const selected = at.type === 'older' ? entries.filter(entry => BigInt(entry.cursor) < BigInt(at.before)).slice(-request.params.limit) : at.type === 'newer' ? entries.filter(entry => BigInt(entry.cursor) > BigInt(at.after)).slice(0, request.params.limit) : target ? entries.slice(Math.max(0, entries.indexOf(target) - Math.floor(request.params.limit / 2)), Math.max(0, entries.indexOf(target) - Math.floor(request.params.limit / 2)) + request.params.limit) : entries.slice(-request.params.limit);
-        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: 'cut' in at && at.cut ? at.cut : { conversation_id: history.conversation_id, journal: '1000', transcript: '1000', mutation_revision: '0' }, target_cursor: target?.cursor, page: { ...history.transcript, entries: selected } } }; break;
+        result = { type: 'session_history', conversation_id: history.conversation_id, window: { cut: 'cut' in at && at.cut ? at.cut : { conversation_id: history.conversation_id, journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, target_cursor: target?.cursor, page: { ...history.transcript, entries: selected } } }; break;
       }
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
@@ -194,17 +249,29 @@ export class Server {
         targets.set(id, { session_id: id, conversation_id: attachedSnapshot.conversation_id, runtime_incarnation: String(9007199254740992n + BigInt(this.coldLoads.get(id)!)), attachment_id: `${id}-${++this.attachmentSequence}` });
         this.targets.set(socket, targets);
         this.maxClaims = Math.max(this.maxClaims, targets.size);
-        result = { type: 'attached', target: this.target(id, socket), snapshot: attachedSnapshot, cursor: String(this.cursor) }; break;
+        result = {type:'attached', target: this.target(id, socket), configuration_revision:'0', attachment_kind:'controller', observation_source:'live'}; break;
       }
-      case 'session/configuration': result = { type: 'session_configuration', application: null }; break;
-      case 'configuration/sourcesRead': result = { type: 'source_settings', projection: cfg3Source() }; break;
-      case 'session/turns': result = { type: 'conversation_turns', page: { cut: { conversation_id: this.target(id, socket).conversation_id, journal: '0', transcript: '0', mutation_revision: '0' }, offset: 0, total: 0, turns: [] } }; break;
-      case 'session/settings': result = { type: 'settings', revision: '0', settings: { cwd: `/workspace/${id}` } }; break;
-      case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)?.conversation_id === request.params.target.conversation_id ? this.snapshots.get(id)! : [...this.nodeSnapshots.values()].find(snapshot => snapshot.conversation_id === request.params.target.conversation_id)!, cursor: String(this.cursor) }; break;
-      case 'session/subscribe': result = { type: 'subscribed', after_cursor: request.params.after_cursor }; break;
+      case 'session/attachmentStatus': result={type:'attachment_status',target:this.targets.get(socket)?.get(request.params.session_id)??null,configuration_revision:'0'};break;
+      case 'session/editorRead': return editorPage(request.params.locator,this.editors.get(JSON.stringify(request.params.locator))??[],request.params.block_index,Number(request.params.offset),request.params.max_bytes);
+      case 'session/configuration': result = { type: 'session_configuration', projection:(null) }; break;
+      case 'configuration/sourcesRead': result = { type: 'source_settings', projection:boundedSettings(cfg3Source()) }; break;
+      case 'session/turns': result = { type: 'conversation_turns', page: { cut: { conversation_id: this.target(id, socket).conversation_id, journal: '0', transcript: '0', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, offset: 0, total: "0", turns: [] } }; break;
+      case 'session/settings': result = settingsReceipt({ cwd: `/workspace/${id}` },'0'); break;
+      case 'session/checkpoint': {
+        const source=this.snapshots.get(id)?.conversation_id===request.params.target.conversation_id?this.snapshots.get(id)!:[...this.nodeSnapshots.values()].find(value=>value.conversation_id===request.params.target.conversation_id)!;
+        this.checkpointSources.set(source.conversation_id,{cursor:String(this.cursor),value:JSON.stringify(source)});
+        result={type:'checkpoint',checkpoint:checkpoint(source,String(this.cursor))};break;
+      }
+      case 'session/subscribe': {
+        const captured=this.checkpointSources.get(request.params.target.conversation_id);
+        const source=this.snapshots.get(id)?.conversation_id===request.params.target.conversation_id?this.snapshots.get(id):[...this.nodeSnapshots.values()].find(value=>value.conversation_id===request.params.target.conversation_id);
+        // This fixture has no native replay journal. A direct source rewrite
+        // requires explicit recovery rather than pretending events were applied.
+        if(captured&&captured.cursor===request.params.after_cursor&&captured.value!==JSON.stringify(source))throw new RpcFailure({code:-32000,message:'Native replay unavailable in this fixture',data:{kind:'resync_required'}});
+        result = { type: 'subscribed', target:request.params.target, registration_id:`registration-${++this.registrationSequence}`, after_cursor: request.params.after_cursor }; this.registrations.set(JSON.stringify(request.params.target),result.registration_id); break; }
       // Inspection detail is served per record, so the fixture answers from
       // the details its scenario staged and reports absence otherwise.
-      case 'session/traceDetail': result = { type: 'trace_detail', detail: this.traceDetails.get(request.params.record_id) ?? null }; break;
+      case 'session/traceDetail': result = traceReceipt(this.traceDetails.get(request.params.record_id) ?? null); break;
       case 'session/detach': this.targets.get(socket)!.delete(id); result = { type: 'detached' }; break;
       case 'session/switchNode': {
         this.targets.get(socket)!.delete(id);
@@ -240,7 +307,7 @@ export class Server {
         else throw new Error(`Fixture Goal mutation ${mutation.action} is a model declaration, not a Web control`);
         current.reference = { ...current.reference, revision: String(BigInt(current.reference.revision) + 1n) };
         this.snapshots.set(id, next); this.cursor++;
-        result = { type: 'goal', view: next.goal }; break;
+        result = request.params.control.action==='show'?domainReceipt('goal',[next.goal]):goalReceipt(next.goal); break;
       }
       case 'interaction/respond': case 'interaction/cancel': {
         const next = structuredClone(this.snapshots.get(id)!);
@@ -249,11 +316,11 @@ export class Server {
         result = { type: 'interaction_settled', interaction: request.params.interaction }; break;
       }
       case 'agent/statistics': return { type: 'agent_statistics', metrics: { statistics: { turns: '0', steps: '0', completed_responses: '0', model_requests: '0', requests_with_usage: '0' }, occupancy: null, duration: { settled_ms: '0', active: null } } };
-      case 'agent/conversationCancel': return {type:'agent_conversation_cancelled',accepted:true};
-      case 'agent/conversation': result = { type: 'agent_conversation', conversation: { agent_id: request.params.agent_id, activation_id: 'activation-a', cursor: null, snapshot: { ...snapshot(), transcript: { entries: [] } } } }; break;
-      case 'agent/turns': return { type: 'conversation_turns', page: { cut: { conversation_id: this.snapshots.get(id)?.agents?.find(agent => agent.agent_id === request.params.agent_id)?.child_conversation_id ?? 'conversation-worker', journal: '0', transcript: '0', mutation_revision: '0' }, offset: 0, total: 0, turns: [] } };
-      case 'agent/transcript': return { type: 'transcript_window', window: { cut: { conversation_id: this.snapshots.get(id)?.agents?.find(agent => agent.agent_id === request.params.agent_id)?.child_conversation_id ?? 'conversation-worker', journal: '0', transcript: '0', mutation_revision: '0' }, page: { entries: [] } } };
-      case 'session/models': return { type: 'models', catalog: { models: [] } };
+      case 'agent/observeCancel': return {type:'agent_observe_cancelled',accepted:true};
+      case 'agent/observe': result = childConversation({entries:[]},request.params.agent_id); break;
+      case 'agent/turns': return { type: 'conversation_turns', page: { cut: { conversation_id: this.snapshots.get(id)?.agents?.find(agent => agent.agent_id === request.params.agent_id)?.child_conversation_id ?? 'conversation-worker', journal: '0', transcript: '0', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, offset: 0, total: "0", turns: [] } };
+      case 'agent/transcript': return { type: 'transcript_window', window: { cut: { conversation_id: this.snapshots.get(id)?.agents?.find(agent => agent.agent_id === request.params.agent_id)?.child_conversation_id ?? 'conversation-worker', journal: '0', transcript: '0', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: [] } } };
+      case 'session/models': return domainReceipt('model_catalog.models',({ models: [] }).models??[]);
       default: throw new Error(`Fixture needs an explicit native result for ${request.method}`);
     }
     return result;
@@ -266,13 +333,38 @@ export class Server {
   /** A real read-domain append preserves the currently admitted Attempt identity/phase. */
   durableUpdate(id: string, next: RuntimeClientSnapshot) {
     this.snapshots.set(id,next);this.cursor++;
-    this.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:this.target(id),cursor:String(this.cursor),event:{type:'read_domains_updated',transcript:next.transcript,todos:next.todos}}});
+    this.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:this.target(id),cursor:String(this.cursor),event:{type:'read_domains_updated',transcript:next.transcript,trace:next.trace,todos:next.todos}}});
   }
   async update(id: string, next: RuntimeClientSnapshot) {
     this.snapshots.set(id, next); this.cursor++;
-    this.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: this.target(id), cursor: String(this.cursor), event: { type: 'attempt_started', attempt_id: 'attempt-A' } } });
-    await this.client.refresh(id);
+    // This synthetic native owner publishes the requested finite state as one
+    // complete transition. Do not fabricate an AttemptStarted fact and force
+    // client recovery for every ordinary observation update.
+    this.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: this.target(id), cursor: String(this.cursor), event: { type: 'checkpoint_advanced', transition: 'fixture-native-cut', checkpoint: checkpoint(next, String(this.cursor)) } } });
   }
 }
 
-export function readingWindow(page: import('../../protocol/app-server/v46').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' }, page }; }
+export function readingWindow(page: import('../../protocol/app-server/v48').RuntimeClientTranscriptPage) { return { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page }; }
+
+export const utf8Length = (text: string) => new TextEncoder().encode(text).length;
+export function contentAdvance(input: {attempt_id:string;message_id:string;block_index:number;position?:number;kind:'text'|'reasoning'|'refusal'|'tool_call_arguments';delta:string}, base=0, revision=1, conversation=snapshot().conversation_id): Extract<import('../../protocol/app-server/v48').RuntimeClientEvent,{type:'block_content_advanced'}> {
+ const end=base+utf8Length(input.delta);
+ return {type:'block_content_advanced',position:input.position??input.block_index,attempt_id:input.attempt_id,message_id:input.message_id,block_index:input.block_index,kind:input.kind,base_length:String(base),end_length:String(end),content_revision:String(revision),inline_delta:input.delta,
+   content_ref:{conversation_id:conversation,source:{type:'live_publication_prefix',component:'payload',stream_id:`stream-${input.attempt_id}`,message_id:input.message_id,attempt_id:input.attempt_id,turn_id:`turn-${input.attempt_id}`,publication_request_id:`request-${input.attempt_id}`,block_index:input.block_index},representation:input.kind==='tool_call_arguments'?'raw_json_utf8':'utf8_text',version:1,content_revision:revision,readable_end:end}};
+}
+
+export function settingsReceipt(settings: import('../../protocol/app-server/v48').SessionPersistentState,revision='0'): Extract<import('../../protocol/app-server/v48').MethodResult,{type:'settings'}> {return {type:'settings',projection:{revision,cwd:settings.cwd,inline:settings,reference:null}};}
+
+export function domainReceipt(domain:string,items:unknown[],options:{total?:number;next?:number|null}={}):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'domain_page'}>{const cut=checkpoint(snapshot()).read_cut;return {type:'domain_page',page:{domain,cursor:'0',read_cut:cut,total:String(options.total??items.length),items:items.map((value,index)=>({offset:String(index),identity:String(index),value,content:[],deferred:false})),next_offset:options.next==null?null:String(options.next)}};}
+export function jobReceipt(job:Pick<import('../../protocol/app-server/v48').RuntimeClientJob,'job_id'|'state'> & Partial<Omit<import('../../protocol/app-server/v48').RuntimeClientJob,'job_id'|'state'>>):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'job_outcome'}>{return {type:'job_outcome',job_id:job.job_id,state:job.state};}
+export function goalReceipt(view:import('../../protocol/app-server/v48').RuntimeClientGoalView):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'goal_mutation'}>{return {type:'goal_mutation',reference:view.current?.reference??null};}
+export function compactReceipt(context:Partial<import('../../protocol/app-server/v48').RuntimeClientContextView>):Extract<import('../../protocol/app-server/v48').MethodResult,{type:'context_compacted'}>{return {type:'context_compacted',compaction:context.latest_compaction??null};}
+
+export function readCut(conversation_id=snapshot().conversation_id):import('../../protocol/app-server/v48').ConversationReadCut {return {conversation_id,journal:'0',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};}
+
+export function applicationReceipt(value:import('../../protocol/app-server/v48').ConfigurationApplication):import('../../protocol/app-server/v48').BoundedSessionApplication;
+export function applicationReceipt(value:null|undefined):null;
+export function applicationReceipt(value:import('../../protocol/app-server/v48').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v48').BoundedSessionApplication|null;
+export function applicationReceipt(value:import('../../protocol/app-server/v48').ConfigurationApplication|null|undefined):import('../../protocol/app-server/v48').BoundedSessionApplication|null{return value==null?null:{scope:value.scope,sources:value.sources,version:value.version,inline:value,reference:null};}
+
+export function traceReceipt(detail:TraceDetail|null|undefined){return domainReceipt('trace.records.1.detail',detail==null?[]:[detail]);}

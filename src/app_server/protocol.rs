@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v46 envelope and method vocabulary.
+//! Rust authority for the App Server v48 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 46;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 48;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -21,11 +21,49 @@ pub enum JsonRpcVersion {
 }
 
 /// Integer request IDs use the JavaScript safe-integer range at admission.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(untagged)]
+#[schemars(rename = "AppServerRequestId")]
 pub enum RequestId {
     String(String),
     Integer(i64),
+}
+
+struct IdentityBudget(usize);
+impl std::io::Write for IdentityBudget {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_sub(bytes.len())
+            .ok_or_else(|| std::io::Error::other("request identity exceeds limit"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl RequestId {
+    /// Validate the re-encoded identity, including JSON escaping, before admission.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        // Even unescaped JSON needs two quote bytes. Refuse a giant typed
+        // String before the serializer scans it for escaping.
+        if matches!(self, Self::String(value) if value.len() > 254) {
+            return false;
+        }
+        if matches!(self, Self::Integer(n) if !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(n))
+        {
+            return false;
+        }
+        serde_json::to_writer(IdentityBudget(256), self).is_ok()
+    }
+    /// Native correlation identities have the same encoded String budget.
+    #[must_use]
+    pub fn is_valid_string(value: &str) -> bool {
+        value.len() <= 254 && serde_json::to_writer(IdentityBudget(256), value).is_ok()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -88,16 +126,16 @@ pub enum Method {
     AgentDeliveryRead {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        message_id: MessageId,
-        #[schemars(range(max = 7))]
+        locator: crate::runtime_client::content::CanonicalContentLocator,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
     #[serde(rename = "agent/deliveryLocate")]
     AgentDeliveryLocate {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        message_id: MessageId,
-        #[schemars(range(max = 7))]
+        locator: crate::runtime_client::content::CanonicalContentLocator,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
     #[serde(rename = "artifact/read")]
@@ -114,8 +152,8 @@ pub enum Method {
     #[serde(rename = "delivery/read")]
     DeliveryRead {
         target: AttachmentTarget,
-        message_id: MessageId,
-        #[schemars(range(max = 7))]
+        locator: crate::runtime_client::content::CanonicalContentLocator,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
     /// The verified absolute native path and current leaf identity of one
@@ -125,8 +163,8 @@ pub enum Method {
     #[serde(rename = "delivery/locate")]
     DeliveryLocate {
         target: AttachmentTarget,
-        message_id: MessageId,
-        #[schemars(range(max = 7))]
+        locator: crate::runtime_client::content::CanonicalContentLocator,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
     /// Cancels this connection's own in-flight `delivery/read` or
@@ -160,6 +198,7 @@ pub enum Method {
     Trace {
         target: AttachmentTarget,
         #[serde(default)]
+        #[schemars(length(max = 8))]
         records: Vec<crate::runtime_client::trace::TraceCursor>,
         before: Option<crate::runtime_client::trace::TraceCursor>,
         limit: usize,
@@ -185,7 +224,7 @@ pub enum Method {
     Transcript {
         target: AttachmentTarget,
         at: crate::durable::reading::ConversationWindowAt,
-        #[schemars(range(min = 1, max = 64))]
+        #[schemars(range(min = 1, max = 32))]
         limit: usize,
     },
     #[serde(rename = "session/turns")]
@@ -204,6 +243,12 @@ pub enum Method {
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
+    },
+    /// Choose catalog defaults by finite native ordinals, even when names are deferred.
+    #[serde(rename = "session/selectModel")]
+    ModelSelect {
+        target: AttachmentTarget,
+        choice: crate::model::session::CatalogModelSelection,
     },
     #[serde(rename = "resources/read")]
     Capability { target: AttachmentTarget },
@@ -241,13 +286,13 @@ pub enum Method {
     },
     #[serde(rename = "agent/list")]
     AgentList { target: AttachmentTarget },
-    #[serde(rename = "agent/conversationCancel")]
-    AgentConversationCancel { request_id: RequestId },
-    #[serde(rename = "agent/conversation")]
-    AgentConversation {
+    #[serde(rename = "agent/observeCancel")]
+    AgentObserveCancel { request_id: RequestId },
+    #[serde(rename = "agent/observe")]
+    AgentObserve {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        after: Option<crate::runtime_client::agent_conversation::AgentConversationCursor>,
+        after: Option<crate::runtime_client::agent_observation::AgentObservationCursor>,
     },
     #[serde(rename = "agent/statistics")]
     AgentStatistics {
@@ -279,6 +324,7 @@ pub enum Method {
         before: Option<crate::runtime_client::trace::TraceCursor>,
         limit: usize,
         #[serde(default)]
+        #[schemars(length(max = 8))]
         records: Vec<crate::runtime_client::trace::TraceCursor>,
     },
     #[serde(rename = "agent/traceDetail")]
@@ -299,7 +345,7 @@ pub enum Method {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
         at: crate::durable::reading::ConversationWindowAt,
-        #[schemars(range(min = 1, max = 64))]
+        #[schemars(range(min = 1, max = 32))]
         limit: usize,
     },
     /// All turns across the Agent's activations, in native start order.
@@ -353,6 +399,82 @@ pub enum Method {
         node_id: Option<SessionNodeId>,
         record_id: String,
     },
+    #[serde(rename = "session/tracePage")]
+    SessionTracePage {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        domain: String,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 32))]
+        limit: usize,
+    },
+    #[serde(rename = "session/traceValueRead")]
+    SessionTraceValueRead {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        domain: String,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        item_offset: u64,
+        #[schemars(length(max = 32))]
+        path: Vec<String>,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
+    #[serde(rename = "session/traceContentRead")]
+    SessionTraceContentRead {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        content_ref: crate::runtime_client::content::ContentRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
+    #[serde(rename = "session/historyContentRead")]
+    SessionHistoryContentRead {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::durable::observation::ObservationReadCut,
+        content_ref: crate::runtime_client::content::ContentRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
+    /// Continues a collection from an exact historical native window cut.
+    #[serde(rename = "session/historyPage")]
+    SessionHistoryPage {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::durable::observation::ObservationReadCut,
+        domain: String,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 32))]
+        limit: usize,
+    },
+    /// Reads a selected historical metadata value in bounded byte ranges.
+    #[serde(rename = "session/historyValueRead")]
+    SessionHistoryValueRead {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::durable::observation::ObservationReadCut,
+        domain: String,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        item_offset: u64,
+        #[schemars(length(max = 32))]
+        path: Vec<String>,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
     #[serde(rename = "session/statistics")]
     SessionStatistics {
         session_id: SessionId,
@@ -367,6 +489,20 @@ pub enum Method {
     SessionNode {
         session_id: SessionId,
         node_id: SessionNodeId,
+    },
+    #[serde(rename = "session/nodeOriginHistory")]
+    SessionNodeOriginHistory {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        limit: usize,
+    },
+    #[serde(rename = "session/nodeValueRead")]
+    SessionNodeValueRead {
+        reference: crate::local_runtime::session::observation::SessionNodeValueRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
     },
     #[serde(rename = "session/tree")]
     SessionTree {
@@ -385,7 +521,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
         surface_revision: crate::conversation::SurfaceRevision,
-        boundary: Option<MessageId>,
+        boundary: Option<crate::runtime_client::content::CanonicalContentLocator>,
         side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/branch")]
@@ -393,7 +529,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: SessionNodeId,
         surface_revision: crate::conversation::SurfaceRevision,
-        boundary: MessageId,
+        boundary: crate::runtime_client::content::CanonicalContentLocator,
         side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/deletePreview")]
@@ -410,14 +546,62 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
     },
+    #[serde(rename = "session/editorRead")]
+    SessionEditorRead {
+        locator: super::editor_read::EditorLocator,
+        block_index: u32,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
     #[serde(rename = "session/detach")]
     SessionDetach { target: AttachmentTarget },
-    #[serde(rename = "session/snapshot")]
-    SessionSnapshot {
+    #[serde(rename = "session/attachmentStatus")]
+    SessionAttachmentStatus { session_id: SessionId },
+    #[serde(rename = "conversation/contentRead")]
+    ConversationContentRead {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        content_ref: crate::runtime_client::content::ContentRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
+    #[serde(rename = "conversation/checkpointValueRead")]
+    ConversationCheckpointValueRead {
+        target: AttachmentTarget,
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        domain: String,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        item_offset: u64,
+        #[schemars(length(max = 32))]
+        path: Vec<String>,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
+    #[serde(rename = "conversation/checkpointPage")]
+    ConversationCheckpointPage {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        domain: String,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        limit: usize,
+    },
+    #[serde(rename = "session/checkpoint")]
+    SessionCheckpoint {
         target: AttachmentTarget,
         /// Bounded loaded Trace identities to repair at the same snapshot cut.
         #[serde(default)]
-        #[schemars(length(max = 512))]
+        #[schemars(length(max = 8))]
         trace_records: Vec<crate::runtime_client::trace::TraceCursor>,
     },
     #[serde(rename = "session/subscribe")]
@@ -461,6 +645,25 @@ pub enum Method {
     },
     #[serde(rename = "session/effectiveConfiguration")]
     ConfigurationGet { target: AttachmentTarget },
+    #[serde(rename = "session/effectiveConfigurationValueRead")]
+    ConfigurationValueRead {
+        target: AttachmentTarget,
+        reference: crate::local_runtime::configuration::effective_observation::EffectiveFieldRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
+    #[serde(rename = "session/effectiveConfigurationPage")]
+    ConfigurationPage {
+        target: AttachmentTarget,
+        revision: String,
+        field: crate::local_runtime::configuration::effective_observation::EffectiveFieldName,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 32))]
+        limit: usize,
+    },
     #[serde(rename = "configuration/sourcesRead")]
     SourcesRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
@@ -472,6 +675,25 @@ pub enum Method {
         id: crate::runtime::identity::McpServerId,
         expected_revision: String,
     },
+    #[serde(rename = "configuration/sourcePage")]
+    SourcesPage {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        revision: String,
+        field: crate::local_runtime::configuration::observation::SourceFieldName,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 32))]
+        limit: usize,
+    },
+    #[serde(rename = "configuration/sourceValueRead")]
+    SourcesValueRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: crate::local_runtime::configuration::observation::SourceFieldRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
     #[serde(rename = "configuration/sourceWrite")]
     SourcesWrite {
         target: crate::local_runtime::configuration::settings::SourceTarget,
@@ -480,9 +702,27 @@ pub enum Method {
     },
     #[serde(rename = "session/settings")]
     SettingsRead { session_id: SessionId },
+    #[serde(rename = "session/settingsValueRead")]
+    SettingsValueRead {
+        session_id: SessionId,
+        reference: crate::local_runtime::configuration::observation::SessionSettingsRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        max_bytes: u32,
+    },
     #[serde(rename = "configuration/reconcile")]
     ConfigurationReconcile {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+    },
+    #[serde(rename = "session/configurationValueRead")]
+    SessionApplicationValueRead {
+        session_id: SessionId,
+        reference: crate::local_runtime::configuration::observation::SessionApplicationRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1_u32, max = 65_536_u32))]
+        max_bytes: u32,
     },
     #[serde(rename = "session/configuration")]
     SessionConfiguration { session_id: SessionId },
@@ -492,6 +732,112 @@ pub enum Method {
         candidate: crate::local_runtime::configuration::application::ApplicationIdentity,
         expected_binding: u64,
     },
+}
+
+impl Method {
+    /// A lost successful response can hide an execution or connection-state commit.
+    pub(crate) const fn may_commit(&self) -> bool {
+        match self {
+            Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
+            Self::AgentArtifactRead { .. }
+            | Self::AgentDeliveryRead { .. }
+            | Self::AgentDeliveryLocate { .. }
+            | Self::ArtifactRead { .. }
+            | Self::DeliveryRead { .. }
+            | Self::DeliveryLocate { .. }
+            | Self::SessionUploadStatus { .. }
+            | Self::Trace { .. }
+            | Self::TraceDetail { .. }
+            | Self::TraceLocateTool { .. }
+            | Self::Transcript { .. }
+            | Self::ConversationTurns { .. }
+            | Self::ModelGet { .. }
+            | Self::ModelCatalog { .. }
+            | Self::Capability { .. }
+            | Self::JobStatus { .. }
+            | Self::JobList { .. }
+            | Self::JobWait { .. }
+            | Self::AgentStatus { .. }
+            | Self::AgentList { .. }
+            | Self::AgentObserve { .. }
+            | Self::AgentStatistics { .. }
+            | Self::AgentWait { .. }
+            | Self::AgentTrace { .. }
+            | Self::AgentTraceDetail { .. }
+            | Self::AgentTraceLocateTool { .. }
+            | Self::AgentTranscript { .. }
+            | Self::AgentTurns { .. }
+            | Self::ServerInfo { .. }
+            | Self::ServerDiagnostics { .. }
+            | Self::SessionList { .. }
+            | Self::SessionRead { .. }
+            | Self::SessionHistory { .. }
+            | Self::SessionTraceHistory { .. }
+            | Self::SessionTraceHistoryDetail { .. }
+            | Self::SessionTracePage { .. }
+            | Self::SessionTraceValueRead { .. }
+            | Self::SessionTraceContentRead { .. }
+            | Self::SessionStatistics { .. }
+            | Self::SessionSummary { .. }
+            | Self::SessionNode { .. }
+            | Self::SessionNodeValueRead { .. }
+            | Self::SessionNodeOriginHistory { .. }
+            | Self::SessionHistoryContentRead { .. }
+            | Self::SessionHistoryPage { .. }
+            | Self::SessionHistoryValueRead { .. }
+            | Self::SessionTree { .. }
+            | Self::SessionBoundaries { .. }
+            | Self::SessionDeletePreview { .. }
+            | Self::SessionCheckpoint { .. }
+            | Self::ConversationContentRead { .. }
+            | Self::ConversationCheckpointPage { .. }
+            | Self::ConversationCheckpointValueRead { .. }
+            | Self::SessionAttachmentStatus { .. }
+            | Self::SessionEditorRead { .. }
+            | Self::ConfigurationGet { .. }
+            | Self::ConfigurationValueRead { .. }
+            | Self::ConfigurationPage { .. }
+            | Self::SourcesRead { .. }
+            | Self::SourcesPage { .. }
+            | Self::SourcesValueRead { .. }
+            | Self::McpProbe { .. }
+            | Self::SettingsRead { .. }
+            | Self::SettingsValueRead { .. }
+            | Self::SessionConfiguration { .. }
+            | Self::SessionApplicationValueRead { .. } => false,
+            Self::DeliveryCancel { .. }
+            | Self::SessionUploadPrepare { .. }
+            | Self::SessionSwitchNode { .. }
+            | Self::ModelSet { .. }
+            | Self::ModelSelect { .. }
+            | Self::CompactContext { .. }
+            | Self::JobCancel { .. }
+            | Self::AgentObserveCancel { .. }
+            | Self::AgentSendMessage { .. }
+            | Self::AgentInterrupt { .. }
+            | Self::Initialize(..)
+            | Self::SessionExportPrepare { .. }
+            | Self::SessionCreate { .. }
+            | Self::SessionName { .. }
+            | Self::SessionFork { .. }
+            | Self::SessionBranch { .. }
+            | Self::SessionDelete { .. }
+            | Self::SessionRecoverDeletion { .. }
+            | Self::SessionAttach { .. }
+            | Self::SessionDetach { .. }
+            | Self::SessionSubscribe { .. }
+            | Self::TurnStart { .. }
+            | Self::TurnSteer { .. }
+            | Self::InboundEdit { .. }
+            | Self::InboundRemove { .. }
+            | Self::TurnCancel { .. }
+            | Self::InteractionRespond { .. }
+            | Self::InteractionCancel { .. }
+            | Self::SourcesWrite { .. }
+            | Self::ConfigurationReconcile { .. }
+            | Self::AdoptConfiguration { .. } => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -544,6 +890,18 @@ pub enum ErrorData {
         subagent_id: crate::runtime::identity::SubagentId,
     },
     RequestCapacity,
+    DuplicateRequestId,
+    ObservationUnavailable {
+        diagnostic: String,
+    },
+    ContentSourceUnavailable,
+    InvalidRange,
+    ReadCutExpired,
+    ObservationCapacityExceeded,
+    ObservationInUse,
+    ResponseTooLarge,
+    ResponseSerializationFailed,
+    OutcomeUnknown,
     ResidencyCapacity,
     AttachmentCapacity,
     ServerDraining,
@@ -579,6 +937,7 @@ pub enum ErrorData {
     /// The client cancelled this delivery request before publication.
     DeliveryCancelled,
     ObservationCancelled,
+    SubscriptionSuperseded,
     StaleAttachment,
     StaleRuntime,
     ControllerInUse,
@@ -657,27 +1016,11 @@ pub enum MethodResult {
     Diagnostics {
         snapshot: crate::app_server::host::ServerDiagnostics,
     },
-    Model {
-        model: Box<crate::model::session::SessionModelView>,
-    },
-    Models {
-        catalog: crate::model::catalog::ModelCatalogView,
-    },
-
-    Capabilities {
-        capabilities: crate::runtime_client::snapshot::CapabilityView,
-    },
-    Context {
-        context: crate::runtime_client::snapshot::RuntimeClientContextView,
+    ContextCompacted {
+        compaction: Option<crate::runtime_client::snapshot::RuntimeClientCompactionView>,
     },
     Trace {
         page: crate::runtime_client::trace::TracePage,
-    },
-    TraceDetail {
-        /// Absent when the identity names no record at the read cut. Boxed
-        /// because inspection detail is by far the largest result: keeping it
-        /// off the shared enum keeps every other response cheap to move.
-        detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
     },
     TraceToolLocation {
         location: Option<crate::runtime_client::trace::TraceToolLocation>,
@@ -688,8 +1031,9 @@ pub enum MethodResult {
     },
     SessionStatistics {
         conversation_id: ConversationId,
+        read_cut: crate::runtime_client::checkpoint::CheckpointReadCut,
         statistics: crate::runtime_client::response::ConversationStatistics,
-        occupancy: Option<crate::context::occupancy::ContextOccupancy>,
+        occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
     },
     SessionTraceHistory {
         conversation_id: ConversationId,
@@ -697,45 +1041,31 @@ pub enum MethodResult {
     },
     SessionTraceHistoryDetail {
         conversation_id: ConversationId,
-        detail: Option<Box<crate::runtime_client::trace::TraceDetail>>,
+        page: crate::runtime_client::checkpoint::CheckpointPage,
     },
     TranscriptWindow {
         window: crate::runtime_client::snapshot::ConversationWindow,
     },
     ConversationTurns {
-        page: crate::durable::reading::ConversationTurnPage,
+        page: crate::runtime_client::turn::ObservedTurnPage,
     },
-    Goal {
-        view: crate::goal::GoalView,
+    GoalMutation {
+        reference: Option<crate::goal::GoalRef>,
     },
-    Job {
-        job: crate::runtime_client::snapshot::RuntimeClientJob,
+    JobCancellationAccepted { job_id: crate::runtime::identity::ToolExecutionId },
+    AgentInterruptionAccepted { agent_id: crate::runtime::identity::AgentId, activation_id: Option<crate::runtime::identity::SubagentId> },
+    JobOutcome {
+        job_id: crate::runtime::identity::ToolExecutionId,
+        state: crate::tools::background::BackgroundLifecycle,
     },
-    Jobs {
-        jobs: Vec<crate::runtime_client::snapshot::RuntimeClientJob>,
-        returned: usize,
-        matched: usize,
-        limit: usize,
-        truncated: bool,
-    },
-    Agent {
-        agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
-    },
-    AgentConversationCancelled {
+    AgentObserveCancelled {
         accepted: bool,
     },
-    AgentConversation {
-        conversation: crate::runtime_client::agent_conversation::AgentConversation,
+    AgentObserve {
+        observation: crate::runtime_client::agent_observation::AgentObservation,
     },
     AgentStatistics {
         metrics: crate::runtime_client::agent_statistics::AgentStatistics,
-    },
-    Agents {
-        agents: Vec<crate::runtime_client::snapshot::RuntimeClientAgent>,
-        returned: usize,
-        matched: usize,
-        limit: usize,
-        truncated: bool,
     },
     AgentMessage {
         agent_id: crate::runtime::identity::AgentId,
@@ -746,7 +1076,6 @@ pub enum MethodResult {
         agent_id: crate::runtime::identity::AgentId,
         activation_id: Option<crate::runtime::identity::SubagentId>,
         outcome: Option<crate::runtime::subagent::SubagentState>,
-        agent: Box<crate::runtime_client::snapshot::RuntimeClientAgent>,
     },
     Initialized {
         /// Opaque process-owner identity, stable across transport reconnects. Not permission.
@@ -760,9 +1089,12 @@ pub enum MethodResult {
     Session {
         session: crate::local_runtime::session::SessionSnapshot,
     },
+    EditorPage {
+        page: super::editor_read::EditorPage,
+    },
     SessionTransition {
         session: crate::local_runtime::session::SessionSnapshot,
-        editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
+        editor: Option<super::editor_read::EditorLocator>,
         durability_diagnostic: Option<String>,
     },
     SessionSummary {
@@ -773,35 +1105,51 @@ pub enum MethodResult {
         next_offset: Option<usize>,
     },
     Node {
-        node: crate::local_runtime::session::SessionNode,
+        node: crate::local_runtime::session::observation::SessionNodeObservation,
     },
+    NodeValueChunk {chunk:crate::local_runtime::session::observation::SessionNodeValueChunk},
     Tree {
-        nodes: Vec<crate::local_runtime::session::SessionNode>,
+        nodes: Vec<crate::local_runtime::session::observation::SessionNodeObservation>,
         next_offset: Option<usize>,
     },
     Boundaries {
         /// The exact committed head the page was selected against.
         surface_revision: crate::conversation::SurfaceRevision,
-        boundaries: Vec<crate::local_runtime::session::SessionUserMessageBoundary>,
+        boundaries: Vec<crate::local_runtime::session::observation::SessionUserMessageBoundaryObservation>,
         next_offset: Option<usize>,
     },
     Deletion {
         result: crate::app_server::session_deletion::SessionDeletionResult,
     },
     Attached {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        configuration:
-            Option<crate::local_runtime::configuration::application::ConfigurationApplication>,
         target: AttachmentTarget,
-        snapshot: Box<crate::runtime_client::snapshot::RuntimeClientSnapshot>,
-        cursor: RuntimeClientCursor,
+        configuration_revision: Option<u64>,
+        attachment_kind: AttachmentKind,
+        observation_source: ObservationSource,
     },
-    Snapshot {
-        snapshot: Box<crate::runtime_client::snapshot::RuntimeClientSnapshot>,
-        cursor: RuntimeClientCursor,
+    AttachmentStatus {
+        target: Option<AttachmentTarget>,
+        configuration_revision: Option<u64>,
+    },
+    ContentChunk {
+        chunk: crate::runtime_client::content::ContentChunk,
+    },
+    DomainPage {
+        page: crate::runtime_client::checkpoint::CheckpointPage,
+    },
+    CheckpointValueChunk {
+        chunk: crate::runtime_client::checkpoint::CheckpointValueChunk,
+    },
+    CheckpointPage {
+        page: crate::runtime_client::checkpoint::CheckpointPage,
+    },
+    Checkpoint {
+        checkpoint: Box<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>,
     },
     Detached {},
     Subscribed {
+        registration_id: String,
+        target: AttachmentTarget,
         after_cursor: RuntimeClientCursor,
     },
     InboundAccepted {
@@ -814,27 +1162,43 @@ pub enum MethodResult {
     InteractionSettled {
         interaction: InteractionRef,
     },
-    ConfigurationApplication {
-        application: crate::local_runtime::configuration::application::ConfigurationApplication,
+    ConfigurationValueChunk {chunk:crate::local_runtime::configuration::effective_observation::EffectiveValueChunk},
+    ConfigurationPage {page:crate::local_runtime::configuration::effective_observation::EffectivePage},
+    ConfigurationReceipt {
+        scope: String,
+        version: u64,
+    },
+    SourcesWritten {
+        revision: String,
+        configuration_revision: Option<u64>,
+    },
+    ModelSet {
+        settings_revision: u64,
     },
     EffectiveConfiguration {
-        projection: Box<crate::local_runtime::configuration::settings::EffectiveConfiguration>,
+        projection: Box<crate::local_runtime::configuration::effective_observation::BoundedEffectiveConfiguration>,
     },
     McpProbe {
         result: crate::local_runtime::mcp_probe::McpProbeResult,
     },
+    SourcePage {
+        page: crate::local_runtime::configuration::observation::SourceFieldPage,
+    },
+    SourceValueChunk {
+        chunk: crate::local_runtime::configuration::observation::SourceValueChunk,
+    },
     SourceSettings {
-        projection: Box<crate::local_runtime::configuration::settings::SourceSettings>,
+        projection: Box<crate::local_runtime::configuration::observation::BoundedSourceSettings>,
     },
     SessionConfiguration {
-        application:
-            Option<crate::local_runtime::configuration::application::ConfigurationApplication>,
+        projection: Option<crate::local_runtime::configuration::observation::BoundedSessionApplication>,
+    },
+    SessionApplicationValueChunk { chunk: crate::local_runtime::configuration::observation::SessionApplicationChunk },
+    SettingsValueChunk {
+        chunk: crate::local_runtime::configuration::observation::SessionSettingsChunk,
     },
     Settings {
-        /// Exact durable Session-intent revision for subsequent CAS controls.
-        /// Loaded configuration has its own immutable generation.
-        revision: u64,
-        settings: SessionPersistentState,
+        projection: crate::local_runtime::configuration::observation::BoundedSessionSettings,
     },
 }
 
@@ -885,17 +1249,52 @@ pub enum NotificationMethod {
     },
     #[serde(rename = "configuration/changed")]
     ConfigurationChanged {
-        application: crate::local_runtime::configuration::application::ConfigurationApplication,
+        application: crate::local_runtime::configuration::observation::BoundedSessionApplication,
+    },
+    /// The latest automatic `rustx.toml` repair observation of one source
+    /// changed (Issue #464).
+    ///
+    /// Source-scoped: it names a `SourceTarget`, never a Session, attachment
+    /// or application scope, and it says nothing about runtime application,
+    /// which `configuration/changed` reports separately. A connection observes
+    /// the User source and each Workspace source it addressed, the least
+    /// recently addressed of its 64 Workspaces forgotten first. Each admission
+    /// of a source — including addressing a forgotten one again — announces
+    /// its current level once, then every change of it, and a delivered
+    /// receipt the finite ledger later forgets is followed by its absence
+    /// once. `receipt: null` says the finite process-local ledger retains no
+    /// receipt for the source — never recorded, withdrawn, or forgotten —
+    /// never that the document is valid, which only a source read reports.
+    /// It is a state, not a repair, and presents nothing. Delivery is
+    /// level-triggered: after a gap, the authoritative
+    /// `configuration/sourcesRead` carries the same receipts. A notice is not
+    /// history: one receipt id is one repair occurrence, and a later notice
+    /// may carry it again at a higher `sequence`.
+    #[serde(rename = "configuration/sourceRepairChanged")]
+    SourceRepairChanged {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        receipt: Option<crate::local_runtime::configuration::repair::ConfigRepairReceipt>,
+        /// The native repair-ledger sequence this level is current at. Within
+        /// one App Server authority it orders this observation against every
+        /// other observation of the same source, including the
+        /// `repair_sequence` of a `configuration/sourcesRead`: the higher one
+        /// is the newer, and two at one sequence agree.
+        sequence: u64,
     },
     #[serde(rename = "session/event")]
     Event {
+        registration_id: String,
         target: AttachmentTarget,
         cursor: RuntimeClientCursor,
         event: Box<crate::runtime_client::event::RuntimeClientEvent>,
     },
     #[serde(rename = "session/resyncRequired")]
     ResyncRequired {
+        registration_id: String,
         target: AttachmentTarget,
+        reason: ResyncReason,
+        checkpoint_required: bool,
+        failed_at_cursor: Option<RuntimeClientCursor>,
         after_cursor: RuntimeClientCursor,
         earliest_serviceable: RuntimeClientCursor,
     },
@@ -942,6 +1341,21 @@ mod lifecycle_protocol_tests {
     use super::Method;
 
     #[test]
+    fn t01_request_id_budget_counts_encoded_utf8_and_escaping() {
+        use super::RequestId;
+        for text in ["a".repeat(254), "\n".repeat(127), "é".repeat(127)] {
+            assert!(RequestId::String(text.clone()).is_valid());
+            assert!(!RequestId::String(format!("{text}a")).is_valid());
+        }
+        for integer in [-9_007_199_254_740_991, 9_007_199_254_740_991] {
+            assert!(RequestId::Integer(integer).is_valid());
+        }
+        for integer in [-9_007_199_254_740_992, 9_007_199_254_740_992] {
+            assert!(!RequestId::Integer(integer).is_valid());
+        }
+    }
+
+    #[test]
     fn retired_controls_are_not_wire_aliases() {
         for method in [
             "background/status",
@@ -961,4 +1375,22 @@ mod lifecycle_protocol_tests {
             );
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKind {
+    Controller,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationSource {
+    Live,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResyncReason {
+    ReplayUnavailable,
+    RecordTooLarge,
 }

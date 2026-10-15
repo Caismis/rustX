@@ -24,8 +24,18 @@ pub struct ConversationReadCut {
     pub conversation_id: ConversationId,
     pub journal: u64,
     pub transcript: u64,
-    /// Advances on every edit/removal of a mutable pending transcript body.
+    /// Advances on every edit/removal/adoption of a mutable pending transcript body.
     pub mutation_revision: u64,
+    /// Immutable canonical Ledger frontier at this same native transaction cut.
+    pub ledger_through: u64,
+    /// Native model-context structure revision, separate from canonical history.
+    pub surface_revision: crate::conversation::SurfaceRevision,
+    /// Actual retained transcript count, distinct from its positional frontier.
+    pub transcript_total: u64,
+    /// Native acceptance frontier, including pending Context without transcript positions.
+    pub pending_through: u64,
+    /// Exact pending count at this cut, separate from transcript collection size.
+    pub pending_total: u64,
 }
 
 impl ConversationReadCut {
@@ -35,6 +45,10 @@ impl ConversationReadCut {
         self.conversation_id == current.conversation_id
             && self.journal <= current.journal
             && self.transcript <= current.transcript
+            && self.ledger_through <= current.ledger_through
+            && self.surface_revision <= current.surface_revision
+            && self.transcript_total <= current.transcript_total
+            && self.pending_through <= current.pending_through
             && self.mutation_revision == current.mutation_revision
     }
 }
@@ -81,6 +95,17 @@ pub enum ConversationWindowAt {
     Turn {
         id: ConversationTurnId,
         cut: ConversationReadCut,
+    },
+    /// Original source-advertised outline order under this exact native cut.
+    TurnOrdinal {
+        #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+        ordinal: u64,
+        cut: ConversationReadCut,
+    },
+    /// Finite immutable canonical locator; absent cut captures native facts.
+    Canonical {
+        locator: crate::runtime_client::content::CanonicalContentLocator,
+        cut: Option<ConversationReadCut>,
     },
     /// Exact canonical message position; absent cut captures current native facts.
     Message {
@@ -194,6 +219,7 @@ impl From<InheritedTurnOutcome> for TurnProcessOutcome {
 /// may retain a newer outcome; later source activity cannot change captured (R, C).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineageReadCut {
+    pub raw_tool_arguments: Vec<super::inbox::CanonicalRawToolArguments>,
     pub read_cut: ConversationReadCut,
     pub conversation_id: ConversationId,
     pub surface_revision: crate::conversation::SurfaceRevision,

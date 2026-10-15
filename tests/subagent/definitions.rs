@@ -784,6 +784,8 @@ fn the_committed_identity_survives_a_durable_round_trip() {
 
     let subagent_id = SubagentId::for_conversation(&conversation_id, 1);
     let committed = RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(format!("subagent-committed-event:{subagent_id}")),
         sequence: 0,
@@ -873,6 +875,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         started_at: chrono::Utc::now(),
     };
     let view = RuntimeClientAgent {
+        deferred_fields: Vec::new(),
         title: "Explore task".to_owned(),
         activation_id: snapshot.subagent_id.clone(),
         agent_id: snapshot.child_agent_id.clone(),

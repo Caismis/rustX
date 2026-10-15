@@ -632,7 +632,7 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
     let mut workflows = WorkflowCatalog::new([program]).unwrap();
     workflows.admit(
         &rustx::capabilities::AvailableToolCatalog::default(),
-        &std::collections::BTreeMap::new(),
+        &rustx::capabilities::CapabilityAvailability::new(),
         &rustx::skills::SkillSnapshot::new(Vec::new()),
         &rustx::runtime::subagent::AgentCatalog::empty(),
         &std::collections::BTreeMap::new(),

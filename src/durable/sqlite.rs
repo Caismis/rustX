@@ -17,6 +17,9 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::collections::VecDeque;
 
+#[cfg(test)]
+pub(crate) use observation_request::{RequestIndexProfile, SourceIndexProfile};
+
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -320,8 +323,10 @@ fn count_conversation_store_open() {
 /// Version 56 combines native child history/provenance with frozen shared
 /// Session workspace ownership and removes Candidate/worktree lifecycle facts.
 /// Version 57 requires the immutable inherited transcript watermark in bootstrap identity.
+/// Version 58 adds transaction-owned content byte segments and exact versioned
+/// publication frontier evidence for bounded observation range reads.
 /// Earlier development stores are rejected without migration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 57;
+pub const SQLITE_SCHEMA_VERSION: i64 = 58;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -370,6 +375,14 @@ pub(crate) enum RequestStartFaultOperation {
     AfterContributionHeadUpsert,
 }
 
+#[cfg(test)]
+pub(crate) struct HiddenContextAuditFixture {
+    pub store: Arc<SqliteConversationStore>,
+    pub before: crate::durable::observation::ObservationReadCut,
+    pub context: TranscriptCommitReceipt,
+    pub audit: crate::durable::inbox::PublicationAuditReceipt,
+}
+
 /// The native durable conversation authority for one conversation.
 pub struct SqliteConversationStore {
     conversation_id: ConversationId,
@@ -404,6 +417,8 @@ pub struct SqliteConversationStore {
     pub(crate) terminal_event_attempts: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) request_snapshot_page_reads: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) request_snapshot_body_reads: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) contribution_head_lookup_reads: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -541,17 +556,21 @@ impl Drop for StoreGuard<'_> {
         if let Some((observer, previous)) = subscription.as_mut() {
             match journal_prefix(&self.connection) {
                 Ok(through) if through > *previous => {
-                    let events = self.connection.prepare("SELECT event_json FROM events WHERE sequence > ?1 AND sequence <= ?2 ORDER BY sequence")
-                        .and_then(|mut query| query.query_map(rusqlite::params![*previous, through], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>())
-                        .ok().and_then(|rows| rows.into_iter().map(|row| serde_json::from_str::<RuntimeEventEnvelope>(&row).ok()).collect());
                     *previous = through;
-                    observer.committed(events);
+                    observer.committed(Some(through));
                 }
                 Err(_) => observer.committed(None),
                 _ => {}
             }
         }
     }
+}
+
+pub(crate) fn journal_attempt_source(
+    sequence: u64,
+    attempt: &AttemptId,
+) -> Result<crate::runtime_client::response::AttemptIdentitySource, ConversationStoreError> {
+    observation_identity::journal(sequence, attempt)
 }
 
 impl SqliteConversationStore {
@@ -735,7 +754,7 @@ impl SqliteConversationStore {
         if has_table(&connection, "rustx_store")? {
             validate_existing_schema(&connection)?;
         } else {
-            create_schema(&connection)?;
+            create_schema(&mut connection)?;
         }
         bind_identity(&mut connection, &conversation_id)?;
         Ok(Self::from_validated_connection(conversation_id, connection))
@@ -785,6 +804,8 @@ impl SqliteConversationStore {
             terminal_event_attempts: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             request_snapshot_page_reads: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            request_snapshot_body_reads: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             contribution_head_lookup_reads: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -841,6 +862,21 @@ impl SqliteConversationStore {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn trace_read_work() -> (usize, usize) {
+        observation_trace::read_work()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn content_read_work() -> (usize, usize) {
+        content::last_read_work()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn profile_request_index() -> observation_request::RequestIndexProfileGuard {
+        observation_request::RequestIndexProfileGuard::start()
+    }
+
     /// Fails the next `count` publication staging commits.
     #[cfg(test)]
     pub(crate) fn arm_fail_publication_frames_times(&self, count: usize) {
@@ -871,6 +907,25 @@ impl SqliteConversationStore {
     pub(crate) fn arm_fail_accept_times(&self, count: usize) {
         self.fail_accept_remaining
             .fetch_add(count, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hidden_context_audit_fixture() -> HiddenContextAuditFixture {
+        tests::hidden_context_audit_fixture()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn canonical_scalar_sources_match(
+        &self,
+        expected: &crate::durable::inbox::CanonicalObservationBatch,
+    ) -> Result<bool, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, &expected.read_cut)?;
+        let actual = complete_canonical_scalars(&connection, &expected.read_cut)?;
+        Ok(actual.human_activity_at == expected.human_activity_at
+            && actual.has_opening_user == expected.has_opening_user
+            && actual.opening_preview == expected.opening_preview
+            && actual.todos == expected.todos)
     }
 
     #[cfg(test)]
@@ -1044,20 +1099,7 @@ impl SqliteConversationStore {
         }
         validate_surface_revision(transaction, snapshot.surface_revision)?;
         let ids = reconstruct_surface_tx(transaction, snapshot.surface_revision)?;
-        for id in ids {
-            let _: MessageBlock = load_message_tx(transaction, &id)?;
-        }
-        let json = encode(snapshot, "request snapshot")?;
-        transaction
-            .execute(
-                "INSERT INTO request_snapshots(request_id,surface_revision,snapshot_json,started_sequence) VALUES(?1,?2,?3,NULL)",
-                params![
-                    snapshot.request_id.as_str(),
-                    seq_to_i64(snapshot.surface_revision.get())?,
-                    json
-                ],
-            )
-            .map_err(|error| storage(format!("insert request snapshot: {error}")))?;
+        insert_request_snapshot_source_tx(transaction, snapshot, &ids)?;
         #[cfg(test)]
         if self.consume_request_start_fault(RequestStartFaultOperation::AfterSnapshotInsert) {
             return Err(storage(
@@ -1065,6 +1107,8 @@ impl SqliteConversationStore {
             ));
         }
         let event = RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(""),
             sequence: 0,
@@ -1083,7 +1127,7 @@ impl SqliteConversationStore {
                 "fault injected: request-start event journal commit",
             ));
         }
-        let persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
+        let persisted = persist_event_tx_deferred(transaction, &self.conversation_id, event)?;
         #[cfg(test)]
         if self.consume_request_start_fault(RequestStartFaultOperation::AfterEventInsert) {
             return Err(storage("fault injected: after request-start event insert"));
@@ -1097,6 +1141,7 @@ impl SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("bind request start sequence: {error}")))?;
+        index_request_read_layouts(transaction, snapshot, &ids, context, &persisted.event);
         // Todo progress is a conversation-owned semantic coordinate, not a
         // Surface append count. Advance it only for the first request of a
         // logical primary step and do so after this start's request context
@@ -1115,11 +1160,14 @@ impl SqliteConversationStore {
             Vec::new()
         };
         consume_pending_carryover_tx(transaction, snapshot)?;
-        Ok(ModelTurnStartCommit {
-            started: persisted.event,
+        request_start_observation_tx(
+            transaction,
+            &self.conversation_id,
+            context,
+            snapshot,
+            persisted.event,
             contribution_emissions,
-            disposition: ModelTurnStartCommitDisposition::NewlyCommitted,
-        })
+        )
     }
 
     fn insert_contribution_emissions_tx(
@@ -1133,6 +1181,8 @@ impl SqliteConversationStore {
         for contribution in &snapshot.contributions {
             for emission in &contribution.emissions {
                 let emission_event = RuntimeEventEnvelope {
+                    tool_occurrence: None,
+                    observation: None,
                     schema_version: EVENT_SCHEMA_VERSION,
                     event_id: contribution_emission_event_id(
                         &snapshot.request_id,
@@ -1153,7 +1203,7 @@ impl SqliteConversationStore {
                     },
                 };
                 let persisted =
-                    persist_event_tx(transaction, &self.conversation_id, emission_event)?;
+                    persist_event_tx_deferred(transaction, &self.conversation_id, emission_event)?;
                 #[cfg(test)]
                 if self.consume_request_start_fault(
                     RequestStartFaultOperation::AfterContributionEventInsert,
@@ -1300,17 +1350,23 @@ impl SqliteConversationStore {
         {
             probe();
         }
-        let Some(mut item) = load_pending_until(&transaction, expected.sequence)?
-            .into_iter()
-            .find(|item| {
-                item.sequence == expected.sequence && item.message_id == expected.message_id
-            })
-        else {
+        let revision: Option<u64> = transaction
+            .query_row(
+                "SELECT revision FROM pending_inbound WHERE sequence=?1",
+                [expected.sequence.get()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        let Some(revision) = revision else {
             return Ok(Outcome::NotPending);
         };
-        if item.revision != expected.revision {
+        if revision != expected.revision {
             return Ok(Outcome::Conflict);
         }
+        let Some(mut item) = load_pending_exact(&transaction, expected.sequence)? else {
+            return Ok(Outcome::NotPending);
+        };
         // Producer-correlated runtime work is not user-authored queue content.
         if item.message.source != UserSource::Human
             || item.message.kind != InboundKind::Message
@@ -1324,45 +1380,1195 @@ impl SqliteConversationStore {
             {
                 return Ok(Outcome::InvalidItem);
             }
-            item.message.content =
-                vec![UserContentBlock::Text(crate::message::content::TextBlock {
-                    text: text.to_owned(),
-                })];
-            let revision = item
-                .revision
-                .checked_add(1)
-                .filter(|value| i64::try_from(*value).is_ok())
-                .ok_or(ConversationStoreError::SequenceExhausted)?;
-            transaction
-                .execute(
-                    "UPDATE pending_inbound SET message_json=?1, revision=?2 WHERE sequence=?3",
-                    params![
-                        encode(&item.message, "pending edit")?,
-                        revision,
-                        seq_to_i64(expected.sequence.get())?
-                    ],
-                )
-                .map_err(|error| storage(format!("pending edit: {error}")))?;
+            rewrite_pending_body(&transaction, &mut item, expected, text)?;
         } else {
+            let _ = optional_display_layout(&transaction, || {
+                content::clear_pending(&transaction, &item.sequence.get().to_string())
+            });
             transaction
                 .execute(
                     "DELETE FROM pending_inbound WHERE sequence=?1",
                     [seq_to_i64(expected.sequence.get())?],
                 )
                 .map_err(|error| storage(format!("pending remove: {error}")))?;
+            let _ = optional_display_layout(&transaction, || {
+                transaction.execute("DELETE FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[item.message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+                Ok(())
+            });
             transaction.execute("DELETE FROM transcript_order WHERE reference_kind='message' AND reference_id=?1", [item.message_id.as_str()])
                 .map_err(|error| storage(format!("pending transcript remove: {error}")))?;
+            transaction.execute("UPDATE rustx_store SET retained_transcript_count=retained_transcript_count-1,pending_observation_count=pending_observation_count-1 WHERE id=1", []).map_err(|error|storage(error.to_string()))?;
         }
         transaction.execute("UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1", [])
             .map_err(|error| storage(format!("reading mutation: {error}")))?;
+        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
+        let pending_observation = observation_receipt::pending(
+            &transaction,
+            &self.conversation_id,
+            text.map(|_| expected.sequence.get()),
+            text.is_none()
+                .then_some((expected.sequence.get(), item.transcript_cursor)),
+            None,
+        );
         transaction
             .commit()
             .map_err(|error| storage(format!("pending mutation commit: {error}")))?;
-        Ok(Outcome::Applied)
+        Ok(Outcome::Applied {
+            read_cut,
+            pending_observation,
+        })
     }
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn observation_trace_facts(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        query: &crate::durable::observation::TraceFactQuery,
+    ) -> Result<Vec<crate::durable::observation::TraceFactHeader>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_trace::facts(&transaction, cut, query)
+    }
+    fn observation_request_accepted_at(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        source_sequence: u64,
+    ) -> Result<
+        Option<crate::runtime_client::content::CanonicalContentLocator>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_request::validate_start(&transaction, source_sequence, cut.read.journal)?;
+        let position:Option<u64>=transaction.query_row("SELECT observation_accepted_ledger FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.flatten();
+        Ok(position
+            .filter(|position| *position <= cut.ledger_through)
+            .map(|position| {
+                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                    position,
+                }
+            }))
+    }
+    fn observation_request_summary_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+    ) -> Result<Option<crate::durable::observation::RequestReadSummary>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation_trace::summary(&connection, source_sequence, through)
+    }
+    fn observation_request_predecessor_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+    ) -> Result<
+        Option<crate::durable::observation::TraceRequestPredecessorHeader>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        observation_trace::predecessor(&connection, source_sequence, through)
+    }
+    fn observation_request_retry_failure_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+    ) -> Result<Option<crate::model::error::ModelErrorKind>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_trace::retry_failure(&connection, source_sequence, through)
+    }
+    fn observation_trace_canonical_summary(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        position: u64,
+    ) -> Result<crate::durable::observation::TraceCanonicalSummary, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_trace::canonical(&transaction, cut, position)
+    }
+    fn observation_trace_tool_result(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        occurrence: &crate::events::types::ToolObservationOccurrence,
+    ) -> Result<Option<crate::durable::observation::TraceCanonicalSummary>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_trace::tool_result(&transaction, cut, occurrence)
+    }
+    fn observation_trace_tool_proposal(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        occurrence: &crate::events::types::ToolObservationOccurrence,
+    ) -> Result<crate::durable::observation::TraceToolProposalSummary, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_trace::proposal(&transaction, cut, occurrence)
+    }
+    fn observation_trace_tool_definition(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        occurrence: &crate::events::types::ToolObservationOccurrence,
+    ) -> Result<Option<crate::runtime_client::trace::TraceFieldSource>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_trace::tool_definition(&transaction, cut, occurrence)
+    }
+    fn observation_trace_adoption(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        source_sequence: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::TraceAdoptionPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_trace::adoption_page(&transaction, cut, source_sequence, offset, limit)
+    }
+    fn observation_request_context_at(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        source_sequence: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::TraceRequestContextPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        observation_trace::context(&transaction, cut, source_sequence, offset, limit)
+    }
+    fn request_summary_header_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+    ) -> Result<crate::durable::observation::RequestObservationHeader, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::header_at(&connection, source_sequence, through)
+    }
+    fn request_field_header_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+        path: &[String],
+    ) -> Result<crate::durable::observation::RequestObservationField, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::field_header_at(&connection, source_sequence, through, path)
+    }
+    fn request_field_page_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::RequestObservationPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::page_at(&connection, source_sequence, through, path, offset, limit)
+    }
+    fn request_value_read_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::read_at(
+            &connection,
+            source_sequence,
+            through,
+            path,
+            offset,
+            max_bytes,
+        )
+    }
+    fn request_outcome_header_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+    ) -> Result<
+        Option<crate::durable::observation::RequestObservationOutcome>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        observation_request::outcome_at(&connection, source_sequence, through)
+    }
+    fn request_outcome_read_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::outcome_read_at(
+            &connection,
+            source_sequence,
+            through,
+            path,
+            offset,
+            max_bytes,
+        )
+    }
+    fn request_previous_identity(
+        &self,
+        request: &RequestId,
+        through: u64,
+    ) -> Result<Option<RequestId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let previous:Option<String>=connection.query_row("SELECT previous_request_id FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||ConversationStoreError::InvalidReference("request outside native read cut".into()))?;
+        Ok(previous.map(RequestId::new))
+    }
+    fn request_outcome_header(
+        &self,
+        request: &RequestId,
+        through: u64,
+    ) -> Result<
+        Option<crate::durable::observation::RequestObservationOutcome>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        observation_request::outcome(&connection, request, through)
+    }
+    fn request_outcome_read(
+        &self,
+        request: &RequestId,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::outcome_read(&connection, request, through, path, offset, max_bytes)
+    }
+    fn request_field_header(
+        &self,
+        request: &RequestId,
+        through: u64,
+        path: &[String],
+    ) -> Result<crate::durable::observation::RequestObservationField, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::field_header(&connection, request, through, path)
+    }
+    fn request_identity_at(
+        &self,
+        sequence: u64,
+        through: u64,
+    ) -> Result<Option<RequestId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let request:Option<String>=connection.query_row("SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1 AND started_sequence<=?2",params![sequence,through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        Ok(request.map(RequestId::new))
+    }
+    fn request_summary_header(
+        &self,
+        request: &RequestId,
+        through: u64,
+    ) -> Result<crate::durable::observation::RequestObservationHeader, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::header(&connection, request, through)
+    }
+    fn request_field_page(
+        &self,
+        request: &RequestId,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::RequestObservationPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::page(&connection, request, through, path, offset, limit)
+    }
+    fn request_value_read(
+        &self,
+        request: &RequestId,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::read(&connection, request, through, path, offset, max_bytes)
+    }
+    fn validate_content_source_cut(
+        &self,
+        reference: &crate::runtime_client::content::ContentRef,
+        cut: &crate::durable::observation::ObservationReadCut,
+    ) -> Result<(), ConversationStoreError> {
+        let connection = self.lock()?;
+        content::validate_source_cut(&connection, &self.conversation_id, reference, cut)
+    }
+    fn observation_inherited_attempt_read(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        kind: crate::runtime_client::response::InheritedAttemptIdentityKind,
+        ordinal: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        observation_identity::read(&connection, cut, kind, ordinal, offset, max_bytes)
+    }
+    #[cfg(test)]
+    fn observation_inherited_native_oracle(
+        &self,
+        messages: &[MessageId],
+    ) -> Result<crate::durable::observation::InheritedObservation, ConversationStoreError> {
+        let connection = self.lock()?;
+        provenance::observation_native_oracle(&connection, messages)
+    }
+    fn observation_inherited_models(
+        &self,
+        response_ordinal: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::InheritedModelPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        provenance::observation_models(&connection, response_ordinal, offset, limit)
+    }
+    fn observation_inherited_model_read(
+        &self,
+        response_ordinal: u64,
+        model_ordinal: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        provenance::observation_model_read(
+            &connection,
+            response_ordinal,
+            model_ordinal,
+            offset,
+            max_bytes,
+        )
+    }
+    fn observation_failure_value_read(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let chunk = observation_execution::failure_value(
+            &transaction,
+            attempt,
+            through,
+            offset,
+            max_bytes,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(chunk)
+    }
+    fn response_identity_source(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        transcript_cursor: u64,
+    ) -> Result<Option<crate::durable::observation::ResponseIdentitySource>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        if transcript_cursor > cut.read.transcript {
+            return Err(ConversationStoreError::InvalidReference(
+                "response source beyond native transcript cut".into(),
+            ));
+        }
+        let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)",[cut.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        if missing {
+            return Err(storage("native response owner header unavailable"));
+        }
+        let position:Option<u64>=connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2",params![transcript_cursor,cut.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let Some(mut position) = position else {
+            let sequence:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_members IS NOT NULL",params![transcript_cursor,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            return Ok(sequence.map(|sequence| {
+                crate::durable::observation::ResponseIdentitySource::Attempt { sequence }
+            }));
+        };
+        let proposal:Option<u64>=connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        if let Some(proposal) = proposal {
+            position = proposal;
+        }
+        let anchor: Option<Option<u64>> = connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![position,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        if let Some(anchor) = anchor.flatten() {
+            let sequence:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![anchor,cut.read.journal],|row|row.get(0)).map_err(|_|storage("native response member header unavailable"))?;
+            return Ok(Some(
+                crate::durable::observation::ResponseIdentitySource::Attempt { sequence },
+            ));
+        }
+        let ordinal:Option<u64>=connection.query_row("SELECT ordinal FROM inherited_response_provenance WHERE closing_ledger_position=?1",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        Ok(ordinal.map(
+            |ordinal| crate::durable::observation::ResponseIdentitySource::Inherited { ordinal },
+        ))
+    }
+    fn inherited_response_summary(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        ordinal: u64,
+    ) -> Result<Option<crate::durable::observation::InheritedResponseHeader>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        let bytes:Option<Vec<u8>>=connection.query_row("SELECT display_provenance FROM inherited_response_provenance WHERE ordinal=?1 AND closing_ledger_position<=?2",params![ordinal,cut.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        bytes
+            .map(|bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())))
+            .transpose()
+    }
+    fn response_identity_fields(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        source: &crate::durable::observation::ResponseIdentitySource,
+    ) -> Result<Vec<crate::durable::observation::ResponseIdentityField>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        response_identity_fields(&connection, cut, source)
+    }
+    fn response_identity_read(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        source: &crate::durable::observation::ResponseIdentitySource,
+        path: &[String],
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        let (key, field) = response_identity_key(&connection, cut, source, path)?;
+        content::utf8_field_read(
+            &connection,
+            "response_identity",
+            &key,
+            field,
+            offset,
+            max_bytes,
+        )
+    }
+    fn observation_execution_at(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        sequence: u64,
+    ) -> Result<crate::durable::observation::AttemptExecutionSummary, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        if sequence > cut.read.journal {
+            return Err(ConversationStoreError::InvalidReference(
+                "execution outside source cut".into(),
+            ));
+        }
+        observation_execution::summary_selected(&connection, sequence, cut.read.journal)
+    }
+    fn observation_members_at(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        sequence: u64,
+    ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        if sequence > cut.read.journal {
+            return Err(ConversationStoreError::InvalidReference(
+                "member outside source cut".into(),
+            ));
+        }
+        observation_members::at_sequence(&connection, sequence)
+    }
+    fn observation_attempt_summary(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+    ) -> Result<crate::durable::observation::AttemptExecutionSummary, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_execution::summary(&connection, attempt, through)
+    }
+    fn todo_observation_head(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+    ) -> Result<Option<crate::durable::inbox::NativeTodoObservation>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        observation_state::todo_head(&connection, 1, cut.ledger_through)
+    }
+
+    fn observation_state_source(
+        &self,
+        domain: &str,
+        cut: &super::observation::ObservationReadCut,
+    ) -> Result<Option<String>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_state::source(&connection, domain, cut)
+    }
+    fn observation_state_header(
+        &self,
+        domain: &str,
+        source_id: &str,
+        cut: &super::observation::ObservationReadCut,
+        path: &[String],
+    ) -> Result<super::observation::RequestObservationField, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_state::header(&connection, domain, source_id, cut, path)
+    }
+    fn observation_state_page(
+        &self,
+        domain: &str,
+        source_id: &str,
+        cut: &super::observation::ObservationReadCut,
+        path: &[String],
+        offset: u64,
+        limit: usize,
+    ) -> Result<super::observation::RequestObservationPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_state::page(&connection, domain, source_id, cut, path, offset, limit)
+    }
+    fn observation_state_value_read(
+        &self,
+        domain: &str,
+        source_id: &str,
+        cut: &super::observation::ObservationReadCut,
+        path: &[String],
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<super::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_state::read(&connection, domain, source_id, cut, path, offset, max_bytes)
+    }
+    fn observation_models_at(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        sequence: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::AttemptModelNamePage, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        if sequence > cut.read.journal {
+            return Err(ConversationStoreError::InvalidReference(
+                "native owner outside cut".into(),
+            ));
+        }
+        observation_execution::models_at(&connection, sequence, cut.read.journal, offset, limit)
+    }
+    fn observation_model_read_at(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        sequence: u64,
+        ordinal: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        if sequence > cut.read.journal {
+            return Err(ConversationStoreError::InvalidReference(
+                "native owner outside cut".into(),
+            ));
+        }
+        observation_execution::model_value_at(
+            &connection,
+            sequence,
+            cut.read.journal,
+            ordinal,
+            offset,
+            max_bytes,
+        )
+    }
+    fn observation_failure_read_at(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        sequence: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        if sequence > cut.read.journal {
+            return Err(ConversationStoreError::InvalidReference(
+                "native owner outside cut".into(),
+            ));
+        }
+        observation_execution::failure_at(&connection, sequence, offset, max_bytes)
+    }
+    fn observation_models_page(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::AttemptModelNamePage, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let page = observation_execution::models(&transaction, attempt, through, offset, limit)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(page)
+    }
+    fn observation_model_value_read(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+        ordinal: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let chunk = observation_execution::model_value(
+            &transaction,
+            attempt,
+            through,
+            ordinal,
+            offset,
+            max_bytes,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(chunk)
+    }
+    fn observation_request_retry_locator_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+    ) -> Result<
+        Option<crate::runtime_client::content::CanonicalContentLocator>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        observation_request::validate_start(&connection, source_sequence, through)?;
+        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        Ok(position.map(|position| {
+            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+        }))
+    }
+    fn observation_request_retry_at(
+        &self,
+        source_sequence: u64,
+        through: u64,
+    ) -> Result<Option<MessageId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_request::validate_start(&connection, source_sequence, through)?;
+        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let Some(position) = position else {
+            return Ok(None);
+        };
+        let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'",[position],|row|row.get(0)).map_err(|_|storage("native retry message header unavailable"))?;
+        let header: crate::durable::observation::MessageHeader = serde_json::from_slice(&bytes)
+            .map_err(|_| storage("native retry message header corrupt"))?;
+        Ok(header.identity)
+    }
+    fn observation_request_retry_locator(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<
+        Option<crate::runtime_client::content::CanonicalContentLocator>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        let position: Option<u64> = connection
+            .query_row(
+                "SELECT retry_ledger_position FROM request_snapshots WHERE request_id=?1",
+                [request_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(position.map(|position| {
+            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+        }))
+    }
+    fn observation_request_retry(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<Option<MessageId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let id: Option<String> = connection
+            .query_row(
+                "SELECT CASE WHEN length(CAST(retry_message_id AS BLOB))<=256 THEN retry_message_id ELSE NULL END FROM request_snapshots WHERE request_id=?1",
+                [request_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(id.map(MessageId::new))
+    }
+    fn observation_member_counts(
+        &self,
+        message_id: &MessageId,
+        through: u64,
+    ) -> Result<Option<crate::durable::observation::AttemptMemberCounts>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation_members::message_members(&connection, message_id, through)
+    }
+    fn observation_attempt_members(
+        &self,
+        attempt: &AttemptId,
+        through: u64,
+    ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_members::members(&connection, attempt, through)
+    }
+
+    fn observation_transcript_process(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        transcript: u64,
+    ) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        observation_members::transcript_process(&connection, cut, transcript)
+    }
+    fn audit_block_header_page(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        transcript: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::AuditBlockHeaderPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::audit_blocks(
+            &connection,
+            &self.conversation_id,
+            cut,
+            transcript,
+            offset,
+            limit,
+        )
+    }
+    fn publication_settlement_head(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+    ) -> Result<
+        Vec<crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        observation::publication_settlement_head(&connection, &self.conversation_id, cut)
+    }
+    fn observation_trace_total(&self, through: u64) -> Result<u64, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_statistics::trace_total(&connection, through)
+    }
+    fn observation_occupancy(
+        &self,
+        through: u64,
+    ) -> Result<
+        Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        observation_occupancy::read(&connection, through)
+    }
+    fn observation_occupancy_model_value_read(
+        &self,
+        sequence: Option<u64>,
+        through: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_occupancy::model_read(&connection, sequence, through, offset, max_bytes)
+    }
+    fn observation_statistics(
+        &self,
+        through: u64,
+    ) -> Result<crate::runtime_client::response::ConversationStatistics, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation_statistics::read(&connection, through)
+    }
+    fn observation_agent_statistics(
+        &self,
+        through: u64,
+    ) -> Result<crate::runtime_client::agent_statistics::AgentStatistics, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation_statistics::agent_read(&connection, through)
+    }
+    fn pending_header_page(
+        &self,
+        cut: &crate::durable::reading::ConversationReadCut,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::durable::observation::PendingHeaderPage, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = observation::pending_page(
+            &transaction,
+            &self.conversation_id,
+            cut,
+            after_sequence,
+            limit,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+    fn pending_value_read(
+        &self,
+        cut: &crate::durable::reading::ConversationReadCut,
+        sequence: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = observation::pending_value(
+            &transaction,
+            &self.conversation_id,
+            cut,
+            sequence,
+            offset,
+            max_bytes,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+    fn read_window_headers(
+        &self,
+        at: &crate::durable::reading::ConversationWindowAt,
+        limit: usize,
+    ) -> Result<crate::durable::observation::ObservationWindow, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = observation::window(&transaction, &self.conversation_id, at, limit)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+
+    fn event_transcript_cursor_at_sequence(
+        &self,
+        sequence: u64,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let cursor: Option<u64> = connection
+            .query_row(
+                "SELECT observation_transcript FROM events WHERE sequence=?1",
+                [sequence],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?
+            .flatten();
+        Ok(cursor.map(TranscriptCursor::new))
+    }
+    fn observation_event_kind(
+        &self,
+        sequence: u64,
+        through: u64,
+    ) -> Result<Option<String>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_event::kind(&connection, sequence, through)
+    }
+    fn observation_event_witness(
+        &self,
+        sequence: u64,
+        through: u64,
+    ) -> Result<Option<crate::durable::observation::ObservationEventWitness>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation_event::witness(&connection, sequence, through)
+    }
+    fn event_value_page(
+        &self,
+        sequence: u64,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::RequestObservationPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_event::page(&connection, sequence, through, path, offset, limit)
+    }
+    fn event_value_read(
+        &self,
+        sequence: u64,
+        through: u64,
+        path: &[String],
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_event::read(&connection, sequence, through, path, offset, max_bytes)
+    }
+    fn latest_observation_events(
+        &self,
+        through: u64,
+        kinds: &[String],
+        attempt: Option<&AttemptId>,
+        limit: usize,
+    ) -> Result<Vec<crate::durable::observation::ObservationEventHeader>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::latest_events(&connection, through, kinds, attempt, limit)
+    }
+    fn tool_call_occurrence_at(
+        &self,
+        call_id: &crate::runtime::identity::ToolCallId,
+        attempt: &AttemptId,
+        cut: &crate::durable::observation::ObservationReadCut,
+    ) -> Result<Option<crate::message::types::ToolCallOccurrenceRef>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::tool_occurrence(&connection, &self.conversation_id, call_id, attempt, cut)
+    }
+
+    fn tool_association_headers(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        message_id: &MessageId,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError>
+    {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = observation::tools(
+            &transaction,
+            &self.conversation_id,
+            cut,
+            message_id,
+            offset,
+            limit,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+
+    fn tool_association_headers_by_locator(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::tools_by_locator(
+            &connection,
+            &self.conversation_id,
+            cut,
+            locator,
+            offset,
+            limit,
+        )
+    }
+    fn transcript_tool_headers(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::NativeToolObservationPage, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation_tools::page(
+            &connection,
+            &self.conversation_id,
+            cut,
+            locator,
+            offset,
+            limit,
+        )
+    }
+
+    fn ordinary_user_message(
+        &self,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+    ) -> Result<bool, ConversationStoreError> {
+        let connection = self.lock()?;
+        match locator {
+            crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id } => {
+                ordinary_user_by_id(&connection, message_id)
+            }
+            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                position,
+            } => connection
+                .query_row(
+                    "SELECT ordinary_user FROM message_ledger WHERE position=?1",
+                    [position],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map(|value| value.unwrap_or(false))
+                .map_err(|error| storage(error.to_string())),
+        }
+    }
+    fn message_ledger_position(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<u64>, ConversationStoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT position FROM message_ledger WHERE message_id=?1",
+                [message_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))
+    }
+    fn message_header(
+        &self,
+        message_id: &MessageId,
+    ) -> Result<Option<crate::durable::observation::MessageHeader>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::message(&connection, message_id)
+    }
+    fn message_block_header_page(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        message_id: &MessageId,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::MessageBlockHeaderPage, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = observation::blocks(
+            &transaction,
+            &self.conversation_id,
+            cut,
+            message_id,
+            offset,
+            limit,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+
+    fn message_block_header_page_by_locator(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::MessageBlockHeaderPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::blocks_by_locator(
+            &connection,
+            &self.conversation_id,
+            cut,
+            locator,
+            offset,
+            limit,
+        )
+    }
+    fn observation_tool_trace_sequence(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        ledger_position: u64,
+        block_index: crate::message::types::ContentBlockIndex,
+    ) -> Result<Option<u64>, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation::validate(&connection, &self.conversation_id, cut)?;
+        if ledger_position == 0 || ledger_position > cut.ledger_through {
+            return Err(ConversationStoreError::InvalidReference(
+                "tool trace source beyond captured cut".into(),
+            ));
+        }
+        connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1",params![ledger_position,block_index.get(),seq_to_i64(cut.read.journal)?],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))
+    }
+
+    fn observation_read_cut(
+        &self,
+    ) -> Result<crate::durable::observation::ObservationReadCut, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = observation::cut(&transaction, &self.conversation_id)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+    fn message_header_page(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        offset: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::durable::observation::MessageHeaderPage, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result =
+            observation::messages(&transaction, &self.conversation_id, cut, offset, limit)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+    fn transcript_header_page(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        before: Option<TranscriptCursor>,
+        limit: usize,
+    ) -> Result<crate::durable::observation::TranscriptHeaderPage, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result =
+            observation::transcript(&transaction, &self.conversation_id, cut, before, limit)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+
     fn transcript_attempts(
         &self,
         messages: &[MessageId],
@@ -1434,6 +2640,72 @@ impl ConversationStore for SqliteConversationStore {
         reading::cut(&transaction, &self.conversation_id)
     }
 
+    fn observation_turns(
+        &self,
+        offset: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::runtime_client::turn::ObservedTurnPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation_turn::page(&transaction, &self.conversation_id, offset, limit)
+    }
+    fn observation_file_delivery(
+        &self,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        index: u64,
+    ) -> Result<crate::durable::observation::NativeFileDelivery, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation_delivery::selected(&transaction, &self.conversation_id, locator, index)
+    }
+    fn observation_deliveries(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::runtime_client::delivery::RuntimeClientDeliveryHead, ConversationStoreError>
+    {
+        content::validate_canonical_locator(locator)?;
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        let position = content::canonical_position(&transaction, locator)?;
+        if position > cut.ledger_through {
+            return Err(ConversationStoreError::InvalidReference(
+                "delivery beyond captured canonical cut".into(),
+            ));
+        }
+        observation_delivery::head(&transaction, position, offset, limit)
+    }
+    fn observation_delivery_read(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        index: u64,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
+        content::validate_canonical_locator(locator)?;
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        observation::validate(&transaction, &self.conversation_id, cut)?;
+        let position = content::canonical_position(&transaction, locator)?;
+        if position > cut.ledger_through {
+            return Err(ConversationStoreError::InvalidReference(
+                "delivery beyond captured canonical cut".into(),
+            ));
+        }
+        observation_delivery::read(&transaction, position, index, offset, max_bytes)
+    }
     fn conversation_turns(
         &self,
         offset: usize,
@@ -1533,10 +2805,36 @@ impl ConversationStore for SqliteConversationStore {
         read_goal(&*self.lock()?)
     }
 
+    fn goal_observation_view(
+        &self,
+    ) -> Result<crate::runtime_client::goal::RuntimeClientGoalView, ConversationStoreError> {
+        let connection = self.lock()?;
+        let bytes: Option<Option<Vec<u8>>> = connection
+            .query_row(
+                "SELECT observation_header FROM goal_state WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        match bytes {
+            None => Ok(crate::runtime_client::goal::RuntimeClientGoalView { current: None }),
+            Some(None) => Err(storage("native Goal display header unavailable")),
+            Some(Some(bytes)) => {
+                serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))
+            }
+        }
+    }
     fn write_goal(
         &self,
         write: crate::goal::GoalWrite,
-    ) -> Result<crate::goal::GoalResult, ConversationStoreError> {
+    ) -> Result<
+        (
+            crate::goal::GoalResult,
+            Option<Arc<crate::durable::inbox::GoalObservationReceipt>>,
+        ),
+        ConversationStoreError,
+    > {
         let mut connection = self.lock()?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1544,13 +2842,14 @@ impl ConversationStore for SqliteConversationStore {
         let previous = read_goal(&tx)?;
         let change = write.change();
         let result = crate::goal::transition(previous.as_ref(), write);
+        let mut receipt = None;
         if let Ok(goal) = &result {
             save_goal(&tx, goal)?;
             #[cfg(test)]
             if Self::consume(&self.fail_event_remaining) {
                 return Err(storage("fault injected: Goal journal commit"));
             }
-            persist_event_tx(
+            let event = persist_event_tx(
                 &tx,
                 &self.conversation_id,
                 crate::goal::journal_envelope(
@@ -1562,11 +2861,17 @@ impl ConversationStore for SqliteConversationStore {
                         change,
                     },
                 ),
-            )?;
+            )?
+            .event;
+            receipt = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
+                view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(goal)),
+                native: event.observation,
+                pending: None,
+            }));
             tx.commit()
                 .map_err(|error| storage(format!("Goal commit: {error}")))?;
         }
-        Ok(result)
+        Ok((result, receipt))
     }
 
     fn accept_goal_round(
@@ -1602,7 +2907,7 @@ impl ConversationStore for SqliteConversationStore {
                 "Goal admission requires its exact typed runtime trigger".to_owned(),
             ));
         }
-        let accepted = accept_inbound_tx(self, &tx, draft)?;
+        let mut accepted = accept_inbound_tx(self, &tx, draft)?;
         if accepted.retried {
             return Err(ConversationStoreError::InvalidReference(
                 "Goal round identity already accepted".to_owned(),
@@ -1616,7 +2921,7 @@ impl ConversationStore for SqliteConversationStore {
             .ok_or(ConversationStoreError::SequenceExhausted)?;
         goal.last_round_message_id = Some(accepted.message_id.clone());
         save_goal(&tx, &goal)?;
-        persist_event_tx(
+        let event = persist_event_tx(
             &tx,
             &self.conversation_id,
             crate::goal::journal_envelope(
@@ -1628,11 +2933,18 @@ impl ConversationStore for SqliteConversationStore {
                     message_id: accepted.message_id.clone(),
                 },
             ),
-        )?;
+        )?
+        .event;
         #[cfg(test)]
         if Self::consume(&self.fail_accept_remaining) {
             return Err(storage("fault injected: Goal accept commit"));
         }
+        refresh_pending_receipt(&tx, &self.conversation_id, &mut accepted)?;
+        accepted.goal_observation = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
+            view: crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(&goal)),
+            native: event.observation,
+            pending: accepted.pending_observation.clone(),
+        }));
         process_death::reach("before:accept_goal_round");
         tx.commit()
             .map_err(|error| storage(format!("Goal admission commit: {error}")))?;
@@ -1693,7 +3005,7 @@ impl ConversationStore for SqliteConversationStore {
         if event.event_id.as_str().is_empty() {
             event.event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
         }
-        let accepted = accept_inbound_tx(self, &transaction, draft)?;
+        let mut accepted = accept_inbound_tx(self, &transaction, draft)?;
         if *event_message_id != accepted.message_id {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "detached terminal fact references {}, accepted inbound is {}",
@@ -1726,7 +3038,13 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: accept/event journal commit"));
         }
         process_death::reach_event("before:event", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
+        if let Some(native) = &mut persisted.event.observation {
+            Arc::make_mut(native)
+                .pending
+                .clone_from(&accepted.pending_observation);
+        }
         transaction
             .commit()
             .map_err(|error| storage(format!("accept/event commit: {error}")))?;
@@ -1772,7 +3090,7 @@ impl ConversationStore for SqliteConversationStore {
         let notice = notice
             .map(|notice| accept_inbound_tx(self, &transaction, notice))
             .transpose()?;
-        let accepted = accept_inbound_tx(self, &transaction, draft)?;
+        let mut accepted = accept_inbound_tx(self, &transaction, draft)?;
         if event_message_id != accepted.message_id {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "subagent terminal fact references {}, accepted inbound is {}",
@@ -1814,7 +3132,13 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: subagent terminal journal commit"));
         }
         process_death::reach_event("before:event", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
+        if let Some(native) = &mut persisted.event.observation {
+            Arc::make_mut(native)
+                .pending
+                .clone_from(&accepted.pending_observation);
+        }
         transaction
             .commit()
             .map_err(|error| storage(format!("subagent terminal commit: {error}")))?;
@@ -1880,6 +3204,16 @@ impl ConversationStore for SqliteConversationStore {
                 [seq_to_i64(watermark.get())?],
             )
             .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+        for item in &items {
+            // The removed native pending row fences these derived bytes even
+            // if cleanup fails; their deletion cannot refuse adoption.
+            let _ = optional_display_layout(&transaction, || {
+                content::clear_pending(&transaction, &item.sequence.get().to_string())
+            });
+        }
+        if !items.is_empty() {
+            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
+        }
         let mut adoption = None;
         if !items.is_empty() {
             let fact = crate::durable::inbox::inbound_adoption_event(
@@ -1895,12 +3229,47 @@ impl ConversationStore for SqliteConversationStore {
         {
             return Err(storage("fault injected: adopt commit"));
         }
+        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
+        let canonical_receipts = canonical_observation_batch(
+            &transaction,
+            &self.conversation_id,
+            &items
+                .iter()
+                .map(|item| (&item.message_id, item.transcript_cursor))
+                .collect::<Vec<_>>(),
+            adoption
+                .as_ref()
+                .map(|event| (event.sequence, event.sequence)),
+        )?;
+        if let Some(event) = &mut adoption {
+            event.observation = canonical_receipts.first().and_then(|receipt| {
+                observation_receipt::canonical(
+                    &transaction,
+                    &self.conversation_id,
+                    event,
+                    Arc::clone(&receipt.observation),
+                )
+            });
+        }
+        let pending_observation = observation_receipt::pending(
+            &transaction,
+            &self.conversation_id,
+            None,
+            None,
+            Some((watermark.get(), items.len() as u64)),
+        );
         process_death::reach("before:adopt_pending_batch");
         transaction
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
         process_death::reach("after:adopt_pending_batch");
-        Ok(crate::durable::inbox::AdoptedBatch { items, adoption })
+        Ok(crate::durable::inbox::AdoptedBatch {
+            pending_observation,
+            canonical_receipts,
+            read_cut,
+            items,
+            adoption,
+        })
     }
 
     fn edit_pending(
@@ -1986,7 +3355,8 @@ impl ConversationStore for SqliteConversationStore {
             seed.checkpoints().clone(),
         )?
         .with_completed_responses(seed.completed_responses().to_vec())?
-        .with_turns(seed.turns().to_vec())?;
+        .with_turns(seed.turns().to_vec())?
+        .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?;
         let seed = &validated;
         let messages = seed.canonical();
         // Semantics belong to the Context Engine; persistence has no alternate selection rule.
@@ -2105,6 +3475,35 @@ impl ConversationStore for SqliteConversationStore {
                 }
                 append_terminals(Some(&crate::conversation::message_id_of(message)))?;
             }
+            for item in seed.raw_tool_arguments() {
+                content::index_raw_arguments(&transaction, item)?;
+                let message = messages
+                    .iter()
+                    .find(|message| message.id() == &item.message_id)
+                    .ok_or_else(|| storage("raw Tool canonical source missing"))?;
+                let position: u64 = transaction
+                    .query_row(
+                        "SELECT position FROM message_ledger WHERE message_id=?1",
+                        [item.message_id.as_str()],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| storage(error.to_string()))?;
+                let _ = optional_display_layout(&transaction, || {
+                    observation::index_message(&transaction, message, Some(position))?;
+                    observation_trace::index_proposals(
+                        &transaction,
+                        &self.conversation_id,
+                        position,
+                        message,
+                    )?;
+                    observation_trace::index_canonical(
+                        &transaction,
+                        &self.conversation_id,
+                        position,
+                        message,
+                    )
+                });
+            }
             // The seed's Surface history becomes this lineage's own retained
             // operation log, replayed from revision 1. Flattening it into one
             // append per active message would produce the same Surface and a
@@ -2143,13 +3542,53 @@ impl ConversationStore for SqliteConversationStore {
                     ],
                 )
                 .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
+            let _ = optional_display_layout(&transaction, || {
+                observation_statistics::seed(&transaction, seed.turns())
+            });
+            let _ = optional_display_layout(&transaction, || {
+                observation_occupancy::inherited(&transaction, occupancy.as_ref())
+            });
             provenance::persist(&transaction, seed)?;
+            // The original identity and provenance now exist together. Derived
+            // readers validate this same transaction's complete bootstrap shape;
+            // no external reader sees the marker before COMMIT.
             transaction
                 .execute(
                     "UPDATE rustx_store SET bootstrap_initialized=1 WHERE id=1",
                     [],
                 )
                 .map_err(|error| storage(format!("mark lineage bootstrap: {error}")))?;
+            let _ = optional_display_layout(&transaction, || {
+                observation_members::seed_members(&transaction, seed)
+            });
+            let _ = optional_display_layout(&transaction, || {
+                observation_turn::seed(&transaction, seed)
+            });
+            for (ordinal, turn) in seed.turns().iter().enumerate() {
+                let _ = optional_display_layout(&transaction, || {
+                    reading::index_inherited_turn(&transaction, seq_to_i64(ordinal as u64)?, turn)
+                });
+            }
+            for (ordinal, turn) in seed.turns().iter().enumerate() {
+                if turn.process_message_ids.is_empty() {
+                    let id = ordinal.to_string();
+                    if let Some(cursor) =
+                        load_transcript_reference(&transaction, "inherited_turn", &id)?
+                    {
+                        let _ = optional_display_layout(&transaction, || {
+                            observation::index_item(
+                                &transaction,
+                                "inherited_turn",
+                                &id,
+                                TranscriptItem::InheritedTurn {
+                                    provenance: turn.clone(),
+                                },
+                                cursor,
+                            )
+                        });
+                    }
+                }
+            }
         }
         transaction
             .commit()
@@ -2285,6 +3724,21 @@ impl ConversationStore for SqliteConversationStore {
             .transpose()
     }
 
+    fn message_append_revision_by_locator(
+        &self,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+    ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let position = content::canonical_position(&connection, locator)?;
+        let revision: Option<u64> = connection
+            .query_row(
+                "SELECT first_append_revision FROM message_ledger WHERE position=?1",
+                [position],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(revision.map(SurfaceRevision::new))
+    }
     fn message_append_revision(
         &self,
         message_id: &MessageId,
@@ -2337,6 +3791,53 @@ impl ConversationStore for SqliteConversationStore {
         ids.iter().map(|id| load_message(&connection, id)).collect()
     }
 
+    fn surface_boundary_header_page(
+        &self,
+        through: SurfaceRevision,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::SurfaceBoundaryHeaderPage, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        observation::surface_boundaries(&connection, through, offset, limit)
+    }
+    fn surface_boundary_message_id(
+        &self,
+        boundary_revision: SurfaceRevision,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+    ) -> Result<MessageId, ConversationStoreError> {
+        let connection = self.lock()?;
+        let position = content::canonical_position(&connection, locator)?;
+        let id:Option<String>=connection.query_row("SELECT message_id FROM message_ledger WHERE ordinary_user=1 AND first_append_revision<=?1 AND position=?2",params![seq_to_i64(boundary_revision.get())?,position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        id.map(MessageId::new).ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "Surface boundary locator/revision mismatch".into(),
+            )
+        })
+    }
+
+    fn canonical_boundary_message_id(
+        &self,
+        boundary_revision: SurfaceRevision,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+    ) -> Result<MessageId, ConversationStoreError> {
+        let connection = self.lock()?;
+        let position = content::canonical_position(&connection, locator)?;
+        let id: Option<String> = connection
+            .query_row(
+                "SELECT message_id FROM message_ledger WHERE first_append_revision<=?1 AND position=?2",
+                params![seq_to_i64(boundary_revision.get())?, position],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        id.map(MessageId::new).ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "canonical boundary locator/revision mismatch".into(),
+            )
+        })
+    }
+
     fn load_user_message_boundaries(
         &self,
         through: SurfaceRevision,
@@ -2387,15 +3888,39 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: canonical event journal commit"));
         }
         process_death::reach_event("before:canonical", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut receipt = canonical_observation_receipt(
+            &transaction,
+            &self.conversation_id,
+            message,
+            transcript_cursor,
+            persisted.event.tool_occurrence.clone(),
+        )?;
+        set_canonical_range(
+            &mut receipt,
+            Some((persisted.event.sequence, persisted.event.sequence)),
+        );
+        persisted.event.observation = if matches!(message, MessageBlock::Tool(_)) {
+            observation_receipt::tool_results(
+                &transaction,
+                &self.conversation_id,
+                std::slice::from_ref(&persisted.event),
+                std::slice::from_ref(message),
+                Arc::clone(&receipt.observation),
+            )
+        } else {
+            observation_receipt::canonical(
+                &transaction,
+                &self.conversation_id,
+                &persisted.event,
+                Arc::clone(&receipt.observation),
+            )
+        };
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical event commit: {error}")))?;
         process_death::reach_event("after:canonical", &persisted.event.event);
-        Ok((
-            persisted.event,
-            TranscriptCommitReceipt { transcript_cursor },
-        ))
+        Ok((persisted.event, receipt))
     }
 
     fn append_canonical_batch_with_events(
@@ -2417,13 +3942,11 @@ impl ConversationStore for SqliteConversationStore {
         ensure_surface_head(&transaction)?;
         let mut receipts = Vec::with_capacity(messages.len());
         for message in messages {
-            receipts.push(TranscriptCommitReceipt {
-                transcript_cursor: append_message_and_surface_internal(
-                    &transaction,
-                    message,
-                    None,
-                )?,
-            });
+            receipts.push(append_message_and_surface_internal(
+                &transaction,
+                message,
+                None,
+            )?);
         }
         let mut persisted = Vec::with_capacity(events.len());
         for event in events {
@@ -2433,8 +3956,36 @@ impl ConversationStore for SqliteConversationStore {
                     "fault injected: canonical batch event journal commit",
                 ));
             }
-            persisted
-                .push(persist_event_tx(&transaction, &self.conversation_id, event.clone())?.event);
+            persisted.push(
+                persist_event_tx_deferred(&transaction, &self.conversation_id, event.clone())?
+                    .event,
+            );
+        }
+        let range = persisted
+            .first()
+            .zip(persisted.last())
+            .map(|(first, last)| (first.sequence, last.sequence));
+        let receipts = canonical_observation_batch(
+            &transaction,
+            &self.conversation_id,
+            &messages
+                .iter()
+                .zip(receipts)
+                .map(|(message, cursor)| (message.id(), cursor))
+                .collect::<Vec<_>>(),
+            range,
+        )?;
+        let shared = receipts.first().and_then(|receipt| {
+            observation_receipt::tool_results(
+                &transaction,
+                &self.conversation_id,
+                &persisted,
+                messages,
+                Arc::clone(&receipt.observation),
+            )
+        });
+        for event in &mut persisted {
+            event.observation.clone_from(&shared);
         }
         process_death::reach("before:append_canonical_batch");
         transaction
@@ -2449,7 +4000,12 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         input: CompactionCommitInput,
     ) -> Result<
-        (SurfaceRevision, u64, RuntimeEventEnvelope, TranscriptCursor),
+        (
+            SurfaceRevision,
+            u64,
+            RuntimeEventEnvelope,
+            TranscriptCommitReceipt,
+        ),
         ConversationStoreError,
     > {
         let mut connection = self.lock()?;
@@ -2527,6 +4083,8 @@ impl ConversationStore for SqliteConversationStore {
             return Err(storage("fault injected: after compaction checkpoint"));
         }
         let event = RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(""),
             sequence: 0,
@@ -2547,7 +4105,7 @@ impl ConversationStore for SqliteConversationStore {
         if self.consume_compaction_fault(CompactionFaultOperation::BeforeEventInsert) {
             return Err(storage("fault injected: before compaction event insert"));
         }
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction.execute(
             "UPDATE message_ledger SET checkpoint_json=?2,compaction_event_sequence=?3 WHERE message_id=?1",
             params![input.summary.id.as_str(), encode(&statistics, "checkpoint statistics")?, seq_to_i64(persisted.event.sequence)?],
@@ -2564,12 +4122,29 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: compaction event journal commit"));
         }
+        let mut receipt = canonical_observation_receipt_for_id(
+            &transaction,
+            &self.conversation_id,
+            &input.summary.id,
+            Some(summary_cursor),
+            persisted.event.tool_occurrence.clone(),
+        )?;
         process_death::reach("before:commit_compaction");
+        set_canonical_range(
+            &mut receipt,
+            Some((persisted.event.sequence, persisted.event.sequence)),
+        );
+        persisted.event.observation = observation_receipt::canonical(
+            &transaction,
+            &self.conversation_id,
+            &persisted.event,
+            Arc::clone(&receipt.observation),
+        );
         transaction
             .commit()
             .map_err(|error| storage(format!("compaction commit: {error}")))?;
         process_death::reach("after:commit_compaction");
-        Ok((revision, generation, persisted.event, summary_cursor))
+        Ok((revision, generation, persisted.event, receipt))
     }
 
     fn load_canonical(&self) -> Result<Vec<MessageBlock>, ConversationStoreError> {
@@ -2901,6 +4476,9 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         request_id: &RequestId,
     ) -> Result<RequestSnapshot, ConversationStoreError> {
+        #[cfg(test)]
+        self.request_snapshot_body_reads
+            .fetch_add(1, Ordering::SeqCst);
         {
             let connection = self.lock()?;
             load_request_snapshot(&connection, &self.conversation_id, request_id)
@@ -3085,14 +4663,22 @@ impl ConversationStore for SqliteConversationStore {
                 "Workflow terminal facts are only valid as an atomic pair".to_owned(),
             )),
             (None, None) => {
-                let persisted_terminal =
-                    persist_event_tx(&transaction, &self.conversation_id, terminal)?;
-                let persisted_output =
-                    persist_event_tx(&transaction, &self.conversation_id, output)?;
+                let mut persisted_terminal =
+                    persist_event_tx_deferred(&transaction, &self.conversation_id, terminal)?;
+                let mut persisted_output =
+                    persist_event_tx_deferred(&transaction, &self.conversation_id, output)?;
                 #[cfg(test)]
                 if Self::consume(&self.fail_event_remaining) {
                     return Err(storage("fault injected: Workflow terminal commit"));
                 }
+                let shared = observation_receipt::workflow_terminal(
+                    &transaction,
+                    &self.conversation_id,
+                    &persisted_terminal.event,
+                    &persisted_output.event,
+                );
+                persisted_terminal.event.observation.clone_from(&shared);
+                persisted_output.event.observation = shared;
                 process_death::reach_event(
                     "before:workflow_terminal",
                     &persisted_output.event.event,
@@ -3143,10 +4729,167 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         observer: Arc<dyn super::presentation::JournalObserver>,
     ) -> Result<u64, ConversationStoreError> {
-        let connection = self.lock()?;
-        let through = journal_prefix(&connection)?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let through = journal_prefix(&transaction)?;
+        // A newly installed Runtime owns recovery of already committed history.
+        // Previous process-local publication holes cannot survive this epoch.
+        observation_readiness::recover_journal(&transaction)?;
+        observation_readiness::mark(&transaction, 1, through)?;
+        transaction
+            .execute(
+                "UPDATE event_observation_readiness SET direct=0 WHERE direct=1",
+                [],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        observation_readiness::recover_transcript(&transaction)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
         *self.journal_observer.lock().expect("Journal observer lock") = Some((observer, through));
         Ok(through)
+    }
+
+    fn mark_observation_ready(&self, first: u64, last: u64) -> Result<(), ConversationStoreError> {
+        if first == 0 || first > last {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid observation readiness range".into(),
+            ));
+        }
+        {
+            let mut connection = self.lock()?;
+            let transaction = connection
+                .transaction()
+                .map_err(|error| storage(error.to_string()))?;
+            observation_readiness::mark(&transaction, first, last)?;
+            transaction
+                .commit()
+                .map_err(|error| storage(error.to_string()))?;
+        }
+        // Never wake under the storage or observer-registration lock, and never
+        // before the tiny derived layout transaction physically commits.
+        let observer = self
+            .journal_observer
+            .lock()
+            .expect("Journal observer lock")
+            .as_ref()
+            .map(|(observer, _)| Arc::clone(observer));
+        if let Some(observer) = observer {
+            observer.ready(last);
+        }
+        Ok(())
+    }
+    fn mark_observation_direct(&self, first: u64, last: u64) -> Result<(), ConversationStoreError> {
+        if first == 0 || first > last {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid observation readiness range".into(),
+            ));
+        }
+        {
+            let mut connection = self.lock()?;
+            let transaction = connection
+                .transaction()
+                .map_err(|error| storage(error.to_string()))?;
+            observation_readiness::mark_direct(&transaction, first, last)?;
+            transaction
+                .commit()
+                .map_err(|error| storage(error.to_string()))?;
+        }
+        // Never wake under the storage or observer-registration lock, and never
+        // before the tiny derived layout transaction physically commits.
+        let observer = self
+            .journal_observer
+            .lock()
+            .expect("Journal observer lock")
+            .as_ref()
+            .map(|(observer, _)| Arc::clone(observer));
+        if let Some(observer) = observer {
+            observer.ready(last);
+        }
+        Ok(())
+    }
+    fn observation_ready_frontier(
+        &self,
+        after: u64,
+        through: u64,
+    ) -> Result<u64, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_readiness::frontier(&connection, after, through)
+    }
+
+    fn mark_observation_transcript_ready(&self, cursor: u64) -> Result<(), ConversationStoreError> {
+        {
+            let mut connection = self.lock()?;
+            let transaction = connection
+                .transaction()
+                .map_err(|error| storage(error.to_string()))?;
+            observation_readiness::mark_transcript(&transaction, cursor)?;
+            transaction
+                .commit()
+                .map_err(|error| storage(error.to_string()))?;
+        }
+        let observer = self
+            .journal_observer
+            .lock()
+            .expect("Journal observer lock")
+            .as_ref()
+            .map(|(observer, _)| Arc::clone(observer));
+        if let Some(observer) = observer {
+            observer.ready(0);
+        }
+        Ok(())
+    }
+    fn mark_canonical_transcript_ready(
+        &self,
+        first_ledger: u64,
+        last_ledger: u64,
+    ) -> Result<(), ConversationStoreError> {
+        {
+            let mut connection = self.lock()?;
+            let transaction = connection
+                .transaction()
+                .map_err(|error| storage(error.to_string()))?;
+            observation_readiness::mark_canonical(&transaction, first_ledger, last_ledger)?;
+            transaction
+                .commit()
+                .map_err(|error| storage(error.to_string()))?;
+        }
+        let observer = self
+            .journal_observer
+            .lock()
+            .expect("Journal observer lock")
+            .as_ref()
+            .map(|(observer, _)| Arc::clone(observer));
+        if let Some(observer) = observer {
+            observer.ready(0);
+        }
+        Ok(())
+    }
+    fn observation_transcript_ready_frontier(
+        &self,
+        after: u64,
+        through: u64,
+    ) -> Result<u64, ConversationStoreError> {
+        let connection = self.lock()?;
+        observation_readiness::transcript_frontier(&connection, after, through)
+    }
+
+    fn transcript_source_ready(
+        &self,
+    ) -> Result<crate::durable::observation::TranscriptSourceReady, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let read_cut = observation::cut(&transaction, &self.conversation_id)?;
+        let prefix =
+            observation_readiness::transcript_frontier(&transaction, 0, read_cut.read.transcript)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(crate::durable::observation::TranscriptSourceReady { prefix, read_cut })
     }
 
     fn presentation_frontier(&self) -> Result<u64, ConversationStoreError> {
@@ -3176,6 +4919,8 @@ impl ConversationStore for SqliteConversationStore {
                 })
                 .map_err(|_| storage("presentation query failed"))?;
             for row in rows {
+                #[cfg(test)]
+                observation_statistics::original_read();
                 events.push(decode(
                     &row.map_err(|_| storage("presentation row failed"))?,
                     "presentation fact",
@@ -3264,6 +5009,104 @@ impl ConversationStore for SqliteConversationStore {
         })
     }
 
+    fn live_block_header_page(
+        &self,
+        source: &crate::runtime_client::content::ContentSource,
+        through_revision: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        content::live_block_header_page(
+            &connection,
+            &self.conversation_id,
+            source,
+            through_revision,
+            offset,
+            limit,
+        )
+    }
+
+    fn live_tool_header_page(
+        &self,
+        source: &crate::runtime_client::content::ContentSource,
+        through_revision: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::runtime_client::content::LiveBlockHeaderPage, ConversationStoreError> {
+        let connection = self.lock()?;
+        content::live_tool_header_page(
+            &connection,
+            &self.conversation_id,
+            source,
+            through_revision,
+            offset,
+            limit,
+        )
+    }
+
+    fn content_descriptor_at(
+        &self,
+        source: &crate::runtime_client::content::ContentSource,
+        representation: crate::runtime_client::content::ContentRepresentation,
+        revision: u64,
+    ) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = content::descriptor_at(
+            &transaction,
+            &self.conversation_id,
+            source,
+            representation,
+            revision,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+    fn content_descriptor(
+        &self,
+        source: &crate::runtime_client::content::ContentSource,
+        representation: crate::runtime_client::content::ContentRepresentation,
+    ) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result =
+            content::descriptor(&transaction, &self.conversation_id, source, representation)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+
+    fn content_read(
+        &self,
+        reference: &crate::runtime_client::content::ContentRef,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<crate::runtime_client::content::ContentChunk, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        let result = content::read(
+            &transaction,
+            &self.conversation_id,
+            reference,
+            offset,
+            max_bytes,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(result)
+    }
+
     fn open_publication_stream(
         &self,
         start: &PublicationStreamStart,
@@ -3320,7 +5163,7 @@ impl ConversationStore for SqliteConversationStore {
     fn stage_publication_frames(
         &self,
         frames: &[PublicationFrame],
-    ) -> Result<(), ConversationStoreError> {
+    ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
         if frames.is_empty() {
             return Err(ConversationStoreError::PublicationViolation(
                 "a publication staging transaction must carry at least one frame".to_owned(),
@@ -3334,7 +5177,7 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_publication_frames_remaining) {
             return Err(storage("fault injected: publication staging commit"));
         }
-        let stream = stage_frames_tx(&transaction, frames)?;
+        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
         if stream.terminal_sequence.is_some() {
             return Err(ConversationStoreError::PublicationViolation(format!(
                 "publication stream {} already reached its terminal boundary",
@@ -3346,14 +5189,14 @@ impl ConversationStore for SqliteConversationStore {
             .commit()
             .map_err(|error| storage(format!("publication staging commit: {error}")))?;
         process_death::reach("after:stage_publication_frames");
-        Ok(())
+        Ok(receipts)
     }
 
     fn commit_publication_terminal(
         &self,
         stream_id: &PublicationStreamId,
         frames: &[PublicationFrame],
-    ) -> Result<(), ConversationStoreError> {
+    ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
         if frames.is_empty() {
             return Err(ConversationStoreError::PublicationViolation(
                 "the publication terminal transaction must carry a final frame".to_owned(),
@@ -3386,7 +5229,7 @@ impl ConversationStore for SqliteConversationStore {
                 stream.start.request_id
             )));
         }
-        let stream = stage_frames_tx(&transaction, frames)?;
+        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
         if stream.start.stream_id != *stream_id {
             return Err(ConversationStoreError::PublicationViolation(format!(
                 "terminal frames belong to publication stream {}, not {stream_id}",
@@ -3414,7 +5257,7 @@ impl ConversationStore for SqliteConversationStore {
             .commit()
             .map_err(|error| storage(format!("publication terminal commit: {error}")))?;
         process_death::reach("after:commit_publication_terminal");
-        Ok(())
+        Ok(receipts)
     }
 
     fn commit_canonical_publication(
@@ -3422,7 +5265,7 @@ impl ConversationStore for SqliteConversationStore {
         stream_id: &PublicationStreamId,
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
-    ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError> {
+    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -3479,7 +5322,9 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical publication commit"));
         }
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        content::settle_canonical(&transaction, stream_id, message)?;
+        rebind_published_read_layouts(&transaction, message, &persisted.event)?;
         // The canonical transition clears the lifecycle staging of the stream:
         // the Ledger is now the long-term authority and no transient frame
         // survives it.
@@ -3506,19 +5351,42 @@ impl ConversationStore for SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+        let mut receipt = canonical_observation_receipt(
+            &transaction,
+            &self.conversation_id,
+            message,
+            Some(transcript_cursor),
+            persisted.event.tool_occurrence.clone(),
+        )?;
         process_death::reach("before:commit_canonical_publication");
+        set_canonical_range(
+            &mut receipt,
+            Some((persisted.event.sequence, persisted.event.sequence)),
+        );
+        persisted.event.observation = observation_receipt::canonical(
+            &transaction,
+            &self.conversation_id,
+            &persisted.event,
+            Arc::clone(&receipt.observation),
+        );
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
         process_death::reach("after:commit_canonical_publication");
-        Ok((persisted.event, transcript_cursor))
+        Ok((persisted.event, receipt))
     }
 
     fn terminalize_publication_audit(
         &self,
         stream_id: &PublicationStreamId,
         timestamp: DateTime<Utc>,
-    ) -> Result<(PublicationAudit, TranscriptCursor), ConversationStoreError> {
+    ) -> Result<
+        (
+            PublicationAudit,
+            crate::durable::inbox::PublicationAuditReceipt,
+        ),
+        ConversationStoreError,
+    > {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -3581,6 +5449,8 @@ impl ConversationStore for SqliteConversationStore {
             content,
             settled_at: timestamp,
         };
+        let _ =
+            optional_display_layout(&transaction, || content::settle_audit(&transaction, &audit));
         let settlement = PublicationSettlement::from(kind);
         transaction
             .execute(
@@ -3605,12 +5475,18 @@ impl ConversationStore for SqliteConversationStore {
                 params![settlement.as_str(), stream_id.as_str()],
             )
             .map_err(|error| storage(format!("settle publication audit: {error}")))?;
+        let receipt = audit_observation_receipt(
+            &transaction,
+            &self.conversation_id,
+            &audit,
+            transcript_cursor,
+        )?;
         process_death::reach("before:terminalize_publication_audit");
         transaction
             .commit()
             .map_err(|error| storage(format!("publication audit commit: {error}")))?;
         process_death::reach("after:terminalize_publication_audit");
-        Ok((audit, transcript_cursor))
+        Ok((audit, receipt))
     }
 
     fn load_unsettled_publication_streams(
@@ -3665,7 +5541,7 @@ impl ConversationStore for SqliteConversationStore {
 
 /// Reads one publication stream record, when it exists.
 fn read_publication_stream(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     stream_id: &PublicationStreamId,
 ) -> Result<Option<PublicationStreamRecord>, ConversationStoreError> {
     let row = transaction
@@ -3691,7 +5567,7 @@ fn read_publication_stream(
 }
 
 fn require_publication_stream(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     stream_id: &PublicationStreamId,
 ) -> Result<PublicationStreamRecord, ConversationStoreError> {
     read_publication_stream(transaction, stream_id)?.ok_or_else(|| {
@@ -3710,6 +5586,242 @@ type PublicationStreamRow = (
     Option<i64>,
     Option<String>,
 );
+
+fn rewrite_pending_body(
+    transaction: &Transaction<'_>,
+    item: &mut PendingInboundItem,
+    expected: &crate::durable::inbox::PendingInboundRef,
+    text: &str,
+) -> Result<(), ConversationStoreError> {
+    item.message.content = vec![UserContentBlock::Text(crate::message::content::TextBlock {
+        text: text.to_owned(),
+    })];
+    let revision = item
+        .revision
+        .checked_add(1)
+        .filter(|value| i64::try_from(*value).is_ok())
+        .ok_or(ConversationStoreError::SequenceExhausted)?;
+    transaction
+        .execute(
+            "UPDATE pending_inbound SET message_json=?1, revision=?2 WHERE sequence=?3",
+            params![
+                encode(&item.message, "pending edit")?,
+                revision,
+                seq_to_i64(expected.sequence.get())?
+            ],
+        )
+        .map_err(|error| storage(format!("pending edit: {error}")))?;
+    let _ = optional_display_layout(transaction, || {
+        content::index_pending(
+            transaction,
+            &item.message,
+            expected.sequence.get(),
+            revision,
+        )?;
+        observation::index_message(transaction, &MessageBlock::User(item.message.clone()), None)
+    });
+    let _ = observation::index_pending_header(
+        transaction,
+        expected.sequence.get(),
+        &item.message_id,
+        None,
+    );
+    Ok(())
+}
+
+fn insert_request_snapshot_source_tx(
+    transaction: &Transaction<'_>,
+    snapshot: &RequestSnapshot,
+    ids: &[MessageId],
+) -> Result<(), ConversationStoreError> {
+    let retry_message_id = request_retry_id(transaction, ids)?;
+    let json = encode(snapshot, "request snapshot")?;
+    transaction
+            .execute(
+                "INSERT INTO request_snapshots(request_id,surface_revision,snapshot_json,started_sequence,retry_message_id,retry_ledger_position,previous_request_id) VALUES(?1,?2,?3,NULL,?4,(SELECT position FROM message_ledger WHERE message_id=?4),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1))",
+                params![
+                    snapshot.request_id.as_str(),
+                    seq_to_i64(snapshot.surface_revision.get())?,
+                    json,
+                    retry_message_id.as_ref().map(MessageId::as_str),
+                ],
+            )
+            .map_err(|error| storage(format!("insert request snapshot: {error}")))?;
+    Ok(())
+}
+
+fn request_start_observation_tx(
+    transaction: &Transaction<'_>,
+    conversation: &ConversationId,
+    context: &[MessageBlock],
+    snapshot: &RequestSnapshot,
+    started: RuntimeEventEnvelope,
+    contribution_emissions: Vec<RuntimeEventEnvelope>,
+) -> Result<ModelTurnStartCommit, ConversationStoreError> {
+    let context_journal_range = Some((
+        started.sequence,
+        contribution_emissions
+            .last()
+            .map_or(started.sequence, |event| event.sequence),
+    ));
+    let context_receipts = canonical_observation_batch(
+        transaction,
+        conversation,
+        &context
+            .iter()
+            .map(|message| (message.id(), None))
+            .collect::<Vec<_>>(),
+        context_journal_range,
+    )?;
+    let mut started = started;
+    let status_sources = observation_receipt::status_sources(transaction, conversation, snapshot);
+    let shared = observation_receipt::request_start(
+        transaction,
+        conversation,
+        &started,
+        &contribution_emissions,
+        context_receipts
+            .first()
+            .map(|receipt| Arc::clone(&receipt.observation)),
+        snapshot,
+        &status_sources,
+    );
+    started.observation.clone_from(&shared);
+    let mut contribution_emissions = contribution_emissions;
+    for emission in &mut contribution_emissions {
+        emission.observation.clone_from(&shared);
+    }
+    Ok(ModelTurnStartCommit {
+        status_sources,
+        context_receipts,
+        started,
+        contribution_emissions,
+        disposition: ModelTurnStartCommitDisposition::NewlyCommitted,
+    })
+}
+
+fn index_request_read_layouts(
+    transaction: &Transaction<'_>,
+    snapshot: &RequestSnapshot,
+    ids: &[MessageId],
+    context: &[MessageBlock],
+    event: &RuntimeEventEnvelope,
+) {
+    let _ = optional_display_layout(transaction, || {
+        if let Some(retry) = request_retry_id(transaction, ids)? {
+            content::index_utf8_field(
+                transaction,
+                "response_identity",
+                &format!("request-start:{}", event.sequence),
+                1,
+                retry.as_str(),
+            )?;
+        }
+        Ok(())
+    });
+    let _ = optional_display_layout(transaction, || {
+        observation_trace::request_core(transaction, event, snapshot)
+    });
+    let _ = optional_display_layout(transaction, || {
+        transaction
+            .execute(
+                "UPDATE request_snapshots SET observation_source_id=?2 WHERE request_id=?1",
+                params![snapshot.request_id.as_str(), event.sequence.to_string()],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        observation_request_summary::index(transaction, snapshot)?;
+        observation_request::index(transaction, event.sequence, ids, snapshot)
+    });
+    let _ = optional_display_layout(transaction, || {
+        observation_trace::index_context(transaction, event.sequence, snapshot, context)
+    });
+    // Catalog identity evidence is independent of optional request-body layouts.
+    let _ = optional_display_layout(transaction, || {
+        observation_trace::index_catalog(transaction, event.sequence, snapshot)
+    });
+}
+
+fn rebind_published_read_layouts(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+    event: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let _ = optional_display_layout(transaction, || {
+        observation_trace::settle_fields(transaction, event)
+    });
+    rebind_canonical_display(transaction, message)
+}
+
+fn rebind_canonical_display(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    // Rebind deferred Tool arguments to their retained original raw encoding at C.
+    let position: i64 = transaction
+        .query_row(
+            "SELECT position FROM message_ledger WHERE message_id=?1",
+            [message.id().as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    let _ = optional_display_layout(transaction, || {
+        observation::index_message(
+            transaction,
+            message,
+            Some(nonnegative(position, "header ledger position")?),
+        )
+    });
+    Ok(())
+}
+
+fn audit_observation_receipt(
+    connection: &Connection,
+    conversation: &ConversationId,
+    audit: &PublicationAudit,
+    cursor: TranscriptCursor,
+) -> Result<crate::durable::inbox::PublicationAuditReceipt, ConversationStoreError> {
+    let read_cut = observation::cut(connection, conversation)?;
+    let summary = observation::audit_summary(audit);
+    let _ = optional_display_layout(connection, || {
+        observation::index_audit(connection, audit, cursor)?;
+        connection.execute("UPDATE observation_headers SET journal_position=?1 WHERE reference_kind='publication_audit' AND reference_id=?2",params![read_cut.read.journal,audit.stream_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        Ok(())
+    });
+    let bytes:Option<Vec<u8>>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",[audit.stream_id.as_str()],|row|row.get(0)).optional().ok().flatten();
+    let header = bytes
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_else(|| crate::durable::observation::TranscriptHeader {
+            tool_calls: Vec::new(),
+            publication_settlement: Some(
+                crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord {
+                    settlement: summary.clone().into(),
+                    transcript_cursor: cursor.into(),
+                    read_cut: read_cut.clone(),
+                },
+            ),
+            cursor,
+            reference_kind: "publication_audit".into(),
+            reference_id: format!("transcript:{}", cursor.get()),
+            message: None,
+            display: None,
+            content: Vec::new(),
+            collections: Vec::new(),
+            deferred: true,
+        });
+    Ok(crate::durable::inbox::PublicationAuditReceipt {
+        ready_through: observation_readiness::frontier(connection, 0, read_cut.read.journal).ok(),
+        ready_t_through: observation_readiness::transcript_frontier(
+            connection,
+            0,
+            read_cut.read.transcript,
+        )
+        .ok(),
+        summary,
+        transcript_cursor: cursor,
+        header,
+        read_cut,
+    })
+}
 
 fn publication_record(
     row: PublicationStreamRow,
@@ -3937,11 +6049,18 @@ fn validate_proposal_frames(
 }
 
 /// Stages one contiguous run of frames onto an open unsettled stream and
-/// returns the stream as it was before the staging.
+/// returns the prior stream and finite per-frame committed source evidence.
 fn stage_frames_tx(
     transaction: &Transaction<'_>,
     frames: &[PublicationFrame],
-) -> Result<PublicationStreamRecord, ConversationStoreError> {
+    conversation_id: &ConversationId,
+) -> Result<
+    (
+        PublicationStreamRecord,
+        Vec<crate::publication::PublicationFrameReceipt>,
+    ),
+    ConversationStoreError,
+> {
     let stream_id = &frames[0].stream_id;
     if frames.iter().any(|frame| frame.stream_id != *stream_id) {
         return Err(ConversationStoreError::PublicationViolation(
@@ -3986,17 +6105,10 @@ fn stage_frames_tx(
     }
     validate_proposal_frames(stream_id, frames, &mut owners)?;
 
+    let mut receipts = Vec::with_capacity(frames.len());
     for frame in frames {
-        transaction
-            .execute(
-                "INSERT INTO publication_frames(stream_id,sequence,frame_json) VALUES(?1,?2,?3)",
-                params![
-                    stream_id.as_str(),
-                    seq_to_i64(frame.sequence)?,
-                    encode(frame, "publication frame")?
-                ],
-            )
-            .map_err(|error| storage(format!("stage publication frame: {error}")))?;
+        let receipt = stage_frame_tx(transaction, conversation_id, &stream.start, frame)?;
+        receipts.push(receipt);
     }
     for owner in owners {
         match owner.persisted_state {
@@ -4033,7 +6145,48 @@ fn stage_frames_tx(
             params![next, stream_id.as_str()],
         )
         .map_err(|error| storage(format!("advance publication sequence: {error}")))?;
-    Ok(stream)
+    Ok((stream, receipts))
+}
+
+fn stage_frame_tx(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    start: &PublicationStreamStart,
+    frame: &PublicationFrame,
+) -> Result<crate::publication::PublicationFrameReceipt, ConversationStoreError> {
+    let stream_id = &start.stream_id;
+    let failed:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM publication_frames INDEXED BY publication_frames_unindexed_idx WHERE stream_id=?1 AND observation_indexed=0)",[stream_id.as_str()],|row|row.get(0)).unwrap_or(true);
+    let receipt = (!failed)
+        .then(|| {
+            optional_display_layout(transaction, || {
+                content::index_frame(transaction, frame)?;
+                content::frame_receipt(transaction, conversation_id, start, frame)
+            })
+        })
+        .flatten()
+        .unwrap_or_else(|| crate::publication::PublicationFrameReceipt {
+            unavailable: true,
+            stream_id: frame.stream_id.clone(),
+            sequence: frame.sequence,
+            content: Vec::new(),
+            suffix_bytes: None,
+            block_ordinal: None,
+            block_total: 0,
+            tool_ordinal: None,
+            tool_total: 0,
+        });
+    transaction
+            .execute(
+                "INSERT INTO publication_frames(stream_id,sequence,frame_json,observation_indexed) VALUES(?1,?2,?3,?4)",
+                params![
+                    stream_id.as_str(),
+                    seq_to_i64(frame.sequence)?,
+                    encode(frame, "publication frame")?,
+                    !receipt.unavailable
+                ],
+            )
+            .map_err(|error| storage(format!("stage publication frame: {error}")))?;
+    Ok(receipt)
 }
 
 fn read_publication_frames(
@@ -4708,8 +6861,27 @@ fn save_goal(
     tx: &Transaction<'_>,
     goal: &crate::goal::GoalSnapshot,
 ) -> Result<(), ConversationStoreError> {
-    tx.execute("INSERT INTO goal_state(singleton, snapshot_json) VALUES(1, ?1) ON CONFLICT(singleton) DO UPDATE SET snapshot_json = excluded.snapshot_json",
-        [encode(goal, "Goal")?]).map_err(|error| storage(format!("write Goal: {error}")))?;
+    let header = crate::runtime_client::goal::RuntimeClientGoalView::from_native(Some(goal));
+    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16384);
+    tx.execute("INSERT INTO goal_state(singleton, snapshot_json,observation_header) VALUES(1, ?1,?2) ON CONFLICT(singleton) DO UPDATE SET snapshot_json = excluded.snapshot_json,observation_header=excluded.observation_header,observation_source_id=NULL,observation_sequence=NULL",
+        params![encode(goal, "Goal")?,bytes]).map_err(|error| storage(format!("write Goal: {error}")))?;
+    let _ = optional_display_layout(tx, || observation_state::goal(tx, goal));
+    Ok(())
+}
+
+fn refresh_pending_receipt(
+    connection: &Connection,
+    conversation: &ConversationId,
+    accepted: &mut AcceptedInbound,
+) -> Result<(), ConversationStoreError> {
+    accepted.read_cut = reading::cut(connection, conversation)?;
+    accepted.pending_observation = observation_receipt::pending(
+        connection,
+        conversation,
+        Some(accepted.sequence.get()),
+        None,
+        None,
+    );
     Ok(())
 }
 
@@ -4766,6 +6938,15 @@ fn accept_inbound_tx(
                 )
             };
             return Ok(AcceptedInbound {
+                goal_observation: None,
+                pending_observation: observation_receipt::pending(
+                    transaction,
+                    &store.conversation_id,
+                    Some(sequence_from_i64(sequence)?),
+                    None,
+                    None,
+                ),
+                read_cut: reading::cut(transaction, &store.conversation_id)?,
                 sequence: InboundSequence::new(sequence_from_i64(sequence)?),
                 message_id: MessageId::new(message_id),
                 message,
@@ -4808,7 +6989,7 @@ fn accept_inbound_tx(
         .map_err(|error| map_insert_error(&error, &message_id))?;
     transaction
         .execute(
-            "UPDATE rustx_store SET next_inbound_sequence = ?1 WHERE id = 1",
+            "UPDATE rustx_store SET next_inbound_sequence = ?1,pending_observation_count=pending_observation_count+1 WHERE id = 1",
             [next],
         )
         .map_err(|error| storage(format!("update inbound sequence: {error}")))?;
@@ -4820,6 +7001,10 @@ fn accept_inbound_tx(
             )
             .map_err(|error| storage(format!("insert correlation: {error}")))?;
     }
+    let _ = optional_display_layout(transaction, || {
+        content::index_pending(transaction, &message, sequence, 0)?;
+        observation::index_message(transaction, &MessageBlock::User(message.clone()), None)
+    });
     // Acceptance is the durable-before-display frontier for an ordinary
     // inbound user message. Context facts are durable model input but are not
     // ordinary transcript content, so they never receive an ordering row.
@@ -4834,13 +7019,267 @@ fn accept_inbound_tx(
             message_id.as_str(),
         )?)
     };
+    let _ = observation::index_pending_header(
+        transaction,
+        sequence,
+        &message_id,
+        transcript_cursor.map(TranscriptCursor::get),
+    );
     Ok(AcceptedInbound {
+        goal_observation: None,
+        pending_observation: observation_receipt::pending(
+            transaction,
+            &store.conversation_id,
+            Some(sequence),
+            None,
+            None,
+        ),
+        read_cut: reading::cut(transaction, &store.conversation_id)?,
         sequence: InboundSequence::new(sequence),
         message_id,
         message,
         transcript_cursor,
         retried: false,
     })
+}
+
+fn response_identity_key(
+    connection: &Connection,
+    cut: &crate::durable::observation::ObservationReadCut,
+    source: &crate::durable::observation::ResponseIdentitySource,
+    path: &[String],
+) -> Result<(String, u32), ConversationStoreError> {
+    let field = match path {
+        [field] if field == "closing_message_id" => 0,
+        [field] if field == "retry_message_id" => 1,
+        [origin, field] if origin == "origin" && field == "closing_message_id" => 2,
+        _ => {
+            return Err(ConversationStoreError::InvalidReference(
+                "unknown response identity source field".into(),
+            ));
+        }
+    };
+    match source {
+        crate::durable::observation::ResponseIdentitySource::Attempt { sequence } => {
+            if *sequence > cut.read.journal {
+                return Err(ConversationStoreError::InvalidReference(
+                    "response outside source cut".into(),
+                ));
+            }
+            let summary = observation_execution::summary_at_sequence(connection, *sequence)?
+                .ok_or_else(|| storage("native response execution header unavailable"))?;
+            if field == 1 {
+                Ok((
+                    format!(
+                        "request-start:{}",
+                        summary
+                            .last_request_sequence
+                            .ok_or_else(|| storage("response request identity unavailable"))?
+                    ),
+                    1,
+                ))
+            } else {
+                Ok((
+                    format!(
+                        "journal:{}",
+                        summary
+                            .closing_identity_sequence
+                            .ok_or_else(|| storage("response closing identity unavailable"))?
+                    ),
+                    0,
+                ))
+            }
+        }
+        crate::durable::observation::ResponseIdentitySource::Inherited { ordinal } => {
+            let exists: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM inherited_response_provenance WHERE ordinal=?1 AND closing_ledger_position<=?2)",
+                    params![ordinal,cut.ledger_through],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(error.to_string()))?;
+            if !exists {
+                return Err(ConversationStoreError::InvalidReference(
+                    "inherited response identity unavailable".into(),
+                ));
+            }
+            Ok((format!("inherited:{ordinal}"), field))
+        }
+    }
+}
+fn response_identity_fields(
+    connection: &Connection,
+    cut: &crate::durable::observation::ObservationReadCut,
+    source: &crate::durable::observation::ResponseIdentitySource,
+) -> Result<Vec<crate::durable::observation::ResponseIdentityField>, ConversationStoreError> {
+    let mut fields = Vec::new();
+    for path in [
+        vec!["closing_message_id".into()],
+        vec!["retry_message_id".into()],
+        vec!["origin".into(), "closing_message_id".into()],
+    ] {
+        if let Ok((key, field)) = response_identity_key(connection, cut, source, &path)
+            && let Some(readable_end) =
+                content::utf8_field_end(connection, "response_identity", &key, field)?
+        {
+            fields.push(crate::durable::observation::ResponseIdentityField { path, readable_end });
+        }
+    }
+    Ok(fields)
+}
+
+fn canonical_observation_receipt(
+    connection: &Connection,
+    conversation: &ConversationId,
+    message: &MessageBlock,
+    transcript_cursor: Option<TranscriptCursor>,
+    _tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,
+) -> Result<TranscriptCommitReceipt, ConversationStoreError> {
+    canonical_observation_receipt_for_id(
+        connection,
+        conversation,
+        message.id(),
+        transcript_cursor,
+        None,
+    )
+}
+fn canonical_observation_receipt_for_id(
+    connection: &Connection,
+    conversation: &ConversationId,
+    message_id: &MessageId,
+    transcript_cursor: Option<TranscriptCursor>,
+    _tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,
+) -> Result<TranscriptCommitReceipt, ConversationStoreError> {
+    let mut receipts = canonical_observation_batch(
+        connection,
+        conversation,
+        &[(message_id, transcript_cursor)],
+        None,
+    )?;
+    Ok(receipts.remove(0))
+}
+fn set_canonical_range(receipt: &mut TranscriptCommitReceipt, range: Option<(u64, u64)>) {
+    Arc::make_mut(&mut receipt.observation).journal_range = range;
+}
+fn canonical_observation_batch(
+    connection: &Connection,
+    conversation: &ConversationId,
+    items: &[(&MessageId, Option<TranscriptCursor>)],
+    journal_range: Option<(u64, u64)>,
+) -> Result<Vec<TranscriptCommitReceipt>, ConversationStoreError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+    let through = journal_prefix(connection)?;
+    let mut source_unavailable = false;
+    let mut positions = Vec::with_capacity(items.len());
+    for (id, _) in items {
+        let position: u64 = connection
+            .query_row(
+                "SELECT position FROM message_ledger WHERE message_id=?1",
+                [id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        source_unavailable |= connection.execute("UPDATE observation_headers SET journal_position=?1,header_json=CAST(json_set(header_json,'$.transcript_cursor',transcript_position) AS BLOB) WHERE ledger_position=?2",params![through,position]).is_err();
+        positions.push(position);
+    }
+    let first_position = *positions.first().expect("nonempty canonical batch");
+    let last_position = *positions.last().expect("nonempty canonical batch");
+    let read_cut = observation::cut(connection, conversation)?;
+    let head = canonical_display_head(connection, conversation, &read_cut, &mut source_unavailable);
+    let scalars = complete_canonical_scalars(connection, &read_cut).unwrap_or_else(|_| {
+        source_unavailable = true;
+        CanonicalSourceScalars::default()
+    });
+    let batch = Arc::new(crate::durable::inbox::CanonicalObservationBatch {
+        ready_through: observation_readiness::frontier(connection, 0, through).ok(),
+        ready_t_through: observation_readiness::transcript_frontier(
+            connection,
+            0,
+            read_cut.read.transcript,
+        )
+        .ok(),
+        source_unavailable,
+        todos: scalars.todos,
+        read_cut,
+        journal_range,
+        first_position,
+        last_position,
+        count: items.len() as u64,
+        first_transcript: items.iter().filter_map(|(_, cursor)| *cursor).min(),
+        last_transcript: items.iter().filter_map(|(_, cursor)| *cursor).max(),
+        transcript_count: items.iter().filter(|(_, cursor)| cursor.is_some()).count() as u64,
+        head,
+        human_activity_at: scalars.human_activity_at,
+        has_opening_user: scalars.has_opening_user,
+        opening_preview: scalars.opening_preview,
+    });
+    Ok(items
+        .iter()
+        .zip(positions)
+        .enumerate()
+        .map(
+            |(ordinal, ((_, transcript_cursor), ledger_position))| TranscriptCommitReceipt {
+                transcript_cursor: *transcript_cursor,
+                ledger_position,
+                ordinal: ordinal as u64,
+                observation: Arc::clone(&batch),
+            },
+        )
+        .collect())
+}
+
+#[derive(Default)]
+struct CanonicalSourceScalars {
+    human_activity_at: Option<chrono::DateTime<Utc>>,
+    has_opening_user: bool,
+    opening_preview: Option<String>,
+    todos: Option<crate::durable::inbox::NativeTodoObservation>,
+}
+fn complete_canonical_scalars(
+    connection: &Connection,
+    cut: &crate::durable::observation::ObservationReadCut,
+) -> Result<CanonicalSourceScalars, ConversationStoreError> {
+    let activity: Option<(i64,u32)> = connection.query_row(
+        "SELECT human_activity_seconds,human_activity_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=?1 ORDER BY human_activity_seconds DESC,human_activity_nanos DESC LIMIT 1",
+        [cut.ledger_through], |row| Ok((row.get(0)?,row.get(1)?)),
+    ).optional().map_err(|error| storage(error.to_string()))?;
+    let opening: Option<Option<String>> = connection.query_row(
+        "SELECT opening_preview FROM message_ledger INDEXED BY message_ledger_opening_idx WHERE ordinary_user=1 AND position<=?1 ORDER BY position LIMIT 1",
+        [cut.ledger_through], |row| row.get(0),
+    ).optional().map_err(|error| storage(error.to_string()))?;
+    Ok(CanonicalSourceScalars {
+        human_activity_at: activity
+            .map(|(seconds, nanos)| {
+                chrono::DateTime::from_timestamp(seconds, nanos)
+                    .ok_or_else(|| storage("native human activity timestamp unavailable"))
+            })
+            .transpose()?,
+        has_opening_user: opening.is_some(),
+        opening_preview: opening.flatten(),
+        todos: observation_state::todo_head(connection, 0, cut.ledger_through)?,
+    })
+}
+fn canonical_display_head(
+    connection: &Connection,
+    conversation: &ConversationId,
+    cut: &crate::durable::observation::ObservationReadCut,
+    source_unavailable: &mut bool,
+) -> Vec<crate::durable::observation::MessageHeader> {
+    match observation::messages(
+        connection,
+        conversation,
+        cut,
+        Some(cut.ledger_through.saturating_sub(8)),
+        8,
+    ) {
+        Ok(page) if !*source_unavailable => page.headers,
+        _ => {
+            *source_unavailable = true;
+            Vec::new()
+        }
+    }
 }
 
 fn append_canonical_messages(
@@ -4869,14 +7308,50 @@ fn append_canonical_messages(
                 Some(&tool.occurrence.assistant_message_id),
             )?;
         }
-        receipts.push(TranscriptCommitReceipt {
-            transcript_cursor: append_message_and_surface(&transaction, message)?,
-        });
+        receipts.push(append_message_and_surface(&transaction, message)?);
     }
+    let receipts = canonical_observation_batch(
+        &transaction,
+        &store.conversation_id,
+        &messages
+            .iter()
+            .zip(receipts)
+            .map(|(message, cursor)| (message.id(), cursor))
+            .collect::<Vec<_>>(),
+        None,
+    )?;
     transaction
         .commit()
         .map_err(|error| storage(format!("canonical commit: {error}")))?;
     Ok(receipts)
+}
+
+fn ordinary_user_by_id(
+    connection: &Connection,
+    id: &MessageId,
+) -> Result<bool, ConversationStoreError> {
+    connection
+        .query_row(
+            "SELECT ordinary_user FROM message_ledger WHERE message_id=?1",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|value| value.unwrap_or(false))
+        .map_err(|error| storage(error.to_string()))
+}
+
+fn request_retry_id(
+    connection: &Connection,
+    ids: &[MessageId],
+) -> Result<Option<MessageId>, ConversationStoreError> {
+    let mut retry = None;
+    for id in ids {
+        if ordinary_user_by_id(connection, id)? {
+            retry = Some(id.clone());
+        }
+    }
+    Ok(retry)
 }
 
 /// Verifies a retried model-turn start against the already-committed durable
@@ -4945,6 +7420,8 @@ fn verify_committed_start_tx(
     let contribution_emissions =
         verify_contribution_start_tx(transaction, context, &stored, &started)?;
     Ok(ModelTurnStartCommit {
+        status_sources: Vec::new(),
+        context_receipts: Vec::new(),
         started,
         contribution_emissions,
         disposition: ModelTurnStartCommitDisposition::IdempotentReplay,
@@ -5374,7 +7851,11 @@ const PRESENTATION_INDEXES: &[(&str, &str)] = &[
 ];
 
 #[allow(clippy::too_many_lines)] // One fixed development schema; no migrations.
-fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
+fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| storage(format!("create schema transaction: {error}")))?;
+    let connection = &transaction;
     connection
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS rustx_store (
@@ -5384,18 +7865,93 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 next_inbound_sequence INTEGER NOT NULL CHECK(next_inbound_sequence >= 0),
                 next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0),
                 next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
+                retained_transcript_count INTEGER NOT NULL DEFAULT 0 CHECK(retained_transcript_count >= 0),
+                pending_observation_count INTEGER NOT NULL DEFAULT 0 CHECK(pending_observation_count >= 0),
+                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=16384),
                 reading_mutation_revision INTEGER NOT NULL DEFAULT 0 CHECK(reading_mutation_revision >= 0),
                 logical_step_sequence INTEGER NOT NULL CHECK(logical_step_sequence >= 0),
                 pending_unresolved_output_stream_id TEXT,
                 bootstrap_initialized INTEGER NOT NULL DEFAULT 0 CHECK(bootstrap_initialized IN (0,1))
             );
+            CREATE TABLE IF NOT EXISTS observation_block_headers (
+                ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
+                block_index INTEGER NOT NULL CHECK(block_index>=0),
+                header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                PRIMARY KEY(ledger_position,block_index),UNIQUE(message_id,block_index)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS audit_observation_blocks (
+                transcript_position INTEGER NOT NULL REFERENCES transcript_order(position) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL CHECK(ordinal>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                PRIMARY KEY(transcript_position,ordinal)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS observation_headers (
+                header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                tool_result_json BLOB CHECK(tool_result_json IS NULL OR length(tool_result_json)<=16384),
+                transcript_position INTEGER UNIQUE,ledger_position INTEGER,
+                journal_position INTEGER NOT NULL DEFAULT 0 CHECK(journal_position>=0),
+                reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL,
+                PRIMARY KEY(reference_kind,reference_id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS observation_headers_ledger_idx ON observation_headers(ledger_position) WHERE ledger_position IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS observation_headers_transcript_idx ON observation_headers(transcript_position) WHERE transcript_position IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS surface_observation_boundaries (
+                ordinal INTEGER PRIMARY KEY,ledger_position INTEGER NOT NULL UNIQUE,surface_revision INTEGER NOT NULL UNIQUE
+            );
+            CREATE TABLE IF NOT EXISTS content_segments (
+                source_kind TEXT NOT NULL, source_id TEXT NOT NULL, block_index INTEGER NOT NULL,
+                representation TEXT NOT NULL, segment INTEGER NOT NULL, bytes BLOB NOT NULL CHECK(length(bytes)<=65536),
+                PRIMARY KEY(source_kind,source_id,block_index,representation,segment)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS content_frontiers (
+                source_kind TEXT NOT NULL, source_id TEXT NOT NULL, block_index INTEGER NOT NULL,
+                representation TEXT NOT NULL, revision INTEGER NOT NULL, readable_end INTEGER NOT NULL,
+                PRIMARY KEY(source_kind,source_id,block_index,representation,revision)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS publication_metadata_segments (
+                stream_id TEXT NOT NULL,block_index INTEGER NOT NULL,revision INTEGER NOT NULL,
+                segment INTEGER NOT NULL,bytes BLOB NOT NULL CHECK(length(bytes)<=65536),
+                PRIMARY KEY(stream_id,block_index,revision,segment)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS publication_observation_blocks (
+                stream_id TEXT NOT NULL, block_index INTEGER NOT NULL, opened_revision INTEGER NOT NULL,
+                creation_ordinal INTEGER NOT NULL,tool_ordinal INTEGER,kind TEXT NOT NULL, PRIMARY KEY(stream_id,block_index),UNIQUE(stream_id,creation_ordinal),UNIQUE(stream_id,tool_ordinal)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS publication_observation_counts (
+                stream_id TEXT NOT NULL, revision INTEGER NOT NULL, total INTEGER NOT NULL,tool_total INTEGER NOT NULL,
+                PRIMARY KEY(stream_id,revision)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS canonical_binary_sources (
+                source_id TEXT NOT NULL, block_index INTEGER NOT NULL, artifact_id TEXT NOT NULL,
+                readable_end INTEGER NOT NULL CHECK(readable_end>=0),
+                PRIMARY KEY(source_id,block_index)
+            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS goal_state (
+                observation_header BLOB CHECK(observation_header IS NULL OR length(observation_header)<=16384),
                 singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                observation_source_id TEXT, observation_sequence INTEGER,
                 snapshot_json TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index);
+            CREATE INDEX IF NOT EXISTS observation_block_kind_idx ON observation_block_headers(message_id,json_extract(header_json,'$.kind'),block_index);
+            CREATE TABLE IF NOT EXISTS observation_models (
+                owner_anchor INTEGER NOT NULL REFERENCES events(sequence),
+                ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+                first_sequence INTEGER NOT NULL REFERENCES events(sequence) ON DELETE CASCADE,
+                request_alias TEXT CHECK(request_alias IS NULL OR length(CAST(request_alias AS BLOB))<=512),
+                request_encoded_bytes INTEGER NOT NULL CHECK(request_encoded_bytes>=2),
+                model_hash BLOB NOT NULL CHECK(length(model_hash)=32),
+                encoded_bytes INTEGER NOT NULL CHECK(encoded_bytes>=0),
+                attempt_id TEXT NOT NULL,
+                PRIMARY KEY(attempt_id,ordinal),
+                UNIQUE(attempt_id,model_hash)
+            );
+            CREATE INDEX IF NOT EXISTS observation_models_owner_idx ON observation_models(owner_anchor,ordinal);
             CREATE TABLE IF NOT EXISTS pending_inbound (
-                revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
                 sequence INTEGER PRIMARY KEY,
+                observation_header BLOB CHECK(observation_header IS NULL OR length(observation_header)<=16384),
+                observation_transcript INTEGER,
+                revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
                 message_id TEXT NOT NULL UNIQUE,
                 message_json TEXT NOT NULL,
                 correlation TEXT
@@ -5406,28 +7962,63 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 message_id TEXT NOT NULL UNIQUE
             );
             CREATE TABLE IF NOT EXISTS message_ledger (
+                observation_trace_summary BLOB CHECK(observation_trace_summary IS NULL OR length(observation_trace_summary)<=16384),
+                observation_identity_digest BLOB CHECK(observation_identity_digest IS NULL OR length(observation_identity_digest)=32),
+                observation_delivery_success INTEGER CHECK(observation_delivery_success IS NULL OR observation_delivery_success IN (0,1)),
+                observation_delivery_total INTEGER CHECK(observation_delivery_total IS NULL OR observation_delivery_total>=0),
+                native_transcript INTEGER,
+                human_activity_at TEXT,
+                human_activity_seconds INTEGER,
+                human_activity_nanos INTEGER,
+                opening_preview TEXT,
+                ordinary_user INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_user IN (0,1)),
+                native_todo INTEGER NOT NULL DEFAULT 0 CHECK(native_todo IN (0,1)),
+                boundary_indexed INTEGER NOT NULL DEFAULT 0 CHECK(boundary_indexed IN (0,1)),
+                first_append_revision INTEGER,
                 position INTEGER PRIMARY KEY,
                 message_id TEXT NOT NULL UNIQUE,
                 message_json TEXT NOT NULL,
                 checkpoint_json TEXT,
                 compaction_event_sequence INTEGER REFERENCES events(sequence)
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS message_ledger_identity_position_idx ON message_ledger(position,message_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL;
             CREATE TABLE IF NOT EXISTS canonical_tool_calls (
-                assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                observation_trace_proposal BLOB CHECK(observation_trace_proposal IS NULL OR length(observation_trace_proposal)<=16384),
+                observation_tool_identity_digest BLOB CHECK(observation_tool_identity_digest IS NULL OR length(observation_tool_identity_digest)=32),
+                observation_definition_ready INTEGER NOT NULL DEFAULT 0 CHECK(observation_definition_ready IN (0,1)),
+                observation_definition_start INTEGER REFERENCES events(sequence),
+                observation_definition_commit INTEGER REFERENCES events(sequence),
+                observation_definition_ordinal INTEGER CHECK(observation_definition_ordinal IS NULL OR observation_definition_ordinal>=0),
+                observation_ledger INTEGER NOT NULL,observation_tool_ordinal INTEGER NOT NULL,observation_call_id TEXT,observation_tool_id TEXT,observation_name TEXT NOT NULL, result_ledger_position INTEGER,
                 block_index INTEGER NOT NULL CHECK(block_index >= 0),
+                assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
                 call_id TEXT NOT NULL,
                 tool_id TEXT NOT NULL,
+                attempt_id TEXT,
+                commit_sequence INTEGER,
                 result_message_id TEXT UNIQUE REFERENCES message_ledger(message_id),
                 PRIMARY KEY(assistant_message_id,block_index),
                 UNIQUE(assistant_message_id,call_id)
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS canonical_tool_calls_observation_idx ON canonical_tool_calls(observation_ledger,block_index);
+            CREATE UNIQUE INDEX IF NOT EXISTS canonical_tool_calls_result_ledger_idx ON canonical_tool_calls(result_ledger_position) WHERE result_ledger_position IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS canonical_tool_calls_scope_idx ON canonical_tool_calls(attempt_id,call_id,commit_sequence,assistant_message_id,block_index);
             CREATE TABLE IF NOT EXISTS transcript_order (
                 position INTEGER PRIMARY KEY,
                 reference_kind TEXT NOT NULL,
                 reference_id TEXT NOT NULL,
+                observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
                 UNIQUE(reference_kind,reference_id)
             );
+            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_missing_idx ON transcript_order(position) WHERE observation_readiness_missing=1;
+            CREATE TABLE IF NOT EXISTS transcript_observation_readiness (
+                position INTEGER PRIMARY KEY REFERENCES transcript_order(position) ON DELETE CASCADE,
+                ready INTEGER NOT NULL CHECK(ready IN (0,1))
+            );
+            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_holes_idx ON transcript_observation_readiness(position) WHERE ready=0;
             CREATE TABLE IF NOT EXISTS bootstrap_identity (
+                occupancy_observation BLOB CHECK(occupancy_observation IS NULL OR length(occupancy_observation)<=16384),
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 message_count INTEGER NOT NULL,
                 history_digest TEXT NOT NULL,
@@ -5439,22 +8030,35 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 inherited_transcript_through INTEGER NOT NULL CHECK(inherited_transcript_through >= 0)
             );
             CREATE TABLE IF NOT EXISTS inherited_turn_provenance (
+                observation_turn_display_witness BLOB CHECK(observation_turn_display_witness IS NULL OR length(observation_turn_display_witness)=32),
+                observation_json_witness BLOB CHECK(observation_json_witness IS NULL OR length(observation_json_witness)=32),
+                observation_turn_display BLOB CHECK(observation_turn_display IS NULL OR length(observation_turn_display)<=16384),
+                display_provenance BLOB CHECK(display_provenance IS NULL OR length(display_provenance)<=16384),
+                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=16384),
+                observation_json BLOB CHECK(observation_json IS NULL OR length(observation_json)<=16384),
                 ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
-                payload TEXT NOT NULL,
-                payload_digest TEXT NOT NULL
+                payload_digest TEXT NOT NULL,
+                payload TEXT NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'));
             CREATE TABLE IF NOT EXISTS inherited_response_provenance (
+                closing_ledger_position INTEGER NOT NULL UNIQUE,
+                display_provenance BLOB CHECK(display_provenance IS NULL OR length(display_provenance)<=16384),
                 ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
                 payload TEXT NOT NULL,
                 payload_digest TEXT NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'));
+            CREATE INDEX IF NOT EXISTS inherited_response_owner_idx ON inherited_response_provenance(json_extract(payload,'$.origin.conversation_id'),json_extract(payload,'$.origin.attempt_id'),ordinal);
             CREATE TABLE IF NOT EXISTS inherited_message_membership (
-                assistant_message_id TEXT PRIMARY KEY REFERENCES message_ledger(message_id),
+                observation_identity_digest BLOB CHECK(observation_identity_digest IS NULL OR length(observation_identity_digest)=32),
+                observation_membership_witness BLOB CHECK(observation_membership_witness IS NULL OR length(observation_membership_witness)=32),
+                assistant_ledger_position INTEGER NOT NULL UNIQUE,
                 turn_ordinal INTEGER REFERENCES inherited_turn_provenance(ordinal),
                 response_ordinal INTEGER REFERENCES inherited_response_provenance(ordinal),
-                membership_digest TEXT NOT NULL
+                membership_digest TEXT NOT NULL,
+                assistant_message_id TEXT PRIMARY KEY REFERENCES message_ledger(message_id),
+                FOREIGN KEY(assistant_ledger_position,assistant_message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE INDEX IF NOT EXISTS inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id);
             CREATE TABLE IF NOT EXISTS surface_ops (
@@ -5475,12 +8079,76 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 active_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS request_snapshots (
+                observation_step_anchor INTEGER, observation_retry_number INTEGER, observation_context_total INTEGER, observation_accepted_ledger INTEGER,
+                observation_summary BLOB CHECK(observation_summary IS NULL OR length(observation_summary)<=16384),
+                retry_ledger_position INTEGER,
+                observation_terminal_sequence INTEGER,
+                observation_terminal_header BLOB CHECK(observation_terminal_header IS NULL OR length(observation_terminal_header)<=16384),
+                observation_source_id TEXT UNIQUE CHECK(observation_source_id IS NULL OR (length(observation_source_id)<=20 AND CAST(observation_source_id AS INTEGER)=started_sequence)),
+                previous_request_id TEXT,
                 request_id TEXT PRIMARY KEY,
                 surface_revision INTEGER NOT NULL,
-                snapshot_json TEXT NOT NULL,
                 started_sequence INTEGER,
-                completed_sequence INTEGER
+                completed_sequence INTEGER,
+                retry_message_id TEXT,
+                snapshot_json TEXT NOT NULL
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS request_snapshots_started_idx ON request_snapshots(started_sequence) WHERE started_sequence IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS state_observation_sources (
+                domain TEXT NOT NULL,source_id TEXT NOT NULL,ledger_position INTEGER,journal_sequence INTEGER,
+                todo_header BLOB CHECK(todo_header IS NULL OR length(todo_header)<=16384),
+                PRIMARY KEY(domain,source_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS state_observation_ledger_idx ON state_observation_sources(domain,ledger_position,source_id);
+            CREATE INDEX IF NOT EXISTS state_observation_journal_idx ON state_observation_sources(domain,journal_sequence,source_id);
+            CREATE TABLE IF NOT EXISTS state_observation_fields (
+                source_id TEXT NOT NULL,
+                path_json TEXT NOT NULL,parent_path TEXT,ordinal INTEGER,
+                key_path TEXT,key_header BLOB CHECK(key_header IS NULL OR length(key_header)<=4096),
+                start INTEGER NOT NULL CHECK(start>=0),end INTEGER NOT NULL CHECK(end>=start),
+                children INTEGER NOT NULL CHECK(children>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                PRIMARY KEY(source_id,path_json)
+            ) WITHOUT ROWID;
+            CREATE UNIQUE INDEX IF NOT EXISTS state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal);
+            CREATE TABLE IF NOT EXISTS request_observation_fields (
+                source_id TEXT NOT NULL REFERENCES request_snapshots(observation_source_id),
+                path_json TEXT NOT NULL,parent_path TEXT,ordinal INTEGER,
+                key_path TEXT,key_header BLOB CHECK(key_header IS NULL OR length(key_header)<=4096),
+                start INTEGER NOT NULL CHECK(start>=0),end INTEGER NOT NULL CHECK(end>=start),
+                children INTEGER NOT NULL CHECK(children>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                PRIMARY KEY(source_id,path_json)
+            ) WITHOUT ROWID;
+            CREATE UNIQUE INDEX IF NOT EXISTS request_observation_children_idx ON request_observation_fields(source_id,parent_path,ordinal);
+
+            CREATE TABLE IF NOT EXISTS request_trace_catalogs (
+                source_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
+                tool_count INTEGER NOT NULL CHECK(tool_count>=0),
+                provisional_message_id TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS request_trace_catalog_identity_idx ON request_trace_catalogs(provisional_message_id,source_sequence);
+            CREATE TABLE IF NOT EXISTS request_trace_definitions (
+                source_sequence INTEGER NOT NULL REFERENCES request_trace_catalogs(source_sequence) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+                tool_identity_digest BLOB NOT NULL CHECK(length(tool_identity_digest)=32),
+                tool_id TEXT NOT NULL,
+                PRIMARY KEY(source_sequence,ordinal)
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS request_trace_definition_digest_idx ON request_trace_definitions(source_sequence,tool_identity_digest,ordinal);
+            CREATE INDEX IF NOT EXISTS request_trace_definition_identity_idx ON request_trace_definitions(source_sequence,tool_id,ordinal);
+            CREATE TABLE IF NOT EXISTS trace_adoption_members (
+                source_sequence INTEGER NOT NULL REFERENCES events(sequence) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+                ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
+                identity_digest BLOB NOT NULL CHECK(length(identity_digest)=32),
+                PRIMARY KEY(source_sequence,ordinal)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS request_trace_contexts (
+                source_sequence INTEGER NOT NULL REFERENCES events(sequence),
+                ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+                header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                PRIMARY KEY(source_sequence,ordinal)
+            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS contribution_emission_heads (
                 producer TEXT NOT NULL,
                 semantic_key TEXT NOT NULL,
@@ -5506,6 +8174,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 stream_id TEXT NOT NULL,
                 sequence INTEGER NOT NULL,
                 frame_json TEXT NOT NULL,
+                observation_indexed INTEGER NOT NULL CHECK(observation_indexed IN (0,1)),
                 PRIMARY KEY(stream_id, sequence)
             );
             CREATE TABLE IF NOT EXISTS publication_proposals (
@@ -5528,20 +8197,88 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 authority_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS events (
+                observation_trace_fact BLOB CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=16384),
+                observation_trace_owner INTEGER,
+                observation_trace_fact_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_trace_fact_required IN (0,1)),
+                observation_kind TEXT CHECK(observation_kind IS NULL OR length(observation_kind)<=128),
+                observation_unavailable INTEGER NOT NULL DEFAULT 0 CHECK(observation_unavailable IN (0,1)),
+                observation_transcript INTEGER,
+                observation_witness BLOB CHECK(observation_witness IS NULL OR length(observation_witness)<=16384),
+                observation_assistant_ledger INTEGER,
+                observation_tool_ledger INTEGER,observation_tool_block INTEGER,
+                observation_tool_phase INTEGER CHECK(observation_tool_phase IS NULL OR observation_tool_phase IN (1,2)),
+                observation_turn_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_turn_required IN (0,1)),
+                observation_turn_ordinal INTEGER, observation_turn_anchor INTEGER,
+                observation_turn_header BLOB CHECK(observation_turn_header IS NULL OR length(observation_turn_header)<=16384),
+                observation_turn_prompt BLOB CHECK(observation_turn_prompt IS NULL OR length(observation_turn_prompt)<=512),
+                observation_turn_prompt_positive INTEGER NOT NULL DEFAULT 0 CHECK(observation_turn_prompt_positive IN (0,1)),
+                observation_execution_owner INTEGER,
+                observation_execution_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_execution_required IN(0,1)),
+                observation_execution BLOB CHECK(observation_execution IS NULL OR length(observation_execution)<=16384),
+                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=16384),
+                event_timestamp TEXT NOT NULL,
+                observation_member_anchor INTEGER,
+                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=16384),
+                observation_occupancy BLOB CHECK(observation_occupancy IS NULL OR length(observation_occupancy)<=16384),
+                observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
+                observation_statistics_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_statistics_required IN (0,1)),
+                observation_members_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_members_required IN (0,1)),
+                observation_trace_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_trace_required IN (0,1)),
+                observation_trace_total INTEGER CHECK(observation_trace_total IS NULL OR observation_trace_total>=0),
                 sequence INTEGER PRIMARY KEY,
                 event_id TEXT NOT NULL UNIQUE,
                 schema_version INTEGER NOT NULL,
                 conversation_id TEXT NOT NULL,
                 attempt_id TEXT,
                 turn_id TEXT,
+                observation_json BLOB CHECK(observation_json IS NULL OR length(observation_json)<=16384),
                 event_json TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL;
+            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence);
+            CREATE TABLE IF NOT EXISTS event_observation_readiness (
+                sequence INTEGER PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
+                ready INTEGER NOT NULL CHECK(ready IN (0,1)),
+                direct INTEGER NOT NULL DEFAULT 0 CHECK(direct IN (0,1))
+            );
+            CREATE INDEX IF NOT EXISTS events_observation_readiness_missing_idx ON events(sequence) WHERE observation_readiness_missing=1;
+            CREATE INDEX IF NOT EXISTS event_observation_readiness_holes_idx ON event_observation_readiness(sequence) WHERE ready=0;
+            CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger,sequence) WHERE observation_assistant_ledger IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_trace_holes_idx ON events(sequence) WHERE observation_trace_required=1 AND observation_trace_total IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_trace_total_idx ON events(sequence) WHERE observation_trace_total IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS transcript_order_audit_position_idx ON transcript_order(position) WHERE reference_kind='publication_audit';
+            CREATE INDEX IF NOT EXISTS events_observation_statistics_holes_idx ON events(sequence) WHERE observation_statistics_required=1 AND observation_statistics IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_statistics_idx ON events(sequence) WHERE observation_statistics IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase,sequence) WHERE observation_tool_phase IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block,sequence) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
+            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence);
+            CREATE INDEX IF NOT EXISTS events_observation_members_idx ON events(attempt_id,sequence) WHERE observation_members IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id,sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_member_holes_sequence_idx ON events(sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor,sequence) WHERE observation_members IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_unavailable_idx ON events(sequence) WHERE observation_unavailable=1;
+            CREATE UNIQUE INDEX IF NOT EXISTS events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
+            CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner,sequence) WHERE observation_execution IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_execution_holes_idx ON events(sequence) WHERE observation_execution_required=1 AND observation_execution IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_execution_idx ON events(attempt_id,sequence) WHERE observation_execution IS NOT NULL;
             CREATE TABLE IF NOT EXISTS lifecycle_state (
                 lifecycle_key TEXT PRIMARY KEY,
                 terminal_event_id TEXT
             );
             CREATE INDEX IF NOT EXISTS pending_inbound_sequence_idx ON pending_inbound(sequence);
             CREATE INDEX IF NOT EXISTS message_ledger_id_idx ON message_ledger(message_id);
+            CREATE INDEX IF NOT EXISTS message_ledger_append_position_idx ON message_ledger(position,first_append_revision) WHERE first_append_revision IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS message_ledger_todo_idx ON message_ledger(position) WHERE native_todo=1;
+            CREATE INDEX IF NOT EXISTS message_ledger_opening_idx ON message_ledger(position) WHERE ordinary_user=1;
+            CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(human_activity_seconds,human_activity_nanos,position) WHERE human_activity_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
             CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
@@ -5550,7 +8287,9 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
             CREATE INDEX IF NOT EXISTS contribution_emission_heads_lookup_idx ON contribution_emission_heads(producer, semantic_key);
             CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
-            CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);",
+            CREATE INDEX IF NOT EXISTS publication_frames_unindexed_idx ON publication_frames(stream_id,sequence) WHERE observation_indexed=0;
+            CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);
+            CREATE INDEX IF NOT EXISTS publication_streams_message_settlement_idx ON publication_streams(message_id,settlement);",
         )
         .map_err(|error| storage(format!("create schema: {error}")))?;
     for (name, expression) in PRESENTATION_INDEXES {
@@ -5578,11 +8317,14 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
         });
     }
     verify_schema_shape(connection)?;
-    Ok(())
+    transaction
+        .commit()
+        .map_err(|error| storage(format!("create schema commit: {error}")))
 }
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
+    provenance::verify_turn_header_shape(connection)?;
     // Bootstrap metadata stays compact; provenance payloads have their own rows.
     // Refuse obsolete inline arrays and require the native keyed representation.
     let bootstrap_columns = connection
@@ -5594,6 +8336,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         .map_err(|error| storage(error.to_string()))?;
     if bootstrap_columns
         != [
+            "occupancy_observation",
             "id",
             "message_count",
             "history_digest",
@@ -5621,6 +8364,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     for sql in [
         "CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))",
         "CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))",
+        "CREATE UNIQUE INDEX message_ledger_identity_position_idx ON message_ledger(position,message_id)",
+        "CREATE UNIQUE INDEX message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL",
     ] {
         let name = sql.split_whitespace().nth(3).expect("literal index name");
         let retained: Option<String> = connection
@@ -5635,6 +8380,58 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "missing or invalid inherited index {name}"
             )));
+        }
+    }
+    for (name, sql) in [
+        (
+            "inherited_response_owner_idx",
+            "CREATE INDEX inherited_response_owner_idx ON inherited_response_provenance(json_extract(payload,'$.origin.conversation_id'),json_extract(payload,'$.origin.attempt_id'),ordinal)",
+        ),
+        (
+            "observation_models_owner_idx",
+            "CREATE INDEX observation_models_owner_idx ON observation_models(owner_anchor,ordinal)",
+        ),
+        (
+            "events_observation_turn_ordinal_idx",
+            "CREATE UNIQUE INDEX events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL",
+        ),
+        (
+            "events_observation_turn_anchor_idx",
+            "CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL",
+        ),
+        (
+            "events_observation_turn_holes_idx",
+            "CREATE INDEX events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL",
+        ),
+        (
+            "events_observation_turn_prompt_idx",
+            "CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1",
+        ),
+        (
+            "events_observation_turn_prompt_holes_idx",
+            "CREATE INDEX events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL",
+        ),
+        (
+            "observation_block_ledger_kind_idx",
+            "CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index)",
+        ),
+        (
+            "events_observation_transcript_idx",
+            "CREATE UNIQUE INDEX events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL",
+        ),
+    ] {
+        let retained: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(error.to_string()))?;
+        if retained.as_deref() != Some(sql) {
+            return Err(ConversationStoreError::IncompatibleSchema(
+                "native owner index unavailable".into(),
+            ));
         }
     }
     let reverse_index: Option<String> = connection
@@ -5680,6 +8477,11 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     let expected = BTreeSet::from([
         (
             "message_ledger".into(),
+            "assistant_ledger_position".into(),
+            "position".into(),
+        ),
+        (
+            "message_ledger".into(),
             "assistant_message_id".into(),
             "message_id".into(),
         ),
@@ -5699,6 +8501,22 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "invalid inherited membership foreign keys".into(),
         ));
     }
+    let paired: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('inherited_message_membership') a JOIN pragma_foreign_key_list('inherited_message_membership') b ON a.id=b.id WHERE a.\"table\"='message_ledger' AND a.\"from\"='assistant_ledger_position' AND a.\"to\"='position' AND b.\"from\"='assistant_message_id' AND b.\"to\"='message_id' AND a.seq=0 AND b.seq=1)",
+        [], |row| row.get(0),
+    ).map_err(|error| storage(error.to_string()))?;
+    if !paired {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "inherited canonical identity is not paired".into(),
+        ));
+    }
+    verify_unique_columns(connection, "message_ledger", &["position", "message_id"])?;
+    verify_unique_column(
+        connection,
+        "inherited_message_membership",
+        "assistant_ledger_position",
+    )?;
+    verify_witness_field_order(connection)?;
     let required = [
         (
             "rustx_store",
@@ -5708,6 +8526,8 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "next_inbound_sequence",
                 "next_event_sequence",
                 "next_transcript_position",
+                "retained_transcript_count",
+                "pending_observation_count",
                 "reading_mutation_revision",
                 "logical_step_sequence",
                 "pending_unresolved_output_stream_id",
@@ -5716,16 +8536,65 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "pending_inbound",
-            &["sequence", "message_id", "message_json", "correlation"],
+            &[
+                "sequence",
+                "observation_header",
+                "observation_transcript",
+                "revision",
+                "message_id",
+                "message_json",
+                "correlation",
+            ],
         ),
         (
             "inbound_correlation",
             &["correlation", "sequence", "message_id"],
         ),
         (
+            "observation_headers",
+            &[
+                "reference_kind",
+                "reference_id",
+                "ledger_position",
+                "header_json",
+            ],
+        ),
+        (
+            "content_segments",
+            &[
+                "source_kind",
+                "source_id",
+                "block_index",
+                "representation",
+                "segment",
+                "bytes",
+            ],
+        ),
+        (
+            "content_frontiers",
+            &[
+                "source_kind",
+                "source_id",
+                "block_index",
+                "representation",
+                "revision",
+                "readable_end",
+            ],
+        ),
+        (
             "message_ledger",
             &[
+                "observation_trace_summary",
+                "observation_identity_digest",
+                "observation_delivery_success",
+                "observation_delivery_total",
                 "position",
+                "native_transcript",
+                "human_activity_at",
+                "human_activity_seconds",
+                "human_activity_nanos",
+                "opening_preview",
+                "ordinary_user",
                 "message_id",
                 "message_json",
                 "checkpoint_json",
@@ -5739,6 +8608,12 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "canonical_tool_calls",
             &[
+                "observation_trace_proposal",
+                "observation_tool_identity_digest",
+                "observation_definition_ready",
+                "observation_definition_start",
+                "observation_definition_commit",
+                "observation_definition_ordinal",
                 "assistant_message_id",
                 "block_index",
                 "call_id",
@@ -5749,6 +8624,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "bootstrap_identity",
             &[
+                "occupancy_observation",
                 "message_count",
                 "history_digest",
                 "turn_count",
@@ -5761,7 +8637,14 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "inherited_turn_provenance",
-            &["ordinal", "payload", "payload_digest"],
+            &[
+                "observation_turn_display",
+                "observation_turn_display_witness",
+                "observation_json_witness",
+                "ordinal",
+                "payload",
+                "payload_digest",
+            ],
         ),
         (
             "inherited_response_provenance",
@@ -5770,7 +8653,10 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "inherited_message_membership",
             &[
+                "observation_identity_digest",
+                "observation_membership_witness",
                 "assistant_message_id",
+                "assistant_ledger_position",
                 "turn_ordinal",
                 "response_ordinal",
                 "membership_digest",
@@ -5791,6 +8677,12 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "request_snapshots",
             &[
+                "observation_step_anchor",
+                "observation_retry_number",
+                "observation_context_total",
+                "observation_accepted_ledger",
+                "observation_summary",
+                "observation_source_id",
                 "request_id",
                 "surface_revision",
                 "snapshot_json",
@@ -5826,7 +8718,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         ),
         (
             "publication_frames",
-            &["stream_id", "sequence", "frame_json"],
+            &["stream_id", "sequence", "frame_json", "observation_indexed"],
         ),
         (
             "publication_proposals",
@@ -5845,6 +8737,22 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "events",
             &[
+                "observation_turn_required",
+                "observation_turn_ordinal",
+                "observation_turn_anchor",
+                "observation_turn_header",
+                "observation_turn_prompt",
+                "observation_turn_prompt_positive",
+                "observation_trace_fact",
+                "observation_trace_owner",
+                "observation_trace_fact_required",
+                "observation_execution_owner",
+                "observation_execution_required",
+                "observation_kind",
+                "observation_occupancy",
+                "observation_statistics_required",
+                "observation_members_required",
+                "observation_member_anchor",
                 "sequence",
                 "event_id",
                 "schema_version",
@@ -5852,6 +8760,64 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "attempt_id",
                 "turn_id",
                 "event_json",
+                "observation_unavailable",
+                "observation_json",
+            ],
+        ),
+        (
+            "request_trace_catalogs",
+            &["source_sequence", "provisional_message_id", "tool_count"],
+        ),
+        (
+            "request_trace_definitions",
+            &[
+                "source_sequence",
+                "ordinal",
+                "tool_identity_digest",
+                "tool_id",
+            ],
+        ),
+        (
+            "trace_adoption_members",
+            &[
+                "source_sequence",
+                "ordinal",
+                "ledger_position",
+                "identity_digest",
+            ],
+        ),
+        (
+            "request_trace_contexts",
+            &["source_sequence", "ordinal", "header_json"],
+        ),
+        (
+            "request_observation_fields",
+            &[
+                "source_id",
+                "path_json",
+                "parent_path",
+                "ordinal",
+                "header_json",
+            ],
+        ),
+        (
+            "state_observation_fields",
+            &[
+                "source_id",
+                "path_json",
+                "parent_path",
+                "ordinal",
+                "header_json",
+            ],
+        ),
+        (
+            "observation_models",
+            &[
+                "request_alias",
+                "request_encoded_bytes",
+                "first_sequence",
+                "owner_anchor",
+                "encoded_bytes",
             ],
         ),
         ("agent_authorities", &["agent_id", "authority_json"]),
@@ -5913,6 +8879,9 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         "contribution_emission_heads",
         &["producer", "semantic_key"],
     )?;
+    content::verify_schema(connection)?;
+    observation::verify_schema(connection)?;
+    observation_trace::verify_schema(connection)?;
     Ok(())
 }
 
@@ -6235,7 +9204,7 @@ fn associate_canonical_tool_result(
             "canonical Tool occurrence already has a result".into(),
         ));
     }
-    transaction.execute("UPDATE canonical_tool_calls SET result_message_id=?1 WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), owner.assistant_message_id.as_str(), owner.block_index.get()])
+    transaction.execute("UPDATE canonical_tool_calls SET result_message_id=?1,result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), owner.assistant_message_id.as_str(), owner.block_index.get()])
         .map_err(|error| storage(format!("canonical Tool result index: {error}")))?;
     Ok(())
 }
@@ -6326,28 +9295,63 @@ fn append_message_ledger(
             |row| row.get(0),
         )
         .map_err(|error| storage(format!("next Ledger position: {error}")))?;
+    let (ordinary_user, human_activity_at, opening_preview) = match message {
+        MessageBlock::User(user) if user.kind == InboundKind::Message => (
+            true,
+            matches!(user.source, UserSource::Human)
+                .then_some(user.timestamp)
+                .flatten(),
+            crate::local_runtime::session::preview_of(user),
+        ),
+        _ => (false, None, None),
+    };
     transaction
         .execute(
-            "INSERT INTO message_ledger(position,message_id,message_json) VALUES(?1,?2,?3)",
-            params![position, id.as_str(), encode(message, "canonical message")?],
+            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_seconds,human_activity_nanos,opening_preview,native_todo) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),human_activity_at.map(|time|time.timestamp()),human_activity_at.map(|time|time.timestamp_subsec_nanos()),opening_preview,observation_state::todo_value(message).is_some()],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
+    let _ = optional_display_layout(transaction, || {
+        content::index_message(transaction, message)?;
+        observation::index_message(
+            transaction,
+            message,
+            Some(nonnegative(position, "header ledger position")?),
+        )
+    });
     if let MessageBlock::Assistant(assistant) = message {
+        let mut tool_ordinal = 0_u64;
         for (index, block) in assistant.content.iter().enumerate() {
             if let AssistantContentBlock::ToolCall(call) = block {
                 let block_index =
                     u32::try_from(index).map_err(|_| storage("Tool block index overflow"))?;
                 transaction
                     .execute(
-                        "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id)
-                         VALUES(?1,?2,?3,?4)",
-                        params![assistant.id.as_str(), block_index, call.id.as_str(), call.tool_id.as_str()],
+                        "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id,observation_ledger,observation_call_id,observation_tool_id,observation_tool_ordinal,observation_name)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                        params![assistant.id.as_str(), block_index, call.id.as_str(), call.tool_id.as_str(),position,(call.id.as_str().len()<=256).then_some(call.id.as_str()),(call.tool_id.as_str().len()<=256).then_some(call.tool_id.as_str()),tool_ordinal, observation_tools::name_preview(&call.name)],
                     )
                     .map_err(|error| storage(format!("canonical Tool occurrence: {error}")))?;
+                tool_ordinal = tool_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| storage("Tool ordinal overflow"))?;
             }
         }
     }
     associate_canonical_tool_result(transaction, message)?;
+    let _ = optional_display_layout(transaction, || {
+        let conversation: String = transaction
+            .query_row(
+                "SELECT conversation_id FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        let conversation = ConversationId::parse(conversation).map_err(storage)?;
+        let position = nonnegative(position, "native Trace C position")?;
+        observation_trace::index_proposals(transaction, &conversation, position, message)?;
+        observation_trace::index_canonical(transaction, &conversation, position, message)
+    });
     if transcript_visible_message(message) {
         Ok(Some(append_transcript_reference(
             transaction,
@@ -6390,6 +9394,15 @@ fn append_transcript_reference(
         .optional()
         .map_err(|error| storage(format!("transcript reference probe: {error}")))?;
     if let Some(position) = existing {
+        if reference_kind == "message" {
+            transaction
+                .execute(
+                    "UPDATE message_ledger SET native_transcript=?1 WHERE message_id=?2",
+                    params![position, reference_id],
+                )
+                .map_err(|error| storage(error.to_string()))?;
+        }
+        let _=transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
         return Ok(TranscriptCursor::new(
             u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
         ));
@@ -6410,12 +9423,36 @@ fn append_transcript_reference(
             params![position, reference_kind, reference_id],
         )
         .map_err(|error| storage(format!("insert transcript reference: {error}")))?;
+    let _ = optional_display_layout(transaction, || {
+        transaction
+            .execute(
+                "INSERT INTO transcript_observation_readiness(position,ready) VALUES(?1,0)",
+                [position],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        transaction
+            .execute(
+                "UPDATE transcript_order SET observation_readiness_missing=0 WHERE position=?1",
+                [position],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(())
+    });
     transaction
         .execute(
-            "UPDATE rustx_store SET next_transcript_position=?1 WHERE id=1",
+            "UPDATE rustx_store SET next_transcript_position=?1,retained_transcript_count=retained_transcript_count+1 WHERE id=1",
             [position],
         )
         .map_err(|error| storage(format!("update transcript position: {error}")))?;
+    if reference_kind == "message" {
+        transaction
+            .execute(
+                "UPDATE message_ledger SET native_transcript=?1 WHERE message_id=?2",
+                params![position, reference_id],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+    }
+    let _=transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]);
     Ok(TranscriptCursor::new(
         u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
     ))
@@ -6472,6 +9509,31 @@ fn append_surface_op(
             ],
         )
         .map_err(|error| storage(format!("append Surface operation: {error}")))?;
+    if let SurfaceOp::Append { message_id } = operation {
+        transaction.execute("UPDATE message_ledger SET first_append_revision=COALESCE(first_append_revision,?1) WHERE message_id=?2",params![revision.get(),message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        // Existing native Surface commit owns first appearance. This index
+        // never rewrites Surface membership, Compaction or canonical history.
+        let _ = optional_display_layout(transaction, || {
+            let boundary: Option<u64> = transaction
+                .query_row(
+                    "SELECT position FROM message_ledger WHERE message_id=?1 AND ordinary_user=1",
+                    [message_id.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| storage(error.to_string()))?;
+            if let Some(position) = boundary {
+                transaction.execute("INSERT OR IGNORE INTO surface_observation_boundaries SELECT COALESCE((SELECT MAX(ordinal)+1 FROM surface_observation_boundaries),0),?1,?2",params![position,seq_to_i64(revision.get())?]).map_err(|error|storage(error.to_string()))?;
+                transaction
+                    .execute(
+                        "UPDATE message_ledger SET boundary_indexed=1 WHERE position=?1",
+                        [position],
+                    )
+                    .map_err(|error| storage(error.to_string()))?;
+            }
+            Ok(())
+        });
+    }
     Ok(())
 }
 
@@ -6669,6 +9731,34 @@ fn load_pending_rows(
         }
     }
     Ok(items)
+}
+
+fn load_pending_exact(
+    connection: &Connection,
+    sequence: InboundSequence,
+) -> Result<Option<PendingInboundItem>, ConversationStoreError> {
+    type PendingIdentityRow = (String, String, Option<String>, Option<u64>, u64);
+    let row:Option<PendingIdentityRow>=connection.query_row("SELECT p.message_id,p.message_json,p.correlation,t.position,p.revision FROM pending_inbound p LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=p.message_id WHERE p.sequence=?1",[sequence.get()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|storage(error.to_string()))?;
+    row.map(|(id, json, correlation, cursor, revision)| {
+        let message: UserMessageBlock =
+            serde_json::from_str(&json).map_err(|error| storage(error.to_string()))?;
+        if message.id.as_str() != id
+            || (!matches!(message.kind, InboundKind::Context(_))) != cursor.is_some()
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "pending source identity or transcript mismatch".into(),
+            ));
+        }
+        Ok(PendingInboundItem {
+            revision,
+            sequence,
+            message_id: MessageId::new(id),
+            message,
+            transcript_cursor: cursor.map(TranscriptCursor::new),
+            correlation,
+        })
+    })
+    .transpose()
 }
 
 fn load_pending_until(
@@ -7533,11 +10623,26 @@ fn persist_agent_authority_tx(
     }
 }
 
-#[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
 fn persist_event_tx(
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
+    event: RuntimeEventEnvelope,
+) -> Result<PersistedEvent, ConversationStoreError> {
+    persist_event_tx_internal(transaction, conversation_id, event, true)
+}
+fn persist_event_tx_deferred(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    event: RuntimeEventEnvelope,
+) -> Result<PersistedEvent, ConversationStoreError> {
+    persist_event_tx_internal(transaction, conversation_id, event, false)
+}
+#[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
+fn persist_event_tx_internal(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
     mut event: RuntimeEventEnvelope,
+    prepare_observation: bool,
 ) -> Result<PersistedEvent, ConversationStoreError> {
     if event.schema_version != EVENT_SCHEMA_VERSION {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -7614,7 +10719,7 @@ fn persist_event_tx(
     let json = encode(&event, "runtime event")?;
     transaction
         .execute(
-            "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp,observation_trace_required,observation_statistics_required,observation_kind,observation_members_required,observation_turn_required,observation_trace_fact_required,observation_execution_required,observation_unavailable) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1)",
             params![
                 sequence,
                 event.event_id.as_str(),
@@ -7622,10 +10727,91 @@ fn persist_event_tx(
                 event.conversation_id.as_str(),
                 event.attempt_id.as_ref().map(ToString::to_string),
                 event.turn_id.as_ref().map(ToString::to_string),
-                json
+                json,
+                event.timestamp.to_rfc3339(),
+                observation_statistics::is_trace_anchor(&event.event),
+                observation_statistics::requires_statistics(&event),
+                observation_event::native_kind(&event.event).ok(),
+                observation_members::requires_members(&event),
+                observation_turn::required(&event),
+                observation_trace::required(&event),
+                observation_execution::required(&event),
             ],
         )
         .map_err(|error| storage(format!("insert runtime event: {error}")))?;
+    // Missing auxiliary evidence is the fail-closed initial state. Independent
+    // savepoints preserve own lifecycle facts if a different layout fails.
+    // Readiness has its own recoverable missing-evidence flag. A newly
+    // installed Runtime may repair it without clearing unrelated layout holes.
+    let _ = optional_display_layout(transaction, || {
+        observation_readiness::insert(transaction, &event)
+    });
+    #[cfg(test)]
+    let statistics_started = std::time::Instant::now();
+    let statistics_available = optional_display_layout(transaction, || {
+        observation_statistics::event(transaction, &event)?;
+        observation_members::member_event(transaction, &event)
+    })
+    .is_some();
+    #[cfg(test)]
+    observation_request::profile_statistics(statistics_started.elapsed());
+    if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
+        transaction.execute("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+    }
+
+    // Caller-supplied ephemeral evidence is never trusted. Native canonical
+    // ownership is resolved inside this exact append transaction.
+    let assistant_available = optional_display_layout(transaction, || {
+        if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
+            transaction.execute("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        }
+        Ok(())
+    }).is_some();
+    event.tool_occurrence = observation::tool_occurrence_receipt(transaction, &event)?;
+    let tool_available = optional_display_layout(transaction, || {
+    if let Some(occurrence) = &event.tool_occurrence {
+        let phase = match &event.event {
+            RuntimeEvent::ToolExecutionStarted { .. } => Some(1),
+            RuntimeEvent::ToolExecutionCompleted { .. }
+            | RuntimeEvent::ToolExecutionFailed { .. } => Some(2),
+            _ => None,
+        };
+        transaction.execute("UPDATE events SET observation_tool_ledger=?1,observation_tool_block=?2,observation_tool_phase=?4 WHERE sequence=?3",params![occurrence.ledger_position,occurrence.block_index.get(),sequence,phase]).map_err(|error|storage(error.to_string()))?;
+    }
+        Ok(())
+    }).is_some();
+    let execution_available = optional_display_layout(transaction, || {
+        observation_execution::event(transaction, &event)
+    })
+    .is_some();
+    let state_available = optional_display_layout(transaction, || {
+        observation_state::event(transaction, &event)
+    })
+    .is_some();
+    let request_available = optional_display_layout(transaction, || {
+        observation_occupancy::event(transaction, &event)?;
+        observation_request::terminal(transaction, &event)
+    })
+    .is_some();
+    let witness_available = observation_event::index_optional(transaction, &event);
+    let trace_available = optional_display_layout(transaction, || {
+        observation_trace::index_event(transaction, &event)
+    })
+    .is_some();
+    let observation_json = crate::runtime_client::checkpoint::bounded_bytes(
+        &event,
+        crate::durable::observation::HEADER_ENCODED_MAX,
+    );
+    let json_available = optional_display_layout(transaction, || {
+        transaction
+            .execute(
+                "UPDATE events SET observation_json=?2 WHERE sequence=?1",
+                params![sequence, observation_json],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(())
+    })
+    .is_some();
     transaction
         .execute(
             "UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1",
@@ -7656,6 +10842,10 @@ fn persist_event_tx(
     } else {
         None
     };
+    let transcript_available = enrich_event_transcript(transaction, &event, transcript_cursor);
+    let turn_available =
+        optional_display_layout(transaction, || observation_turn::event(transaction, &event))
+            .is_some();
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
     // keyed lookup instead of a Journal scan.
@@ -7672,10 +10862,76 @@ fn persist_event_tx(
             )));
         }
     }
+    if statistics_available
+        && assistant_available
+        && tool_available
+        && execution_available
+        && state_available
+        && request_available
+        && witness_available
+        && trace_available
+        && json_available
+        && transcript_available
+        && turn_available
+    {
+        // The marker clear is auxiliary too: its failure leaves the original
+        // native J/C/T committed and this row explicitly unavailable.
+        let _ = optional_display_layout(transaction, || {
+            transaction
+                .execute(
+                    "UPDATE events SET observation_unavailable=0 WHERE sequence=?1",
+                    [sequence],
+                )
+                .map_err(|error| storage(error.to_string()))?;
+            Ok(())
+        });
+    }
+    event.observation = prepare_observation
+        .then(|| observation_receipt::single(transaction, conversation_id, &event))
+        .flatten();
     Ok(PersistedEvent {
         event,
         transcript_cursor,
     })
+}
+
+/// Independent derived T coordinates, witness and display header cannot refuse
+/// the original transcript seat or erase another successfully captured layout.
+fn enrich_event_transcript(
+    transaction: &Transaction<'_>,
+    event: &RuntimeEventEnvelope,
+    cursor: Option<TranscriptCursor>,
+) -> bool {
+    let Some(cursor) = cursor else {
+        return true;
+    };
+    let coordinates = optional_display_layout(transaction, || {
+        transaction
+            .execute(
+                "UPDATE events SET observation_transcript=?1 WHERE sequence=?2",
+                params![cursor.get(), event.sequence],
+            )
+            .map_err(|error| storage(error.to_string()))?;
+        Ok(())
+    })
+    .is_some();
+    let witness = optional_display_layout(transaction, || {
+        observation_event::attach_transcript(transaction, event.sequence, cursor)
+    })
+    .is_some();
+    let kind = if matches!(
+        event.event,
+        RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. }
+    ) {
+        "interaction_event"
+    } else {
+        "attempt_terminal"
+    };
+    let header = optional_display_layout(transaction, || {
+        observation::index_native_event(transaction, kind, event, cursor)
+    })
+    .is_some();
+    coordinates && witness && header
 }
 
 fn validate_event_identity(envelope: &RuntimeEventEnvelope) -> Result<(), ConversationStoreError> {
@@ -7739,19 +10995,55 @@ fn validate_attempt_start_uniqueness(
     Ok(())
 }
 
+// These expression indexes cover the original native Journal JSON, rather
+// than optional observation headers. Two starts retain duplicate detection;
+// one winner per terminal kind retains earliest native sequence ordering.
+const REQUEST_START_PROBE_SQL: &str =
+    "SELECT event_json FROM events INDEXED BY events_request_id_kind_idx
+    WHERE json_extract(event_json,'$.event.request_id')=?1
+      AND json_extract(event_json,'$.event.type')='model_request_started'
+    ORDER BY sequence LIMIT 2";
+const REQUEST_OUTCOME_PROBE_SQL: &str = "SELECT event_json FROM (
+    SELECT event_json,sequence FROM (
+        SELECT event_json,sequence FROM events INDEXED BY events_request_id_kind_idx
+        WHERE json_extract(event_json,'$.event.request_id')=?1
+          AND json_extract(event_json,'$.event.type')='model_request_completed'
+        ORDER BY sequence LIMIT 1)
+    UNION ALL
+    SELECT event_json,sequence FROM (
+        SELECT event_json,sequence FROM events INDEXED BY events_request_id_kind_idx
+        WHERE json_extract(event_json,'$.event.request_id')=?1
+          AND json_extract(event_json,'$.event.type')='model_request_failed'
+        ORDER BY sequence LIMIT 1))
+    ORDER BY sequence LIMIT 1";
+
+#[cfg(test)]
+thread_local! {
+    static REQUEST_PROBE_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) };
+}
+#[cfg(test)]
+fn record_request_probe_work(json: &str) {
+    REQUEST_PROBE_WORK.with(|work| {
+        let (rows, bytes) = work.get();
+        work.set((rows + 1, bytes + json.len()));
+    });
+}
+
 fn find_request_start_event(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
     let mut statement = transaction
-        .prepare("SELECT event_json FROM events ORDER BY sequence")
+        .prepare_cached(REQUEST_START_PROBE_SQL)
         .map_err(|error| storage(format!("request-start event probe: {error}")))?;
     let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([request_id.as_str()], |row| row.get::<_, String>(0))
         .map_err(|error| storage(format!("request-start event query: {error}")))?;
     let mut found = None;
     for row in rows {
         let json = row.map_err(|error| storage(format!("request-start event row: {error}")))?;
+        #[cfg(test)]
+        record_request_probe_work(&json);
         let event: RuntimeEventEnvelope = decode(&json, "request-start event")?;
         if matches!(
             &event.event,
@@ -7858,13 +11150,15 @@ fn find_request_outcome_event(
     request_id: &RequestId,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
     let mut statement = transaction
-        .prepare("SELECT event_json FROM events ORDER BY sequence")
+        .prepare_cached(REQUEST_OUTCOME_PROBE_SQL)
         .map_err(|error| storage(format!("request outcome probe: {error}")))?;
     let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([request_id.as_str()], |row| row.get::<_, String>(0))
         .map_err(|error| storage(format!("request outcome query: {error}")))?;
     for row in rows {
         let json = row.map_err(|error| storage(format!("request outcome row: {error}")))?;
+        #[cfg(test)]
+        record_request_probe_work(&json);
         let event: RuntimeEventEnvelope = decode(&json, "request outcome")?;
         if matches!(
             &event.event,
@@ -9490,11 +12784,8 @@ fn ledger_message_exists(
     message_id: &MessageId,
 ) -> Result<bool, ConversationStoreError> {
     connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM message_ledger WHERE message_id=?1)",
-            [message_id.as_str()],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT EXISTS(SELECT 1 FROM message_ledger WHERE message_id=?1)")
+        .and_then(|mut statement| statement.query_row([message_id.as_str()], |row| row.get(0)))
         .map_err(|error| storage(format!("event Ledger reference: {error}")))
 }
 
@@ -9805,6 +13096,79 @@ fn map_insert_error(error: &rusqlite::Error, message_id: &MessageId) -> Conversa
     }
 }
 
+fn verify_witness_field_order(connection: &Connection) -> Result<(), ConversationStoreError> {
+    for (table, original, fields) in [
+        (
+            "request_trace_catalogs",
+            "provisional_message_id",
+            &["tool_count"] as &[&str],
+        ),
+        (
+            "canonical_tool_calls",
+            "assistant_message_id",
+            &[
+                "observation_tool_identity_digest",
+                "observation_definition_ready",
+                "observation_definition_start",
+                "observation_definition_commit",
+                "observation_definition_ordinal",
+            ] as &[&str],
+        ),
+        (
+            "message_ledger",
+            "message_id",
+            &[
+                "observation_identity_digest",
+                "observation_delivery_success",
+                "observation_delivery_total",
+            ] as &[&str],
+        ),
+        (
+            "inherited_message_membership",
+            "assistant_message_id",
+            &[
+                "observation_identity_digest",
+                "observation_membership_witness",
+                "assistant_ledger_position",
+                "turn_ordinal",
+                "response_ordinal",
+                "membership_digest",
+            ] as &[&str],
+        ),
+    ] {
+        let original_position: usize = connection
+            .query_row(
+                "SELECT cid FROM pragma_table_info(?1) WHERE name=?2",
+                params![table, original],
+                |row| row.get(0),
+            )
+            .map_err(|_| {
+                ConversationStoreError::IncompatibleSchema(
+                    "missing original witness identity column".into(),
+                )
+            })?;
+        for field in fields {
+            let position: usize = connection
+                .query_row(
+                    "SELECT cid FROM pragma_table_info(?1) WHERE name=?2",
+                    params![table, field],
+                    |row| row.get(0),
+                )
+                .map_err(|_| {
+                    ConversationStoreError::IncompatibleSchema(
+                        "missing finite read witness column".into(),
+                    )
+                })?;
+            if position >= original_position {
+                return Err(ConversationStoreError::IncompatibleSchema(
+                    "finite read witness follows original identity body".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn is_constraint_violation(error: &rusqlite::Error) -> bool {
     matches!(
         error,
@@ -9818,6 +13182,18 @@ mod pending_transaction_tests;
 
 #[cfg(test)]
 mod tests {
+    include!("sqlite/observation_trace_tests.rs");
+    include!("sqlite/observation_inspection_tests.rs");
+    include!("sqlite/observation_occupancy_tests.rs");
+    include!("sqlite/observation_statistics_tests.rs");
+    include!("sqlite/observation_member_tests.rs");
+    include!("sqlite/observation_owner_tests.rs");
+    include!("sqlite/observation_selected_source_tests.rs");
+    include!("sqlite/observation_occupancy_origin_tests.rs");
+    mod request_probe_tests {
+        use super::*;
+        include!("sqlite/request_probe_tests.rs");
+    }
     mod indexed_fact_tests {
         use super::*;
         include!("sqlite/indexed_fact_tests.rs");
@@ -10227,7 +13603,7 @@ mod tests {
         )
         .unwrap();
         let current = &unresolved.entries[0].tool_calls[0];
-        assert_eq!(current.message_id, MessageId::new("b"));
+        assert_eq!(current.message_id, Some(MessageId::new("b")));
         assert!(matches!(
             current.state,
             crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
@@ -10289,7 +13665,7 @@ mod tests {
         let unresolved =
             crate::runtime_client::snapshot::transcript_page_view(before.clone()).unwrap();
         for (index, tool) in unresolved.entries[0].tool_calls.iter().enumerate() {
-            assert_eq!(tool.message_id, MessageId::new("assistant"));
+            assert_eq!(tool.message_id, Some(MessageId::new("assistant")));
             assert_eq!(tool.block_index.get() as usize, index);
             assert!(matches!(
                 tool.state,
@@ -10348,11 +13724,18 @@ mod tests {
             tools[1].result.as_ref().unwrap().status,
             ToolExecutionStatus::Failed { .. }
         ));
+        let original_results: Vec<_> = tools.iter().map(|tool| tool.result.clone()).collect();
         let projected = crate::runtime_client::snapshot::transcript_page_view(older).unwrap();
-        assert!(projected.entries[0].tool_calls.iter().all(|tool| matches!(
-            tool.state,
-            crate::runtime_client::snapshot::ForegroundToolState::Settled { .. }
-        )));
+        // Canonical result acceptance is positive C evidence. No execution J
+        // fact occurred in this fixture, so it cannot settle the lifecycle.
+        for (tool, expected) in projected.entries[0].tool_calls.iter().zip(original_results) {
+            assert!(matches!(
+                tool.state,
+                crate::runtime_client::snapshot::ForegroundToolState::Assembled { .. }
+            ));
+            assert_eq!(tool.committed_result, expected);
+            assert!(tool.result_source.is_none());
+        }
     }
 
     #[test]
@@ -10448,6 +13831,8 @@ mod tests {
         event: RuntimeEvent,
     ) -> RuntimeEventEnvelope {
         RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(event_id),
             sequence: 0,
@@ -11040,6 +14425,58 @@ mod tests {
             None,
             request_context_ids,
         )
+    }
+
+    pub(crate) fn hidden_context_audit_fixture() -> HiddenContextAuditFixture {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936190");
+        let store = Arc::new(SqliteConversationStore::in_memory(id).unwrap());
+        store.initialize(&[]).unwrap();
+        let snapshot = context_start_snapshot(store.load_head().unwrap().revision, Vec::new());
+        let time = Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap();
+        let started = store.commit_model_turn_start(&[], &snapshot, time).unwrap();
+        store
+            .mark_observation_ready(started.started.sequence, started.started.sequence)
+            .unwrap();
+        let start = PublicationStreamStart {
+            stream_id: PublicationStreamId::for_request(
+                &snapshot.identity.attempt_id,
+                &snapshot.provisional_message_id,
+            ),
+            message_id: snapshot.provisional_message_id.clone(),
+            attempt_id: snapshot.identity.attempt_id.clone(),
+            turn_id: snapshot.identity.turn.clone(),
+            request_id: snapshot.request_id.clone(),
+        };
+        store.open_publication_stream(&start).unwrap();
+        store
+            .stage_publication_frames(&[PublicationFrame {
+                stream_id: start.stream_id.clone(),
+                message_id: start.message_id,
+                sequence: 0,
+                payload: PublicationPayload::TextSuffix {
+                    block_index: ContentBlockIndex::new(0),
+                    suffix: "original audit prefix".into(),
+                },
+            }])
+            .unwrap();
+        let before = store.observation_read_cut().unwrap();
+        let context = store
+            .append_canonical(&request_context_message(
+                "hidden-before-audit",
+                "future context",
+            ))
+            .unwrap();
+        assert!(context.transcript_cursor.is_none());
+        let (_, audit) = store
+            .terminalize_publication_audit(&start.stream_id, time)
+            .unwrap();
+        assert_eq!(audit.read_cut.ledger_through, context.ledger_position);
+        HiddenContextAuditFixture {
+            store,
+            before,
+            context,
+            audit,
+        }
     }
 
     fn status_start_snapshot_for(
@@ -11908,6 +15345,63 @@ mod tests {
     /// Issue #12 (M9b): the request-scoped context, the Request Snapshot,
     /// and the `ModelRequestStarted` fact commit in one transaction; the
     /// snapshot's Surface revision is the head the context appends created.
+    #[test]
+    #[ignore = "explicit native request-index measurement; no timing correctness assertion"]
+    fn measure_native_request_index_complete_300_turn_source() {
+        let store = store();
+        let messages = (0..600)
+            .map(|index| {
+                user_message(
+                    &format!("profile-{index}"),
+                    "\u{feff}🙂水 native retained request history",
+                )
+            })
+            .collect::<Vec<_>>();
+        store.initialize(&messages).unwrap();
+        let snapshot = progress_request_snapshot(
+            "index-profile",
+            "1",
+            0,
+            store.load_head().unwrap().revision,
+            Vec::new(),
+        );
+        let before = std::time::Instant::now();
+        crate::runtime::read_layout::SeekableObservationSource::profile_unbuffered(|| {
+            store.commit_model_turn_start(&[], &snapshot, Utc::now())
+        })
+        .unwrap();
+        let before_total = before.elapsed();
+        let baseline = observation_request::LAST_INDEX_PROFILE.with(std::cell::Cell::get);
+        let snapshot = progress_request_snapshot(
+            "index-profile-buffered",
+            "1",
+            0,
+            store.load_head().unwrap().revision,
+            Vec::new(),
+        );
+        let began = std::time::Instant::now();
+        let committed = store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap();
+        let total = began.elapsed();
+        let (layout, bytes, fields, count) =
+            observation_request::LAST_INDEX_PROFILE.with(std::cell::Cell::get);
+        assert!(count > 6000);
+        assert_eq!(count, baseline.3);
+        let header = store
+            .request_summary_header(&snapshot.request_id, committed.started.sequence)
+            .unwrap();
+        assert_eq!(header.collections[0].total, 600);
+        assert!(header.encoded_bytes > 100_000);
+        eprintln!(
+            "actual native600-message RequestStart baseline: layout={:?}, native_bytes={:?}, fields={:?}, field_count={}, total_commit={before_total:?}",
+            baseline.0, baseline.1, baseline.2, baseline.3
+        );
+        eprintln!(
+            "actual native600-message RequestStart buffered index: layout={layout:?}, native_bytes={bytes:?}, fields={fields:?}, field_count={count}, total_commit={total:?}"
+        );
+    }
+
     #[test]
     fn model_turn_start_commits_context_snapshot_and_event_atomically() {
         let store = store();
@@ -13887,7 +17381,7 @@ mod tests {
                 .expect("transaction");
             transaction
                 .execute(
-                    "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                    "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp) VALUES(?1,?2,?3,?4,NULL,NULL,?5,json_extract(?5,'$.timestamp'))",
                     params![
                         1i64,
                         malformed.event_id.as_str(),
@@ -14169,6 +17663,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Three native authority faults retain their independent reconstruction assertions.
     fn corrupt_request_surface_or_ledger_references_fail_closed() {
         let request_store = store();
         let message = user_message("request-message", "request body");
@@ -14259,18 +17754,139 @@ mod tests {
         {
             let connection = missing_message_store.conn.lock().unwrap();
             let missing_message_id = crate::conversation::message_id_of(&missing_message);
+            connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
             connection
                 .execute(
                     "DELETE FROM message_ledger WHERE message_id=?1",
                     [missing_message_id.as_str()],
                 )
                 .unwrap();
+            connection.execute_batch("PRAGMA foreign_keys=ON").unwrap();
         }
         assert!(matches!(
             missing_message_store.reconstruct_model_request(&missing_snapshot.request_id),
             Err(ConversationStoreError::InvalidReference(detail))
                 if detail.contains("missing Ledger message")
         ));
+    }
+
+    #[test]
+    fn new_schema_birth_rolls_back_late_ddl_and_commits_once_with_full_durability() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("schema-birth.sqlite");
+        let mut connection = Connection::open(&path).unwrap();
+        configure_connection(&mut connection, false).unwrap();
+        let (conflict, _) = PRESENTATION_INDEXES[0];
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE schema_birth_sentinel(value TEXT); INSERT INTO schema_birth_sentinel VALUES('original'); CREATE INDEX {conflict} ON schema_birth_sentinel(value);"
+            ))
+            .unwrap();
+        assert!(create_schema(&mut connection).is_err());
+        assert!(connection.is_autocommit());
+        let objects = connection
+            .prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut original = vec![conflict.to_owned(), "schema_birth_sentinel".to_owned()];
+        original.sort();
+        assert_eq!(
+            objects, original,
+            "no partially born schema survives late DDL failure"
+        );
+        let sentinel: String = connection
+            .query_row("SELECT value FROM schema_birth_sentinel", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(sentinel, "original");
+        connection
+            .execute_batch(&format!(
+                "DROP INDEX {conflict}; DROP TABLE schema_birth_sentinel;"
+            ))
+            .unwrap();
+        let commits = Arc::new(AtomicUsize::new(0));
+        let observed = commits.clone();
+        connection.commit_hook(Some(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            false
+        }));
+        create_schema(&mut connection).unwrap();
+        assert_eq!(
+            commits.load(Ordering::SeqCst),
+            1,
+            "all schema DDL and validation share one commit"
+        );
+        verify_schema_shape(&connection).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "delete"
+        );
+        let conversation = ConversationId::new("conv_00000000-0000-7000-8000-000000000467");
+        bind_identity(&mut connection, &conversation).unwrap();
+        assert_eq!(
+            commits.load(Ordering::SeqCst),
+            2,
+            "identity retains its separate native binding transaction"
+        );
+        drop(connection);
+        let reopened = SqliteConversationStore::open_existing(conversation.clone(), &path).unwrap();
+        assert_eq!(reopened.conversation_id, conversation);
+    }
+
+    #[test]
+    fn new_schema_birth_rolls_back_when_shape_validation_fails() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+        let mut connection = Connection::open_in_memory().unwrap();
+        configure_connection(&mut connection, true).unwrap();
+        let verification = Arc::new(AtomicBool::new(false));
+        let observed = verification.clone();
+        connection.authorizer(Some(move |context: AuthContext<'_>| {
+            if matches!(
+                context.action,
+                AuthAction::Pragma {
+                    pragma_name: "table_info",
+                    pragma_value: Some("inherited_turn_provenance")
+                }
+            ) {
+                observed.store(true, Ordering::SeqCst);
+                Authorization::Deny
+            } else {
+                Authorization::Allow
+            }
+        }));
+        assert!(create_schema(&mut connection).is_err());
+        assert!(
+            verification.load(Ordering::SeqCst),
+            "the failure occurred during final shape validation"
+        );
+        connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        assert!(connection.is_autocommit());
+        let objects: u64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            objects, 0,
+            "validation failure rolls back every new table, index and root row"
+        );
+        create_schema(&mut connection).unwrap();
+        verify_schema_shape(&connection).unwrap();
     }
 
     #[test]
@@ -14380,7 +17996,7 @@ mod tests {
             ] {
                 connection
                     .execute(
-                        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp) VALUES(?1,?2,?3,?4,NULL,NULL,?5,json_extract(?5,'$.timestamp'))",
                         params![
                             sequence,
                             event_id,
@@ -14409,7 +18025,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 58);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -14453,7 +18069,7 @@ mod tests {
             let connection = store.conn.lock().unwrap();
             connection
                 .execute(
-                    "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                    "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp) VALUES(?1,?2,?3,?4,NULL,NULL,?5,json_extract(?5,'$.timestamp'))",
                     params![
                         1i64,
                         "subagent-committed-event:conv-v31-subagent-1",
@@ -14478,7 +18094,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 57);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 58);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -14500,11 +18116,8 @@ mod tests {
         #[derive(Default)]
         struct Observer(Mutex<Vec<Option<u64>>>);
         impl super::super::presentation::JournalObserver for Observer {
-            fn committed(&self, events: Option<Vec<RuntimeEventEnvelope>>) {
-                self.0
-                    .lock()
-                    .unwrap()
-                    .push(events.and_then(|events| events.last().map(|event| event.sequence)));
+            fn committed(&self, through: Option<u64>) {
+                self.0.lock().unwrap().push(through);
             }
         }
         let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936178");
@@ -14534,6 +18147,917 @@ mod tests {
             journal_prefix(&store.lock().unwrap()).unwrap(),
             committed.sequence
         );
+    }
+
+    #[test]
+    fn t19_t20_journal_readiness_is_exact_committed_and_recovered_on_reinstall() {
+        struct Observer {
+            store: std::sync::Weak<SqliteConversationStore>,
+            ready: Mutex<Vec<(u64, u64)>>,
+        }
+        impl super::super::presentation::JournalObserver for Observer {
+            fn committed(&self, _through: Option<u64>) {}
+            fn ready(&self, through: u64) {
+                let frontier = self
+                    .store
+                    .upgrade()
+                    .unwrap()
+                    .observation_ready_frontier(0, through)
+                    .unwrap();
+                self.ready.lock().unwrap().push((through, frontier));
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("readiness.sqlite");
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936178");
+        let store = Arc::new(SqliteConversationStore::open(id.clone(), &path).unwrap());
+        let observer = Arc::new(Observer {
+            store: Arc::downgrade(&store),
+            ready: Mutex::new(Vec::new()),
+        });
+        assert_eq!(store.observe_journal(observer.clone()).unwrap(), 0);
+        for index in 1..=3 {
+            let mut event = envelope(
+                &id,
+                &format!("ready-{index}"),
+                Some(AttemptId::new("attempt")),
+                RuntimeEvent::TurnStarted,
+            );
+            event.turn_id = Some(TurnId::new(index.to_string()));
+            assert_eq!(store.append_event(event).unwrap().sequence, index);
+        }
+        assert_eq!(store.observation_ready_frontier(0, 3).unwrap(), 0);
+        // Owner two publishes first. This neither releases owner one nor skips it.
+        store.mark_observation_direct(2, 2).unwrap();
+        assert!(
+            store
+                .observation_event_witness(2, 3)
+                .unwrap()
+                .unwrap()
+                .native_direct
+        );
+        assert!(
+            !store
+                .observation_event_witness(1, 3)
+                .unwrap()
+                .unwrap()
+                .native_direct
+        );
+        assert_eq!(*observer.ready.lock().unwrap(), vec![(2, 0)]);
+        assert_eq!(store.observation_ready_frontier(0, 3).unwrap(), 0);
+        store.mark_observation_ready(1, 1).unwrap();
+        assert_eq!(store.observation_ready_frontier(0, 3).unwrap(), 2);
+        store.mark_observation_ready(1, 1).unwrap();
+        assert!(store.mark_observation_ready(3, 4).is_err());
+        assert!(store.mark_observation_ready(0, 1).is_err());
+        assert_eq!(store.observation_ready_frontier(2, 3).unwrap(), 2);
+        // A rolled-back tiny layout update is invisible and creates no wake.
+        let wakes = observer.ready.lock().unwrap().len();
+        {
+            let mut connection = store.lock().unwrap();
+            let transaction = connection.transaction().unwrap();
+            observation_readiness::mark(&transaction, 3, 3).unwrap();
+            transaction.rollback().unwrap();
+        }
+        assert_eq!(observer.ready.lock().unwrap().len(), wakes);
+        assert_eq!(store.observation_ready_frontier(2, 3).unwrap(), 2);
+        let connection = store.lock().unwrap();
+        let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>0 AND sequence<=3", [], |row| row.get(3)).unwrap();
+        assert!(
+            plan.contains("event_observation_readiness_holes_idx"),
+            "{plan}"
+        );
+        drop(connection);
+        drop(store);
+        let reopened = Arc::new(SqliteConversationStore::open(id, &path).unwrap());
+        assert_eq!(reopened.observation_ready_frontier(0, 3).unwrap(), 2);
+        let next = Arc::new(Observer {
+            store: Arc::downgrade(&reopened),
+            ready: Mutex::new(Vec::new()),
+        });
+        assert_eq!(reopened.observe_journal(next).unwrap(), 3);
+        assert_eq!(reopened.observation_ready_frontier(0, 3).unwrap(), 3);
+        assert!(
+            !reopened
+                .observation_event_witness(2, 3)
+                .unwrap()
+                .unwrap()
+                .native_direct
+        );
+    }
+
+    #[test]
+    fn t10_t19_t20_readiness_layout_failure_never_refuses_native_journal_commit() {
+        struct Observer;
+        impl super::super::presentation::JournalObserver for Observer {
+            fn committed(&self, _through: Option<u64>) {}
+        }
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936174");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        let make = |label: &str| {
+            let mut event = envelope(
+                &id,
+                label,
+                Some(AttemptId::new("readiness-failure")),
+                RuntimeEvent::TurnStarted,
+            );
+            event.turn_id = Some(TurnId::new("1"));
+            event
+        };
+        store.append_event(make("first")).unwrap();
+        store.lock().unwrap().execute_batch("CREATE TRIGGER readiness_layout_failure BEFORE INSERT ON event_observation_readiness WHEN NEW.sequence=2 BEGIN SELECT RAISE(FAIL,'derived readiness failure'); END;").unwrap();
+        let second = store.append_event(make("second")).unwrap();
+        assert_eq!(second.sequence, 2, "original native Journal committed");
+        assert!(second.observation.as_ref().unwrap().source_unavailable);
+        let flags: (bool, bool) = store.lock().unwrap().query_row(
+            "SELECT observation_readiness_missing,observation_unavailable FROM events WHERE sequence=2",
+            [], |row| Ok((row.get(0)?,row.get(1)?)),
+        ).unwrap();
+        assert_eq!(
+            flags,
+            (true, false),
+            "only the readiness owner needs repair"
+        );
+        assert!(
+            store
+                .observation_event_witness(2, 2)
+                .unwrap()
+                .unwrap()
+                .source_unavailable
+        );
+        store.mark_observation_direct(1, 1).unwrap();
+        assert_eq!(store.observation_ready_frontier(0, 2).unwrap(), 1);
+        assert!(store.mark_observation_ready(2, 2).is_err());
+        assert!(store.mark_observation_direct(2, 2).is_err());
+        assert!(
+            !store
+                .observation_event_witness(2, 2)
+                .unwrap()
+                .unwrap()
+                .native_direct
+        );
+        assert!(
+            store.observe_journal(Arc::new(Observer)).is_err(),
+            "failed repair remains unavailable"
+        );
+        store
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER readiness_layout_failure")
+            .unwrap();
+        assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 2);
+        assert_eq!(store.observation_ready_frontier(0, 2).unwrap(), 2);
+        let recovered = store.observation_event_witness(2, 2).unwrap().unwrap();
+        assert!(!recovered.source_unavailable);
+        assert!(
+            !observation_receipt::single(&store.lock().unwrap(), &id, &second)
+                .unwrap()
+                .source_unavailable
+        );
+        assert_eq!(store.read_events(Some(1), 1).unwrap().events, vec![second]);
+        assert!(
+            !recovered.native_direct,
+            "restart reconstructs committed authority"
+        );
+    }
+
+    #[test]
+    fn t10_t19_t20_readiness_repair_preserves_independent_auxiliary_failure() {
+        struct Observer;
+        impl super::super::presentation::JournalObserver for Observer {
+            fn committed(&self, _through: Option<u64>) {}
+        }
+        let id = ConversationId::new("conv_09276f12-ed32-741a-8cd5-91c38800ef71");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        store.lock().unwrap().execute_batch(
+            "CREATE TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
+             CREATE TRIGGER fallback_failure BEFORE UPDATE OF observation_json ON events BEGIN SELECT RAISE(FAIL,'independent fallback failure'); END;",
+        ).unwrap();
+        let mut event = envelope(
+            &id,
+            "both-layout-failures",
+            Some(AttemptId::new("readiness-owner")),
+            RuntimeEvent::TurnStarted,
+        );
+        event.turn_id = Some(TurnId::new("1"));
+        let committed = store.append_event(event).unwrap();
+        assert_eq!(committed.sequence, 1);
+        assert!(committed.observation.as_ref().unwrap().source_unavailable);
+        let flags = |store: &SqliteConversationStore| -> (bool, bool) {
+            store.lock().unwrap().query_row(
+                "SELECT observation_readiness_missing,observation_unavailable FROM events WHERE sequence=1",
+                [], |row| Ok((row.get(0)?,row.get(1)?)),
+            ).unwrap()
+        };
+        assert_eq!(flags(&store), (true, true));
+        assert!(store.observe_journal(Arc::new(Observer)).is_err());
+        store
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER readiness_failure; DROP TRIGGER fallback_failure;")
+            .unwrap();
+        assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 1);
+        assert_eq!(store.observation_ready_frontier(0, 1).unwrap(), 1);
+        assert_eq!(flags(&store), (false, true));
+        assert!(
+            store
+                .observation_event_witness(1, 1)
+                .unwrap()
+                .unwrap()
+                .source_unavailable
+        );
+        assert!(
+            observation_receipt::single(&store.lock().unwrap(), &id, &committed)
+                .unwrap()
+                .source_unavailable
+        );
+        assert_eq!(store.read_events(None, 1).unwrap().events, vec![committed]);
+        let mut healthy = envelope(
+            &id,
+            "healthy-after-repair",
+            Some(AttemptId::new("readiness-owner")),
+            RuntimeEvent::TurnStarted,
+        );
+        healthy.turn_id = Some(TurnId::new("2"));
+        let next = store.append_event(healthy).unwrap();
+        assert_eq!(next.sequence, 2);
+        assert!(!next.observation.as_ref().unwrap().source_unavailable);
+        assert!(
+            !store
+                .observation_event_witness(2, 2)
+                .unwrap()
+                .unwrap()
+                .source_unavailable
+        );
+    }
+
+    #[test]
+    fn t14_canonical_after_boundary_uses_original_ledger_and_selected_revision() {
+        use crate::runtime_client::content::CanonicalContentLocator;
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let opening = store
+            .append_canonical(&user_message("opening", "ordinary boundary"))
+            .unwrap();
+        let original_id = "assistant-".repeat(128);
+        let closing = store
+            .append_canonical(&assistant_message(&original_id, "canonical closing"))
+            .unwrap();
+        let locator = CanonicalContentLocator::ByLedgerPosition {
+            position: closing.ledger_position,
+        };
+        let revision = closing.observation.read_cut.surface_revision;
+        {
+            let connection = store.lock().unwrap();
+            connection
+                .execute_batch("DELETE FROM observation_headers")
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE message_ledger SET message_json='unreadable original body' WHERE position=?1",
+                    [closing.ledger_position],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store
+                .canonical_boundary_message_id(revision, &locator)
+                .unwrap(),
+            MessageId::new(original_id),
+            "After resolves the original identity without a body or display header"
+        );
+        assert!(matches!(
+            store.canonical_boundary_message_id(
+                opening.observation.read_cut.surface_revision,
+                &locator,
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert!(matches!(
+            store.surface_boundary_message_id(revision, &locator),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(
+            store
+                .surface_boundary_message_id(
+                    revision,
+                    &CanonicalContentLocator::ByLedgerPosition {
+                        position: opening.ledger_position,
+                    },
+                )
+                .unwrap(),
+            MessageId::new("opening"),
+            "Before retains its ordinary inbound boundary semantics"
+        );
+    }
+
+    #[test]
+    fn t10_t19_t20_transcript_readiness_failure_preserves_native_canonical_commit() {
+        struct Observer;
+        impl super::super::presentation::JournalObserver for Observer {
+            fn committed(&self, _through: Option<u64>) {}
+        }
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936182");
+        let store = SqliteConversationStore::in_memory(id).unwrap();
+        store.initialize(&[]).unwrap();
+        store.lock().unwrap().execute_batch("CREATE TRIGGER transcript_readiness_failure BEFORE INSERT ON transcript_observation_readiness WHEN NEW.position=1 BEGIN SELECT RAISE(FAIL,'derived transcript readiness failure'); END;").unwrap();
+        let first = store
+            .append_canonical(&user_message("first", "canonical authority"))
+            .unwrap();
+        assert_eq!(first.ledger_position, 1);
+        assert_eq!(first.transcript_cursor.unwrap().get(), 1);
+        assert_eq!(
+            store
+                .message_ledger_position(&MessageId::new("first"))
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            store.observation_transcript_ready_frontier(0, 1).unwrap(),
+            0
+        );
+        assert!(store.mark_observation_transcript_ready(1).is_err());
+        assert!(store.mark_canonical_transcript_ready(1, 1).is_err());
+        let second = store
+            .append_canonical(&user_message("second", "unrelated native commit"))
+            .unwrap();
+        assert_eq!(second.transcript_cursor.unwrap().get(), 2);
+        store.mark_canonical_transcript_ready(2, 2).unwrap();
+        assert_eq!(
+            store.observation_transcript_ready_frontier(0, 2).unwrap(),
+            0
+        );
+        assert!(store.observe_journal(Arc::new(Observer)).is_err());
+        store
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER transcript_readiness_failure")
+            .unwrap();
+        assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 0);
+        assert_eq!(
+            store.observation_transcript_ready_frontier(0, 2).unwrap(),
+            2
+        );
+        let connection = store.lock().unwrap();
+        let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>0 AND position<=2", [], |row| row.get(3)).unwrap();
+        assert!(
+            plan.contains("transcript_observation_readiness_missing_idx"),
+            "{plan}"
+        );
+    }
+
+    #[test]
+    fn t10_t15_t20_trace_count_hole_is_unavailable_without_refusing_native_commit() {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936179");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        let make = |label: &str| {
+            let mut event = envelope(
+                &id,
+                label,
+                Some(AttemptId::new("trace-count")),
+                RuntimeEvent::TurnStarted,
+            );
+            event.turn_id = Some(TurnId::new("1"));
+            event
+        };
+        let first = store.append_event(make("first")).unwrap();
+        assert_eq!(store.observation_trace_total(first.sequence).unwrap(), 1);
+        store.lock().unwrap().execute_batch("CREATE TRIGGER trace_layout_failure BEFORE UPDATE OF observation_trace_total ON events WHEN NEW.sequence=2 BEGIN SELECT RAISE(FAIL,'derived count failure'); END;").unwrap();
+        let second = store.append_event(make("second")).unwrap();
+        assert_eq!(
+            second.sequence, 2,
+            "native fact committed despite derived fault"
+        );
+        assert!(second.observation.unwrap().trace_total.is_none());
+        assert!(store.observation_trace_total(2).is_err());
+        assert_eq!(store.observation_trace_total(1).unwrap(), 1);
+        let connection = store.lock().unwrap();
+        let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=2",[],|row|row.get(3)).unwrap();
+        assert!(
+            plan.contains("events_observation_trace_holes_idx"),
+            "{plan}"
+        );
+    }
+
+    #[test]
+    fn t10_t19_derived_journal_body_failure_preserves_native_terminal_witness() {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936179");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        let attempt = AttemptId::new("terminal-layout-failure");
+        store
+            .append_event(envelope(
+                &id,
+                "start",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_segments WHEN NEW.source_kind='observation_journal' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
+        let event = store
+            .append_event(envelope(
+                &id,
+                "settled",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptFailed {
+                    attempt_id: attempt.clone(),
+                    error: crate::events::types::AttemptFailure::Runtime {
+                        error: crate::runtime::types::RuntimeError::Internal {
+                            message: "native diagnostic".repeat(10000),
+                        },
+                    },
+                },
+            ))
+            .unwrap();
+        assert_eq!(event.sequence, 2);
+        store.mark_observation_ready(1, 2).unwrap();
+        assert_eq!(store.observation_ready_frontier(0, 2).unwrap(), 2);
+        let witness = store.observation_event_witness(2, 2).unwrap().unwrap();
+        assert_eq!(witness.event_kind, "attempt_failed");
+        assert_eq!(witness.value["error"]["type"], "runtime");
+        assert_eq!(witness.value["error"]["error"]["type"], "internal");
+        assert!(witness.deferred);
+        assert!(
+            store
+                .event_value_read(2, 2, &["event".into(), "error".into()], 0, 65536)
+                .is_err()
+        );
+        let terminal = store.observation_attempt_summary(&attempt, 2).unwrap();
+        assert_eq!(terminal.terminal_kind.as_deref(), Some("attempt_failed"));
+        assert!(terminal.failure.is_some());
+        assert_eq!(store.read_events(None, 32).unwrap().events.len(), 2);
+    }
+
+    #[test]
+    fn t14_t19_t20_native_receipts_capture_only_released_predecessor_prefix() {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936187");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        store.initialize(&[]).unwrap();
+        let make = |name: &str| {
+            let mut event = envelope(
+                &id,
+                name,
+                Some(AttemptId::new("prefix-proof")),
+                RuntimeEvent::TurnStarted,
+            );
+            event.turn_id = Some(TurnId::new("1"));
+            event
+        };
+        let first = store.append_event(make("first")).unwrap();
+        assert_eq!(first.observation.as_ref().unwrap().ready_before, Some(0));
+        store.mark_observation_ready(1, 1).unwrap();
+        let held = store.append_event(make("held")).unwrap();
+        assert_eq!(held.observation.as_ref().unwrap().ready_before, Some(1));
+        let later = store.append_event(make("later")).unwrap();
+        assert_eq!(later.observation.as_ref().unwrap().ready_before, Some(1));
+        let canonical = store
+            .append_canonical(&user_message("prefix-canonical", "canonical"))
+            .unwrap();
+        assert_eq!(canonical.observation.ready_through, Some(1));
+        assert_eq!(canonical.observation.read_cut.read.journal, 3);
+        store.mark_observation_ready(3, 3).unwrap();
+        assert_eq!(store.observation_ready_frontier(0, 3).unwrap(), 1);
+        store.mark_observation_ready(2, 2).unwrap();
+        assert_eq!(store.observation_ready_frontier(0, 3).unwrap(), 3);
+        assert_eq!(
+            later.observation.as_ref().unwrap().ready_before,
+            Some(1),
+            "later publication cannot retag frozen append evidence"
+        );
+        let follow = store
+            .append_canonical(&user_message("prefix-follow", "follow"))
+            .unwrap();
+        assert_eq!(follow.observation.ready_through, Some(3));
+    }
+
+    #[test]
+    fn t10_t14_t19_native_single_receipt_preserves_large_other_reason_and_exact_cut() {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936185");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        let attempt = AttemptId::new("native-receipt-reason");
+        let started = store
+            .append_event(envelope(
+                &id,
+                "start",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        let source = started
+            .observation
+            .as_ref()
+            .expect("source-owned Single receipt");
+        assert_eq!(source.read_cut.read.journal, 1);
+        assert_eq!(source.journal_range, Some((1, 1)));
+        let reason = "雪😀".repeat(300_000);
+        let settled = store
+            .append_event(envelope(
+                &id,
+                "settled",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptCompleted {
+                    attempt_id: attempt.clone(),
+                    finish_reason: ModelFinishReason::Other {
+                        reason: reason.clone(),
+                    },
+                },
+            ))
+            .unwrap();
+        let receipt = settled
+            .observation
+            .as_ref()
+            .expect("native terminal receipt");
+        let crate::durable::observation::NativeObservationTransition::Single(witness) =
+            &receipt.transition
+        else {
+            panic!("scalar append family")
+        };
+        assert_eq!(witness.value["finish_reason"]["type"], "other");
+        assert!(
+            witness.value["finish_reason"]["reason"]
+                .as_str()
+                .unwrap()
+                .len()
+                <= 256
+        );
+        assert!(witness.deferred);
+        assert_eq!(receipt.read_cut.read.journal, 2);
+        assert_eq!(
+            source.read_cut.read.journal, 1,
+            "later native writes cannot retag prior source evidence"
+        );
+        let summary = store.observation_attempt_summary(&attempt, 2).unwrap();
+        assert!(summary.finish_reason_deferred);
+        assert_eq!(summary.finish_reason_sequence, Some(2));
+        assert_eq!(summary.terminal_sequence, Some(2));
+        let fields = ["event".into(), "finish_reason".into(), "reason".into()];
+        let mut offset = 0;
+        let mut bytes = Vec::new();
+        loop {
+            let chunk = store
+                .event_value_read(2, 2, &fields, offset, 65_536)
+                .unwrap();
+            let (rows, materialized) = SqliteConversationStore::content_read_work();
+            assert!(rows <= 2 && materialized <= 131_072);
+            bytes.extend(chunk.bytes);
+            match chunk.next_offset {
+                Some(next) => {
+                    assert!(next > offset);
+                    offset = next;
+                }
+                None => break,
+            }
+        }
+        assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), reason);
+        let durable = serde_json::to_value(&settled).unwrap();
+        assert!(durable.get("observation").is_none());
+        assert_eq!(
+            durable["event"]["finish_reason"]["reason"]
+                .as_str()
+                .unwrap(),
+            reason
+        );
+    }
+
+    #[test]
+    fn t12_t19_native_failure_receipt_and_range_preserve_public_normalization() {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936187");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        let attempt = AttemptId::new("public-failure-source");
+        store
+            .append_event(envelope(
+                &id,
+                "start",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        let error = crate::model::error::ModelError {
+            kind: crate::model::error::ModelErrorKind::ProviderError,
+            message: "雪".repeat(1000),
+            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
+            retry_after_ms: Some(73),
+            provider_code: Some("private-provider-code".into()),
+            context_overflow: None,
+            malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
+        };
+        let event = store
+            .append_event(envelope(
+                &id,
+                &"private-native-id".repeat(100_000),
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptFailed {
+                    attempt_id: attempt.clone(),
+                    error: crate::events::types::AttemptFailure::Model { error },
+                },
+            ))
+            .unwrap();
+        let headers = store
+            .latest_observation_events(2, &["attempt_failed".into()], None, 32)
+            .unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].sequence, 2);
+        assert!(
+            headers[0].event_id.is_none(),
+            "metadata seek never hydrates an enormous original Event ID"
+        );
+        let receipt = event.observation.as_ref().unwrap();
+        assert!(receipt.failure_deferred);
+        assert_eq!(receipt.failure_sequence, Some(2));
+        assert!(receipt.failure_readable_end > 3000);
+        let failure = serde_json::to_string(receipt.failure.as_ref().unwrap()).unwrap();
+        assert!(!failure.contains("provider_code") && !failure.contains("private-provider-code"));
+        let chunk = store
+            .observation_failure_value_read(&attempt, 2, 0, 65_536)
+            .unwrap();
+        assert!(chunk.next_offset.is_none());
+        let failure: serde_json::Value = serde_json::from_slice(&chunk.bytes).unwrap();
+        assert_eq!(failure["type"], "model");
+        assert_eq!(failure["message"].as_str().unwrap().len(), 3000);
+        assert_eq!(failure["retry_after_ms"], "73");
+        assert!(failure.get("provider_code").is_none());
+        assert!(
+            serde_json::to_string(&event)
+                .unwrap()
+                .contains("private-provider-code"),
+            "original native Journal authority is retained, not rewritten by display privacy"
+        );
+    }
+
+    #[test]
+    fn t14_t15_t20_pending_native_receipt_refills_head_without_a_body_mirror() {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936186");
+        let store = SqliteConversationStore::in_memory(id).unwrap();
+        let time = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut accepted = Vec::new();
+        for index in 0..73 {
+            let item = store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: crate::message::types::UserSource::Human,
+                    kind: crate::message::types::InboundKind::Message,
+                    content: vec![crate::message::types::UserContentBlock::Text(
+                        crate::message::content::TextBlock {
+                            text: format!("pending{index}"),
+                        },
+                    )],
+                    timestamp: time,
+                    correlation: None,
+                })
+                .unwrap();
+            let receipt = item
+                .pending_observation
+                .as_ref()
+                .expect("native indexed pending receipt");
+            assert_eq!(receipt.total, index + 1);
+            assert!(receipt.head.len() <= 32);
+            assert_eq!(
+                receipt.selected.as_ref().unwrap().sequence,
+                item.sequence.get()
+            );
+            assert!(receipt.head.iter().all(
+                |header| header.message.locator.is_none() && header.message.content.is_empty()
+            ));
+            accepted.push(item);
+        }
+        let first = &accepted[0];
+        let removed = store
+            .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                sequence: first.sequence,
+                revision: 0,
+            })
+            .unwrap();
+        let crate::durable::inbox::PendingMutationOutcome::Applied {
+            pending_observation: Some(receipt),
+            ..
+        } = removed
+        else {
+            panic!("native pending removal receipt")
+        };
+        assert_eq!(receipt.total, 72);
+        assert_eq!(receipt.removed_sequence, Some(1));
+        assert_eq!(receipt.removed_transcript, first.transcript_cursor);
+        assert_eq!(
+            (
+                receipt.head.first().unwrap().sequence,
+                receipt.head.last().unwrap().sequence
+            ),
+            (2, 33)
+        );
+        assert_eq!(
+            accepted
+                .last()
+                .unwrap()
+                .pending_observation
+                .as_ref()
+                .unwrap()
+                .total,
+            73,
+            "capture evidence remains immutable"
+        );
+    }
+
+    #[test]
+    fn t14_t20_atomic_canonical_batch_owns_one_finite_shared_observation_proof() {
+        let store = SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_2be184c1-ab11-725b-82c3-81daea936180",
+        ))
+        .unwrap();
+        store.initialize(&[]).unwrap();
+        let messages = (0..73)
+            .map(|index| user_message(&format!("batch-{index}"), &format!("body-{index}")))
+            .collect::<Vec<_>>();
+        let receipts = store.append_canonical_batch(&messages).unwrap();
+        assert_eq!(receipts.len(), 73);
+        let batch = &receipts[0].observation;
+        assert_eq!(
+            (batch.first_position, batch.last_position, batch.count),
+            (1, 73, 73)
+        );
+        assert_eq!(batch.read_cut.ledger_through, 73);
+        assert_eq!(batch.transcript_count, 73);
+        assert_eq!(batch.head.len(), 8);
+        assert_eq!(batch.head.first().unwrap().ledger_position, Some(66));
+        assert_eq!(batch.head.last().unwrap().ledger_position, Some(73));
+        assert!(batch.has_opening_user);
+        assert_eq!(batch.opening_preview.as_deref(), Some("body-0"));
+        assert_eq!(batch.journal_range, None);
+        for (ordinal, receipt) in receipts.iter().enumerate() {
+            assert!(Arc::ptr_eq(batch, &receipt.observation));
+            assert_eq!(receipt.ordinal, ordinal as u64);
+            assert_eq!(receipt.ledger_position, ordinal as u64 + 1);
+        }
+        let follow = store
+            .append_canonical(&user_message("follow", "after-batch"))
+            .unwrap();
+        assert_eq!(follow.observation.count, 1);
+        assert_eq!(follow.ordinal, 0);
+        assert_eq!(follow.ledger_position, 74);
+        assert_eq!(
+            batch.read_cut.ledger_through, 73,
+            "immutable batch does not jump to the new source head"
+        );
+    }
+
+    #[test]
+    fn t14_t19_t20_transcript_ready_prefix_fences_prior_terminal_without_position_mirror() {
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936181");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        store.initialize(&[]).unwrap();
+        let attempt = AttemptId::new("gated-terminal");
+        store
+            .append_event(envelope(
+                &id,
+                "started",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        store
+            .append_event(envelope(
+                &id,
+                "terminal",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptTimedOut {
+                    attempt_id: attempt,
+                },
+            ))
+            .unwrap();
+        let messages = (0..73)
+            .map(|index| user_message(&format!("after-terminal-{index}"), "canonical"))
+            .collect::<Vec<_>>();
+        let batch = store.append_canonical_batch(&messages).unwrap();
+        assert_eq!(batch.last().unwrap().transcript_cursor.unwrap().get(), 74);
+        store.mark_canonical_transcript_ready(1, 73).unwrap();
+        assert_eq!(
+            store.observation_transcript_ready_frontier(0, 74).unwrap(),
+            0,
+            "C release cannot release unrelated prior terminalT"
+        );
+        store.mark_observation_ready(1, 2).unwrap();
+        assert_eq!(store.observation_ready_frontier(0, 2).unwrap(), 2);
+        assert_eq!(
+            store.observation_transcript_ready_frontier(0, 74).unwrap(),
+            0,
+            "J andT publication evidence remain distinct"
+        );
+        store.mark_observation_transcript_ready(1).unwrap();
+        assert_eq!(
+            store.observation_transcript_ready_frontier(0, 74).unwrap(),
+            74
+        );
+        assert!(store.mark_observation_transcript_ready(75).is_err());
+        assert!(store.mark_canonical_transcript_ready(1, 74).is_err());
+        let connection = store.lock().unwrap();
+        let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>0 AND position<=74",[],|row|row.get(3)).unwrap();
+        assert!(
+            plan.contains("transcript_observation_readiness_holes_idx"),
+            "{plan}"
+        );
+    }
+
+    #[test]
+    fn t14_t19_t20_transcript_source_prefix_recovers_after_4097_later_owner_releases() {
+        struct Observer {
+            store: std::sync::Weak<SqliteConversationStore>,
+            latest: Mutex<Option<crate::durable::observation::TranscriptSourceReady>>,
+            wakes: std::sync::atomic::AtomicUsize,
+        }
+        impl super::super::presentation::JournalObserver for Observer {
+            fn committed(&self, _through: Option<u64>) {}
+            fn ready(&self, through: u64) {
+                assert_eq!(
+                    through, 0,
+                    "T publication wakes even when J does not change"
+                );
+                let proof = self
+                    .store
+                    .upgrade()
+                    .unwrap()
+                    .transcript_source_ready()
+                    .unwrap();
+                *self.latest.lock().unwrap() = Some(proof);
+                self.wakes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936182");
+        let store = Arc::new(SqliteConversationStore::in_memory(id.clone()).unwrap());
+        store.initialize(&[]).unwrap();
+        let observer = Arc::new(Observer {
+            store: Arc::downgrade(&store),
+            latest: Mutex::new(None),
+            wakes: std::sync::atomic::AtomicUsize::new(0),
+        });
+        store.observe_journal(observer.clone()).unwrap();
+        let attempt = AttemptId::new("held-terminal-t");
+        store
+            .append_event(envelope(
+                &id,
+                "held-start",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        store
+            .append_event(envelope(
+                &id,
+                "held-terminal",
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptTimedOut {
+                    attempt_id: attempt,
+                },
+            ))
+            .unwrap();
+        let messages = (0..4097)
+            .map(|index| user_message(&format!("later-t-{index}"), "canonical"))
+            .collect::<Vec<_>>();
+        let receipts = store.append_canonical_batch(&messages).unwrap();
+        let batch = &receipts.last().unwrap().observation;
+        assert_eq!(batch.ready_t_through, Some(0));
+        assert_eq!(batch.last_transcript.unwrap().get(), 4098);
+        let frozen = store.transcript_source_ready().unwrap();
+        assert_eq!(frozen.prefix, 0);
+        assert_eq!(frozen.read_cut.ledger_through, 4097);
+        for position in 2..=4098 {
+            store.mark_observation_transcript_ready(position).unwrap();
+        }
+        let held = observer.latest.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            held, frozen,
+            "later owner releases cannot skip held native T1"
+        );
+        store.mark_observation_transcript_ready(1).unwrap();
+        let released = observer.latest.lock().unwrap().clone().unwrap();
+        assert_eq!(released.prefix, 4098);
+        assert_eq!(released.read_cut, frozen.read_cut);
+        assert_eq!(
+            observer.wakes.load(std::sync::atomic::Ordering::SeqCst),
+            4098
+        );
+        assert_eq!(
+            batch.ready_t_through,
+            Some(0),
+            "receipt proof remains immutable"
+        );
+        let follow = store
+            .append_canonical(&user_message("follow-t", "next"))
+            .unwrap();
+        assert_eq!(follow.observation.ready_t_through, Some(4098));
+        let current = store.transcript_source_ready().unwrap();
+        assert_eq!(current.prefix, 4098);
+        assert_eq!(current.read_cut.read.transcript, 4099);
+        assert_eq!(frozen.read_cut.read.transcript, 4098);
     }
 
     #[test]
@@ -14674,7 +19198,7 @@ mod tests {
             // Valid JSON but deliberately not a decodable RuntimeEventEnvelope.
             // The version gate must win before any payload reader can run.
             connection.execute(
-                "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(1,'incompatible',?1,?2,NULL,NULL,'{}')",
+                "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp) VALUES(1,'incompatible',?1,?2,NULL,NULL,'{}','2026-01-01T00:00:00Z')",
                 params![i64::from(EVENT_SCHEMA_VERSION), id.as_str()],
             ).unwrap();
             connection
@@ -14712,7 +19236,7 @@ mod tests {
             {
                 connection
                     .execute(
-                        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp) VALUES(?1,?2,?3,?4,NULL,NULL,?5,json_extract(?5,'$.timestamp'))",
                         params![
                             i64::try_from(sequence + 1).unwrap(),
                             format!("retired-{sequence}"),
@@ -15184,6 +19708,187 @@ mod tests {
             })
         ));
     }
+    fn assert_status_original_ranges(
+        store: &SqliteConversationStore,
+        view: &crate::runtime_client::snapshot::AgentStatusView,
+        rendered: &str,
+    ) {
+        use base64::Engine as _;
+        let bytes = store
+            .content_read(view.rendered_ref.as_ref().unwrap(), 0, 65_536)
+            .unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(bytes.data_base64)
+                .unwrap(),
+            rendered.as_bytes()
+        );
+        let reference = view
+            .opportunities
+            .fresh_inbound
+            .as_ref()
+            .unwrap()
+            .target_metadata_ref
+            .as_ref()
+            .unwrap();
+        let chunk = store.content_read(reference, 0, 65_536).unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap()
+                .len(),
+            65_536
+        );
+        assert!(chunk.next_offset.is_some());
+    }
+
+    /// T14/T19/T20: hidden Context uses its actual immutable C source, and a
+    /// giant `FreshInbound` identity keeps its native placement without body cloning.
+    #[test]
+    fn t14_t19_t20_status_receipt_preserves_giant_source_identity_and_placement() {
+        let store = store();
+        let native_id = "native-input-λ".repeat(30_000);
+        let base = user_message(&native_id, "ordinary user");
+        store.initialize(std::slice::from_ref(&base)).unwrap();
+        let time = Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap();
+        let status = crate::context::AgentStatus {
+            generated_at: time,
+            sections: vec![crate::context::AgentStatusSection {
+                id: crate::context::AgentStatusSectionId::new("temporal"),
+                data: crate::context::AgentStatusSectionData::Temporal {
+                    current_time: time,
+                    timezone: None,
+                },
+            }],
+        };
+        let status_id = MessageId::new("native-status-λ".repeat(30_000));
+        let rendered = crate::context::render_agent_status(&status);
+        let mut canonical =
+            agent_status_message(status_id.as_str(), time, &[AgentStatusModuleId::Time]);
+        let MessageBlock::User(user) = &mut canonical else {
+            panic!("status User context")
+        };
+        user.content = vec![crate::message::types::UserContentBlock::Text(
+            crate::message::content::TextBlock {
+                text: rendered.clone(),
+            },
+        )];
+        let mut snapshot = status_start_snapshot_for(
+            "status-source-attempt",
+            "1",
+            store.load_head().unwrap().revision.next(),
+            status_id.clone(),
+            vec![],
+            vec![status_id],
+        );
+        let contribution = snapshot.contributions.last_mut().unwrap();
+        contribution.metadata = ContextKind::AgentStatus(status.generation_metadata());
+        contribution.presentation =
+            Some(crate::context::contribution::ContributionPresentation::AgentStatus(status));
+        contribution.opportunities.fresh_inbound = Some(crate::context::FreshInboundOpportunity {
+            target_message_id: base.id().clone(),
+        });
+        let committed = store
+            .commit_model_turn_start(&[canonical], &snapshot, time)
+            .unwrap();
+        assert_eq!(committed.status_sources.len(), 1);
+        let native = committed.started.observation.as_ref().unwrap();
+        let crate::durable::observation::NativeObservationTransition::RequestStart {
+            statuses, ..
+        } = &native.transition
+        else {
+            panic!("closed RequestStart family")
+        };
+        assert_eq!(statuses.len(), 1);
+        let view = &statuses[0];
+        assert!(view.status_message_id.is_none());
+        assert_eq!(
+            view.source_locator,
+            Some(
+                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                    position: 2
+                }
+            )
+        );
+        let fresh = view.opportunities.fresh_inbound.as_ref().unwrap();
+        assert!(fresh.target_message_id.is_none());
+        assert_eq!(
+            fresh.target_locator,
+            Some(
+                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                    position: 1
+                }
+            )
+        );
+        assert_eq!(
+            fresh.transcript_anchor,
+            Some(crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(1))
+        );
+        assert_eq!(native.read_cut.ledger_through, 2);
+        assert_eq!(native.read_cut.read.journal, committed.started.sequence);
+        assert!(serde_json::to_vec(view).unwrap().len() < 16_384);
+        assert_status_original_ranges(&store, view, &rendered);
+        assert_eq!(
+            store.observation_read_cut().unwrap().transcript_total,
+            1,
+            "hidden status remains outside transcript"
+        );
+    }
+
+    /// T14/T20: `GoalRound` accounting, pending head and J frontier are one source receipt.
+    #[test]
+    fn t14_t20_goal_receipt_owns_pending_and_journal_atomically() {
+        let store = store();
+        let (result, receipt) = store
+            .write_goal(crate::goal::GoalWrite::Create {
+                objective: "goal objective".into(),
+                budget: 3,
+                origin: crate::goal::GoalOrigin::RuntimeControl,
+            })
+            .unwrap();
+        let goal = result.unwrap();
+        let receipt = receipt.unwrap();
+        assert_eq!(
+            receipt.view.current.as_ref().unwrap().reference,
+            goal.reference
+        );
+        assert!(receipt.pending.is_none());
+        assert_eq!(receipt.native.as_ref().unwrap().journal_range, Some((1, 1)));
+        let accepted = store
+            .accept_goal_round(
+                &goal.reference,
+                crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: crate::message::types::UserSource::Runtime,
+                    kind: crate::message::types::InboundKind::GoalContinuation(
+                        goal.reference.clone(),
+                    ),
+                    content: vec![crate::message::types::UserContentBlock::Text(
+                        crate::message::content::TextBlock {
+                            text: "continue".into(),
+                        },
+                    )],
+                    timestamp: Utc.with_ymd_and_hms(2026, 8, 27, 6, 0, 0).unwrap(),
+                    correlation: None,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        let receipt = accepted.goal_observation.as_ref().unwrap();
+        let current = receipt.view.current.as_ref().unwrap();
+        assert_eq!(current.reference.revision, goal.reference.revision + 1);
+        assert_eq!(current.autonomous_rounds_consumed, 1);
+        let pending = receipt.pending.as_ref().unwrap();
+        assert_eq!(pending.read_cut, accepted.read_cut);
+        assert_eq!(pending.total, 1);
+        assert_eq!(
+            pending.selected.as_ref().unwrap().sequence,
+            accepted.sequence.get()
+        );
+        let native = receipt.native.as_ref().unwrap();
+        assert_eq!(native.read_cut.read, accepted.read_cut);
+        assert_eq!(native.journal_range, Some((2, 2)));
+    }
 }
 
 // Finite archive readers share the concrete durable schema, never transport DTOs.
@@ -15256,5 +19961,53 @@ mod presentation_cancellation_tests {
         reader.close_presentation_reader();
         assert!(task.join().unwrap().is_err());
         drop(writer); // The writer never needed to release for reader termination.
+    }
+}
+
+mod content;
+mod content_encoding;
+mod content_metadata;
+mod observation;
+
+mod observation_identity;
+mod observation_members;
+mod observation_statistics;
+mod observation_turn;
+
+mod observation_delivery;
+mod observation_event;
+mod observation_execution;
+mod observation_membership;
+mod observation_occupancy;
+mod observation_readiness;
+mod observation_receipt;
+mod observation_request;
+mod observation_request_summary;
+mod observation_state;
+mod observation_tools;
+mod observation_trace;
+
+/// Optional immutable read layout belongs to the native source transaction.
+/// Failure retires this layout without refusing the authoritative write.
+fn optional_display_layout<T>(
+    connection: &Connection,
+    build: impl FnOnce() -> Result<T, ConversationStoreError>,
+) -> Option<T> {
+    connection
+        .execute_batch("SAVEPOINT rustx_display_layout")
+        .ok()?;
+    match build() {
+        Ok(value)
+            if connection
+                .execute_batch("RELEASE rustx_display_layout")
+                .is_ok() =>
+        {
+            Some(value)
+        }
+        _ => {
+            let _ = connection
+                .execute_batch("ROLLBACK TO rustx_display_layout; RELEASE rustx_display_layout");
+            None
+        }
     }
 }

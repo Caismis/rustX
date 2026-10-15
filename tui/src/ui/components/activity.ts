@@ -1,3 +1,4 @@
+import { hasInteractionBody, type DisplayInteraction } from '../../presentation/interaction-display.ts';
 import { invocationLabel } from "../../presentation/invocation.ts";
 /**
  * The activity area: work that is not conversation content.
@@ -40,7 +41,6 @@ import { invocationLabel } from "../../presentation/invocation.ts";
 import type {
   AnswerSpecification,
   InteractionRef,
-  RoutedInteraction,
   RuntimeClientJob,
   RuntimeClientAgent,
   RuntimeClientAgentActivity,
@@ -338,17 +338,18 @@ function activityLine(activity: RuntimeClientAgentActivity): string {
         : "model request";
     case "retrying_model":
       return `retrying · attempt ${activity.retry}`;
-    case "tool": {
-      const progress = describeProgress(activity.progress);
-      return progress === undefined
-        ? bounded(activity.tool_id)
-        : `${bounded(activity.tool_id)} · ${progress}`;
+    case "tool_group": {
+      const representative=activity.representative;
+      const count=activity.active>1?`${activity.active} Tool executions · `:'';
+      if(!representative)return `${activity.active} Tool executions · details deferred`;
+      const progress=describeProgress(representative.progress);
+      return count+bounded(representative.tool_id)+(progress===undefined?'':` · ${progress}`);
     }
     case "compacting":
       return "compacting context";
     case "waiting":
       return activity.on.type === "approval"
-        ? `waiting · approval (${bounded(activity.on.tool_id)})`
+        ? `waiting · approval (${bounded(activity.on.tool_id ?? "deferred Tool identity")})`
         : "waiting · questionnaire";
   }
 }
@@ -439,10 +440,11 @@ export function renderInteractionSection(
  * this client never sends back a modified call.
  */
 function renderInteraction(
-  routed: RoutedInteraction,
+  routed: DisplayInteraction,
   preferences: PresentationPreferences,
   focused: boolean,
 ): string {
+  if (!hasInteractionBody(routed)) return `Pending ${routed.kind} · ${sourceLabel(routed)} · body deferred · Ctrl+G to inspect`;
   const interaction = routed.request;
   const identity = formatInteraction(routed);
   const source = sourceLabel(routed);
@@ -484,11 +486,11 @@ function renderInteraction(
   ].join("\n");
 }
 
-function formatInteraction(interaction: RoutedInteraction): string {
+function formatInteraction(interaction: DisplayInteraction): string {
   return `${interaction.interaction.conversation_id}::${interaction.interaction.interaction_id}`;
 }
 
-function sourceLabel(interaction: RoutedInteraction): string {
+function sourceLabel(interaction: DisplayInteraction): string {
   if (interaction.source.type === "primary") {
     return "source · primary conversation";
   }

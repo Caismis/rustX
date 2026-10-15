@@ -1,4 +1,4 @@
-//! Issue #42: the immutable attempt model snapshot, the model-update /
+//! Issues #42 and #468: immutable attempt model snapshots, the live model-update /
 //! attempt-admission linearization, attempt-scoped context windows, and the
 //! `session` / `explicit` summary policies.
 //!
@@ -28,7 +28,7 @@ use rustx::model::catalog::{MapCredentialEnvironment, ModelProfileId, ModelRef, 
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
-use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
+use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
     EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor,
     RuntimeClientEvent, RuntimeClientHost, RuntimeClientProtocolEvent,
@@ -166,14 +166,18 @@ async fn await_parked(model: &Arc<FakeModel>) {
 
 /// Receives from the observation stream until the predicate matches.
 async fn receive_until(
+    host: &RuntimeClientHost,
     subscription: &EventSubscription,
     mut predicate: impl FnMut(&RuntimeClientProtocolEvent) -> bool,
 ) -> Vec<RuntimeClientProtocolEvent> {
     tokio::time::timeout(LIVENESS, async {
         let mut seen = Vec::new();
         loop {
-            let EventDelivery::Event(event) = subscription.next().await else {
-                panic!("the subscription must stay open and contiguous");
+            let delivery = subscription.next().await;
+            let EventDelivery::Event(event) = delivery else {
+                let error = host.checkpoint().err();
+                let source = host.weak_inner().upgrade().expect("resident fixture").projection_source_debug();
+                panic!("the subscription must stay open and contiguous: {delivery:?}; checkpoint_error={error:?}; source={source}");
             };
             let matched = predicate(&event);
             seen.push(event);
@@ -323,17 +327,20 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
         config: Box::new(SessionModelConfig::of(beta.reference())),
     });
     assert!(
-        response.error.is_some(),
-        "busy Session rejects model adoption: {response:?}"
+        response.error.is_none(),
+        "active Session commits model selection: {response:?}"
     );
 
     // The runtime can truthfully report both facts at once, so a client never
     // has to infer them from event ordering.
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot.model.as_ref().unwrap().configured.model,
-        alpha.reference(),
-        "the Session keeps A until explicit idle model adoption"
+        beta.reference(),
+        "the Session immediately selects B for future independent Attempts"
     );
     let attempt = snapshot.attempt.as_ref().expect("a running attempt");
     assert_eq!(
@@ -343,8 +350,12 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
     );
 
     release.send_replace(true);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -373,15 +384,14 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
         "B's binding was never used by the already-admitted attempt"
     );
 
-    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
-        id: RequestId::new(4),
-        config: Box::new(SessionModelConfig::of(beta.reference())),
-    });
-    assert!(response.error.is_none(), "{response:?}");
-    // The next attempt snapshots B.
+    // No second mutation is needed: the next independent Attempt snapshots B.
     submit(&attachment, 3, "second");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let beta_requests = beta.handle.requests();
@@ -421,8 +431,12 @@ async fn a_model_update_before_admission_is_observed_by_that_attempt() {
     assert!(response.error.is_none());
 
     submit(&attachment, 2, "hello");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -434,6 +448,91 @@ async fn a_model_update_before_admission_is_observed_by_that_attempt() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].model(), "model-b");
     assert_eq!(requests[0].max_output_tokens(), 2048);
+}
+
+/// The provider fails only after the live selection committed. The Agent
+/// Loop's ordinary transient retry still uses the original resolved binding.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_transient_retry_after_live_selection_keeps_the_admitted_invocation() {
+    let (release, receiver) = support::fake::model_release();
+    let alpha = Provider::new(
+        ALPHA,
+        "model-a",
+        vec![
+            vec![
+                FakeStep::Emit(ModelEvent::Started),
+                FakeStep::ParkUntilReleased(receiver),
+                FakeStep::Emit(ModelEvent::Failed {
+                    error: rustx::model::ModelError {
+                        kind: rustx::model::ModelErrorKind::Transport,
+                        message: "scripted transient transport failure".to_owned(),
+                        retry_disposition: rustx::model::error::ModelRetryDisposition::Transient,
+                        retry_after_ms: None,
+                        provider_code: None,
+                        context_overflow: None,
+                        malformed_tool_proposal: None,
+                        timeout_phase: None,
+                        generation: None,
+                    },
+                }),
+            ],
+            one_turn_stop(),
+        ],
+    )
+    .output(333)
+    .params(serde_json::json!({"temperature": 0.1}));
+    let beta = Provider::new(BETA, "model-b", vec![one_turn_stop()])
+        .output(999)
+        .params(serde_json::json!({"temperature": 0.9}));
+    let host = runtime(
+        session_model(&[&alpha, &beta], SessionModelConfig::of(alpha.reference())),
+        NO_COMPACTION,
+    )
+    .await;
+    let (attachment, subscription) = attach(&host);
+    submit(&attachment, 1, "retry me");
+    await_parked(&alpha.handle).await;
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(2),
+        config: Box::new(SessionModelConfig::of(beta.reference())),
+    });
+    assert!(response.error.is_none(), "{response:?}");
+    release.send_replace(true);
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+    })
+    .await;
+    let requests = alpha.handle.requests();
+    assert_eq!(requests.len(), 2, "original invocation and transient retry");
+    for request in &requests {
+        assert_eq!(request.model(), "model-a");
+        assert_eq!(request.max_output_tokens(), 333);
+        assert_eq!(
+            request.request_params()["temperature"],
+            serde_json::json!(0.1)
+        );
+    }
+    assert!(beta.handle.requests().is_empty());
+    submit(&attachment, 3, "new independent Attempt");
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+    })
+    .await;
+    let requests = beta.handle.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].max_output_tokens(), 999);
+    assert_eq!(
+        requests[0].request_params()["temperature"],
+        serde_json::json!(0.9)
+    );
 }
 
 /// An attempt's compaction decision uses **its own** model's context window.
@@ -486,8 +585,12 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     // A long inbound turn: comfortably inside A's window, well past B's.
     let long = "compaction pressure ".repeat(600);
     submit(&attachment, 1, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(
@@ -503,8 +606,12 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     assert!(response.error.is_none(), "{response:?}");
 
     submit(&attachment, 3, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -581,15 +688,23 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     // compaction.
     let long = "compaction pressure ".repeat(600);
     submit(&attachment, 1, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(alpha.handle.requests().len(), 1, "the first attempt fits");
 
     submit(&attachment, 2, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -713,13 +828,17 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
         }),
     });
     assert!(
-        response.error.is_some(),
-        "active Attempt refuses summary adoption: {response:?}"
+        response.error.is_none(),
+        "Session summary selection commits while the Attempt remains frozen: {response:?}"
     );
 
     release.send_replace(true);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -747,12 +866,10 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     }
 }
 
-/// Issue #456: a selected Model Profile — primary and explicit Summary — is
-/// part of the invocation frozen at admission. A profile change requested
-/// after admission is refused for the running Attempt, whose tool
-/// continuation, context-overflow compaction and retry all keep the admitted
-/// profile's complete parameters and output default; the next Attempt adopts
-/// the new profiles.
+/// Issues #456 and #468: complete primary and Summary Model Profiles freeze
+/// at admission. A live selection commits immediately, while tool continuation,
+/// compaction and retry keep the admitted invocation. The next independent
+/// Attempt uses the committed replacement.
 #[allow(clippy::too_many_lines)] // one complete freeze interleaving
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry() {
@@ -784,11 +901,12 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         ],
     )
     .output(4096)
+    .always_on_reasoning()
     .profiles(
-        "precise",
+        "high",
         serde_json::json!({
-            "precise": {"maxOutputTokens": 300, "requestParams": {"temperature": 0.1, "stop": [null]}},
-            "creative": {"requestParams": {"temperature": 1.3, "metadata": {"tier": null}}}
+            "high": {"reasoningEnabled": true, "maxOutputTokens": 300, "requestParams": {"reasoning_effort": "high", "temperature": 0.1, "stop": [null]}},
+            "low": {"reasoningEnabled": false, "requestParams": {"reasoning_effort": "low", "temperature": 1.3, "metadata": {"tier": null}}}
         }),
     );
     let summary_text = |text: &str| {
@@ -829,7 +947,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         ..SessionModelConfig::of(alpha.reference())
     };
     let host = runtime(
-        session_model(&[&alpha, &summary], selected("precise", "brief")),
+        session_model(&[&alpha, &summary], selected("high", "brief")),
         SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 20,
@@ -841,20 +959,34 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
 
     submit(&attachment, 1, "start");
     await_parked(&alpha.handle).await;
-    // A profile change after admission is refused for the running Attempt.
+    // Session selection commits, while the running Attempt retains High.
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(2),
-        config: Box::new(selected("creative", "long")),
+        config: Box::new(selected("low", "long")),
     });
-    assert!(response.error.is_some(), "{response:?}");
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    assert!(response.error.is_none(), "{response:?}");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("checkpoint");
+    let selected = snapshot.model.as_ref().unwrap();
+    assert_eq!(
+        selected.configured.profile,
+        Some(ModelProfileId::new("low"))
+    );
+    assert!(!selected.effective.as_ref().unwrap().reasoning_enabled);
     let frozen = snapshot.attempt.as_ref().unwrap().model.as_ref().unwrap();
-    assert_eq!(frozen.primary.profile, Some(ModelProfileId::new("precise")));
+    assert_eq!(frozen.primary.profile, Some(ModelProfileId::new("high")));
+    assert!(frozen.primary.reasoning_enabled);
     assert_eq!(frozen.primary.max_output_tokens, 300);
 
     release.send_replace(true);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -866,7 +998,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         assert_eq!(request.max_output_tokens(), 300);
         assert_eq!(
             serde_json::Value::Object(request.request_params().clone()),
-            serde_json::json!({"temperature": 0.1, "stop": [null], "seed": null})
+            serde_json::json!({"reasoning_effort": "high", "temperature": 0.1, "stop": [null], "seed": null})
         );
     }
     // The compaction summary used the admitted Summary profile.
@@ -878,15 +1010,14 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         serde_json::json!({"summary_tag": "brief", "summary_seed": [null]})
     );
 
-    // Idle adoption succeeds, and only the next Attempt observes it.
-    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
-        id: RequestId::new(3),
-        config: Box::new(selected("creative", "long")),
-    });
-    assert!(response.error.is_none(), "{response:?}");
+    // The next Attempt uses the already committed selection without replay.
     submit(&attachment, 4, "next");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let primary = alpha.handle.requests();
@@ -898,7 +1029,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     );
     assert_eq!(
         serde_json::Value::Object(primary[3].request_params().clone()),
-        serde_json::json!({"temperature": 1.3, "metadata": {"tier": null}, "seed": null})
+        serde_json::json!({"reasoning_effort": "low", "temperature": 1.3, "metadata": {"tier": null}, "seed": null})
     );
     for request in &primary[..3] {
         assert_eq!(
@@ -1178,8 +1309,14 @@ async fn a_rejected_model_update_changes_nothing() {
         },
     )
     .await;
-    let (attachment, _subscription) = attach(&host);
-    let (_, before) = host.snapshot().expect("snapshot");
+    let (attachment, subscription) = attach(&host);
+    receive_until(&host, &subscription, |event| event.event.facts().iter().any(|fact| {
+        matches!(fact, RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility: rustx::local_runtime::configuration::application::AdoptionEligibility::Eligible })
+    })).await;
+    let (_, before) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
 
     for invalid in [
         // An unknown model.
@@ -1235,7 +1372,14 @@ async fn a_rejected_model_update_changes_nothing() {
         );
     }
 
-    let (snapshot, after) = host.snapshot().expect("snapshot");
+    let (snapshot, after) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
+    assert!(
+        matches!(subscription.try_next(), EventDelivery::Pending),
+        "rejected selections publish no additional fact"
+    );
     assert_eq!(
         after, before,
         "a rejected update allocates no cursor and publishes no event"
@@ -1244,15 +1388,14 @@ async fn a_rejected_model_update_changes_nothing() {
         snapshot.model.as_ref().unwrap().configured,
         SessionModelConfig::of(alpha.reference())
     );
-    let RuntimeClientResult::Model { model } = attachment
-        .handle_request(RuntimeClientRequest::ModelGet {
-            id: RequestId::new(10),
-        })
-        .result
-        .expect("model_get result")
-    else {
-        panic!("model_get returns the session model");
-    };
+    let model: rustx::model::session::SessionModelView = super::super::common::native_domain_single(
+        attachment
+            .handle_request(RuntimeClientRequest::ModelGet {
+                id: RequestId::new(10),
+            })
+            .result
+            .expect("model_get result"),
+    );
     assert_eq!(model.configured, SessionModelConfig::of(alpha.reference()));
 }
 

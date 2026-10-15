@@ -38,7 +38,7 @@ pub struct CapabilitySnapshot {
     available_tools: Arc<AvailableToolCatalog>,
     skills: Arc<SkillSnapshot>,
     resolved_profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
-    selected_skill_entries: Vec<crate::skills::SkillCatalogEntry>,
+    selected_skill_entries: Arc<[crate::skills::SkillCatalogEntry]>,
     python_environment: Option<PythonEnvironment>,
     node_environment: Option<NodeEnvironment>,
     effective_environment: ToolEnvironment,
@@ -109,7 +109,8 @@ impl CapabilitySnapshot {
                     .is_none_or(|profile| profile.skills.contains(&entry.name))
             })
             .cloned()
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         self.resolved_profile = profile;
         self
     }
@@ -140,7 +141,7 @@ impl CapabilitySnapshot {
             revision,
             tool_registry,
             available_tools,
-            selected_skill_entries: skills.catalog_entries().to_vec(),
+            selected_skill_entries: skills.catalog_entries().into(),
             skills,
             resolved_profile: None,
             python_environment,

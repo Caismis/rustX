@@ -1,3 +1,4 @@
+import { settingsReceipt } from './fixture';
 // @vitest-environment node
 /** Final operation admission against a real Product Host process (Node only). */
 import { afterEach, expect, it, vi } from 'vitest';
@@ -9,7 +10,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
-import type { MethodResult } from '../../protocol/app-server/v46';
+import type { MethodResult } from '../../protocol/app-server/v48';
 import { Server, endpoint } from './fixture';
 
 function deferred<T>() {
@@ -42,7 +43,7 @@ function realHost(server: Server) {
     },
     adoptWorkspace: unused, renameWorkspace: unused, reorderWorkspace: unused, removeWorkspace: unused, resolveWorkspace: unused,
   };
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd },'0')));
   const authority = new WorkspaceAuthority(host);
   const accepted = vi.fn(); authority.subscribe(accepted);
   server.client.setSessionAdmission(new WorkspaceSessionAdmission(authority, server.client).admit);
@@ -93,7 +94,7 @@ it.each(Object.keys(rootChanges) as (keyof typeof rootChanges)[])('Fork uses the
   try {
     await server.client.attach('A');
     const { conversation_id } = server.client.target('A');
-    server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '1', boundaries: [{ surface_revision: '1', message: { id: 'user-1', kind: 'message', source: 'human', content: [{ type: 'text', text: 'hi' }] } }] }) as MethodResult);
+    server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '1', boundaries: [{ surface_revision: '1', locator:{type:'by_message_id',message_id:'user-1'}, block_count:'1',content:[],collections:[], message: { id: 'user-1', kind: 'message', source: 'human', content: [{ type: 'text', text: 'hi' }] } }] }) as MethodResult);
     server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id, ordinal: '1', origin: { type: 'new' } }] }) as MethodResult);
     const scope = new CommandSession(server.client, 'A', () => true);
     const [selection] = (await scope.boundaries()).selections;

@@ -3,9 +3,279 @@
 use super::{Fixture, bounded, input};
 use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
+use crate::runtime_client::content::CanonicalContentLocator;
 use crate::runtime_client::event::RuntimeClientEvent;
 
 use super::app_server_conformance as conformance;
+
+fn trace_content_references(
+    value: &serde_json::Value,
+    output: &mut Vec<crate::runtime_client::content::ContentRef>,
+) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(reference) = fields.get("content_ref") {
+                output.push(
+                    crate::runtime_client::structural_json::decode(reference.clone()).unwrap(),
+                );
+            }
+            for field in fields.values() {
+                trace_content_references(field, output);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                trace_content_references(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t08_t11_t15_cold_trace_pages_read_exact_deferred_request_and_fence_foreign_cut() {
+    bounded(async {
+        use base64::Engine as _;
+        let fixture = Fixture::new().await;
+        let identity = fixture
+            .manager
+            .load(&fixture.sessions[0].id, None)
+            .await
+            .unwrap();
+        let runtime = identity.inspect_runtime().unwrap();
+        let text = "é\\\"\n".repeat(8_000);
+        runtime.submit_inbound(input(&text)).unwrap();
+        fixture.gates[0].wait_entered().await;
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let session_id = fixture.sessions[0].id.clone();
+        let MethodResult::SessionTraceHistory { page, .. } = call(
+            &connection,
+            46_701,
+            Method::SessionTraceHistory {
+                session_id: session_id.clone(),
+                node_id: None,
+                before: None,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("native trace summaries");
+        };
+        let record = page
+            .records
+            .iter()
+            .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+            .unwrap();
+        let MethodResult::SessionTraceHistoryDetail {
+            page,
+            conversation_id,
+        } = call(
+            &connection,
+            46_702,
+            Method::SessionTraceHistoryDetail {
+                session_id: session_id.clone(),
+                node_id: None,
+                record_id: record.id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("bounded cold native detail");
+        };
+        assert_eq!(conversation_id, fixture.sessions[0].active_conversation_id);
+        assert_eq!(page.total, 1);
+        assert!(page.items[0].deferred || !page.items[0].content.is_empty());
+        assert!(
+            serde_json::to_string(&MethodResult::DomainPage { page: page.clone() })
+                .unwrap()
+                .len()
+                < 786_432
+        );
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        let mut chunks = 0;
+        loop {
+            let MethodResult::CheckpointValueChunk { chunk } = call(
+                &connection,
+                46_703,
+                Method::SessionTraceValueRead {
+                    session_id: session_id.clone(),
+                    node_id: None,
+                    cut: page.read_cut.clone(),
+                    domain: page.domain.clone(),
+                    item_offset: 0,
+                    path: vec![],
+                    offset,
+                    max_bytes: 8192,
+                },
+            )
+            .await
+            else {
+                panic!("bounded cold native value");
+            };
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(chunk.bytes_base64)
+                .unwrap();
+            assert!(!decoded.is_empty() && decoded.len() <= 8192);
+            bytes.extend(decoded);
+            chunks += 1;
+            match chunk.next_offset {
+                Some(next) => {
+                    assert!(next > offset);
+                    offset = next;
+                }
+                None => break,
+            }
+        }
+        assert!(
+            chunks > 1,
+            "deferred native request requires advancing reads"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut references = Vec::new();
+        trace_content_references(&value, &mut references);
+        let reference = references
+            .into_iter()
+            .find(|reference| {
+                reference.representation
+                    == crate::runtime_client::content::ContentRepresentation::Utf8Text
+                    && reference.readable_end == text.len() as u64
+            })
+            .expect("frozen canonical input content descriptor");
+        let mut content = Vec::new();
+        let mut offset = 0;
+        loop {
+            let MethodResult::ContentChunk { chunk } = call(
+                &connection,
+                46_705,
+                Method::SessionTraceContentRead {
+                    session_id: session_id.clone(),
+                    node_id: None,
+                    cut: page.read_cut.clone(),
+                    content_ref: reference.clone(),
+                    offset,
+                    max_bytes: 8192,
+                },
+            )
+            .await
+            else {
+                panic!("cold canonical source chunk");
+            };
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap();
+            assert!(!decoded.is_empty() && decoded.len() <= 8192);
+            content.extend(decoded);
+            match chunk.next_offset {
+                Some(next) => {
+                    assert!(next > offset);
+                    offset = next;
+                }
+                None => break,
+            }
+        }
+        assert_eq!(String::from_utf8(content).unwrap(), text);
+        // The same historical native cut discovers deferred canonical fields
+        // without attaching this reader or loading a complete conversation.
+        let source_cut = page.read_cut.source_cut.clone().unwrap();
+        let MethodResult::CheckpointPage { page: messages } = call(
+            &connection,
+            46_706,
+            Method::SessionHistoryPage {
+                session_id: session_id.clone(),
+                node_id: None,
+                cut: source_cut.clone(),
+                domain: "messages".into(),
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("cold canonical descriptors")
+        };
+        assert_eq!(messages.read_cut.source_cut.as_ref(), Some(&source_cut));
+        assert!(messages.items.len() <= 32);
+        let item = messages.items.first().expect("adopted user message header");
+        let MethodResult::CheckpointPage { page: blocks } = call(
+            &connection,
+            46_707,
+            Method::SessionHistoryPage {
+                session_id: session_id.clone(),
+                node_id: None,
+                cut: source_cut.clone(),
+                domain: format!("messages.{}.blocks", item.identity),
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("cold canonical block descriptors")
+        };
+        assert_eq!(blocks.total, 1);
+        assert!(
+            blocks
+                .items
+                .iter()
+                .flat_map(|item| &item.content)
+                .any(|binding| binding.content_ref == reference)
+        );
+        let mut foreign_source = source_cut;
+        foreign_source.read.conversation_id = fixture.sessions[1].active_conversation_id.clone();
+        assert!(matches!(
+            connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(46_708),
+                    call: Method::SessionHistoryPage {
+                        session_id: session_id.clone(),
+                        node_id: None,
+                        cut: foreign_source,
+                        domain: "messages".into(),
+                        offset: 0,
+                        limit: 32
+                    }
+                })
+                .await,
+            Response::Failure(_)
+        ));
+        let mut foreign = page.read_cut;
+        foreign.conversation_id = fixture.sessions[1].active_conversation_id.clone();
+        let response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(46_704),
+                call: Method::SessionTraceValueRead {
+                    session_id,
+                    node_id: None,
+                    cut: foreign,
+                    domain: page.domain,
+                    item_offset: 0,
+                    path: vec![],
+                    offset: 0,
+                    max_bytes: 65_536,
+                },
+            })
+            .await;
+        assert!(matches!(
+            response,
+            Response::Failure(Failure {
+                error: RpcError {
+                    data: Some(ErrorData::ReadCutExpired),
+                    ..
+                },
+                ..
+            })
+        ));
+        fixture.gates[0].release();
+        connection.close();
+        fixture.close().await;
+    })
+    .await;
+}
 
 // Wait on the catalog's native publication signal, not on elapsed time or retries.
 async fn activity_published(f: &Fixture, id: &crate::local_runtime::session::SessionId) {
@@ -131,6 +401,10 @@ impl crate::agent::PreToolPolicy for AskPolicy {
 
 pub(super) async fn call(connection: &AppServerConnection, id: i64, call: Method) -> MethodResult {
     static SCHEMA: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
+    let configuration_target = match &call {
+        Method::ConfigurationGet { target } => Some(target.clone()),
+        _ => None,
+    };
     let response = connection
         .handle_request(Request {
             jsonrpc: JsonRpcVersion::V2,
@@ -151,7 +425,469 @@ pub(super) async fn call(connection: &AppServerConnection, id: i64, call: Method
         panic!("{response:?}")
     };
     assert_eq!(response.id, RequestId::Integer(id));
-    response.result
+    if let MethodResult::Attached { target, .. } = &response.result {
+        let checkpoint_response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(id + 10_000_000),
+                call: Method::SessionCheckpoint {
+                    target: target.clone(),
+                    trace_records: vec![],
+                },
+            })
+            .await;
+        let Response::Success(checkpoint) = checkpoint_response else {
+            panic!("client checkpoint loading: {checkpoint_response:?}")
+        };
+        let MethodResult::Checkpoint { checkpoint } = checkpoint.result else {
+            panic!("checkpoint")
+        };
+        assert!(matches!(
+            connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(id + 20_000_000),
+                    call: Method::SessionSubscribe {
+                        target: target.clone(),
+                        after_cursor: checkpoint.cursor
+                    }
+                })
+                .await,
+            Response::Success(_)
+        ));
+    }
+    let result = materialize_source_fixture(connection, id, response.result).await;
+    if let Some(target) = configuration_target {
+        return materialize_configuration_fixture(connection, id, target, result).await;
+    }
+    result
+}
+
+async fn materialize_source_fixture(
+    connection: &AppServerConnection,
+    id: i64,
+    result: MethodResult,
+) -> MethodResult {
+    use base64::Engine;
+    let MethodResult::SourceSettings { mut projection } = result else {
+        return result;
+    };
+    if projection.inline.is_none() {
+        let mut object = serde_json::Map::new();
+        let mut read_id = id + 60_000_000;
+        for field in &projection.fields {
+            let value = if let Some(value) = &field.value {
+                value.clone()
+            } else {
+                let reference = field.reference.clone().expect("source descriptor");
+                let mut bytes = Vec::new();
+                let mut offset = 0;
+                loop {
+                    let Response::Success(response) = connection
+                        .handle_request(Request {
+                            jsonrpc: JsonRpcVersion::V2,
+                            id: RequestId::Integer(read_id),
+                            call: Method::SourcesValueRead {
+                                target: projection.target.clone(),
+                                reference: reference.clone(),
+                                offset,
+                                max_bytes: 65_536,
+                            },
+                        })
+                        .await
+                    else {
+                        panic!("fixture source read");
+                    };
+                    read_id += 1;
+                    let MethodResult::SourceValueChunk { chunk } = response.result else {
+                        panic!("source chunk");
+                    };
+                    bytes.extend(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(chunk.data_base64)
+                            .unwrap(),
+                    );
+                    assert!(
+                        bytes.len() <= 16 * 1024 * 1024,
+                        "explicit fixture source cache bound"
+                    );
+                    let Some(next) = chunk.next_offset else {
+                        break;
+                    };
+                    assert!(next > offset);
+                    offset = next;
+                }
+                serde_json::from_slice(&bytes).unwrap()
+            };
+            let serde_json::Value::String(name) = serde_json::to_value(field.name).unwrap() else {
+                panic!("field name");
+            };
+            assert!(object.insert(name, value).is_none());
+        }
+        projection.inline = Some(Box::new(
+            crate::runtime_client::structural_json::decode(serde_json::Value::Object(object))
+                .unwrap(),
+        ));
+        // This is loaded client fixture state. Only the original bounded
+        // server response above is serialized and schema-validated.
+    }
+    MethodResult::SourceSettings { projection }
+}
+
+async fn materialize_configuration_fixture(
+    connection: &AppServerConnection,
+    id: i64,
+    target: AttachmentTarget,
+    result: MethodResult,
+) -> MethodResult {
+    use base64::Engine;
+    let MethodResult::EffectiveConfiguration { mut projection } = result else {
+        return result;
+    };
+    if projection.inline.is_none() {
+        let mut object = serde_json::Map::new();
+        let mut read_id = id + 70_000_000;
+        for field in &projection.fields {
+            let value = if let Some(value) = &field.value {
+                value.clone()
+            } else {
+                let reference = field.reference.clone().expect("configuration descriptor");
+                let mut bytes = Vec::new();
+                let mut offset = 0;
+                loop {
+                    let Response::Success(response) = connection
+                        .handle_request(Request {
+                            jsonrpc: JsonRpcVersion::V2,
+                            id: RequestId::Integer(read_id),
+                            call: Method::ConfigurationValueRead {
+                                target: target.clone(),
+                                reference: reference.clone(),
+                                offset,
+                                max_bytes: 65_536,
+                            },
+                        })
+                        .await
+                    else {
+                        panic!("fixture configuration read");
+                    };
+                    read_id += 1;
+                    let MethodResult::ConfigurationValueChunk { chunk } = response.result else {
+                        panic!("configuration chunk");
+                    };
+                    bytes.extend(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(chunk.data_base64)
+                            .unwrap(),
+                    );
+                    assert!(bytes.len() <= 16 * 1024 * 1024, "fixture cache bound");
+                    let Some(next) = chunk.next_offset else {
+                        break;
+                    };
+                    assert!(next > offset);
+                    offset = next;
+                }
+                serde_json::from_slice(&bytes).unwrap()
+            };
+            let serde_json::Value::String(name) = serde_json::to_value(field.name).unwrap() else {
+                panic!("field name");
+            };
+            assert!(object.insert(name, value).is_none());
+        }
+        projection.inline = Some(Box::new(
+            crate::runtime_client::structural_json::decode(serde_json::Value::Object(object))
+                .unwrap(),
+        ));
+    }
+    MethodResult::EffectiveConfiguration { projection }
+}
+
+pub(super) async fn read_model_result(
+    connection: &AppServerConnection,
+    target: &AttachmentTarget,
+    result: MethodResult,
+) -> Box<crate::model::session::SessionModelView> {
+    use base64::Engine as _;
+    let MethodResult::DomainPage { page } = result else {
+        panic!("model domain page");
+    };
+    assert_eq!(page.domain, "model");
+    assert_eq!(page.total, 1);
+    assert!(page.next_offset.is_none());
+    assert_eq!(page.items.len(), 1);
+    let item_offset = page.items[0].offset;
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    let mut readable_end = None;
+    loop {
+        let MethodResult::CheckpointValueChunk { chunk } = call(
+            connection,
+            46_790,
+            Method::ConversationCheckpointValueRead {
+                target: target.clone(),
+                agent_id: None,
+                cut: page.read_cut.clone(),
+                domain: page.domain.clone(),
+                item_offset,
+                path: Vec::new(),
+                offset,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("selected original model value");
+        };
+        assert_eq!(chunk.cut, page.read_cut);
+        assert_eq!(chunk.domain, page.domain);
+        assert_eq!(chunk.item_offset, item_offset);
+        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.offset, offset);
+        assert_eq!(
+            chunk.representation,
+            crate::runtime_client::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1
+        );
+        assert!(chunk.bytes_base64.len() <= 87_384);
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.bytes_base64)
+            .unwrap();
+        assert!(!part.is_empty() && part.len() <= 65_536);
+        if let Some(end) = readable_end {
+            assert_eq!(chunk.readable_end, end);
+        } else {
+            readable_end = Some(chunk.readable_end);
+        }
+        let next = offset + u64::try_from(part.len()).unwrap();
+        assert!(next <= chunk.readable_end);
+        assert!(bytes.len() + part.len() <= 16 * 1024 * 1024);
+        bytes.extend(part);
+        if let Some(value) = chunk.next_offset {
+            assert_eq!(value, next);
+            assert!(value > offset && value < chunk.readable_end);
+            offset = value;
+        } else {
+            assert_eq!(next, chunk.readable_end);
+            break;
+        }
+    }
+    Box::new(
+        crate::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
+            .unwrap(),
+    )
+}
+pub(super) async fn read_native_model_result(
+    client: &crate::runtime_client::RuntimeAttachment,
+    result: crate::runtime_client::RuntimeClientResult,
+) -> crate::model::session::SessionModelView {
+    use base64::Engine as _;
+    let crate::runtime_client::RuntimeClientResult::DomainPage { page } = result else {
+        panic!("bounded native model page");
+    };
+    assert_eq!(page.domain, "model");
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.total, 1);
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    let mut end = None;
+    loop {
+        let response = client
+            .handle_request_async(
+                crate::runtime_client::RuntimeClientRequest::CheckpointValueRead {
+                    id: crate::runtime_client::RequestId::new(46_791),
+                    cut: page.read_cut.clone(),
+                    domain: page.domain.clone(),
+                    item_offset: page.items[0].offset,
+                    path: Vec::new(),
+                    offset,
+                    max_bytes: 65_536,
+                },
+            )
+            .await;
+        let Some(crate::runtime_client::RuntimeClientResult::CheckpointValueChunk { chunk }) =
+            response.result
+        else {
+            panic!("original selected model value: {:?}", response.error);
+        };
+        assert_eq!(chunk.cut, page.read_cut);
+        assert_eq!(chunk.domain, page.domain);
+        assert_eq!(chunk.item_offset, page.items[0].offset);
+        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.offset, offset);
+        assert_eq!(
+            chunk.representation,
+            crate::runtime_client::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1
+        );
+        assert!(chunk.bytes_base64.len() <= 87_384);
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.bytes_base64)
+            .unwrap();
+        assert!(!part.is_empty() && part.len() <= 65_536);
+        if let Some(original) = end {
+            assert_eq!(chunk.readable_end, original);
+        } else {
+            end = Some(chunk.readable_end);
+        }
+        let next = offset + part.len() as u64;
+        assert!(next <= chunk.readable_end);
+        assert!(bytes.len() + part.len() <= 16 * 1024 * 1024);
+        bytes.extend(part);
+        if let Some(value) = chunk.next_offset {
+            assert_eq!(value, next);
+            assert!(value > offset && value < chunk.readable_end);
+            offset = value;
+        } else {
+            assert_eq!(next, chunk.readable_end);
+            break;
+        }
+    }
+    crate::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap()).unwrap()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ModelCatalogObservation {
+    pub models: Vec<CatalogModelObservation>,
+}
+
+/// The current finite native catalog header, including its profile continuation facts.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct CatalogModelObservation {
+    pub model: crate::model::catalog::ModelRef,
+    pub protocol: crate::model::types::ModelProtocol,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub context_window: u64,
+    pub max_output_tokens: u32,
+    pub declared_capabilities: crate::model::catalog::ModelCapabilities,
+    pub effective_capabilities: crate::model::catalog::ModelCapabilities,
+    pub profiles: Vec<crate::model::catalog::ModelProfileView>,
+    pub default_profile: Option<crate::model::catalog::ModelProfileId>,
+    pub credential_source: crate::model::catalog::CredentialSourceView,
+    pub profile_count: u64,
+    pub profiles_deferred: bool,
+}
+impl PartialEq<crate::model::catalog::ModelCatalogView> for ModelCatalogObservation {
+    fn eq(&self, original: &crate::model::catalog::ModelCatalogView) -> bool {
+        self.models.len() == original.models.len()
+            && self
+                .models
+                .iter()
+                .zip(&original.models)
+                .all(|(observed, native)| {
+                    observed.model == native.model
+                        && observed.protocol == native.protocol
+                        && observed.context_window == native.context_window
+                        && observed.max_output_tokens == native.max_output_tokens
+                        && observed.declared_capabilities == native.declared_capabilities
+                        && observed.effective_capabilities == native.effective_capabilities
+                        && observed.profiles == native.profiles
+                        && observed.default_profile == native.default_profile
+                        && observed.credential_source == native.credential_source
+                        && observed.profile_count == native.profiles.len() as u64
+                        && !observed.profiles_deferred
+                })
+    }
+}
+pub(super) fn read_catalog_result(result: MethodResult) -> ModelCatalogObservation {
+    let MethodResult::DomainPage { page } = result else {
+        panic!("catalog domain page");
+    };
+    assert_eq!(page.domain, "model_catalog.models");
+    assert!(
+        page.next_offset.is_none(),
+        "this fixture's catalog fits one bounded page"
+    );
+    assert!(page.items.len() <= 32);
+    assert_eq!(page.total, page.items.len() as u64);
+    let models = page
+        .items
+        .into_iter()
+        .map(|item| {
+            let model: CatalogModelObservation = crate::runtime_client::structural_json::decode(
+                item.value.expect("finite inline catalog fixture header"),
+            )
+            .expect("current typed catalog header");
+            assert!(
+                !model.profiles_deferred,
+                "this small fixture's complete native profile prefix is advertised inline"
+            );
+            assert_eq!(model.profile_count, model.profiles.len() as u64);
+            assert!(model.profiles.len() <= 32);
+            if model.profile_count > 0 {
+                let frontier = page
+                    .collections
+                    .iter()
+                    .find(|frontier| {
+                        frontier.domain == format!("model_catalog.models.{}.profiles", item.offset)
+                    })
+                    .expect("actual numeric profile source frontier");
+                assert_eq!(frontier.total, model.profile_count);
+                assert_eq!(frontier.next_offset, Some(0));
+            }
+            model
+        })
+        .collect();
+    ModelCatalogObservation { models }
+}
+pub(super) fn read_native_catalog_result(
+    result: crate::runtime_client::RuntimeClientResult,
+) -> ModelCatalogObservation {
+    let crate::runtime_client::RuntimeClientResult::DomainPage { page } = result else {
+        panic!("native catalog page");
+    };
+    read_catalog_result(MethodResult::DomainPage { page })
+}
+
+async fn read_editor(
+    connection: &AppServerConnection,
+    locator: crate::app_server::editor_read::EditorLocator,
+) -> Vec<crate::local_runtime::session::uploads::UserInputBlock> {
+    use base64::Engine;
+    let mut content = vec![];
+    let mut block_index = 0;
+    let mut offset = 0;
+    let mut bytes = vec![];
+    loop {
+        let MethodResult::EditorPage { page } = call(
+            connection,
+            30_000_000,
+            Method::SessionEditorRead {
+                locator: locator.clone(),
+                block_index,
+                offset,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("editor read")
+        };
+        if let Some(chunk) = page.chunk {
+            bytes.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(chunk.data_base64)
+                    .unwrap(),
+            );
+            if let Some(next) = chunk.next_offset {
+                offset = next;
+                continue;
+            }
+            content.push(
+                crate::local_runtime::session::uploads::UserInputBlock::Text(
+                    crate::message::content::TextBlock {
+                        text: String::from_utf8(std::mem::take(&mut bytes)).unwrap(),
+                    },
+                ),
+            );
+        }
+        if let Some(upload) = page.upload {
+            content.push(crate::local_runtime::session::uploads::UserInputBlock::Upload(upload));
+        }
+        let Some(next) = page.next_block else {
+            break;
+        };
+        block_index = next;
+        offset = 0;
+    }
+    content
 }
 
 pub(super) async fn initialize(connection: &AppServerConnection) {
@@ -197,6 +933,9 @@ async fn detach_during_unloading_needs_no_operation_lease() {
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
         let probe = f.manager.probe(&old.conversation_id);
+        // The attachment helper's independent checkpoint already used this gate.
+        // Rearm it: a wrongly admitted detach would now park instead of passing.
+        probe.before_operation.arm();
         probe.before_shutdown.arm();
         let unload = super::unload_task(&f, old.conversation_id.clone());
         probe.before_shutdown.entered().await;
@@ -209,7 +948,11 @@ async fn detach_during_unloading_needs_no_operation_lease() {
             MethodResult::Detached {}
         ));
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(!*probe.before_operation.entered.borrow());
+        assert!(
+            !*probe.before_operation.entered.borrow(),
+            "detach admits no operation lease"
+        );
+        probe.before_operation.release();
         probe.before_shutdown.release();
         unload.await.unwrap().unwrap();
         f.close().await;
@@ -243,7 +986,7 @@ async fn stale_detach_cannot_remove_replacement_route() {
         call(
             &connection,
             2,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: new,
             },
@@ -275,14 +1018,30 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
         let worker = connection.clone();
         let operation_target = target.clone();
         let operation = tokio::spawn(async move {
-            call(
-                &worker,
-                200,
-                Method::ConfigurationGet {
-                    target: operation_target,
-                },
-            )
-            .await
+            let response = worker
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(200),
+                    call: Method::ConfigurationGet {
+                        target: operation_target,
+                    },
+                })
+                .await;
+            let wire = serde_json::to_value(&response).unwrap();
+            assert!(
+                jsonschema::validator_for(&crate::app_server::schema::protocol_schema())
+                    .unwrap()
+                    .is_valid(&wire)
+            );
+            assert!(
+                serde_json::to_vec(&wire).unwrap().len()
+                    <= crate::app_server::transport::MAX_MESSAGE_BYTES
+            );
+            let Response::Success(receipt) = response else {
+                panic!("admitted original bounded read: {response:?}");
+            };
+            assert_eq!(receipt.id, RequestId::Integer(200));
+            receipt.result
         });
         probe.before_operation.entered().await;
         let worker = connection.clone();
@@ -367,10 +1126,14 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
             ErrorData::StaleRuntime
         );
         probe.before_operation.release();
-        assert!(matches!(
-            operation.await.unwrap(),
-            MethodResult::EffectiveConfiguration { .. }
-        ));
+        let MethodResult::EffectiveConfiguration { projection } = operation.await.unwrap() else {
+            panic!("the admitted original configuration read succeeds during retirement");
+        };
+        assert!(!projection.revision.is_empty());
+        assert!(
+            projection.inline.is_some() || !projection.fields.is_empty(),
+            "the bounded receipt retains original selected-field evidence"
+        );
         assert!(matches!(
             delete.await.unwrap(),
             MethodResult::Deletion { .. }
@@ -532,7 +1295,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
         }
         let barrier = Arc::new(tokio::sync::Barrier::new(3));
         let mut tasks = Vec::new();
-        for session in &sessions[1..] {
+        for (index, session) in sessions[1..].iter().enumerate() {
             let worker = connection.clone();
             let barrier = barrier.clone();
             let session_id = session.id.clone();
@@ -541,7 +1304,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
                 worker
                     .handle_request(Request {
                         jsonrpc: JsonRpcVersion::V2,
-                        id: RequestId::Integer(400),
+                        id: RequestId::Integer(400 + i64::try_from(index).unwrap()),
                         call: Method::SessionAttach {
                             session_id,
                             node_id: None,
@@ -853,11 +1616,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
             panic!("name");
         };
         assert_eq!(session.name.as_deref(), Some("durable only"));
-        let MethodResult::Settings {
-            revision: _,
-            settings,
-            ..
-        } = call(
+        let MethodResult::Settings { projection } = call(
             &connection,
             102,
             Method::SettingsRead {
@@ -868,6 +1627,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
         else {
             panic!("settings");
         };
+        let settings = projection.inline.unwrap();
         assert!(
             settings.model.is_some(),
             "Session creation resolves its model"
@@ -993,10 +1753,17 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         assert!(matches!(reply_a, MethodResult::InboundAccepted { .. }));
         assert!(matches!(reply_b, MethodResult::InboundAccepted { .. }));
         tokio::join!(f.gates[0].wait_entered(), f.gates[1].wait_entered());
+        f.manager
+            .configuration_host(&a.session_id)
+            .unwrap()
+            .projection_settled()
+            .await;
+        let frozen = f.manager.configuration_host(&a.session_id).unwrap();
+        frozen.inner.park_projection_worker();
         let before = call(
             &connection,
             22,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 target: a.clone(),
                 trace_records: Vec::new(),
             },
@@ -1032,40 +1799,49 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         let after = call(
             &connection,
             24,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 target: a.clone(),
                 trace_records: Vec::new(),
             },
         )
         .await;
         let (
-            MethodResult::Snapshot {
-                snapshot: before,
-                cursor: before_cursor,
+            MethodResult::Checkpoint {
+                checkpoint: checkpoint_1,
             },
-            MethodResult::Snapshot {
-                snapshot: after,
-                cursor: after_cursor,
+            MethodResult::Checkpoint {
+                checkpoint: checkpoint_2,
             },
         ) = (before, after)
         else {
             panic!("snapshots");
         };
+        let before = Box::new(checkpoint_1.snapshot);
+        let before_cursor = checkpoint_1.cursor;
+        let after = Box::new(checkpoint_2.snapshot);
+        let after_cursor = checkpoint_2.cursor;
         assert_eq!(before, after, "catalog summary changes no Session field");
         assert!(after_cursor >= before_cursor);
+        frozen.inner.unpark_projection_worker();
         let mut checked_cursor = before_cursor;
         let mut seen = std::collections::BTreeSet::new();
         while seen.len() != 2 || checked_cursor < after_cursor {
             let notification = connection.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event: it
-            // carries no cursor and no attachment target (Issue #386).
-            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+            // carries no cursor and no attachment target (Issue #386); nor is
+            // a source-scoped repair level (Issue #464).
+            if matches!(
+                notification,
+                NotificationMethod::SummaryInvalidated { .. }
+                    | NotificationMethod::SourceRepairChanged { .. }
+            ) {
                 continue;
             }
             let NotificationMethod::Event {
                 target,
                 event,
                 cursor,
+                ..
             } = notification
             else {
                 panic!("event")
@@ -1073,14 +1849,33 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
             assert!(target == a || target == b);
             if target == a && cursor > before_cursor && cursor <= after_cursor {
                 assert_eq!(cursor.get(), checked_cursor.get() + 1);
-                assert!(matches!(
-                    *event,
+                assert!(event.facts().iter().all(|fact| matches!(
+                    fact,
                     RuntimeClientEvent::ReadDomainsUpdated { .. }
-                ));
+                        | RuntimeClientEvent::TraceChanged
+                )));
+
                 checked_cursor = cursor;
             }
-            if matches!(*event, RuntimeClientEvent::AttemptStarted { .. }) {
-                seen.insert(target.session_id);
+            if event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
+            {
+                seen.insert(target.session_id.clone());
+            }
+            if let RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } = &*event
+                && checkpoint.snapshot.attempt.as_ref().is_some_and(|attempt| {
+                    matches!(
+                        attempt.phase,
+                        crate::runtime_client::RuntimeClientAttemptPhase::Admitted
+                            | crate::runtime_client::RuntimeClientAttemptPhase::Running
+                    )
+                })
+            {
+                assert_eq!(checkpoint.cursor, cursor);
+                assert_eq!(checkpoint.read_cut.conversation_id, target.conversation_id);
+                seen.insert(target.session_id.clone());
             }
         }
         let rival = AppServerConnection::new(f.host.clone());
@@ -1128,10 +1923,12 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         assert!(live_a.inspect_runtime().unwrap().has_current_attempt());
         let new_a = attach(&rival, &f, 0).await;
         assert_ne!(new_a.attachment_id, a.attachment_id);
-        let MethodResult::Snapshot { snapshot, .. } = call(
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_3,
+        } = call(
             &rival,
             32,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: new_a,
             },
@@ -1140,12 +1937,16 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         else {
             panic!("snapshot")
         };
+        let snapshot = Box::new(checkpoint_3.snapshot);
         assert_eq!(snapshot.conversation_id, a.conversation_id);
         f.gates[1].release();
         loop {
             if let NotificationMethod::Event { target, event, .. } =
                 connection.next_notification().await.notification
-                && matches!(*event, RuntimeClientEvent::AttemptSettled { .. })
+                && event
+                    .facts()
+                    .iter()
+                    .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
             {
                 assert_eq!(target, b);
                 break;
@@ -1254,10 +2055,12 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
                 coordinator.pending_published.notified().await;
                 assert_eq!(coordinator.pending_count(), 1);
                 let reattached = attach(&connection, &f, 0).await;
-                let MethodResult::Snapshot { snapshot, .. } = call(
+                let MethodResult::Checkpoint {
+                    checkpoint: checkpoint_4,
+                } = call(
                     &connection,
                     62,
-                    Method::SessionSnapshot {
+                    Method::SessionCheckpoint {
                         trace_records: vec![],
                         target: reattached.clone(),
                     },
@@ -1266,6 +2069,7 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
                 else {
                     panic!("snapshot")
                 };
+                let snapshot = Box::new(checkpoint_4.snapshot);
                 assert_eq!(snapshot.pending_interactions.len(), 1);
                 let pending = snapshot.pending_interactions[0].clone();
                 call(
@@ -1345,7 +2149,10 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
                 loop {
                     if let NotificationMethod::Event { event, .. } =
                         connection.next_notification().await.notification
-                        && matches!(*event, RuntimeClientEvent::AttemptSettled { .. })
+                        && event
+                            .facts()
+                            .iter()
+                            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
                     {
                         break;
                     }
@@ -1361,57 +2168,57 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn attach_snapshot_and_subscription_share_the_publication_cut() {
+async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() {
     bounded(async {
         use std::sync::Arc;
         let f = Fixture::new().await;
         let identity = f.manager.load(&f.sessions[0].id, None).await.unwrap();
         let runtime = identity.inspect_runtime().unwrap();
-        let probe = crate::runtime_client::test_sync::ProjectionProbe::default();
-        {
-            let resident = identity.resident.upgrade().unwrap();
-            let composition = resident.composition.lock().unwrap();
-            composition
-                .as_ref()
-                .unwrap()
-                .host()
-                .install_projection_probe(probe.clone());
-        }
-        probe.arm_snapshot();
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
-        let worker = connection.clone();
-        let session_id = f.sessions[0].id.clone();
-        let attaching = tokio::spawn(async move {
-            call(
-                &worker,
-                80,
-                Method::SessionAttach {
-                    session_id,
+        let Response::Success(attached) = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(80),
+                call: Method::SessionAttach {
+                    session_id: f.sessions[0].id.clone(),
                     node_id: None,
                 },
-            )
+            })
             .await
-        });
-        let entered = probe.clone();
-        tokio::task::spawn_blocking(move || entered.wait_snapshot_entered())
-            .await
-            .unwrap();
-        // Native producer publication occurs while attach holds the projection cut.
-        // No snapshot-then-subscribe window is available to the connection.
-        let accepted = runtime.submit_inbound(input("request-A")).unwrap();
-        f.gates[0].wait_entered().await;
-        probe.release_snapshot();
-        let MethodResult::Attached {
-            target,
-            snapshot,
-            cursor,
-            ..
-        } = attaching.await.unwrap()
         else {
             panic!("attach")
         };
-        assert!(snapshot.inbound.pending.is_empty());
+        let MethodResult::Attached { target, .. } = attached.result else {
+            panic!("identity receipt")
+        };
+        let MethodResult::Checkpoint { checkpoint } = call(
+            &connection,
+            81,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint")
+        };
+        let cursor = checkpoint.cursor;
+        assert!(checkpoint.snapshot.inbound.pending.is_empty());
+        // Publication between C and registration remains in native Replay;
+        // explicit subscribe(C) does not jump to latest.
+        let accepted = runtime.submit_inbound(input("request-A")).unwrap();
+        f.gates[0].wait_entered().await;
+        call(
+            &connection,
+            82,
+            Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: cursor,
+            },
+        )
+        .await;
         let mut previous = cursor.get();
         let mut occurrences = 0;
         f.gates[0].release();
@@ -1419,14 +2226,20 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
             let notification = connection.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event: it
             // carries no cursor, so it never participates in this cursor
-            // monotonicity check (Issue #386).
-            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+            // monotonicity check (Issue #386); nor does a source-scoped repair
+            // level (Issue #464).
+            if matches!(
+                notification,
+                NotificationMethod::SummaryInvalidated { .. }
+                    | NotificationMethod::SourceRepairChanged { .. }
+            ) {
                 continue;
             }
             let NotificationMethod::Event {
                 target: routed,
                 cursor,
                 event,
+                ..
             } = notification
             else {
                 panic!("event")
@@ -1434,11 +2247,19 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
             assert_eq!(routed, target);
             assert_eq!(cursor.get(), previous + 1);
             previous = cursor.get();
-            if let RuntimeClientEvent::InboundEnqueued { message, .. } = &*event {
-                assert_eq!(message.id, accepted.message_id);
-                occurrences += 1;
+            let RuntimeClientEvent::ProjectionTransition { events, metadata } = *event else {
+                panic!("one bounded native transition");
+            };
+            assert_eq!(metadata.read_cut.revision, cursor.get());
+            let mut settled = false;
+            for event in events {
+                if let RuntimeClientEvent::InboundEnqueued { message, .. } = &event {
+                    assert_eq!(message.id, accepted.message_id);
+                    occurrences += 1;
+                }
+                settled |= matches!(event, RuntimeClientEvent::AttemptSettled { .. });
             }
-            if matches!(*event, RuntimeClientEvent::AttemptSettled { .. }) {
+            if settled {
                 break;
             }
         }
@@ -1515,7 +2336,7 @@ async fn explicit_close_is_idempotent_and_revokes_claims_despite_retained_arc() 
         call(
             &replacement,
             2,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: new,
             },
@@ -1576,7 +2397,7 @@ async fn host_request_owner_outlives_dropped_protocol_waiter() {
             call(
                 &worker,
                 91,
-                Method::SessionSnapshot {
+                Method::SessionCheckpoint {
                     trace_records: vec![],
                     target,
                 },
@@ -1768,10 +2589,15 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         )
         .await;
         f.gates[0].wait_entered().await;
+        // Join the real source-preparation boundary. The provider is parked,
+        // so no execution or synchronous publication owner can advance while
+        // we prove that the read routes themselves preserve the native cut.
+        let native = f.manager.configuration_host(&target.session_id).unwrap();
+        native.inner.park_projection_worker();
         let before = call(
             &connection,
             901,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: target.clone(),
             },
@@ -1812,65 +2638,49 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         let after = call(
             &connection,
             903,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: target.clone(),
             },
         )
         .await;
         let (
-            MethodResult::Snapshot {
-                snapshot: before_view,
-                cursor: before_cursor,
+            MethodResult::Checkpoint {
+                checkpoint: checkpoint_5,
             },
-            MethodResult::Snapshot {
-                snapshot: after_view,
-                cursor: after_cursor,
+            MethodResult::Checkpoint {
+                checkpoint: checkpoint_6,
             },
         ) = (&before, &after)
         else {
             panic!("snapshots");
         };
+        let before_view = &checkpoint_5.snapshot;
+        let before_cursor = &checkpoint_5.cursor;
+        let after_view = &checkpoint_6.snapshot;
+        let after_cursor = &checkpoint_6.cursor;
         assert_eq!(
             before_view, after_view,
             "Trace reads change no Session or Trace field"
         );
-        assert!(after_cursor >= before_cursor);
-        let mut cursor = *before_cursor;
-        while cursor < *after_cursor {
-            if let NotificationMethod::Event {
-                event,
-                cursor: next,
-                ..
-            } = connection.next_notification().await.notification
-                && next > cursor
-            {
-                assert_eq!(next.get(), cursor.get() + 1);
-                assert!(
-                    matches!(*event, RuntimeClientEvent::ReadDomainsUpdated { .. }),
-                    "only independent materialization may advance the cursor"
-                );
-                cursor = next;
-            }
-        }
+        assert_eq!(before_cursor, after_cursor, "Trace reads publish no cursor");
         connection.close();
         let repaired = AppServerConnection::new(f.host.clone());
         initialize(&repaired).await;
         let repaired_target = attach(&repaired, &f, 0).await;
-        let MethodResult::Snapshot {
-            snapshot: continuous,
-            ..
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_7,
         } = after
         else {
             panic!("snapshot");
         };
-        let MethodResult::Snapshot {
-            snapshot: reconnected,
-            ..
+        let continuous = Box::new(checkpoint_7.snapshot);
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_8,
         } = call(
             &repaired,
             904,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: repaired_target.clone(),
             },
@@ -1879,22 +2689,31 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         else {
             panic!("snapshot");
         };
-        assert_eq!(continuous.trace, reconnected.trace);
+        let reconnected = Box::new(checkpoint_8.snapshot);
+        assert_eq!(
+            continuous, reconnected,
+            "reconnect preserves the parked native cut"
+        );
+        native.inner.unpark_projection_worker();
         f.gates[0].release();
         loop {
             if let NotificationMethod::Event { event, .. } =
                 repaired.next_notification().await.notification
-                && matches!(*event, RuntimeClientEvent::AttemptSettled { .. })
+                && event
+                    .facts()
+                    .iter()
+                    .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
             {
                 break;
             }
         }
-        let MethodResult::Snapshot {
-            snapshot: settled, ..
+        native.inner.park_projection_worker();
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_9,
         } = call(
             &repaired,
             905,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: repaired_target,
             },
@@ -1903,17 +2722,17 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         else {
             panic!("snapshot");
         };
+        let settled = Box::new(checkpoint_9.snapshot);
         repaired.close();
         let final_connection = AppServerConnection::new(f.host.clone());
         initialize(&final_connection).await;
         let final_target = attach(&final_connection, &f, 0).await;
-        let MethodResult::Snapshot {
-            snapshot: final_snapshot,
-            ..
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_10,
         } = call(
             &final_connection,
             906,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 trace_records: vec![],
                 target: final_target,
             },
@@ -1922,7 +2741,12 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         else {
             panic!("snapshot");
         };
-        assert_eq!(settled.trace, final_snapshot.trace);
+        let final_snapshot = Box::new(checkpoint_10.snapshot);
+        assert_eq!(
+            settled, final_snapshot,
+            "terminal reconnect preserves the parked native cut"
+        );
+        native.inner.unpark_projection_worker();
         final_connection.close();
         f.close().await;
     })
@@ -2121,7 +2945,7 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
         initialize(&connection).await;
         let MethodResult::SessionTransition {
             session: destination,
-            editor_content: Some(editor),
+            editor: Some(editor),
             ..
         } = call(
             &connection,
@@ -2131,13 +2955,16 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
                 session_id: source.id.clone(),
                 node_id: None,
                 surface_revision: revision,
-                boundary: Some(crate::runtime::identity::MessageId::new("boundary")),
+                boundary: Some(CanonicalContentLocator::ByMessageId {
+                    message_id: crate::runtime::identity::MessageId::new("boundary"),
+                }),
             },
         )
         .await
         else {
             panic!("fork with editor receipts");
         };
+        let editor = read_editor(&connection, editor).await;
         let crate::local_runtime::session::deletion::SessionDeleteResult::Preview { preview } =
             controller.delete_preview(&source.id).await
         else {
@@ -2245,7 +3072,6 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
         };
         let expected = PendingInboundRef {
             sequence: inbound_sequence,
-            message_id,
             revision: 0,
         };
         assert!(matches!(
@@ -2309,7 +3135,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
             )
             .await,
             MethodResult::InboundMutation {
-                outcome: Outcome::Applied
+                outcome: Outcome::Applied { .. }
             }
         ));
         assert!(matches!(
@@ -2326,10 +3152,12 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
                 outcome: Outcome::Conflict
             }
         ));
-        let MethodResult::Snapshot { snapshot, .. } = call(
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_11,
+        } = call(
             &connection,
             705,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 target: a.clone(),
                 trace_records: vec![],
             },
@@ -2338,8 +3166,11 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
         else {
             panic!("snapshot")
         };
+        let snapshot = Box::new(checkpoint_11.snapshot);
         assert_eq!(snapshot.inbound.pending.len(), 1);
         assert_eq!(snapshot.inbound.pending[0].revision, 1);
+        assert_eq!(snapshot.inbound.pending[0].message.id, message_id,
+            "native edit retains the authoritative Message identity without requiring it in the bounded CAS locator");
         assert_eq!(
             snapshot.inbound.pending[0].message.content,
             input("edited pending")
@@ -2359,7 +3190,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
             )
             .await,
             MethodResult::InboundMutation {
-                outcome: Outcome::Applied
+                outcome: Outcome::Applied { .. }
             }
         ));
         assert!(matches!(
@@ -2376,10 +3207,12 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
                 outcome: Outcome::NotPending
             }
         ));
-        let MethodResult::Snapshot { snapshot, .. } = call(
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_12,
+        } = call(
             &connection,
             708,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 target: a.clone(),
                 trace_records: vec![],
             },
@@ -2388,6 +3221,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
         else {
             panic!("snapshot")
         };
+        let snapshot = Box::new(checkpoint_12.snapshot);
         assert!(snapshot.inbound.pending.is_empty());
         assert!(
             f.manager
@@ -2433,14 +3267,13 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         else {
             panic!()
         };
+        let projection=projection.inline.expect("bounded fixture source");
         assert!(projection.user.authored.is_some());
         assert!(projection.workspace.is_none());
         assert!(projection.user.authored.as_ref().unwrap().models.as_ref().unwrap().contains_key("local/b"));
         let expected = projection.user.revision.clone();
         let selection = Some(SessionModelConfig::of(ModelRef::parse("local/b").unwrap()));
-        let MethodResult::SourceSettings {
-            projection: saved, ..
-        } = call(
+        let MethodResult::SourcesWritten { revision: written_revision, .. } = call(
             &connection,
             2,
             Method::SourcesWrite {
@@ -2460,6 +3293,11 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         else {
             panic!()
         };
+        let MethodResult::SourceSettings { projection: saved, .. } = call(
+            &connection, 1002, Method::SourcesRead { target: crate::local_runtime::configuration::settings::SourceTarget::User },
+        ).await else { panic!("explicit source reread after confirmed write") };
+        let saved=saved.inline.expect("bounded fixture source");
+        assert_eq!(saved.user.revision, written_revision);
         assert_ne!(saved.user.revision, expected);
         assert_eq!(
             saved.user.authored.as_ref().unwrap().agent.as_ref().unwrap().model.as_ref().unwrap().model,
@@ -2492,6 +3330,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         else {
             panic!()
         };
+        let fresh=fresh.inline.expect("bounded fixture source");
         assert_eq!(fresh.user, saved.user);
         let error = f
             .manager
@@ -2520,10 +3359,7 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         initialize(&connection).await;
         let initial = f
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap();
         let mut model = initial
@@ -2552,18 +3388,16 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
                 .collect(),
         );
         f.manager
-            .source_settings(
+            .write_source_settings(
                 &crate::local_runtime::configuration::settings::SourceTarget::User,
-                Some((
-                    initial.user.revision,
-                    SourceMutation::Config {
-                        mutation:
-                            crate::local_runtime::configuration::settings::ConfigMutation::Model {
-                                id: "local/a".into(),
-                                authored: Some(model),
-                            },
-                    },
-                )),
+                initial.user.revision,
+                SourceMutation::Config {
+                    mutation:
+                        crate::local_runtime::configuration::settings::ConfigMutation::Model {
+                            id: "local/a".into(),
+                            authored: Some(model),
+                        },
+                },
             )
             .await
             .unwrap();
@@ -2594,7 +3428,7 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         .await;
         f.gates[0].wait_entered().await;
         let runtime = f.manager.load(&target.session_id, None).await.unwrap();
-        let before = runtime.client().snapshot().unwrap().0;
+        let before = runtime.client().checkpoint().unwrap().snapshot;
         let MethodResult::SourceSettings { projection, .. } = call(
             &connection,
             102,
@@ -2606,6 +3440,7 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         else {
             panic!()
         };
+        let projection = projection.inline.expect("bounded fixture source");
         let mut model = projection
             .user
             .authored
@@ -2630,7 +3465,7 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
                 ),
             },
         );
-        call(
+        let MethodResult::SourcesWritten { .. } = call(
             &connection,
             103,
             Method::SourcesWrite {
@@ -2645,8 +3480,11 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
                 },
             },
         )
-        .await;
-        let after = runtime.client().snapshot().unwrap().0;
+        .await
+        else {
+            panic!("confirmed native source-write receipt")
+        };
+        let after = runtime.client().checkpoint().unwrap().snapshot;
         assert_eq!(before.resources, after.resources);
         assert_eq!(before.capabilities, after.capabilities);
         assert_eq!(
@@ -2694,11 +3532,9 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             .await
             .unwrap();
         let cold = attach_session(&connection, &created.session).await;
-        let MethodResult::Models { catalog } =
-            call(&connection, 104, Method::ModelCatalog { target: cold }).await
-        else {
-            panic!()
-        };
+        let catalog = read_catalog_result(
+            call(&connection, 104, Method::ModelCatalog { target: cold }).await,
+        );
         assert_eq!(
             catalog
                 .models
@@ -2736,6 +3572,7 @@ async fn write_profiles(
     else {
         panic!("source settings")
     };
+    let projection = projection.inline.expect("bounded fixture source");
     let mut model = projection
         .user
         .authored
@@ -2763,7 +3600,7 @@ async fn write_profiles(
             })
             .collect(),
     );
-    call(
+    let MethodResult::SourcesWritten { .. } = call(
         connection,
         id + 1,
         Method::SourcesWrite {
@@ -2777,10 +3614,13 @@ async fn write_profiles(
             },
         },
     )
-    .await;
+    .await
+    else {
+        panic!("confirmed native source-write receipt")
+    };
 }
 
-fn profile_ids(catalog: &crate::model::catalog::ModelCatalogView) -> Vec<String> {
+fn profile_ids(catalog: &ModelCatalogObservation) -> Vec<String> {
     catalog
         .models
         .iter()
@@ -2823,33 +3663,51 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             profile: Some(ModelProfileId::new(profile)),
             ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
         };
-        let MethodResult::Model { model } = call(
+        assert!(matches!(
+            call(
+                &connection,
+                102,
+                Method::ModelSet {
+                    target: target.clone(),
+                    config: Box::new(pinned("balanced")),
+                }
+            )
+            .await,
+            MethodResult::ModelSet { .. }
+        ));
+        let model = read_model_result(
             &connection,
-            102,
-            Method::ModelSet {
-                target: target.clone(),
-                config: Box::new(pinned("balanced")),
-            },
+            &target,
+            call(
+                &connection,
+                10_102,
+                Method::ModelGet {
+                    target: target.clone(),
+                },
+            )
+            .await,
         )
-        .await
-        else {
-            panic!("model")
-        };
+        .await;
         assert_eq!(
             model.effective.as_ref().unwrap().request_params["temperature"],
             json!(0.5)
         );
+        // The fixture loads after source authoring; explicitly register its
+        // source application. Model selection alone never ingests source files.
+        f.manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
         super::configuration::settled(&f, 0).await;
         let models = |id| {
             let connection = &connection;
             let target = target.clone();
             async move {
-                let MethodResult::Models { catalog } =
-                    call(connection, id, Method::ModelCatalog { target }).await
-                else {
-                    panic!("models")
-                };
-                catalog
+                read_catalog_result(call(connection, id, Method::ModelCatalog { target }).await)
             }
         };
         assert_eq!(profile_ids(&models(103).await), ["balanced", "fast"]);
@@ -2864,7 +3722,6 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             .manager
             .configuration_application(&target.session_id)
             .unwrap();
-        let mut eligibility = super::configuration::EligibilityStream::open(&f, &target.session_id);
         let settlement = runtime.settlement_signal();
         call(
             &connection,
@@ -2880,9 +3737,9 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
         f.gates[0].wait_entered().await;
         let admitted = managed
             .client()
-            .snapshot()
+            .checkpoint()
             .unwrap()
-            .0
+            .snapshot
             .attempt
             .unwrap()
             .model;
@@ -2924,22 +3781,63 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
         // published catalog.
         let catalog = models(107).await;
         assert_eq!(profile_ids(&catalog), ["balanced", "deep", "fast"]);
-        let crate::runtime_client::RuntimeClientResult::ModelCatalog { catalog: client } = f
-            .manager
-            .configuration_host(&target.session_id)
-            .unwrap()
-            .model_catalog()
-            .unwrap()
-        else {
-            panic!("Runtime Client catalog")
-        };
+        let client = read_native_catalog_result(
+            f.manager
+                .configuration_host(&target.session_id)
+                .unwrap()
+                .model_catalog()
+                .unwrap(),
+        );
         assert_eq!(client, catalog);
         assert_eq!(
             managed
                 .client()
-                .snapshot()
+                .checkpoint()
                 .unwrap()
-                .0
+                .snapshot
+                .attempt
+                .unwrap()
+                .model,
+            admitted
+        );
+
+        // Select the newly published Profile while the admitted Attempt is still
+        // physically parked. Only future independent Attempts may use it.
+        let MethodResult::ModelSet { .. } = call(
+            &connection,
+            108,
+            Method::ModelSet {
+                target: target.clone(),
+                config: Box::new(pinned("deep")),
+            },
+        )
+        .await
+        else {
+            panic!("bounded selection receipt")
+        };
+        let model = read_model_result(
+            &connection,
+            &target,
+            call(
+                &connection,
+                10_108,
+                Method::ModelGet {
+                    target: target.clone(),
+                },
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            model.effective.as_ref().unwrap().profile,
+            Some(ModelProfileId::new("deep"))
+        );
+        assert_eq!(
+            managed
+                .client()
+                .checkpoint()
+                .unwrap()
+                .snapshot
                 .attempt
                 .unwrap()
                 .model,
@@ -2958,30 +3856,6 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             assert!(body.get("seed").is_none());
         }
 
-        // Native selection admission resolves the published Profile, and the
-        // next Attempt sends exactly its parameters. Settlement precedes the
-        // Attempt task's release; selection waits for the idle runtime.
-        {
-            use crate::local_runtime::configuration::application::AdoptionEligibility;
-            eligibility.until(AdoptionEligibility::Busy).await;
-            eligibility.until(AdoptionEligibility::Eligible).await;
-        }
-        let MethodResult::Model { model } = call(
-            &connection,
-            108,
-            Method::ModelSet {
-                target: target.clone(),
-                config: Box::new(pinned("deep")),
-            },
-        )
-        .await
-        else {
-            panic!("model")
-        };
-        assert_eq!(
-            model.effective.as_ref().unwrap().profile,
-            Some(ModelProfileId::new("deep"))
-        );
         let settlement = runtime.settlement_signal();
         call(
             &connection,
@@ -3039,7 +3913,7 @@ async fn refusal(connection: &AppServerConnection, id: i64, call: Method) -> Err
 /// reconnect.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery() {
-    use crate::local_runtime::configuration::application::{AdoptionError, UnitApplication};
+    use crate::local_runtime::configuration::application::UnitApplication;
     use crate::model::catalog::{ModelProfileId, ModelRef};
     use crate::model::session::SessionModelConfig;
     use serde_json::json;
@@ -3068,6 +3942,14 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
             config: Box::new(pinned(profile)),
         };
         call(&connection, 102, set("fast")).await;
+        f.manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
         super::configuration::settled(&f, 0).await;
         let managed = f.manager.load(&target.session_id, None).await.unwrap();
         let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
@@ -3076,8 +3958,6 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
         let selected = runtime.model_view();
         assert!(selected.unavailable.is_none());
-        let mut eligibility =
-            super::configuration::EligibilityStream::open(&f, &target.session_id);
 
         let settlement = runtime.settlement_signal();
         call(
@@ -3092,7 +3972,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         )
         .await;
         f.gates[0].wait_entered().await;
-        let admitted = managed.client().snapshot().unwrap().0.attempt.unwrap().model;
+        let admitted = managed.client().checkpoint().unwrap().snapshot.attempt.unwrap().model;
 
         // `fast`, the pinned Profile, is removed from a valid catalog.
         write_profiles(&connection, 104, "balanced", &[balanced.clone(), deep.clone()]).await;
@@ -3117,49 +3997,41 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         assert_eq!(published.revision(), resources.revision().next());
 
         // Discovery: both native surfaces advertise the published catalog.
-        let MethodResult::Models { catalog } = call(
+        let catalog = read_catalog_result(call(
             &connection,
             106,
             Method::ModelCatalog {
                 target: target.clone(),
             },
         )
-        .await
-        else {
-            panic!("models")
-        };
+        .await);
         assert_eq!(profile_ids(&catalog), ["balanced", "deep"]);
-        let crate::runtime_client::RuntimeClientResult::ModelCatalog { catalog: client } = f
+        let client = read_native_catalog_result(f
             .manager
             .configuration_host(&target.session_id)
             .unwrap()
             .model_catalog()
-            .unwrap()
-        else {
-            panic!("Runtime Client catalog")
-        };
+            .unwrap());
         assert_eq!(client, catalog);
 
         // The configured identity is still `fast`, reported unavailable; the
         // invocation it last resolved is retained, never replaced by a default.
-        let MethodResult::Model { model } = call(
+        let model = read_model_result(
+            &connection, &target, call(
             &connection,
             107,
             Method::ModelGet {
                 target: target.clone(),
             },
         )
-        .await
-        else {
-            panic!("model")
-        };
+        .await).await;
         assert_eq!(model.configured, pinned("fast"));
         let diagnostic = model.unavailable.clone().expect("reported unavailable");
         assert!(diagnostic.contains("fast"), "{diagnostic}");
         assert_eq!(model.effective, selected.effective);
         assert_eq!(model.summary, selected.summary);
         assert_eq!(
-            managed.client().snapshot().unwrap().0.attempt.unwrap().model,
+            managed.client().checkpoint().unwrap().snapshot.attempt.unwrap().model,
             admitted
         );
 
@@ -3201,27 +4073,21 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
             .await,
             ErrorData::ModelUnavailable { .. }
         ));
-        assert!(managed.client().snapshot().unwrap().0.inbound.pending.is_empty());
+        assert!(managed.client().checkpoint().unwrap().snapshot.inbound.pending.is_empty());
         assert_eq!(f.provider.request_bodies().len(), 2);
         // Re-selecting the removed Profile is refused by the published catalog.
         assert!(matches!(
             refusal(&connection, 110, set("fast")).await,
-            ErrorData::ConfigurationAdoption {
-                rejection: AdoptionError::Failed { .. }
-            }
+            ErrorData::ModelUnavailable { .. }
         ));
         assert_eq!(runtime.model_view(), *model);
 
-        // Explicit recovery through the native mutation path, once the
-        // settled Attempt's task has released the runtime.
-        {
-            use crate::local_runtime::configuration::application::AdoptionEligibility;
-            eligibility.until(AdoptionEligibility::Busy).await;
-            eligibility.until(AdoptionEligibility::Eligible).await;
-        }
-        let MethodResult::Model { model } = call(&connection, 111, set("deep")).await else {
-            panic!("model")
+        // Explicit recovery uses the published catalog without an idle gate.
+        let MethodResult::ModelSet { .. } = call(&connection, 111, set("deep")).await else {
+            panic!("bounded selection receipt")
         };
+        let model = read_model_result(
+            &connection, &target, call(&connection, 10_108, Method::ModelGet {target:target.clone()}).await).await;
         assert!(model.unavailable.is_none());
         assert_eq!(
             model.effective.as_ref().unwrap().profile,
@@ -3271,7 +4137,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
 /// same runtime incarnation and attachment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
-    use crate::local_runtime::configuration::application::{AdoptionError, UnitApplication};
+    use crate::local_runtime::configuration::application::UnitApplication;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::catalog::ModelRef;
     use crate::model::session::SessionModelConfig;
@@ -3287,7 +4153,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
             target: target.clone(),
             config: Box::new(model(id)),
         };
-        // The Session already resolves `local/a`; selecting it is a no-op.
+        // Persist the Session's currently resolved `local/a` as explicit intent.
         call(&connection, 100, set("local/a")).await;
         let managed = f.manager.load(&target.session_id, None).await.unwrap();
         let incarnation = managed.incarnation_id();
@@ -3302,7 +4168,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         // its own wire identity and Profile, and moves the default to it.
         let source = f
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap();
         let mut document: toml::Value =
@@ -3362,32 +4228,33 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         );
 
         // The Session still asks for `local/a`, reported unavailable.
-        let MethodResult::Model { model: view } = call(
+        let view = read_model_result(
             &connection,
-            102,
-            Method::ModelGet {
-                target: target.clone(),
-            },
+            &target,
+            call(
+                &connection,
+                102,
+                Method::ModelGet {
+                    target: target.clone(),
+                },
+            )
+            .await,
         )
-        .await
-        else {
-            panic!("model")
-        };
+        .await;
         assert_eq!(view.configured, model("local/a"));
         assert!(view.unavailable.as_deref().unwrap().contains("local/a"));
         assert_eq!(view.effective, selected.effective);
         // Discovery advertises the replacement, and only the published catalog.
-        let MethodResult::Models { catalog } = call(
-            &connection,
-            103,
-            Method::ModelCatalog {
-                target: target.clone(),
-            },
-        )
-        .await
-        else {
-            panic!("models")
-        };
+        let catalog = read_catalog_result(
+            call(
+                &connection,
+                103,
+                Method::ModelCatalog {
+                    target: target.clone(),
+                },
+            )
+            .await,
+        );
         let references: Vec<_> = catalog
             .models
             .iter()
@@ -3398,9 +4265,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         // turn runs on it.
         assert!(matches!(
             refusal(&connection, 104, set("local/a")).await,
-            ErrorData::ConfigurationAdoption {
-                rejection: AdoptionError::Failed { .. }
-            }
+            ErrorData::ModelUnavailable { .. }
         ));
         assert!(matches!(
             refusal(
@@ -3419,10 +4284,23 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         assert!(f.provider.request_bodies().is_empty());
 
         // Explicit selection of the replacement, then the next Attempt.
-        let MethodResult::Model { model: view } = call(&connection, 106, set("local/c")).await
-        else {
-            panic!("model")
-        };
+        assert!(matches!(
+            call(&connection, 106, set("local/c")).await,
+            MethodResult::ModelSet { .. }
+        ));
+        let view = read_model_result(
+            &connection,
+            &target,
+            call(
+                &connection,
+                10_106,
+                Method::ModelGet {
+                    target: target.clone(),
+                },
+            )
+            .await,
+        )
+        .await;
         assert!(view.unavailable.is_none());
         let effective = view.effective.as_ref().unwrap();
         assert_eq!(effective.model.to_string(), "local/c");
@@ -3488,10 +4366,7 @@ async fn c12_source_read_is_independent_of_concurrent_session_revision() {
         let id = f.sessions[0].id.clone();
         let before = f
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap();
         let revision = f
@@ -3510,10 +4385,7 @@ async fn c12_source_read_is_independent_of_concurrent_session_revision() {
         let _read_id = id.clone();
         let read = tokio::spawn(async move {
             manager
-                .source_settings(
-                    &crate::local_runtime::configuration::settings::SourceTarget::User,
-                    None,
-                )
+                .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
                 .await
         });
         entered.await.unwrap();
@@ -3536,10 +4408,7 @@ async fn c12_source_read_is_independent_of_concurrent_session_revision() {
         assert!(read.await.unwrap().is_ok());
         let after = f
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap();
         let (current, settings) = f.manager.sessions.read_settings(&id).await.unwrap();
@@ -3558,20 +4427,44 @@ async fn c12_source_commit_is_independent_of_concurrent_session_revision() {
     bounded(async {
         let f = Fixture::new().await;
         let id = f.sessions[0].id.clone();
-        let before = f.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User, None).await.unwrap();
-        let revision = f.manager.sessions.catalog.lock().await.settings_revision(&id).unwrap();
+        let before = f
+            .manager
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
+            .await
+            .unwrap();
+        let revision = f
+            .manager
+            .sessions
+            .catalog
+            .lock()
+            .await
+            .settings_revision(&id)
+            .unwrap();
         let (entered, resume) = source_gate(&f, "before_publication");
-        let mut model = before.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"].clone();
+        let mut model = before
+            .user
+            .authored
+            .as_ref()
+            .unwrap()
+            .models
+            .as_ref()
+            .unwrap()["local/a"]
+            .clone();
         model.max_output_tokens = 2048;
         let manager = f.manager.clone();
         let _write_id = id.clone();
         let write = tokio::spawn(async move {
             manager
-                .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User,
-                    Some((
-                        before.user.revision,
-                        SourceMutation::Config { mutation: crate::local_runtime::configuration::settings::ConfigMutation::Model { id: "local/a".into(), authored: Some(model) } },
-                    )),
+                .write_source_settings(
+                    &crate::local_runtime::configuration::settings::SourceTarget::User,
+                    before.user.revision,
+                    SourceMutation::Config {
+                        mutation:
+                            crate::local_runtime::configuration::settings::ConfigMutation::Model {
+                                id: "local/a".into(),
+                                authored: Some(model),
+                            },
+                    },
                 )
                 .await
         });
@@ -3582,9 +4475,21 @@ async fn c12_source_commit_is_independent_of_concurrent_session_revision() {
         drop(catalog);
         resume.send(()).unwrap();
         assert!(write.await.unwrap().is_ok());
-        let fresh = f.manager.source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User, None).await.unwrap();
+        let fresh = f
+            .manager
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
+            .await
+            .unwrap();
         assert_eq!(
-            fresh.user.authored.as_ref().unwrap().models.as_ref().unwrap()["local/a"].max_output_tokens,
+            fresh
+                .user
+                .authored
+                .as_ref()
+                .unwrap()
+                .models
+                .as_ref()
+                .unwrap()["local/a"]
+                .max_output_tokens,
             2048
         );
         f.close().await;
@@ -3602,10 +4507,7 @@ async fn c12_mcp_source_commit_is_independent_of_session_revision() {
         initialize(&connection).await;
         let before = f
             .manager
-            .source_settings(
-                &crate::local_runtime::configuration::settings::SourceTarget::User,
-                None,
-            )
+            .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
             .await
             .unwrap();
         let revision = f
@@ -3633,9 +4535,10 @@ async fn c12_mcp_source_commit_is_independent_of_session_revision() {
         let expected = before.user_mcp.revision.clone();
         let write = tokio::spawn(async move {
             manager
-                .source_settings(
+                .write_source_settings(
                     &crate::local_runtime::configuration::settings::SourceTarget::User,
-                    Some((expected, mutation)),
+                    expected,
+                    mutation,
                 )
                 .await
         });
@@ -3659,6 +4562,7 @@ async fn c12_mcp_source_commit_is_independent_of_session_revision() {
         else {
             panic!()
         };
+        let fresh = fresh.inline.expect("bounded fixture source");
         assert!(
             fresh
                 .user_mcp
@@ -3682,8 +4586,8 @@ async fn c12_mcp_source_commit_is_independent_of_session_revision() {
             .await,
             ErrorData::SourceConflict { .. }
         ));
-        let MethodResult::SourceSettings {
-            projection: deleted,
+        let MethodResult::SourcesWritten {
+            revision: written_revision,
             ..
         } = call(
             &connection,
@@ -3701,6 +4605,22 @@ async fn c12_mcp_source_commit_is_independent_of_session_revision() {
         else {
             panic!()
         };
+        let MethodResult::SourceSettings {
+            projection: deleted,
+            ..
+        } = call(
+            &connection,
+            1002,
+            Method::SourcesRead {
+                target: crate::local_runtime::configuration::settings::SourceTarget::User,
+            },
+        )
+        .await
+        else {
+            panic!("explicit source reread after confirmed write")
+        };
+        let deleted = deleted.inline.expect("bounded fixture source");
+        assert_eq!(deleted.user_mcp.revision, written_revision);
         assert!(deleted.user_mcp.authored.as_ref().unwrap().is_empty());
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
@@ -3723,12 +4643,11 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
                 &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
                     directory: f.workspaces[0].clone(),
                 },
-                None,
             )
             .await
             .unwrap();
-        let MethodResult::SourceSettings {
-            projection: definition,
+        let MethodResult::SourcesWritten {
+            revision: written_revision,
             ..
         } = call(
             &connection,
@@ -3755,12 +4674,34 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
         else {
             panic!("source projection")
         };
+        let MethodResult::SourceSettings {
+            projection: definition,
+            ..
+        } = call(
+            &connection,
+            1001,
+            Method::SourcesRead {
+                target: crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+            },
+        )
+        .await
+        else {
+            panic!("explicit source reread after confirmed write")
+        };
+        let definition = definition.inline.expect("bounded fixture source");
+        assert_eq!(
+            definition.workspace_mcp.as_ref().unwrap().revision,
+            written_revision
+        );
         assert_eq!(
             definition.workspace.as_ref().unwrap().revision,
             before.workspace.as_ref().unwrap().revision
         );
-        let MethodResult::SourceSettings {
-            projection: policy, ..
+        let MethodResult::SourcesWritten {
+            revision: written_revision,
+            ..
         } = call(
             &connection,
             2,
@@ -3784,6 +4725,26 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
         else {
             panic!("policy projection")
         };
+        let MethodResult::SourceSettings {
+            projection: policy, ..
+        } = call(
+            &connection,
+            1002,
+            Method::SourcesRead {
+                target: crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: f.workspaces[0].clone(),
+                },
+            },
+        )
+        .await
+        else {
+            panic!("explicit source reread after confirmed write")
+        };
+        let policy = policy.inline.expect("bounded fixture source");
+        assert_eq!(
+            policy.workspace.as_ref().unwrap().revision,
+            written_revision
+        );
         assert_eq!(
             policy.workspace_mcp.as_ref().unwrap().revision,
             definition.workspace_mcp.as_ref().unwrap().revision
@@ -3799,6 +4760,7 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
         else {
             panic!("native effective projection")
         };
+        let projection = projection.inline.expect("bounded fixture configuration");
         assert!(projection.root_agent.tools.sources.is_empty());
         assert!(f.provider.request_bodies().is_empty());
         connection.close();
@@ -3883,7 +4845,9 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         let access = controller.acquire_session(&source.id, None).await.unwrap();
         let store = SqliteConversationStore::open(source.active_conversation_id.clone(), &access.database_path).unwrap();
         let event = |attempt: &str, kind| RuntimeEventEnvelope {
-            schema_version: 1, event_id: EventId::new(format!("lineage-event-{}", store.presentation_frontier().unwrap() + 1)), sequence: 0,
+            tool_occurrence: None,
+            observation: None,
+ schema_version: 1, event_id: EventId::new(format!("lineage-event-{}", store.presentation_frontier().unwrap() + 1)), sequence: 0,
             conversation_id: source.active_conversation_id.clone(), attempt_id: Some(AttemptId::new(attempt)), turn_id: None,
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(), event: kind,
         };
@@ -3902,19 +4866,19 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
         drop(access);
         let connection = AppServerConnection::new(f.host.clone()); initialize(&connection).await;
         for (index, fork) in [false, true].into_iter().enumerate() {
-            let method = if fork { Method::SessionFork { session_id: source.id.clone(), node_id: Some(source.active_node.clone()), surface_revision: revision, boundary: Some(MessageId::new("assistant-b")), side: LineageSide::After } }
-                else { Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("assistant-b"), side: LineageSide::After } };
-            let MethodResult::SessionTransition { session, editor_content, .. } = call(&connection, 4000 + i64::try_from(index).unwrap(), method).await else { panic!("lineage transition") };
+            let method = if fork { Method::SessionFork { session_id: source.id.clone(), node_id: Some(source.active_node.clone()), surface_revision: revision, boundary: Some(CanonicalContentLocator::ByMessageId {message_id:MessageId::new("assistant-b")}), side: LineageSide::After } }
+                else { Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: CanonicalContentLocator::ByMessageId {message_id:MessageId::new("assistant-b")}, side: LineageSide::After } };
+            let MethodResult::SessionTransition { session, editor, .. } = call(&connection, 4000 + i64::try_from(index).unwrap(), method).await else { panic!("lineage transition") };
             assert_eq!(session.id == source.id, !fork);
-            assert!(editor_content.is_none_or(|content| content.is_empty()));
+            assert!(editor.is_none());
             let destination = controller.acquire_session(&session.id, Some(&session.active_node)).await.unwrap();
             let copied = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
             let messages = copied.load_canonical().unwrap(); assert_eq!(messages.len(), 4);
             assert!(matches!(&messages[3], MessageBlock::Assistant(a) if a.content == match &original[3] { MessageBlock::Assistant(a) => a.content.clone(), _ => unreachable!() }));
             let mut projected = crate::runtime_client::snapshot::transcript_page_view(copied.load_transcript_page(None, 64).unwrap()).unwrap();
-            crate::runtime_client::response::decorate(&copied, &mut projected).unwrap();
+            crate::runtime_client::response::native_oracle_decorate(&copied, &mut projected).unwrap();
             let tail = projected.entries.last().unwrap().completed_response.clone().unwrap();
-            assert_eq!(tail.closing_message_id, crate::conversation::message_id_of(&messages[3]));
+            assert_eq!(tail.closing_message_id, Some(crate::conversation::message_id_of(&messages[3])));
             assert_eq!(tail.retry_message_id, Some(crate::conversation::message_id_of(&messages[2])));
             assert_eq!(tail.origin.conversation_id, source.active_conversation_id);
             assert_eq!(tail.usage.as_ref().unwrap().total_tokens, 120);
@@ -3930,18 +4894,20 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             assert!(copied.read_events(None, 128).unwrap().events.is_empty());
             let child_id = session.id.clone(); let child_node = session.active_node.clone();
             drop(copied); drop(destination);
-            let MethodResult::Attached { target: child_target, snapshot: attached, .. } = call(&connection, 4198, Method::SessionAttach { session_id: child_id.clone(), node_id: Some(child_node.clone()) }).await else { panic!("attach inherited lineage") };
-            assert_eq!(attached.transcript.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
+            let MethodResult::Attached { target: child_target, .. } = call(&connection, 4198, Method::SessionAttach { session_id: child_id.clone(), node_id: Some(child_node.clone()) }).await else { panic!("attach inherited lineage") };
+            let MethodResult::Checkpoint {checkpoint:attached}=call(&connection,41980,Method::SessionCheckpoint{target:child_target.clone(),trace_records:vec![]}).await else {panic!("checkpoint")};
+            assert_eq!(attached.snapshot.transcript.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
             call(&connection, 4199, Method::SessionDetach { target: child_target }).await;
             // Both independent and in-Session children remain native anchors on another copy.
             for again_fork in [false, true] {
-                let method = if again_fork { Method::SessionFork { session_id: child_id.clone(), node_id: Some(child_node.clone()), surface_revision: tail.surface_revision, boundary: Some(tail.closing_message_id.clone()), side: LineageSide::After } }
-                    else { Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.closing_message_id.clone(), side: LineageSide::After } };
-                let MethodResult::SessionTransition { editor_content, .. } = call(&connection, 4200, method).await else { panic!("inherited continuation") };
-                assert!(editor_content.is_none_or(|content| content.is_empty()));
+                let method = if again_fork { Method::SessionFork { session_id: child_id.clone(), node_id: Some(child_node.clone()), surface_revision: tail.surface_revision, boundary: Some(tail.closing_locator.clone()), side: LineageSide::After } }
+                    else { Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.closing_locator.clone(), side: LineageSide::After } };
+                let MethodResult::SessionTransition { editor, .. } = call(&connection, 4200, method).await else { panic!("inherited continuation") };
+                assert!(editor.is_none());
             }
-            let MethodResult::SessionTransition { session: retry, editor_content: Some(input), .. } = call(&connection, 4201, Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.retry_message_id.clone().unwrap(), side: LineageSide::Before }).await else { panic!("inherited retry") };
-            assert_eq!(input, vec![UserInputBlock::Text(TextBlock { text: "user-b".into() })]);
+            let MethodResult::SessionTransition { session: retry, editor: Some(input), .. } = call(&connection, 4201, Method::SessionBranch { session_id: child_id.clone(), node_id: child_node.clone(), surface_revision: tail.surface_revision, boundary: tail.retry_locator.clone().unwrap(), side: LineageSide::Before }).await else { panic!("inherited retry") };
+            let input=read_editor(&connection,input).await;
+        assert_eq!(input, vec![UserInputBlock::Text(TextBlock { text: "user-b".into() })]);
             let retry_access = controller.acquire_session(&retry.id, Some(&retry.active_node)).await.unwrap();
             let retry_store = SqliteConversationStore::open_existing(retry.active_conversation_id, &retry_access.database_path).unwrap();
             assert_eq!(retry_store.load_canonical().unwrap().len(), 2);
@@ -3949,26 +4915,27 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             let reopened = SqliteConversationStore::open_existing(child.node.conversation_id.clone(), &child.database_path).unwrap();
             assert_eq!(reopened.load_canonical().unwrap(), messages);
             let mut reopened_page = crate::runtime_client::snapshot::transcript_page_view(reopened.load_transcript_page(None, 64).unwrap()).unwrap();
-            crate::runtime_client::response::decorate(&reopened, &mut reopened_page).unwrap();
+            crate::runtime_client::response::native_oracle_decorate(&reopened, &mut reopened_page).unwrap();
             assert_eq!(reopened_page.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
-            rejected(&connection, Method::SessionBranch { session_id: child_id, node_id: child_node, surface_revision: crate::conversation::SurfaceRevision::new(tail.surface_revision.get() + 1), boundary: tail.closing_message_id, side: LineageSide::After }).await;
+            rejected(&connection, Method::SessionBranch { session_id: child_id, node_id: child_node, surface_revision: crate::conversation::SurfaceRevision::new(tail.surface_revision.get() + 1), boundary: tail.closing_locator, side: LineageSide::After }).await;
 
         }
-        let MethodResult::SessionTransition { session, editor_content: Some(input), .. } = call(&connection, 4010, Method::SessionBranch {
-            session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::Before,
+        let MethodResult::SessionTransition { session, editor: Some(input), .. } = call(&connection, 4010, Method::SessionBranch {
+            session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: CanonicalContentLocator::ByMessageId {message_id:MessageId::new("user-b")}, side: LineageSide::Before,
         }).await else { panic!("retry cut") };
+        let input=read_editor(&connection,input).await;
         assert_eq!(input, vec![UserInputBlock::Text(TextBlock { text: "user-b".into() })]);
         let destination = controller.acquire_session(&session.id, Some(&session.active_node)).await.unwrap();
         let retry = SqliteConversationStore::open_existing(session.active_conversation_id, &destination.database_path).unwrap();
         assert_eq!(retry.load_canonical().unwrap().len(), 2);
         // Regenerate keeps only the prefix before the retried input: one turn.
         let mut retried = crate::runtime_client::snapshot::transcript_page_view(retry.load_transcript_page(None, 64).unwrap()).unwrap();
-        crate::runtime_client::response::decorate(&retry, &mut retried).unwrap();
+        crate::runtime_client::response::native_oracle_decorate(&retry, &mut retried).unwrap();
         let totals = retried.statistics.unwrap();
         assert_eq!((totals.turns, totals.model_requests, totals.completed_responses), (1, 1, 1));
         assert_eq!(totals.reported_usage.unwrap().total_tokens, 120);
-        rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: crate::conversation::SurfaceRevision::new(revision.get() + 1), boundary: MessageId::new("assistant-b"), side: LineageSide::After }).await;
-        rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: MessageId::new("user-b"), side: LineageSide::After }).await;
+        rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: crate::conversation::SurfaceRevision::new(revision.get() + 1), boundary: CanonicalContentLocator::ByMessageId {message_id:MessageId::new("assistant-b")}, side: LineageSide::After }).await;
+        rejected(&connection, Method::SessionBranch { session_id: source.id.clone(), node_id: source.active_node.clone(), surface_revision: revision, boundary: CanonicalContentLocator::ByMessageId {message_id:MessageId::new("user-b")}, side: LineageSide::After }).await;
         assert_eq!(store.load_canonical().unwrap(), original);
         drop(destination); drop(retry); drop(store); f.close().await;
     })).await;
@@ -4045,19 +5012,67 @@ fn wire_text(text: &str) -> Vec<UserInputBlock> {
 /// Drains events until the named Session's current attempt settles: the
 /// deterministic "turn completed" signal (a settled attempt provably follows
 /// the canonical commit of its user boundary).
-async fn await_attempt_settled(
-    connection: &AppServerConnection,
-    session_id: &crate::local_runtime::session::SessionId,
-) {
-    loop {
-        // Session metadata invalidation is a legitimate part of the vocabulary
-        // and is simply not the signal this helper waits for (Issue #386).
-        if let NotificationMethod::Event { target, event, .. } =
-            connection.next_notification().await.notification
-            && target.session_id == *session_id
-            && matches!(*event, RuntimeClientEvent::AttemptSettled { .. })
-        {
-            break;
+/// Captures execution ownership before admission and waits for both the native
+/// handoff and its correlated display publication. Replacement checkpoints are
+/// authoritative only for the same native attempt, never an earlier settlement.
+struct AttemptCompletion {
+    runtime: crate::runtime::ConversationRuntime,
+    after: u64,
+    target: AttachmentTarget,
+}
+
+impl AttemptCompletion {
+    fn capture(fixture: &Fixture, target: &AttachmentTarget) -> Self {
+        let runtime = fixture
+            .manager
+            .configuration_runtime(&target.session_id)
+            .unwrap();
+        Self {
+            after: runtime.settlement_ordinal_for_test(),
+            runtime,
+            target: target.clone(),
+        }
+    }
+
+    async fn observed(self, connection: &AppServerConnection, expected: &AttachmentTarget) {
+        assert_eq!(expected.session_id, self.target.session_id);
+        assert_eq!(expected.conversation_id, self.target.conversation_id);
+        assert_eq!(
+            expected.runtime_incarnation,
+            self.target.runtime_incarnation
+        );
+        let receipt = self.runtime.child_attempt_settlement(self.after).await;
+        assert_eq!(receipt.ordinal, self.after + 1, "exact next native handoff");
+        loop {
+            let NotificationMethod::Event {
+                target,
+                cursor,
+                event,
+                ..
+            } = connection.next_notification().await.notification
+            else {
+                continue;
+            };
+            if &target != expected {
+                continue;
+            }
+            if event.facts().iter().any(|fact| match fact {
+                RuntimeClientEvent::AttemptSettled { attempt_id, .. } => {
+                    *attempt_id == receipt.attempt_id
+                }
+                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                    assert_eq!(checkpoint.cursor, cursor);
+                    assert_eq!(checkpoint.snapshot.conversation_id, target.conversation_id);
+                    checkpoint.snapshot.attempt.as_ref().is_some_and(|attempt| {
+                        attempt.attempt_id.as_ref() == Some(&receipt.attempt_id)
+                            && matches!(attempt.phase,
+                                crate::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled { .. })
+                    })
+                }
+                _ => false,
+            }) {
+                return;
+            }
         }
     }
 }
@@ -4139,6 +5154,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
         // 119th character is a non-space (so the kept prefix is not trimmed).
         let text = format!("  {}\n\n\t {}", "é".repeat(150), "汉".repeat(50));
         assert!(!text.contains("request-B"));
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             50,
@@ -4201,10 +5217,11 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
             .await
             .document_generation();
         f.gates[0].release();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         // P06 (runtime plane): a second turn is an ordinary new commit, but
         // the one-shot publisher is spent — the settled first line survives
         // byte-identically while the new human activity commits separately.
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             53,
@@ -4215,7 +5232,7 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
         )
         .await;
         assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         {
             let probe = probe.borrow();
             assert!(probe.finished && probe.published);
@@ -4274,6 +5291,7 @@ async fn a_projection_published_underneath_a_name_survives_over_the_wire() {
             &target.session_id,
         )
         .expect("root composition armed the display-projection publisher");
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             61,
@@ -4307,7 +5325,7 @@ async fn a_projection_published_underneath_a_name_survives_over_the_wire() {
             Some("named session first subject")
         );
         f.gates[0].release();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         f.close().await;
     })
     .await;
@@ -4327,6 +5345,7 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
             &target.session_id,
         )
         .expect("root composition armed the display-projection publisher");
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             63,
@@ -4344,7 +5363,7 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
             .expect("the publisher outlives its runtime");
         assert!(probe.borrow().published);
         f.gates[0].release();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         activity_published(&f, &target.session_id).await;
         let generation = f
             .manager
@@ -4355,6 +5374,7 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
             .document_generation();
         let live = f.manager.load(&target.session_id, None).await.unwrap();
         let runtime = live.inspect_runtime().expect("the runtime stays resident");
+        let completion = AttemptCompletion::capture(&f, &target);
         runtime
             .submit_sourced_inbound(
                 crate::message::types::UserSource::Agent {
@@ -4363,7 +5383,7 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
                 input("an agent-authored repaint attempt"),
             )
             .unwrap();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         let MethodResult::SessionSummary { summary } = call(
             &connection,
             64,
@@ -4409,6 +5429,7 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
             &target.session_id,
         )
         .expect("root composition armed the display-projection publisher");
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             65,
@@ -4441,7 +5462,7 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
             assert!(!probe.published, "the armed fault failed the commit");
         }
         f.gates[0].release();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         // Canonical history is exactly the turn: one ordinary user boundary
         // and one assistant response.
         let path = f
@@ -4541,6 +5562,7 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
             &[137_u8, 80, 78, 71, 13, 10, 26, 10],
         )
         .await;
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             71,
@@ -4562,7 +5584,7 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
             assert!(!probe.published);
         }
         f.gates[0].release();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         let MethodResult::SessionSummary { summary } = call(
             &connection,
             72,
@@ -4577,6 +5599,7 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
         assert_eq!(summary.preview, None);
         // The one-shot publisher is spent: a later text turn commits, but
         // the settled `None` never gets repainted.
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             73,
@@ -4587,7 +5610,7 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
         )
         .await;
         assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         let MethodResult::SessionSummary { summary } = call(
             &connection,
             74,
@@ -4628,6 +5651,7 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
             &target.session_id,
         )
         .expect("root composition armed the display-projection publisher");
+        let completion = AttemptCompletion::capture(&f, &target);
         let reply = call(
             &connection,
             80,
@@ -4712,7 +5736,7 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
             "the authoritative reread carries the committed projection"
         );
         f.gates[0].release();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         f.close().await;
     })
     .await;
@@ -5156,14 +6180,14 @@ impl TrustedFileHost {
         let mut request = self.endpoint.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v3, rustx-product-host.{credential}")
+            format!("rustx.product-host.file-read.v4, rustx-product-host.{credential}")
                 .parse()
                 .unwrap(),
         );
         let (socket, reply) = tokio_tungstenite::connect_async(request).await?;
         assert_eq!(
             reply.headers()["sec-websocket-protocol"],
-            "rustx.product-host.file-read.v3"
+            "rustx.product-host.file-read.v4"
         );
         Ok(socket)
     }
@@ -5201,7 +6225,6 @@ impl TrustedFileHost {
 
 // Shared native fixture scenario; the boundary-suite owner runs it on Linux and macOS.
 pub(crate) async fn committed_present_read_boundary_scenario() {
-    use crate::message::types::MessageBlock;
     use crate::tools::session_files::SessionFileReadFailure as FileFailure;
     use base64::Engine;
     use futures_util::{SinkExt, StreamExt};
@@ -5216,7 +6239,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
             target: target.clone(),
-            source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, message_id, delivery_index: 0 },
+            source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id }, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
         };
         assert_eq!(
@@ -5228,7 +6251,8 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
                 reason: FileFailure::Unavailable
             }
         );
-        f.gates[0].release();
+        let completion = AttemptCompletion::capture(&f, &target);
+    f.gates[0].release();
         call(
             &browser,
             4100,
@@ -5238,11 +6262,11 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             },
         )
         .await;
-        await_attempt_settled(&browser, &target.session_id).await;
-        let MethodResult::Snapshot { snapshot, .. } = call(
+        completion.observed(&browser, &target).await;
+        let MethodResult::Checkpoint { checkpoint: checkpoint_13 } = call(
             &browser,
             4101,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 target: target.clone(),
                 trace_records: vec![],
             },
@@ -5251,16 +6275,8 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         else {
             panic!()
         };
-        let tools: Vec<_> = snapshot
-            .messages
-            .iter()
-            .filter_map(|message| match message {
-                MessageBlock::Tool(tool) => Some(tool),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(tools.len(), 1, "ordinary terminal Tool commit is unique");
-        let tool = tools[0];
+        let snapshot = Box::new(checkpoint_13.snapshot);
+        let tool = checkpoint_delivery_metadata(&browser, &target, &snapshot).await;
         assert_eq!(
             tool.result.status,
             crate::tools::ToolExecutionStatus::Success
@@ -5294,7 +6310,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         // Browser has every valid coordinate and the exact cwd; neither its
         // shared transport token nor a claimed Product Host name grants bytes.
         let forged = serde_json::json!({"jsonrpc":"2.0", "id":4190, "method":"session/fileRead", "params":{
-            "target":target, "message_id":tool.id, "delivery_index":0, "allowed_roots":[f.workspaces[0]], "file":file
+            "target":target, "locator":{"type":"by_message_id","message_id":tool.id}, "delivery_index":0, "allowed_roots":[f.workspaces[0]], "file":file
         }});
         let Some(Response::Failure(denied)) = browser.handle_json(&forged.to_string()).await else { panic!("ordinary file bypass succeeded") };
         assert_eq!(denied.error.code, -32601);
@@ -5308,30 +6324,32 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
                 before: window.page.entries[0].cursor.into(),
             }, limit: 64,
         }).await else { panic!() };
-        assert!(older.page.entries.iter().any(|entry| matches!(&entry.item,
-            crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message: MessageBlock::Tool(tool) }
-                if tool.result.deliveries == [file.clone()])));
-        let access = f.manager.sessions.acquire_session(&target.session_id, Some(&f.sessions[0].active_node)).await.unwrap();
-        let store = crate::durable::SqliteConversationStore::open_existing(target.conversation_id.clone(), &access.database_path).unwrap();
-        let revision = crate::durable::ConversationStore::load_head(&store).unwrap().revision;
-        drop(store); drop(access);
+        let older_reference = older.page.content.iter().find(|binding| matches!(&binding.content_ref.source,
+            crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+                component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+                locator: CanonicalContentLocator::ByMessageId { message_id }, ..
+            } if message_id == &tool.id)).expect("older exact canonical Tool metadata source");
+        let older_tool = read_delivery_metadata(&browser, &target, &older_reference.content_ref).await;
+        assert_eq!(older_tool.id, tool.id);
+        assert_eq!(older_tool.result.deliveries.as_slice(), std::slice::from_ref(&file));
+        let response_boundary = delivery_response_boundary(&browser, &target).await;
         let MethodResult::SessionTransition { session: fork, .. } = call(&browser, 4122, Method::SessionFork {
             session_id: target.session_id.clone(), node_id: Some(f.sessions[0].active_node.clone()),
-            surface_revision: revision, boundary: Some(crate::conversation::message_id_of(snapshot.messages.last().unwrap())),
+            surface_revision: response_boundary.surface_revision,
+            boundary: Some(response_boundary.closing_locator.clone()),
             side: crate::local_runtime::session::LineageSide::After,
         }).await else { panic!() };
         let fork_target = attach_session(&browser, &fork).await;
         assert_eq!(fork_target.attachment_id, target.attachment_id, "native local attachment ordinals intentionally collide across Conversations");
-        let MethodResult::Snapshot { snapshot: copied, .. } = call(&browser, 4123, Method::SessionSnapshot {
+        let MethodResult::Checkpoint { checkpoint: checkpoint_14 } = call(&browser, 4123, Method::SessionCheckpoint {
             target: fork_target.clone(), trace_records: vec![],
         }).await else { panic!() };
-        let inherited = copied.messages.iter().find_map(|block| match block {
-            MessageBlock::Tool(tool) if !tool.result.deliveries.is_empty() => Some(tool), _ => None,
-        }).unwrap();
+        let copied = Box::new(checkpoint_14.snapshot);
+        let inherited = checkpoint_delivery_metadata(&browser, &fork_target, &copied).await;
         assert_eq!(inherited.result.deliveries.as_slice(), std::slice::from_ref(&file));
         assert_ne!(fork_target.conversation_id, file.scope.conversation_id);
         let MethodResult::SessionFileBytes { file: inherited_file, data } = product_host.success( crate::app_server::product_host::FileRead {
-            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, message_id: inherited.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
+            target: fork_target, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id: inherited.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[0].clone()],
         }).await else { panic!() };
         assert_eq!(inherited_file, file);
         assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original);
@@ -5339,7 +6357,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
         let unrelated = attach_session(&browser, &f.sessions[1]).await;
         assert_eq!(product_host.rejected( crate::app_server::product_host::FileRead {
-            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, message_id: tool.id.clone(), delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
+            target: unrelated, source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id: tool.id.clone() }, delivery_index: 0 }, roots: vec![f.workspaces[1].clone()],
         }).await, ErrorData::SessionFileRead { reason: FileFailure::Unavailable });
         let mut denied = read(tool.id.clone());
         denied.roots = vec![f.workspaces[1].clone()];
@@ -5479,7 +6497,6 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
 // Transport-granted delivery access on an ordinary connection. The same native
 // core as the Product Host lane, without its registered-root policy.
 pub(crate) async fn delivery_access_boundary_scenario() {
-    use crate::message::types::MessageBlock;
     use crate::tools::session_files::SessionFileReadFailure as FileFailure;
     use base64::Engine;
     use std::os::unix::fs::MetadataExt;
@@ -5532,7 +6549,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 &ordinary,
                 Method::DeliveryRead {
                     target: target.clone(),
-                    message_id: crate::runtime::identity::MessageId::new("invented"),
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: crate::runtime::identity::MessageId::new("invented")
+                    },
                     delivery_index: 0,
                 }
             )
@@ -5541,6 +6560,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 reason: FileFailure::Unauthorized
             }
         );
+        let completion = AttemptCompletion::capture(&f, &target);
         f.gates[0].release();
         call(
             &ordinary,
@@ -5551,11 +6571,13 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             },
         )
         .await;
-        await_attempt_settled(&ordinary, &target.session_id).await;
-        let MethodResult::Snapshot { snapshot, .. } = call(
+        completion.observed(&ordinary, &target).await;
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_15,
+        } = call(
             &ordinary,
             4301,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 target: target.clone(),
                 trace_records: vec![],
             },
@@ -5564,14 +6586,8 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         else {
             panic!()
         };
-        let tool = snapshot
-            .messages
-            .iter()
-            .find_map(|message| match message {
-                MessageBlock::Tool(tool) => Some(tool.clone()),
-                _ => None,
-            })
-            .unwrap();
+        let snapshot = Box::new(checkpoint_15.snapshot);
+        let tool = checkpoint_delivery_metadata(&ordinary, &target, &snapshot).await;
         let file = tool.result.deliveries[0].clone();
         let requests = f.provider.request_bodies().len();
         // Every exact coordinate, the exact cwd and a forged trusted client
@@ -5579,12 +6595,16 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         for method in [
             Method::DeliveryRead {
                 target: target.clone(),
-                message_id: tool.id.clone(),
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: tool.id.clone(),
+                },
                 delivery_index: 0,
             },
             Method::DeliveryLocate {
                 target: target.clone(),
-                message_id: tool.id.clone(),
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: tool.id.clone(),
+                },
                 delivery_index: 0,
             },
         ] {
@@ -5601,7 +6621,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 &trusted,
                 Method::DeliveryRead {
                     target: target.clone(),
-                    message_id: tool.id.clone(),
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: tool.id.clone()
+                    },
                     delivery_index: 0,
                 }
             )
@@ -5620,7 +6642,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         let read = |message_id: crate::runtime::identity::MessageId, delivery_index| {
             Method::DeliveryRead {
                 target: own.clone(),
-                message_id,
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id,
+                },
                 delivery_index,
             }
         };
@@ -5648,7 +6672,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             4304,
             Method::DeliveryLocate {
                 target: own.clone(),
-                message_id: tool.id.clone(),
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: tool.id.clone(),
+                },
                 delivery_index: 0,
             },
         )
@@ -5681,39 +6707,36 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                     reason: FileFailure::Unavailable,
                 },
             ),
-            (tool.id.clone(), 8, ErrorData::InvalidParams),
+            (
+                tool.id.clone(),
+                8,
+                ErrorData::SessionFileRead {
+                    reason: FileFailure::Unavailable,
+                },
+            ),
         ] {
             assert_eq!(rejected(&trusted, read(message_id, index)).await, expected);
+        }
+        if let Ok(index) =
+            usize::try_from(crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX + 1)
+        {
+            assert_eq!(
+                rejected(&trusted, read(tool.id.clone(), index)).await,
+                ErrorData::InvalidParams
+            );
         }
         // A fork addresses its own copied message but resolves the original
         // Conversation and root, never a same-named file in an unrelated root.
         std::fs::write(f.workspaces[1].join(&file.path), b"UNRELATED").unwrap();
-        let access = f
-            .manager
-            .sessions
-            .acquire_session(&own.session_id, Some(&f.sessions[0].active_node))
-            .await
-            .unwrap();
-        let store = crate::durable::SqliteConversationStore::open_existing(
-            own.conversation_id.clone(),
-            &access.database_path,
-        )
-        .unwrap();
-        let revision = crate::durable::ConversationStore::load_head(&store)
-            .unwrap()
-            .revision;
-        drop(store);
-        drop(access);
+        let response_boundary = delivery_response_boundary(&trusted, &own).await;
         let MethodResult::SessionTransition { session: fork, .. } = call(
             &trusted,
             4305,
             Method::SessionFork {
                 session_id: own.session_id.clone(),
                 node_id: Some(f.sessions[0].active_node.clone()),
-                surface_revision: revision,
-                boundary: Some(crate::conversation::message_id_of(
-                    snapshot.messages.last().unwrap(),
-                )),
+                surface_revision: response_boundary.surface_revision,
+                boundary: Some(response_boundary.closing_locator.clone()),
                 side: crate::local_runtime::session::LineageSide::After,
             },
         )
@@ -5722,12 +6745,12 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             panic!("fork")
         };
         let fork_target = attach_session(&trusted, &fork).await;
-        let MethodResult::Snapshot {
-            snapshot: copied, ..
+        let MethodResult::Checkpoint {
+            checkpoint: checkpoint_16,
         } = call(
             &trusted,
             4310,
-            Method::SessionSnapshot {
+            Method::SessionCheckpoint {
                 target: fork_target.clone(),
                 trace_records: vec![],
             },
@@ -5736,16 +6759,8 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         else {
             panic!("fork snapshot")
         };
-        let copied = copied
-            .messages
-            .iter()
-            .find_map(|block| match block {
-                MessageBlock::Tool(tool) if !tool.result.deliveries.is_empty() => {
-                    Some(tool.id.clone())
-                }
-                _ => None,
-            })
-            .unwrap();
+        let copied = Box::new(checkpoint_16.snapshot);
+        let copied = checkpoint_delivery_metadata(&trusted, &fork_target, &copied).await;
         let MethodResult::SessionFileBytes {
             file: inherited,
             data,
@@ -5754,7 +6769,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             4306,
             Method::DeliveryRead {
                 target: fork_target.clone(),
-                message_id: copied,
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: copied.id,
+                },
                 delivery_index: 0,
             },
         )
@@ -5776,7 +6793,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 &trusted,
                 Method::DeliveryRead {
                     target: unrelated.clone(),
-                    message_id: tool.id.clone(),
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: tool.id.clone()
+                    },
                     delivery_index: 0
                 }
             )
@@ -5804,7 +6823,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 4307,
                 Method::DeliveryLocate {
                     target: own.clone(),
-                    message_id: tool.id.clone(),
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: tool.id.clone()
+                    },
                     delivery_index: 0
                 }
             )
@@ -5897,16 +6918,162 @@ pub(crate) async fn delivery_access_boundary_scenario() {
     .await;
 }
 
+async fn delivery_response_boundary(
+    connection: &AppServerConnection,
+    target: &AttachmentTarget,
+) -> crate::runtime_client::response::CompletedResponseView {
+    let MethodResult::TranscriptWindow { window } = call(
+        connection,
+        45_001,
+        Method::Transcript {
+            target: target.clone(),
+            at: crate::durable::reading::ConversationWindowAt::Latest,
+            limit: 32,
+        },
+    )
+    .await
+    else {
+        panic!("native completed response window");
+    };
+    window
+        .page
+        .entries
+        .iter()
+        .rev()
+        .find_map(|entry| entry.completed_response.as_ref())
+        .expect("native completed response boundary")
+        .clone()
+}
+
+#[derive(serde::Deserialize)]
+struct DeliveryToolMetadata {
+    id: crate::runtime::identity::MessageId,
+    result: DeliveryResultMetadata,
+}
+#[derive(serde::Deserialize)]
+struct DeliveryResultMetadata {
+    status: crate::tools::ToolExecutionStatus,
+    #[serde(default)]
+    artifacts: Vec<crate::message::content::FileReference>,
+    #[serde(default)]
+    deliveries: Vec<crate::tools::session_files::SessionFileReference>,
+}
+
+async fn read_delivery_metadata(
+    connection: &AppServerConnection,
+    target: &AttachmentTarget,
+    reference: &crate::runtime_client::content::ContentRef,
+) -> DeliveryToolMetadata {
+    use base64::Engine as _;
+    assert!(matches!(
+        &reference.source,
+        crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+            component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+            ..
+        }
+    ));
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let MethodResult::ContentChunk { chunk } = call(
+            connection,
+            45_000,
+            Method::ConversationContentRead {
+                target: target.clone(),
+                agent_id: None,
+                content_ref: reference.clone(),
+                offset,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("canonical delivery metadata chunk")
+        };
+        assert_eq!(&chunk.content_ref, reference);
+        assert_eq!(chunk.offset, offset);
+        assert_eq!(chunk.readable_end, reference.readable_end);
+        assert!(chunk.data_base64.len() <= 87_384);
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.data_base64)
+            .unwrap();
+        assert!(part.len() <= 65_536);
+        assert_eq!(
+            chunk.end_offset,
+            offset + u64::try_from(part.len()).unwrap()
+        );
+        bytes.extend(part);
+        assert!(
+            bytes.len() <= 16 * 1024 * 1024,
+            "selected fixture metadata cache bound"
+        );
+        let Some(next) = chunk.next_offset else {
+            assert_eq!(chunk.end_offset, reference.readable_end);
+            break;
+        };
+        assert_eq!(next, chunk.end_offset);
+        assert!(next > offset);
+        offset = next;
+    }
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn delivery_metadata_reference(
+    descriptor: &crate::runtime_client::snapshot::RuntimeClientMessageDescriptor,
+) -> &crate::runtime_client::content::ContentRef {
+    assert_eq!(descriptor.role, "tool");
+    &descriptor
+        .content
+        .iter()
+        .find(|binding| {
+            matches!(
+                &binding.content_ref.source,
+                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+                    component:
+                        crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+                    ..
+                }
+            )
+        })
+        .expect("native canonical Tool metadata source")
+        .content_ref
+}
+
+async fn checkpoint_delivery_metadata(
+    connection: &AppServerConnection,
+    target: &AttachmentTarget,
+    snapshot: &crate::runtime_client::RuntimeClientSnapshot,
+) -> DeliveryToolMetadata {
+    let descriptors: Vec<_> = snapshot
+        .message_descriptors
+        .iter()
+        .filter(|header| header.role == "tool")
+        .collect();
+    assert_eq!(
+        descriptors.len(),
+        1,
+        "ordinary canonical Tool commit is unique"
+    );
+    let tool = read_delivery_metadata(
+        connection,
+        target,
+        delivery_metadata_reference(descriptors[0]),
+    )
+    .await;
+    assert_eq!(descriptors[0].identity.as_ref(), Some(&tool.id));
+    tool
+}
+
 pub(super) const DELIVERED: &[u8] = b"# Original\r\n\r\nNative bytes\r\n";
 
 /// Commits one `present` delivery of `f.sessions[0]` through an ordinary
 /// connection, which then closes. Returns the delivering Tool message id.
 pub(super) async fn committed_delivery(f: &Fixture) -> crate::runtime::identity::MessageId {
-    use crate::message::types::MessageBlock;
     std::fs::write(f.workspaces[0].join("报告 file.md"), DELIVERED).unwrap();
     let ordinary = AppServerConnection::new(f.host.clone());
     initialize(&ordinary).await;
     let target = attach(&ordinary, f, 0).await;
+    let completion = AttemptCompletion::capture(f, &target);
     f.gates[0].release();
     call(
         &ordinary,
@@ -5917,12 +7084,14 @@ pub(super) async fn committed_delivery(f: &Fixture) -> crate::runtime::identity:
         },
     )
     .await;
-    await_attempt_settled(&ordinary, &target.session_id).await;
-    let MethodResult::Snapshot { snapshot, .. } = call(
+    completion.observed(&ordinary, &target).await;
+    let MethodResult::Checkpoint {
+        checkpoint: checkpoint_17,
+    } = call(
         &ordinary,
         4301,
-        Method::SessionSnapshot {
-            target,
+        Method::SessionCheckpoint {
+            target: target.clone(),
             trace_records: vec![],
         },
     )
@@ -5930,15 +7099,11 @@ pub(super) async fn committed_delivery(f: &Fixture) -> crate::runtime::identity:
     else {
         panic!("snapshot")
     };
+    let snapshot = Box::new(checkpoint_17.snapshot);
+    let tool = checkpoint_delivery_metadata(&ordinary, &target, &snapshot).await;
+    assert!(!tool.result.deliveries.is_empty(), "committed delivery");
     ordinary.close();
-    snapshot
-        .messages
-        .iter()
-        .find_map(|message| match message {
-            MessageBlock::Tool(tool) if !tool.result.deliveries.is_empty() => Some(tool.id.clone()),
-            _ => None,
-        })
-        .expect("committed delivery")
+    tool.id
 }
 
 pub(super) fn delivery_request(
@@ -5954,13 +7119,17 @@ pub(super) fn delivery_request(
         call: if locate {
             Method::DeliveryLocate {
                 target,
-                message_id,
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id,
+                },
                 delivery_index: 0,
             }
         } else {
             Method::DeliveryRead {
                 target,
-                message_id,
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id,
+                },
                 delivery_index: 0,
             }
         },
@@ -6108,7 +7277,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
         probe.before_admission.wait_entered().await;
         failed_with(
             &trusted.handle_request(read(14)).await,
-            &ErrorData::InvalidParams,
+            &ErrorData::DuplicateRequestId,
         );
         assert!(
             !cancel_delivery(&other, 14).await,
@@ -6146,20 +7315,74 @@ pub(crate) async fn delivery_cancellation_scenario() {
     .await;
 }
 
-/// The server half of the reserved cancel slot, over a real stdio transport.
-///
-/// The TUI client counts a request until its response arrives and never has
-/// more than `IN_FLIGHT_REQUESTS` outstanding, one of which only
-/// `delivery/cancel` may use. Here fifteen requests are in flight — a
-/// delivery read parked inside its native descriptor read and fourteen
-/// ordinary requests parked before their operation — and the cancel arrives
-/// as the sixteenth: it is admitted, answered at once without waiting for any
-/// of them, and wins; the read answers once, with `delivery_cancelled`, only
-/// after it physically settles; the connection stays healthy throughout.
-///
-/// Every party is counted at its boundary before the next step: the read by
-/// its held permit, the fourteen by the operation gate's parked count, so the
-/// cancel provably arrives with exactly fifteen others in flight.
+/// Native admission holds each request before lookup/execution. Unknown Agent
+/// identities intentionally test the Observe lane before domain validation;
+/// their later exact refusals neither create a Child nor claim an outcome.
+fn delivery_capacity_parties(target: &AttachmentTarget) -> Vec<Request> {
+    let mut parties = Vec::new();
+    for id in 0..5 {
+        parties.push(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call: Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        });
+    }
+    for id in 10..18 {
+        parties.push(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call: Method::AgentObserve {
+                target: target.clone(),
+                agent_id: crate::runtime::identity::AgentId::new(format!("admission-only-{id}")),
+                after: None,
+            },
+        });
+    }
+    parties.push(Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::Integer(90),
+        call: Method::TurnCancel {
+            target: target.clone(),
+        },
+    });
+    parties
+}
+
+fn delivery_capacity_answer(response: Response, parties: &[Request]) -> i64 {
+    let (id, result) = match response {
+        Response::Success(success) => (success.id, Ok(success.result)),
+        Response::Failure(failure) => (
+            failure.id.expect("correlated refusal"),
+            Err(failure.error.data.expect("typed refusal")),
+        ),
+    };
+    let party = parties
+        .iter()
+        .find(|request| request.id == id)
+        .expect("exact retained request");
+    match (&party.call, result) {
+        (Method::SessionCheckpoint { .. }, Ok(MethodResult::Checkpoint { .. }))
+        | (Method::TurnCancel { .. }, Err(ErrorData::InvalidState)) => {}
+        (
+            Method::AgentObserve { agent_id, .. },
+            Err(ErrorData::UnknownAgent { agent_id: actual }),
+        ) => assert_eq!(&actual, agent_id),
+        other => panic!("retained native request changed: {other:?}"),
+    }
+    let RequestId::Integer(id) = id else {
+        panic!("integer fixture identity");
+    };
+    id
+}
+
+/// Five checkpoints and one physically parked delivery fill the six ordinary
+/// slots. Eight Observe requests and one control request are independently
+/// held at native operation admission, making fifteen retained requests. The
+/// remaining control slot admits delivery/cancel as the sixteenth, without
+/// releasing a read permit or cancelling any other native operation.
 pub(crate) async fn delivery_cancellation_capacity_scenario() {
     use crate::app_server::transport::{IN_FLIGHT_REQUESTS, stdio};
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
@@ -6208,22 +7431,16 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
             SESSION_FILE_MAX_READS - 1,
             "the read is admitted and holds its native permit"
         );
-        // Fourteen unrelated requests, each parked before its operation.
+        // Fourteen unrelated requests across their declared admission lanes.
         let probe = f.manager.probe(&own.conversation_id);
         probe.before_operation.arm();
-        let ordinary = IN_FLIGHT_REQUESTS - 2;
-        for id in 0..ordinary {
-            let request = Request {
-                jsonrpc: JsonRpcVersion::V2,
-                id: RequestId::Integer(i64::try_from(id).unwrap()),
-                call: Method::SessionSnapshot {
-                    target: own.clone(),
-                    trace_records: vec![],
-                },
-            };
-            input.write_all(line(&request).as_bytes()).await.unwrap();
+        assert_eq!(IN_FLIGHT_REQUESTS, 16);
+        let parties = delivery_capacity_parties(&own);
+        assert_eq!(parties.len(), IN_FLIGHT_REQUESTS - 2);
+        for request in &parties {
+            input.write_all(line(request).as_bytes()).await.unwrap();
         }
-        probe.before_operation.parked(ordinary).await;
+        probe.before_operation.parked(parties.len()).await;
 
         // The sixteenth request in flight: the cancel.
         let cancel = Request {
@@ -6250,7 +7467,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         );
         assert_eq!(
             probe.before_operation.parked_now(),
-            ordinary,
+            parties.len(),
             "no unrelated request settled or was dropped"
         );
 
@@ -6259,32 +7476,24 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         assert!(matches!(&cancelled, Response::Failure(failure) if failure.id == Some(RequestId::Integer(100))));
         failed_with(&cancelled, &ErrorData::DeliveryCancelled);
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
-        assert_eq!(probe.before_operation.parked_now(), ordinary);
+        assert_eq!(probe.before_operation.parked_now(), parties.len());
 
         probe.before_operation.release();
         let mut answered = Vec::new();
-        for _ in 0..ordinary {
-            let Response::Success(snapshot) = next_response().await else {
-                panic!("unrelated requests are untouched")
-            };
-            let RequestId::Integer(id) = snapshot.id else {
-                panic!("integer id")
-            };
-            answered.push(id);
+        for _ in &parties {
+            answered.push(delivery_capacity_answer(next_response().await, &parties));
         }
         answered.sort_unstable();
-        assert_eq!(
-            answered,
-            (0..i64::try_from(ordinary).unwrap()).collect::<Vec<_>>(),
-            "each answered exactly once, and nothing else"
-        );
+        let mut expected: Vec<_> = parties.iter().map(|request| match &request.id { RequestId::Integer(id) => *id, RequestId::String(_) => unreachable!("integer fixture identity") }).collect();
+        expected.sort_unstable();
+        assert_eq!(answered, expected, "each retained request answered exactly once");
         probe.before_operation.parked(0).await;
 
         // Back to baseline, and the same connection still serves requests.
         let after = Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(300),
-            call: Method::SessionSnapshot {
+            call: Method::SessionCheckpoint {
                 target: own.clone(),
                 trace_records: vec![],
             },
@@ -6376,7 +7585,7 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
             call(
                 &connection,
                 20,
-                Method::SessionSnapshot {
+                Method::SessionCheckpoint {
                     target: target.clone(),
                     trace_records: vec![],
                 },
@@ -6392,6 +7601,15 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
             ("非ASCII".to_owned(), false),
             ("trailing\n".to_owned(), false),
         ] {
+            f.manager
+                .configuration_host(&target.session_id)
+                .unwrap()
+                .projection_settled()
+                .await;
+            let native = f.manager.configuration_host(&target.session_id).unwrap();
+            if !valid {
+                native.inner.park_projection_worker();
+            }
             let before = read().await;
             let mut wire = serde_json::to_value(Request {
                 jsonrpc: JsonRpcVersion::V2,
@@ -6410,9 +7628,13 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
             };
             if valid {
                 assert_ne!(failure.error.code, -32602);
-                let MethodResult::Snapshot { snapshot, .. } = read().await else {
+                let MethodResult::Checkpoint {
+                    checkpoint: checkpoint_18,
+                } = read().await
+                else {
                     panic!("snapshot")
                 };
+                let snapshot = Box::new(checkpoint_18.snapshot);
                 let result = snapshot.context.manual_compaction.unwrap();
                 assert_eq!(result.request_id.unwrap().as_str(), value);
                 assert!(result.released);
@@ -6424,6 +7646,9 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
                     serde_json::to_value(read().await).unwrap(),
                     serde_json::to_value(before).unwrap()
                 );
+            }
+            if !valid {
+                native.inner.unpark_projection_worker();
             }
             assert!(f.provider.request_bodies().is_empty());
         }
@@ -7067,10 +8292,12 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
                     .unwrap()
                     .is_empty()
             );
-            let MethodResult::Snapshot { snapshot, .. } = call(
+            let MethodResult::Checkpoint {
+                checkpoint: checkpoint_19,
+            } = call(
                 &connection,
                 9909,
-                Method::SessionSnapshot {
+                Method::SessionCheckpoint {
                     target: target.clone(),
                     trace_records: vec![],
                 },
@@ -7079,6 +8306,7 @@ async fn native_user_input_receipt_collection_enforces_count_bytes_and_authority
             else {
                 panic!("snapshot")
             };
+            let snapshot = Box::new(checkpoint_19.snapshot);
             assert!(snapshot.inbound.pending.is_empty());
             assert!(f.provider.request_bodies().is_empty());
             assert_eq!(
@@ -7278,6 +8506,7 @@ async fn human_message_activity_reorders_live_catalog_without_focus_or_rename_ac
             .await
             .unwrap()
             .updated_at;
+        let completion = AttemptCompletion::capture(&f, &target);
         call(
             &connection,
             801,
@@ -7334,7 +8563,7 @@ async fn human_message_activity_reorders_live_catalog_without_focus_or_rename_ac
             summary.updated_at
         );
         f.gates[0].release();
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         assert_eq!(
             f.manager
                 .sessions
@@ -7361,7 +8590,7 @@ async fn durable_history_is_readable_before_and_during_runtime_preparation() {
             session_id: f.sessions[0].id.clone(),
             node_id: None,
             at: crate::durable::reading::ConversationWindowAt::Latest,
-            limit: 64,
+            limit: 32,
         };
         let MethodResult::SessionHistory {
             conversation_id,
@@ -7371,7 +8600,9 @@ async fn durable_history_is_readable_before_and_during_runtime_preparation() {
             panic!("history");
         };
         assert_eq!(conversation_id, id);
+        assert_eq!(window.cut.conversation_id, id);
         assert!(window.page.entries.is_empty());
+        let captured = window.clone();
         assert_eq!(
             probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
             0
@@ -7382,14 +8613,32 @@ async fn durable_history_is_readable_before_and_during_runtime_preparation() {
         let session = f.sessions[0].clone();
         let attaching = tokio::spawn(async move { attach_session(&worker, &session).await });
         probe.before_compose.entered().await;
-        assert!(matches!(
-            call(&connection, 501, read()).await,
-            MethodResult::SessionHistory { .. }
-        ));
+        assert_eq!(
+            rejected(&connection, read()).await,
+            ErrorData::StaleRuntime,
+            "an allocated Loading owner cannot silently become a cold Store-head read"
+        );
+        assert_eq!(
+            window, captured,
+            "the already-captured nonactivated native page remains unchanged"
+        );
+        assert_eq!(window.cut.conversation_id, id);
         assert!(!attaching.is_finished());
         assert_eq!(connection.attachment_counts(), (0, 1));
         probe.before_compose.release();
-        attaching.await.unwrap();
+        let target = attaching.await.unwrap();
+        assert_eq!(target.conversation_id, id);
+        let MethodResult::SessionHistory {
+            conversation_id,
+            window: installed,
+        } = call(&connection, 502, read()).await
+        else {
+            panic!("genuine installed-owner history cut");
+        };
+        assert_eq!(conversation_id, id);
+        assert_eq!(installed.cut.conversation_id, id);
+        assert!(installed.page.entries.is_empty());
+        assert!(f.provider.request_bodies().is_empty());
         connection.close();
         f.close().await;
     })
@@ -7442,7 +8691,9 @@ async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retireme
                 session_id: source.id.clone(),
                 node_id: source.active_node.clone(),
                 surface_revision: revision,
-                boundary: MessageId::new("ownership-seed"),
+                boundary: CanonicalContentLocator::ByMessageId {
+                    message_id: MessageId::new("ownership-seed"),
+                },
                 side: LineageSide::Before,
             },
         )
@@ -7569,7 +8820,9 @@ async fn switch_fixture(
             session_id: source.id.clone(),
             node_id: source.active_node.clone(),
             surface_revision: revision,
-            boundary: MessageId::new("ownership-seed"),
+            boundary: CanonicalContentLocator::ByMessageId {
+                message_id: MessageId::new("ownership-seed"),
+            },
             side: LineageSide::Before,
         },
     )
@@ -7594,7 +8847,9 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
         for outcome in ["success", "composition_failure", "lost_ack"] {
             let f = Fixture::new().await;
             let (connection, target_a, branch) = switch_fixture(&f).await;
+            let retiring = f.manager.probe(&target_a.conversation_id);
             let probe = f.manager.probe(&branch.active_conversation_id);
+            retiring.before_shutdown.arm();
             probe.before_compose.arm();
             if outcome == "composition_failure" {
                 probe.fail_compose_once.store(true, Ordering::SeqCst);
@@ -7614,29 +8869,17 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                     })
                     .await
             });
-            probe.before_compose.entered().await;
-            // This barrier is after unload and catalog selection, before B is
-            // resident. Missing browser target cannot describe this transition.
+            retiring.before_shutdown.entered().await;
             assert_eq!(
                 f.manager.residency(&target_a.conversation_id),
-                ResidencyState::Unloaded
+                ResidencyState::Unloading
             );
             assert_eq!(
                 f.manager.residency(&branch.active_conversation_id),
-                ResidencyState::Loading
-            );
-            assert_eq!(
-                f.manager
-                    .session_controller()
-                    .read_session_summary(&branch.id)
-                    .await
-                    .unwrap()
-                    .active_node,
-                branch.active_node
+                ResidencyState::Unloaded
             );
             assert_eq!(connection.attachment_counts(), (1, 0));
             assert_eq!(f.host.diagnostics().external_attachments, 1);
-            // Retained Route identity cannot execute against the unloaded A.
             assert_eq!(
                 rejected(
                     &connection,
@@ -7648,43 +8891,41 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                     }
                 )
                 .await,
-                ErrorData::StaleRuntime,
-            );
-            // Even another connection cannot bypass in-progress B residency.
-            let inspector = AppServerConnection::new(f.host.clone());
-            initialize(&inspector).await;
-            assert_eq!(
-                rejected(
-                    &inspector,
-                    Method::SessionAttach {
-                        session_id: branch.id.clone(),
-                        node_id: Some(f.sessions[0].active_node.clone()),
-                    }
-                )
-                .await,
-                ErrorData::OperationFailed
+                ErrorData::StaleRuntime
             );
             if outcome == "lost_ack" {
                 connection.close();
             }
-            probe.before_compose.release();
+            retiring.before_shutdown.release();
             let response = work.await.unwrap();
-            if outcome == "composition_failure" {
-                assert!(matches!(response, Response::Failure(_)), "{response:?}");
-                assert_eq!(
-                    f.manager.residency(&branch.active_conversation_id),
-                    ResidencyState::Unloaded
-                );
-            } else {
-                assert!(matches!(response, Response::Success(_)), "{response:?}");
-                assert_eq!(
-                    f.manager.residency(&branch.active_conversation_id),
-                    ResidencyState::Loaded
-                );
-            }
+            let Response::Success(receipt) = response else {
+                panic!("native switch selection receipt: {response:?}");
+            };
+            let MethodResult::Session { session } = receipt.result else {
+                panic!("native switch selection result");
+            };
+            assert_eq!(session.active_node, branch.active_node);
+            assert_eq!(
+                session.active_conversation_id,
+                branch.active_conversation_id
+            );
+            assert_eq!(
+                f.manager.residency(&target_a.conversation_id),
+                ResidencyState::Unloaded
+            );
+            assert_eq!(
+                f.manager.residency(&branch.active_conversation_id),
+                ResidencyState::Unloaded
+            );
+            assert_eq!(
+                probe.compositions.load(Ordering::SeqCst),
+                0,
+                "selection never composes a successor implicitly"
+            );
             assert_eq!(connection.attachment_counts(), (0, 0));
             assert_eq!(f.host.diagnostics().external_attachments, 0);
-            assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+            let inspector = AppServerConnection::new(f.host.clone());
+            initialize(&inspector).await;
             let MethodResult::Session { session } = call(
                 &inspector,
                 8101,
@@ -7694,7 +8935,7 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
             )
             .await
             else {
-                panic!("native selection")
+                panic!("native selection");
             };
             assert_eq!(session.active_node, branch.active_node);
             assert_eq!(
@@ -7705,8 +8946,8 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                 assert_eq!(
                     rejected(
                         &connection,
-                        Method::SessionSnapshot {
-                            target: target_a,
+                        Method::SessionCheckpoint {
+                            target: target_a.clone(),
                             trace_records: vec![]
                         }
                     )
@@ -7714,8 +8955,75 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                     ErrorData::StaleAttachment
                 );
             }
-            // Explicit recovery uses observed B. It does not replay switch or
-            // invent A's retired Route, including after composition failure.
+            // Explicit attachment owns composition; failure cannot roll back the confirmed switch.
+            let attaching = inspector.clone();
+            let selected = branch.clone();
+            let preparation = tokio::spawn(async move {
+                attaching
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(8103),
+                        call: Method::SessionAttach {
+                            session_id: selected.id,
+                            node_id: Some(selected.active_node),
+                        },
+                    })
+                    .await
+            });
+            probe.before_compose.entered().await;
+            assert_eq!(
+                f.manager.residency(&branch.active_conversation_id),
+                ResidencyState::Loading
+            );
+            assert_eq!(inspector.attachment_counts(), (0, 1));
+            let competing = AppServerConnection::new(f.host.clone());
+            initialize(&competing).await;
+            assert_eq!(
+                rejected(
+                    &competing,
+                    Method::SessionAttach {
+                        session_id: branch.id.clone(),
+                        node_id: Some(f.sessions[0].active_node.clone())
+                    }
+                )
+                .await,
+                ErrorData::OperationFailed
+            );
+            probe.before_compose.release();
+            let prepared = preparation.await.unwrap();
+            if outcome == "composition_failure" {
+                assert!(matches!(prepared, Response::Failure(_)), "{prepared:?}");
+                assert_eq!(
+                    f.manager.residency(&branch.active_conversation_id),
+                    ResidencyState::Unloaded
+                );
+            } else {
+                let Response::Success(receipt) = prepared else {
+                    panic!("explicit successor attachment: {prepared:?}");
+                };
+                let MethodResult::Attached { target, .. } = receipt.result else {
+                    panic!("explicit successor attachment result");
+                };
+                assert_eq!(target.conversation_id, branch.active_conversation_id);
+                assert_eq!(
+                    f.manager.residency(&branch.active_conversation_id),
+                    ResidencyState::Loaded
+                );
+                call(&inspector, 8104, Method::SessionDetach { target }).await;
+            }
+            assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
+            assert_eq!(inspector.attachment_counts(), (0, 0));
+            assert_eq!(f.host.diagnostics().external_attachments, 0);
+            let selected = f
+                .manager
+                .session_controller()
+                .read_session_summary(&branch.id)
+                .await
+                .unwrap();
+            assert_eq!(
+                selected.active_node, branch.active_node,
+                "failed composition cannot restore A"
+            );
             let target_b = attach(&inspector, &f, 0).await;
             assert_eq!(target_b.conversation_id, branch.active_conversation_id);
             assert_eq!(inspector.attachment_counts(), (1, 0));
@@ -7727,6 +9035,7 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                 ResidencyState::Loaded
             );
             assert!(f.provider.request_bodies().is_empty());
+            competing.close();
             inspector.close();
             connection.close();
             f.close().await;
@@ -7743,7 +9052,8 @@ mod child_delivery {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
     bounded(async {
-        use crate::local_runtime::session::{LineageSide, SessionNodeId, SessionNodeOrigin};
+        use crate::local_runtime::session::{LineageSide, SessionNodeId};
+        use crate::local_runtime::session::observation::SessionNodeOriginObservation as SessionNodeOrigin;
         use crate::runtime::identity::MessageId;
         let f = Fixture::new().await;
         let (connection, target, branch) = switch_fixture(&f).await;
@@ -7754,7 +9064,7 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
         assert_eq!(root.conversation_id, source.active_conversation_id);
         assert_eq!(root.origin, SessionNodeOrigin::New);
         let MethodResult::Node { node } = call(&connection, 8201, Method::SessionNode { session_id: source.id.clone(), node_id: branch.active_node.clone() }).await else { panic!("exact fork") };
-        assert!(matches!(node.origin, SessionNodeOrigin::Fork { source_session, source_node, source_message, side: LineageSide::Before, .. } if source_session == source.id && source_node == source.active_node && source_message == MessageId::new("ownership-seed")));
+        assert!(matches!(node.origin, SessionNodeOrigin::Fork { source_session, source_node, source_message, side: LineageSide::Before, .. } if source_session == source.id && source_node == source.active_node && source_message == Some(MessageId::new("ownership-seed"))));
         let missing = SessionNodeId::generate();
         assert_eq!(rejected(&connection, Method::SessionNode { session_id: source.id.clone(), node_id: missing.clone() }).await, ErrorData::UnknownNode { session_id: source.id.clone(), node_id: missing });
         assert_eq!(rejected(&connection, Method::SessionNode { session_id: f.sessions[1].id.clone(), node_id: root.id }).await, ErrorData::UnknownNode { session_id: f.sessions[1].id.clone(), node_id: source.active_node.clone() });
@@ -7771,7 +9081,7 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
         assert_eq!(window.page.entries.len(), 1);
         let MethodResult::Boundaries { surface_revision, .. } = call(&connection, 8206, Method::SessionBoundaries { target: target.clone(), offset: 0, limit: 32 }).await else { panic!("cut") };
         let MethodResult::SessionTransition { session: inherited, .. } = call(&connection, 8207, Method::SessionFork {
-            session_id: source.id.clone(), node_id: Some(source.active_node.clone()), surface_revision, boundary: Some(MessageId::new("ownership-seed")), side: LineageSide::Before,
+            session_id: source.id.clone(), node_id: Some(source.active_node.clone()), surface_revision, boundary: Some(CanonicalContentLocator::ByMessageId {message_id:MessageId::new("ownership-seed")}), side: LineageSide::Before,
         }).await else { panic!("inherited lineage") };
         let MethodResult::SessionHistory { window, .. } = call(&connection, 8208, Method::SessionHistory {
             session_id: inherited.id, node_id: Some(inherited.active_node), at: crate::durable::reading::ConversationWindowAt::Latest, limit: 1,
@@ -7784,4 +9094,763 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     }).await;
+}
+
+#[path = "live_model.rs"]
+mod live_model;
+pub(crate) use live_model::live_model_child_inheritance_boundary_scenario;
+#[tokio::test]
+async fn t01_invalid_identity_precedes_method_and_connection_admission() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        for id in [
+            serde_json::json!("x".repeat(255)),
+            serde_json::json!(9_007_199_254_740_992_u64),
+            serde_json::json!(null),
+            serde_json::json!([]),
+        ] {
+            let record =
+                serde_json::json!({"jsonrpc":"2.0", "id":id, "method":"not/a/method", "params":{}})
+                    .to_string();
+            let Response::Failure(failure) = connection.handle_json(&record).await.unwrap() else {
+                panic!("invalid envelope")
+            };
+            assert_eq!(failure.id, None);
+            assert_eq!(failure.error.code, -32600);
+            assert_eq!(connection.attachment_counts(), (0, 0));
+        }
+        let Response::Failure(failure) = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::String("\n".repeat(128)),
+                call: Method::Initialize(InitializeParams {
+                    protocol_version: APP_SERVER_PROTOCOL_VERSION,
+                    client: ClientIdentity {
+                        name: "rejected".into(),
+                        version: "1".into(),
+                    },
+                    presentation: PresentationCapabilities::default(),
+                }),
+            })
+            .await
+        else {
+            panic!("typed invalid identity")
+        };
+        assert_eq!((failure.id, failure.error.code), (None, -32600));
+        // Rejected typed Initialize did not alter connection state.
+        initialize(&connection).await;
+        for call in [
+            Method::DeliveryCancel {
+                request_id: RequestId::String("x".repeat(255)),
+            },
+            Method::AgentObserveCancel {
+                request_id: RequestId::Integer(i64::MAX),
+            },
+        ] {
+            let Response::Failure(failure) = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(19),
+                    call,
+                })
+                .await
+            else {
+                panic!("invalid cancellation parameter")
+            };
+            assert_eq!(
+                (failure.id, failure.error.code),
+                (Some(RequestId::Integer(19)), -32602)
+            );
+        }
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn t20_request_identity_remains_owned_through_response_disposition() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let request = || Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(31),
+            call: Method::ServerInfo {},
+        };
+        let reply = connection.reply(request()).await;
+        let Response::Failure(failure) = connection.handle_request(request()).await else {
+            panic!("overlapping identity must be refused")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::DuplicateRequestId));
+        drop(reply); // Unaccepted response abandoned; exact association is released.
+        assert!(matches!(
+            connection.handle_request(request()).await,
+            Response::Success(_)
+        ));
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn t20_observation_cancel_after_admission_before_first_poll_never_dispatches() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let MethodResult::Attached { target, .. } = call(
+            &connection,
+            1,
+            Method::SessionAttach {
+                session_id: f.sessions[0].id.clone(),
+                node_id: None,
+            },
+        )
+        .await
+        else {
+            panic!("attached")
+        };
+        let wait = connection.admitted_request_for_test(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(41),
+            call: Method::AgentObserve {
+                target,
+                agent_id: crate::runtime::identity::AgentId::new("never-inspected"),
+                after: None,
+            },
+        });
+        // No future has been polled. Cancellation must already find the owner.
+        let cancelled = call(
+            &connection,
+            42,
+            Method::AgentObserveCancel {
+                request_id: RequestId::Integer(41),
+            },
+        )
+        .await;
+        assert_eq!(
+            cancelled,
+            MethodResult::AgentObserveCancelled { accepted: true }
+        );
+        let Response::Failure(failure) = wait.await.commit() else {
+            panic!("cancelled observation")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ObservationCancelled));
+        // Dispatching this nonexistent Child would have produced UnknownAgent.
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t20_aborted_response_waiter_retains_native_operation_reservation_until_termination() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let MethodResult::Attached { target, .. } = call(
+            &connection,
+            1,
+            Method::SessionAttach {
+                session_id: f.sessions[0].id.clone(),
+                node_id: None,
+            },
+        )
+        .await
+        else {
+            panic!("attached")
+        };
+        let runtime = f.manager.load(&target.session_id, None).await.unwrap();
+        let resident = runtime.client().current().unwrap();
+        let mut operations = resident.operations.subscribe();
+        let probe = f.manager.probe(&target.conversation_id);
+        probe.before_operation.arm();
+        let request = Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(51),
+            call: Method::ModelGet { target },
+        };
+        let waiting = tokio::spawn(connection.admitted_request_for_test(request.clone()));
+        probe.before_operation.entered().await;
+        waiting.abort();
+        assert!(matches!(waiting.await, Err(error) if error.is_cancelled()));
+        let Response::Failure(failure) = connection.handle_request(request.clone()).await else {
+            panic!("physical work still owns identity")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::DuplicateRequestId));
+        // Native OperationLease release is the physical termination proof.
+        probe.before_operation.release();
+        operations.wait_for(|count| *count == 0).await.unwrap();
+        assert!(matches!(
+            connection.handle_request(request).await,
+            Response::Success(_)
+        ));
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+/// T15: the source configuration owner has bounded projections, advancing
+/// aggregate pages, and independent exact large-field reads at one source cut.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence() {
+    bounded(async {
+        use crate::local_runtime::configuration::{observation as source, settings::SourceTarget};
+        use base64::Engine;
+        let f = Fixture::new().await;
+        let mut native = f
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap();
+        native.prospective_diagnostic = Some("é\n".repeat(140_000));
+        for index in 0..3000 {
+            native.resource_revisions.insert(
+                std::path::PathBuf::from(format!("resource-{index:05}")),
+                "revision".repeat(8),
+            );
+        }
+        native.resource_revisions.insert(
+            std::path::PathBuf::from("resource-zzzz"),
+            "x".repeat(40_000),
+        );
+        let projection = source::bounded(&native).unwrap();
+        assert!(projection.inline.is_none());
+        let mut reconstructed = serde_json::Map::new();
+        for field in &projection.fields {
+            let value = if let Some(value) = &field.value {
+                value.clone()
+            } else {
+                let reference = field.reference.as_ref().unwrap();
+                let mut bytes = Vec::new();
+                let mut offset = 0;
+                loop {
+                    let chunk =
+                        source::read(&native, reference, offset, source::READ_BYTES).unwrap();
+                    bytes.extend(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(&chunk.data_base64)
+                            .unwrap(),
+                    );
+                    let Some(next) = chunk.next_offset else {
+                        break;
+                    };
+                    assert!(next > offset);
+                    offset = next;
+                }
+                serde_json::from_slice(&bytes).unwrap()
+            };
+            let serde_json::Value::String(name) = serde_json::to_value(field.name).unwrap() else {
+                panic!("field name");
+            };
+            assert!(reconstructed.insert(name, value).is_none());
+        }
+        let reconstructed: crate::local_runtime::configuration::settings::SourceSettings =
+            crate::runtime_client::structural_json::decode(serde_json::Value::Object(
+                reconstructed,
+            ))
+            .unwrap();
+        assert_eq!(reconstructed, native);
+        let response = Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(315),
+            result: MethodResult::SourceSettings {
+                projection: Box::new(projection.clone()),
+            },
+        }));
+        assert!(serde_json::to_vec(&response).unwrap().len() < 786_432);
+        let reference = projection
+            .fields
+            .iter()
+            .find(|field| field.name == source::SourceFieldName::ProspectiveDiagnostic)
+            .unwrap()
+            .reference
+            .as_ref()
+            .unwrap();
+        let mut offset = 0;
+        let mut bytes = vec![];
+        loop {
+            let chunk = source::read(&native, reference, offset, source::READ_BYTES).unwrap();
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap();
+            assert!(decoded.len() <= 65_536);
+            assert!(chunk.end_offset > offset);
+            bytes.extend(decoded);
+            let Some(next) = chunk.next_offset else {
+                break;
+            };
+            offset = next;
+        }
+        assert_eq!(
+            serde_json::from_slice::<String>(&bytes).unwrap(),
+            native.prospective_diagnostic.as_deref().unwrap()
+        );
+        assert!(source::read(&native, reference, reference.byte_length + 1, 1).is_err());
+        let mut offset = 0;
+        let mut seen = 0;
+        loop {
+            let page = source::page(
+                &native,
+                &projection.revision,
+                source::SourceFieldName::ResourceRevisions,
+                offset,
+                32,
+            )
+            .unwrap();
+            assert!(page.items.len() <= 32);
+            assert!(serde_json::to_vec(&page).unwrap().len() < 786_432);
+            for item in &page.items {
+                assert_eq!(item.index, seen);
+                seen += 1;
+                if let Some(reference) = &item.reference {
+                    let chunk = source::read(&native, reference, 0, 65_536).unwrap();
+                    let entry: serde_json::Value = serde_json::from_slice(
+                        &base64::engine::general_purpose::STANDARD
+                            .decode(chunk.data_base64)
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(entry[0], "resource-zzzz");
+                    assert_eq!(entry[1], "x".repeat(40_000));
+                }
+            }
+            let Some(next) = page.next_offset else {
+                break;
+            };
+            assert!(next > offset);
+            offset = next;
+        }
+        assert_eq!(
+            seen,
+            u64::try_from(native.resource_revisions.len()).unwrap()
+        );
+        native.prospective_diagnostic.as_mut().unwrap().push('x');
+        assert_eq!(
+            source::read(&native, reference, 0, 1).unwrap_err(),
+            "source read cut expired"
+        );
+        native.prospective_diagnostic = None;
+        native.resource_revisions.clear();
+        for index in 0..33 {
+            native
+                .resource_revisions
+                .insert(std::path::PathBuf::from(format!("r{index}")), "v".into());
+        }
+        assert!(
+            serde_json::to_vec(&native.resource_revisions)
+                .unwrap()
+                .len()
+                < 16_384
+        );
+        let small_many = source::bounded(&native).unwrap();
+        assert!(
+            small_many.inline.is_none(),
+            "count budget applies below whole-view byte budget"
+        );
+        let field = small_many
+            .fields
+            .iter()
+            .find(|field| field.name == source::SourceFieldName::ResourceRevisions)
+            .unwrap();
+        assert!(
+            field.value.is_none(),
+            "count budget applies below per-field byte budget"
+        );
+        assert!(field.reference.as_ref().unwrap().byte_length < 16_384);
+        let page = source::page(
+            &native,
+            &small_many.revision,
+            source::SourceFieldName::ResourceRevisions,
+            0,
+            32,
+        )
+        .unwrap();
+        assert_eq!(page.items.len(), 32);
+        assert_eq!(page.next_offset, Some(32));
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t15_cold_settings_deferred_value_advances_with_exact_catalog_revision() {
+    use crate::local_runtime::configuration::observation as source;
+    use base64::Engine;
+    bounded(async {
+        let f = Fixture::new().await;
+        let (revision, mut settings) = f
+            .manager
+            .sessions
+            .read_settings(&f.sessions[0].id)
+            .await
+            .unwrap();
+        settings.model = Some(crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("local/a").unwrap(),
+        ));
+        settings.model.as_mut().unwrap().request_params.insert(
+            "large".into(),
+            serde_json::Value::String("é\n".repeat(700_000)),
+        );
+        let projection = source::session_settings(revision, &settings).unwrap();
+        assert!(projection.inline.is_none());
+        let reference = projection.reference.as_ref().unwrap();
+        assert!(serde_json::to_vec(&projection).unwrap().len() < 786_432);
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let chunk =
+                source::session_settings_read(revision, &settings, reference, offset, 65_536)
+                    .unwrap();
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap();
+            assert!(decoded.len() <= 65_536);
+            assert!(chunk.end_offset > offset);
+            bytes.extend(decoded);
+            let Some(next) = chunk.next_offset else {
+                break;
+            };
+            offset = next;
+        }
+        assert_eq!(
+            crate::runtime_client::structural_json::decode::<
+                crate::local_runtime::session::SessionPersistentState,
+            >(serde_json::from_slice(&bytes).unwrap())
+            .unwrap(),
+            settings
+        );
+        assert_eq!(
+            source::session_settings_read(revision + 1, &settings, reference, 0, 1).unwrap_err(),
+            "source read cut expired"
+        );
+        let mut modified = reference.clone();
+        modified.byte_length += 1;
+        assert!(source::session_settings_read(revision, &settings, &modified, 0, 1).is_err());
+        assert!(
+            source::session_settings_read(
+                revision,
+                &settings,
+                reference,
+                reference.byte_length + 1,
+                1
+            )
+            .is_err()
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() {
+    use crate::local_runtime::configuration::effective_observation as source;
+    use base64::Engine;
+    bounded(async {
+        let f = Fixture::new().await;
+        f.manager.load(&f.sessions[0].id, None).await.unwrap();
+        let mut native = f
+            .manager
+            .effective_configuration_observation(&f.sessions[0].id)
+            .unwrap();
+        native.effective_model.configured.request_params.insert(
+            "large".into(),
+            serde_json::Value::String("é\n".repeat(300_000)),
+        );
+        for index in 0..3000 {
+            native.source_revisions.insert(
+                std::path::PathBuf::from(format!("source-{index:05}")),
+                "revision".repeat(8),
+            );
+        }
+        let projection = source::bounded(&native).unwrap();
+        assert!(projection.inline.is_none());
+        assert_eq!(projection.fields.len(), 18);
+        assert!(serde_json::to_vec(&projection).unwrap().len() < 786_432);
+        let mut reconstructed = serde_json::Map::new();
+        for field in &projection.fields {
+            let value = if let Some(value) = &field.value {
+                value.clone()
+            } else {
+                let reference = field.reference.as_ref().unwrap();
+                let mut bytes = Vec::new();
+                let mut offset = 0;
+                loop {
+                    let chunk = source::read(&native, reference, offset, 65_536).unwrap();
+                    bytes.extend(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(chunk.data_base64)
+                            .unwrap(),
+                    );
+                    let Some(next) = chunk.next_offset else {
+                        break;
+                    };
+                    assert!(next > offset);
+                    offset = next;
+                }
+                serde_json::from_slice(&bytes).unwrap()
+            };
+            let serde_json::Value::String(name) = serde_json::to_value(field.name).unwrap() else {
+                panic!("field");
+            };
+            assert!(reconstructed.insert(name, value).is_none());
+        }
+        let reconstructed: crate::local_runtime::configuration::settings::EffectiveConfiguration =
+            crate::runtime_client::structural_json::decode(serde_json::Value::Object(
+                reconstructed,
+            ))
+            .unwrap();
+        assert_eq!(reconstructed, native);
+        let mut offset = 0;
+        let mut seen = 0;
+        loop {
+            let page = source::page(
+                &native,
+                &projection.revision,
+                source::EffectiveFieldName::SourceRevisions,
+                offset,
+                32,
+            )
+            .unwrap();
+            assert!(page.items.len() <= 32);
+            assert!(serde_json::to_vec(&page).unwrap().len() < 786_432);
+            seen += page.items.len();
+            let Some(next) = page.next_offset else {
+                break;
+            };
+            assert!(next > offset);
+            offset = next;
+        }
+        assert_eq!(seen, native.source_revisions.len());
+        let reference = projection
+            .fields
+            .iter()
+            .find(|field| field.name == source::EffectiveFieldName::EffectiveModel)
+            .unwrap()
+            .reference
+            .as_ref()
+            .unwrap();
+        native.adopted_binding += 1;
+        assert_eq!(
+            source::read(&native, reference, 0, 1).unwrap_err(),
+            "source read cut expired"
+        );
+        native.effective_model.configured.request_params.clear();
+        native.source_revisions.clear();
+        for index in 0..33 {
+            native
+                .source_revisions
+                .insert(std::path::PathBuf::from(format!("r{index}")), "v".into());
+        }
+        assert!(serde_json::to_vec(&native.source_revisions).unwrap().len() < 16_384);
+        let small_many = source::bounded(&native).unwrap();
+        assert!(small_many.inline.is_none());
+        let field = small_many
+            .fields
+            .iter()
+            .find(|field| field.name == source::EffectiveFieldName::SourceRevisions)
+            .unwrap();
+        assert!(field.value.is_none());
+        assert!(field.reference.as_ref().unwrap().byte_length < 16_384);
+        let page = source::page(
+            &native,
+            &small_many.revision,
+            source::EffectiveFieldName::SourceRevisions,
+            0,
+            32,
+        )
+        .unwrap();
+        assert_eq!(page.items.len(), 32);
+        assert_eq!(page.next_offset, Some(32));
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t08_t13_t15_editor_and_origin_history_use_finite_native_ledger_identity() {
+    bounded(async {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::local_runtime::session::LineageSide;
+        use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+        use crate::runtime::identity::MessageId;
+        let fixture = Fixture::new().await;
+        let source = &fixture.sessions[0];
+        let controller = fixture.manager.session_controller();
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(source.active_conversation_id.clone(), &access.database_path).unwrap();
+        let original_id = MessageId::new("original-id:".to_owned() + &"水".repeat(400_000));
+        let text = "🙂water\n".repeat(40_000);
+        store.append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: original_id.clone(), source:UserSource::Human, kind:InboundKind::Message, timestamp:None,
+            content:vec![UserContentBlock::Text(crate::message::TextBlock { text:text.clone() })],
+        })).unwrap();
+        let header = store.message_header(&original_id).unwrap().unwrap();
+        let locator = CanonicalContentLocator::ByLedgerPosition { position:header.ledger_position.unwrap() };
+        let revision = store.load_head().unwrap().revision;
+        drop(store);
+        drop(access);
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let receipt = call(&connection, 46_700, Method::SessionFork {
+            session_id:source.id.clone(), node_id:None, surface_revision:revision,
+            boundary:Some(locator.clone()), side:LineageSide::Before,
+        }).await;
+        assert!(serde_json::to_vec(&receipt).unwrap().len() < 8192);
+        let MethodResult::SessionTransition { session, editor:Some(editor), .. } = receipt else { panic!("bounded fork receipt"); };
+        let (_retained, origin) = controller.acquire_read_origin(&session.id, &session.active_node).await.unwrap();
+        assert_eq!(origin.source_locator, locator);
+        let recovered = read_editor(&connection, editor.clone()).await;
+        assert_eq!(recovered, vec![crate::local_runtime::session::uploads::UserInputBlock::Text(crate::message::TextBlock {text})]);
+        let MethodResult::SessionHistory { window, .. } = call(&connection, 46_701, Method::SessionNodeOriginHistory {
+            session_id:session.id.clone(), node_id:session.active_node.clone(), limit:32,
+        }).await else { panic!("finite original history anchor"); };
+        assert!(serde_json::to_vec(&window).unwrap().len() <= 786_432);
+        assert!(window.page.content.iter().chain(window.page.deferred_entries.iter().flat_map(|entry| entry.content.iter())).any(|entry| matches!(&entry.content_ref.source, crate::runtime_client::content::ContentSource::CanonicalMessageBlock { locator: found, .. } if found == &locator)));
+        let mut foreign = editor;
+        foreign.source_node = session.active_node;
+        rejected(&connection, Method::SessionEditorRead { locator:foreign, block_index:0, offset:0, max_bytes:1 }).await;
+        fixture.close().await;
+    }).await;
+}
+
+async fn retained_huge_root(fixture: &Fixture) -> (crate::runtime::identity::MessageId, u64) {
+    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use crate::runtime::identity::MessageId;
+    let session = &fixture.sessions[0];
+    let access = fixture
+        .manager
+        .session_controller()
+        .acquire_session(&session.id, None)
+        .await
+        .unwrap();
+    let store = SqliteConversationStore::open(
+        session.active_conversation_id.clone(),
+        &access.database_path,
+    )
+    .unwrap();
+    let text = "水\n".repeat(600_000);
+    let readable_end = u64::try_from(text.len()).unwrap();
+    let message_id = MessageId::new("retained-huge-root");
+    store
+        .append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: message_id.clone(),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+            content: vec![UserContentBlock::Text(crate::message::TextBlock { text })],
+        }))
+        .unwrap();
+    drop(store);
+    drop(access);
+    (message_id, readable_end)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admission() {
+    bounded(async {
+        use std::task::Poll;
+        let fixture = Fixture::new().await;
+        let (message_id, readable_end) = retained_huge_root(&fixture).await;
+        let session = &fixture.sessions[0];
+        let connection = AppServerConnection::new(fixture.host.clone());
+        initialize(&connection).await;
+        let reply = connection
+            .reply(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(46_710),
+                call: Method::SessionAttach {
+                    session_id: session.id.clone(),
+                    node_id: None,
+                },
+            })
+            .await;
+        let mut lost = crate::app_server::transport::Outbound::reply(reply).unwrap();
+        let mut receipt_bytes = 0;
+        // Attach is committed, but the physical attempt accepts no bytes.
+        assert!(matches!(
+            lost.poll_hand_off::<()>(|record| {
+                receipt_bytes = record.len();
+                Poll::Pending
+            }),
+            Poll::Pending
+        ));
+        assert!(receipt_bytes > 0 && receipt_bytes < 4096);
+        drop(lost);
+        let MethodResult::AttachmentStatus {
+            target: Some(target),
+            ..
+        } = call(
+            &connection,
+            46_711,
+            Method::SessionAttachmentStatus {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("committed attachment remains resolvable");
+        };
+        assert_eq!(target.conversation_id, session.active_conversation_id);
+        assert_eq!(
+            rejected(
+                &connection,
+                Method::SessionAttach {
+                    session_id: session.id.clone(),
+                    node_id: None,
+                }
+            )
+            .await,
+            ErrorData::ControllerInUse
+        );
+        let MethodResult::Checkpoint { checkpoint } = call(
+            &connection,
+            46_712,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("independent bounded checkpoint");
+        };
+        assert!(serde_json::to_vec(&checkpoint).unwrap().len() <= 786_432);
+        let descriptor = checkpoint
+            .snapshot
+            .message_descriptors
+            .iter()
+            .find(|descriptor| descriptor.identity.as_ref() == Some(&message_id))
+            .unwrap();
+        assert!(descriptor.content.iter().any(|binding|
+            binding.deferred && binding.content_ref.readable_end == readable_end));
+        assert!(
+            fixture.provider.request_bodies().is_empty(),
+            "reconciliation starts no model work"
+        );
+        call(&connection, 46_713, Method::SessionDetach { target }).await;
+        assert!(matches!(
+            call(
+                &connection,
+                46_714,
+                Method::SessionAttachmentStatus {
+                    session_id: session.id.clone(),
+                }
+            )
+            .await,
+            MethodResult::AttachmentStatus { target: None, .. }
+        ));
+        connection.close();
+        fixture.close().await;
+    })
+    .await;
 }

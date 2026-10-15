@@ -24,7 +24,7 @@ export { plainText as plain };
 
 /** A presentation state built from one snapshot. */
 export function stateOf(
-  overrides: Partial<RuntimeClientSnapshot> = {},
+  overrides: Parameters<typeof snapshot>[0] = {},
 ): PresentationState {
   return replaceFromSnapshot(snapshot(overrides), runtimeCursor(0));
 }

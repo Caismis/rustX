@@ -17,6 +17,7 @@ import { TUI, Editor } from "@earendil-works/pi-tui";
 
 import { plainText, plainWidth } from "../src/ui/theme.ts";
 import { stateOf } from "./support/render.ts";
+import { harness } from "./support/app-server-harness.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
 import {
   AppServerRequestError,
@@ -28,13 +29,18 @@ import { TransientFeedbackSurface } from "../src/ui/components/transient-feedbac
 import { DeliverySelector } from "../src/ui/components/delivery-selector.ts";
 import type { AppServerHost } from "../src/app-server/host.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
+import type { SourceRepairObservation } from "../src/presentation/source-repairs.ts";
+import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts";
 import type {
   AttachmentTarget,
   SessionDeleteResult,
   SessionSnapshot,
   SessionSummaryView,
+  SourceTarget,
 } from "../src/protocol/app-server.ts";
 import {
+  checkpoint,
+  snapshot,
   attemptView,
   approvalInteraction,
   childApprovalInteraction,
@@ -47,6 +53,10 @@ import {
 } from "./support/fixtures.ts";
 
 const SESSION_SETTINGS = { cwd: "/work/project" };
+function observedChild(child:ReturnType<typeof subagent>):import('../../protocol/app-server/v48.ts').AgentObservation {
+  return {type:'checkpoint',agent_id:child.agent_id,conversation_id:child.child_conversation_id,activation_id:child.activation_id,source:'durable_only',cursor:null,checkpoint:checkpoint(snapshot({conversation_id:child.child_conversation_id}))};
+}
+
 
 function targetFor(sessionId: string): AttachmentTarget {
   return {
@@ -83,6 +93,7 @@ function fakeSession(
     target: targetFor(sessionId),
     released: false,
     serverClosed: false,
+    controlReady: true,
     resyncCount: 0,
     onState: (listener: (nextState: unknown) => void) => {
       stateListeners.add(listener);
@@ -123,9 +134,20 @@ interface FakeHostOptions {
   onClose?: (listener: (error: TransportClosedError) => void) => void;
   /** Answers `host.attach` for a focus change. */
   attach?: (sessionId: string, nodeId?: string) => Promise<AppServerSession>;
+  inheritModelSelectionUncertainty?: (previous: AppServerHost) => void;
   /** Answers `host.readSession` for the footer. */
   readSession?: (sessionId: string) => Promise<SessionSnapshot>;
   exitCode?: number;
+  /** The authority this connection negotiated in `initialize`. */
+  authorityId?: string;
+  /** Source repair observations the host already holds. */
+  sourceRepairs?: SourceRepairObservation[];
+  /** Installed so a test can publish source repair observations. The
+   * returned unsubscribe keeps the listener: a late notice already in
+   * flight from this connection can still arrive. */
+  onSourceRepair?: (listener: (observation: SourceRepairObservation) => void) => void;
+  /** Answers `host.readSourceRepairs`, the authoritative source read. */
+  readSourceRepairs?: (target: SourceTarget) => Promise<unknown>;
 }
 
 function fakeHost(options: FakeHostOptions = {}): AppServerHost {
@@ -133,6 +155,7 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
   const log = options.log ?? [];
   const host = {
     ownership,
+    authorityId: options.authorityId ?? "fixture-app-server-authority",
     client: {
       closed: undefined,
       pendingCount: 0,
@@ -149,6 +172,7 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
       describeTransport: () => "fake",
     },
     attached: [],
+    inheritModelSelectionUncertainty: options.inheritModelSelectionUncertainty ?? (() => {}),
     describe: () => (ownership === "owned_child" ? "owned child" : "external"),
     stderrTail: () => ({ text: "", truncatedBytes: 0 }),
     childExit: undefined,
@@ -157,6 +181,12 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
       (async (sessionId: string) => fakeSession(undefined, sessionId)),
     attachment: () => undefined,
     detach: async () => {},
+    sourceRepairs: () => options.sourceRepairs ?? [],
+    onSourceRepair: (listener: (observation: SourceRepairObservation) => void) => {
+      options.onSourceRepair?.(listener);
+      return () => {};
+    },
+    readSourceRepairs: options.readSourceRepairs ?? (async () => { throw new Error("this fake host has no authoritative source read"); }),
     readSession:
       options.readSession ?? (async () => sessionView()),
     listSessions: async () => ({ sessions: [] as SessionSummaryView[] }),
@@ -456,7 +486,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: "Final report", mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     for (const access of [false, true]) {
       const session = fakeSession() as unknown as Record<string, unknown>;
       const page = deferred<void>();
@@ -509,7 +539,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     const bytes = Buffer.from("# 报告\r\n\u0000\xff", "latin1");
     const selectorPrototype = DeliverySelector.prototype as unknown as {
       settle: (operation: number, level: "info" | "error", text: string) => void;
@@ -570,7 +600,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     const body = { file, data: Buffer.from("bytes\r\n").toString("base64") };
     for (const retirement of ["escape", "replacement", "snapshot", "disconnect", "quit"] as const) {
       const dir = mkdtempSync(join(tmpdir(), "rustx-files-retire-"));
@@ -652,7 +682,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     const location = { file, path, device: leaf.dev.toString(), inode: leaf.ino.toString() };
     const transientPrototype = TransientFeedbackSurface.prototype as unknown as {
       replace: (feedback: { level: "info" | "error"; text: string }) => void;
@@ -1813,6 +1843,7 @@ describe("RustxTuiApp lifecycle", () => {
     );
     const api = session as unknown as {
       modelCatalog: () => Promise<{ models: ReturnType<typeof catalogModel>[] }>;
+      modelGet: () => Promise<ReturnType<typeof sessionModel>>;
       modelSet: (config: { model: string }) => Promise<ReturnType<typeof sessionModel>>;
     };
     api.modelCatalog = async () => {
@@ -1826,6 +1857,7 @@ describe("RustxTuiApp lifecycle", () => {
       selectedModel = config.model;
       return sessionModel(config.model);
     };
+    api.modelGet = async () => sessionModel("alpha/model-a");
 
     const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
@@ -2250,8 +2282,13 @@ it("remote recovery installs a fresh attachment and fences old callbacks without
   next.submitInbound = async () => { submissions++; return { messageId: "new", sequence: "2" }; };
   const first = fakeHost({ ownership: "external", onClose: (listener) => { close = listener; } });
   let attachments = 0;
+  let inheritedUncertainty = false;
   const second = fakeHost({ ownership: "external", attach: async (id) => {
+    assert.equal(inheritedUncertainty, true, "unanswered-selection evidence transfers before new attachment");
     assert.equal(id, old.sessionId); attachments++; return next;
+  }, inheritModelSelectionUncertainty: previous => {
+    assert.equal(previous, first);
+    inheritedUncertainty = true;
   } });
   let connects = 0;
   const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS,
@@ -2277,6 +2314,422 @@ it("remote recovery installs a fresh attachment and fences old callbacks without
   assert.equal(submissions, 2, "new input uses the replacement attachment");
   await app.quit();
   await running;
+});
+
+/** One source repair observation at ledger `sequence`. */
+function repairObservation(id: string | undefined, target: SourceTarget, sequence: string, status: "repaired" | "unresolved" = "repaired"): SourceRepairObservation {
+  return { target, sequence, receipt: id === undefined ? undefined : {
+    id, target, status, before_revision: "sha256:before", after_revision: status === "repaired" ? "sha256:after" : null, changed_count: 1,
+    changes: [{ kind: "updated_schema_version", from: 8, to: 10 }], truncated: false, backup_available: status === "repaired",
+    diagnostic: status === "repaired" ? null : "invalid value",
+  } };
+}
+
+const REPAIR_WORKSPACE = { kind: "workspace", directory: "/srv/project" } as const;
+
+/**
+ * A TUI whose App Server connections are scripted fakes: the first is `a1`,
+ * and each reconnect takes the next of `later`. Every authoritative read is
+ * held until the test settles it; settling publishes the read's observations
+ * through that connection, as a real host folds them in.
+ */
+function repairConnections(first: { authorityId: string; sourceRepairs: SourceRepairObservation[] }, later: { name: string; authorityId: string; sourceRepairs: SourceRepairObservation[] }[]) {
+  let close!: (error: TransportClosedError) => void;
+  const publish = new Map<string, (observation: SourceRepairObservation) => void>();
+  const reads: { host: string; target: SourceTarget; settle: (observations: SourceRepairObservation[]) => void; fail: (error: Error) => void }[] = [];
+  let inFlight = 0, maxInFlight = 0;
+  const connection = (name: string, authorityId: string, sourceRepairs: SourceRepairObservation[]) => fakeHost({
+    ownership: "external", authorityId, sourceRepairs,
+    onClose: listener => { close = listener; },
+    onSourceRepair: listener => { publish.set(name, listener); },
+    readSourceRepairs: target => new Promise((resolve, reject) => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      reads.push({ host: name, target,
+        settle: observations => { inFlight--; for (const observation of observations) publish.get(name)!(observation); resolve(undefined); },
+        fail: error => { inFlight--; reject(error); } });
+    }),
+  });
+  const hosts = later.map(({ name, authorityId, sourceRepairs }) => connection(name, authorityId, sourceRepairs));
+  let status: SourceRepairStatus | undefined;
+  const announced: string[] = [];
+  const original = { adopt: SourceRepairStatus.prototype.adopt, observe: SourceRepairStatus.prototype.observe };
+  SourceRepairStatus.prototype.adopt = function(authorityId) { status = this; return original.adopt.call(this, authorityId); };
+  SourceRepairStatus.prototype.observe = function(authorityId, observation) {
+    const changed = original.observe.call(this, authorityId, observation);
+    if (changed && observation.receipt) announced.push(`${authorityId}:${observation.receipt.id}`);
+    return changed;
+  };
+  const app = new RustxTuiApp({ host: connection("a1", first.authorityId, first.sourceRepairs), session: fakeSession(), sessionSettings: SESSION_SETTINGS,
+    reconnect: async () => hosts.shift()! });
+  const running = app.run();
+  return {
+    app, publish, reads, announced, hosts,
+    get maxInFlight() { return maxInFlight; },
+    get status() { return status!; },
+    line: () => plainText(status!.render(400).join(" ")),
+    reconnect: async () => {
+      close(new TransportClosedError("input_eof", "lost connection"));
+      await waitForApplicationContinuation();
+      await waitForApplicationContinuation();
+    },
+    finish: async () => {
+      SourceRepairStatus.prototype.adopt = original.adopt;
+      SourceRepairStatus.prototype.observe = original.observe;
+      await app.quit(); await running;
+    },
+  };
+}
+
+it("repair status is scoped to the App Server authority across reconnects and replacement", async () => {
+  const userRepair = repairObservation("receipt-user-1", { kind: "user" }, "1");
+  const workspaceRepair = repairObservation("receipt-workspace-1", REPAIR_WORKSPACE, "2", "unresolved");
+  // a1 and a2 reach the same server process; b replaced it at the endpoint.
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [userRepair, workspaceRepair] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [userRepair] }, { name: "b", authorityId: "authority-b", sourceRepairs: [] }]);
+  try {
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.announced, ["authority-a:receipt-user-1", "authority-a:receipt-workspace-1"]);
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+    // The same authority again: nothing is announced twice, and the pending
+    // Workspace warning is reread rather than trusted.
+    await t.reconnect();
+    assert.equal(t.hosts.length, 1);
+    assert.deepEqual(t.reads.map(read => [read.host, read.target]), [["a2", REPAIR_WORKSPACE]]);
+    t.reads[0]!.settle([repairObservation("receipt-user-1", { kind: "user" }, "4"), repairObservation("receipt-workspace-1", REPAIR_WORKSPACE, "4", "unresolved")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.announced, ["authority-a:receipt-user-1", "authority-a:receipt-workspace-1"]);
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+    // A late notice of the previous connection changes nothing; the current
+    // connection's newer withdrawal does.
+    t.publish.get("a1")!(repairObservation(undefined, REPAIR_WORKSPACE, "5"));
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+    t.publish.get("a2")!(repairObservation(undefined, REPAIR_WORKSPACE, "6"));
+    assert.doesNotMatch(t.line(), /Workspace/);
+    assert.equal(t.status.visible, true, "the User receipt is still unacknowledged");
+    // A replacement process holding no receipt retires the old line, and
+    // rereads nothing of it.
+    await t.reconnect();
+    assert.equal(t.hosts.length, 0);
+    assert.equal(t.status.visible, false);
+    assert.deepEqual(t.status.render(120), []);
+    assert.equal(t.reads.length, 1);
+    t.publish.get("a2")!(repairObservation("late", { kind: "user" }, "7"));
+    assert.equal(t.status.visible, false, "a replaced connection never reaches the new line");
+    // Its own receipt with an equal id is a new announcement.
+    t.publish.get("b")!(repairObservation("receipt-user-1", { kind: "user" }, "1"));
+    assert.deepEqual(t.announced.at(-1), "authority-b:receipt-user-1");
+    assert.match(t.line(), /Auto-repaired 1 entry in User/);
+  } finally { await t.finish(); }
+});
+
+it("REC-01 a withdrawal while away retires the warning through the reconnect read", async () => {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
+    // The returning connection is told nothing about the Workspace until it
+    // addresses it again: only the User is observed at once.
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }]);
+  try {
+    await waitForApplicationContinuation();
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+    await t.reconnect();
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/, "a missing notice proves nothing");
+    assert.deepEqual(t.reads.map(read => read.target), [REPAIR_WORKSPACE]);
+    t.reads[0]!.settle([repairObservation(undefined, { kind: "user" }, "9"), repairObservation(undefined, REPAIR_WORKSPACE, "9")]);
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, false);
+    assert.deepEqual(t.status.render(120), []);
+  } finally { await t.finish(); }
+});
+
+it("REC-02 an unchanged receipt stays pending and is not announced twice", async () => {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] }]);
+  try {
+    await waitForApplicationContinuation();
+    await t.reconnect();
+    t.reads[0]!.settle([repairObservation("w1", REPAIR_WORKSPACE, "8", "unresolved")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.announced, ["authority-a:w1"]);
+    assert.equal(t.status.visible, true);
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+  } finally { await t.finish(); }
+});
+
+it("REC-03 an acknowledged receipt stays acknowledged and needs no reread", async () => {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] }]);
+  try {
+    await waitForApplicationContinuation();
+    t.status.acknowledge();
+    await t.reconnect();
+    assert.deepEqual(t.reads, [], "nothing is presented, so nothing is reread");
+    t.publish.get("a2")!(repairObservation("w1", REPAIR_WORKSPACE, "8", "unresolved"));
+    assert.equal(t.status.visible, false);
+    assert.deepEqual(t.announced, ["authority-a:w1"]);
+  } finally { await t.finish(); }
+});
+
+it("REC-04 a receipt replaced while away is presented instead of the old one", async () => {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }]);
+  try {
+    await waitForApplicationContinuation();
+    await t.reconnect();
+    t.reads[0]!.settle([repairObservation("w2", REPAIR_WORKSPACE, "7")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.announced, ["authority-a:w1", "authority-a:w2"]);
+    assert.doesNotMatch(t.line(), /could not be auto-repaired/);
+    assert.match(t.line(), /Auto-repaired 1 entry in Workspace/);
+  } finally { await t.finish(); }
+});
+
+it("REC-06/REC-07 a replacement authority retires the line and a replaced connection's held read never reaches it", async () => {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }, { name: "b", authorityId: "authority-b", sourceRepairs: [repairObservation("b1", { kind: "user" }, "1")] }]);
+  try {
+    await waitForApplicationContinuation();
+    await t.reconnect();
+    const held = t.reads[0]!;
+    // Replaced while its read is held; b establishes its own observations.
+    await t.reconnect();
+    assert.match(t.line(), /Auto-repaired 1 entry in User/);
+    held.settle([repairObservation("w1", REPAIR_WORKSPACE, "9", "unresolved"), repairObservation("a-user", { kind: "user" }, "9")]);
+    await waitForApplicationContinuation();
+    assert.doesNotMatch(t.line(), /Workspace/);
+    assert.deepEqual(t.announced, ["authority-a:w1", "authority-b:b1"]);
+    assert.equal(t.reads.length, 1, "b rereads nothing of a's line");
+  } finally { await t.finish(); }
+});
+
+it("REC-07 a held read of a replaced connection to the same authority is fenced by its host", async () => {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }, { name: "a3", authorityId: "authority-a", sourceRepairs: [] }]);
+  try {
+    await waitForApplicationContinuation();
+    await t.reconnect();
+    const held = t.reads[0]!;
+    // a3 reaches the same authority; its sequences are comparable, so only
+    // the host fence keeps a2's answer out.
+    await t.reconnect();
+    assert.deepEqual(t.reads.map(read => read.host), ["a2", "a3"]);
+    held.settle([repairObservation(undefined, REPAIR_WORKSPACE, "99")]);
+    await waitForApplicationContinuation();
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+    t.reads[1]!.settle([repairObservation(undefined, REPAIR_WORKSPACE, "9")]);
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, false);
+  } finally { await t.finish(); }
+});
+
+it("REC-05 a failed reconnect read is not a withdrawal and leaves the client usable", async () => {
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => rejections.push(reason);
+  process.on("unhandledRejection", onRejection);
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved"), repairObservation("w2", { kind: "workspace", directory: "/srv/other" }, "4", "unresolved")] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }]);
+  try {
+    await waitForApplicationContinuation();
+    await t.reconnect();
+    t.reads[0]!.fail(new Error("the read was refused"));
+    await waitForApplicationContinuation();
+    // The next source is still reread; the failed one keeps its entry.
+    assert.equal(t.reads.length, 2);
+    t.reads[1]!.settle([repairObservation(undefined, t.reads[1]!.target, "9")]);
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, true);
+    assert.deepEqual(t.status.pendingSources(), [t.reads[0]!.target]);
+    process.stdin.emit("data", "x");
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, false, "the client still takes input and acknowledges");
+    assert.deepEqual(rejections, []);
+  } finally { process.off("unhandledRejection", onRejection); await t.finish(); }
+});
+
+it("REC-09 reconnect rereads are bounded by the line's finite sources, one at a time, after source churn", async () => {
+  const many = Array.from({ length: 70 }, (_, index) => repairObservation(`w${index}`, { kind: "workspace", directory: `/srv/w${index}` }, String(index + 2), "unresolved"));
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("u", { kind: "user" }, "1", "unresolved"), ...many] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }]);
+  try {
+    await waitForApplicationContinuation();
+    const pending = t.status.pendingSources();
+    assert.equal(pending.length, 65);
+    assert.ok(pending.some(target => target.kind === "user"), "the User is never crowded out");
+    assert.ok(!pending.some(target => target.kind === "workspace" && target.directory === "/srv/w0"));
+    await t.reconnect();
+    while (t.reads.length < 64) {
+      assert.equal(t.maxInFlight, 1);
+      t.reads.at(-1)!.settle([]);
+      await waitForApplicationContinuation();
+    }
+    t.reads.at(-1)!.settle([]);
+    await waitForApplicationContinuation();
+    // Each Workspace read rereads the User too: 64 reads, never 65 or more.
+    assert.equal(t.reads.length, 64);
+    assert.ok(t.reads.every(read => read.target.kind === "workspace"));
+    assert.equal(t.maxInFlight, 1);
+  } finally { await t.finish(); }
+});
+
+it("REC-08 quitting during a reconnect read leaves the retired line untouched", async () => {
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => rejections.push(reason);
+  process.on("unhandledRejection", onRejection);
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [repairObservation("w1", REPAIR_WORKSPACE, "3", "unresolved")] },
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }]);
+  let finished = false;
+  try {
+    await waitForApplicationContinuation();
+    await t.reconnect();
+    const held = t.reads[0]!;
+    await t.finish(); finished = true;
+    const before = t.status.pendingSources();
+    held.settle([repairObservation(undefined, REPAIR_WORKSPACE, "9")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.status.pendingSources(), before);
+    assert.deepEqual(rejections, []);
+  } finally { process.off("unhandledRejection", onRejection); if (!finished) await t.finish(); }
+});
+
+const REPAIR_USER = { kind: "user" } as const;
+
+/** A pending User warning and pending Workspace warnings, reconnected to
+ * the same authority, which announces nothing of them again. */
+async function pendingUserAndWorkspaces(directories: string[], later = [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] as SourceRepairObservation[] }]) {
+  const t = repairConnections({ authorityId: "authority-a", sourceRepairs: [
+    repairObservation("u1", REPAIR_USER, "1", "unresolved"),
+    ...directories.map((directory, index) => repairObservation(`w${index}`, { kind: "workspace", directory }, String(index + 2), "unresolved")),
+  ] }, later);
+  await waitForApplicationContinuation();
+  assert.equal(t.status.pendingSources().length, directories.length + 1);
+  await t.reconnect();
+  return t;
+}
+
+it("ISOLATE-01 a Workspace that cannot be read never keeps the User from its own reconcile read", async () => {
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory]);
+  try {
+    assert.deepEqual(t.reads.map(read => read.target), [REPAIR_WORKSPACE]);
+    t.reads[0]!.fail(new Error("the Workspace is no longer a valid source"));
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.reads.map(read => read.target), [REPAIR_WORKSPACE, REPAIR_USER]);
+    t.reads[1]!.settle([repairObservation(undefined, REPAIR_USER, "9")]);
+    await waitForApplicationContinuation();
+    // The User warning is gone; the Workspace's state is unproven and stays.
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_WORKSPACE]);
+    assert.doesNotMatch(t.line(), /User/);
+    assert.match(t.line(), /Workspace rustx\.toml could not be auto-repaired/);
+  } finally { await t.finish(); }
+});
+
+it("ISOLATE-02 a successful Workspace read reconciles the User with no second read", async () => {
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory]);
+  try {
+    t.reads[0]!.settle([repairObservation("u1", REPAIR_USER, "9", "unresolved"), repairObservation(undefined, REPAIR_WORKSPACE, "9")]);
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
+    assert.equal(t.reads.length, 1);
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER]);
+  } finally { await t.finish(); }
+});
+
+it("ISOLATE-03 several failed Workspace reads lead to exactly one User read, one at a time", async () => {
+  const directories = ["/srv/a", "/srv/b", "/srv/c"];
+  const t = await pendingUserAndWorkspaces(directories);
+  try {
+    for (const index of directories.keys()) {
+      assert.equal(t.reads.length, index + 1);
+      t.reads[index]!.fail(new Error("refused"));
+      await waitForApplicationContinuation();
+    }
+    assert.deepEqual(t.reads.map(read => read.target), [...directories.map(directory => ({ kind: "workspace", directory })), REPAIR_USER]);
+    t.reads[3]!.settle([repairObservation(undefined, REPAIR_USER, "9")]);
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
+    assert.equal(t.reads.length, 4);
+    assert.equal(t.maxInFlight, 1);
+    assert.equal(t.status.pendingSources().length, 3);
+    process.stdin.emit("data", "x");
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, false, "other controls stay usable");
+  } finally { await t.finish(); }
+});
+
+it("ISOLATE-04 a failed User read after failed Workspace reads clears nothing and fails nothing", async () => {
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => rejections.push(reason);
+  process.on("unhandledRejection", onRejection);
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory]);
+  try {
+    t.reads[0]!.fail(new Error("refused"));
+    await waitForApplicationContinuation();
+    t.reads[1]!.fail(new Error("refused too"));
+    await waitForApplicationContinuation();
+    assert.equal(t.reads.length, 2);
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER, REPAIR_WORKSPACE]);
+    process.stdin.emit("data", "x");
+    await waitForApplicationContinuation();
+    assert.equal(t.status.visible, false, "the connection still takes input");
+    assert.deepEqual(rejections, []);
+  } finally { process.off("unhandledRejection", onRejection); await t.finish(); }
+});
+
+it("ISOLATE-05 a User fallback read retired by a replaced connection or a quit reaches nothing", async () => {
+  const t = await pendingUserAndWorkspaces([REPAIR_WORKSPACE.directory],
+    [{ name: "a2", authorityId: "authority-a", sourceRepairs: [] }, { name: "a3", authorityId: "authority-a", sourceRepairs: [] }]);
+  let finished = false;
+  try {
+    t.reads[0]!.fail(new Error("refused"));
+    await waitForApplicationContinuation();
+    const fallback = t.reads[1]!;
+    assert.deepEqual([fallback.host, fallback.target], ["a2", REPAIR_USER]);
+    // Replaced by a3 of the same authority while the fallback is held.
+    await t.reconnect();
+    assert.deepEqual(t.reads.map(read => read.host), ["a2", "a2", "a3"]);
+    fallback.settle([repairObservation(undefined, REPAIR_USER, "99")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER, REPAIR_WORKSPACE]);
+    // a3's own fallback is held, then the client quits.
+    t.reads[2]!.fail(new Error("refused"));
+    await waitForApplicationContinuation();
+    const quitFallback = t.reads[3]!;
+    assert.deepEqual([quitFallback.host, quitFallback.target], ["a3", REPAIR_USER]);
+    await t.finish(); finished = true;
+    quitFallback.settle([repairObservation(undefined, REPAIR_USER, "100")]);
+    await waitForApplicationContinuation();
+    assert.deepEqual(t.status.pendingSources(), [REPAIR_USER, REPAIR_WORKSPACE]);
+  } finally { if (!finished) await t.finish(); }
+});
+
+it("immediate automatic reconnect retains an outstanding model request's unknown outcome before new attachment", async t => {
+  const initial = snapshot({ model: sessionModel("alpha/model-a") });
+  const previous = await harness(initial);
+  const replacement = await harness(initial);
+  t.mock.method(previous.host, "readSession", async () => sessionView());
+  t.mock.method(replacement.host, "readSession", async () => sessionView());
+  const attachedWithUnknown = deferred<boolean>();
+  const attach = replacement.host.attach.bind(replacement.host);
+  t.mock.method(replacement.host, "attach", async (...args: Parameters<typeof attach>) => {
+    const session = await attach(...args);
+    attachedWithUnknown.resolve(session.modelSelectionOutcomeUnknown);
+    return session;
+  });
+  const app = new RustxTuiApp({ host: previous.host, session: previous.session, sessionSettings: SESSION_SETTINGS,
+    reconnect: async () => replacement.host });
+  try {
+    const uncertain = assert.rejects(previous.session.modelSet({ model: "beta/model-b" }), UncertainOutcomeError);
+    await previous.transport.log.awaitMethod("session/setModel");
+    previous.transport.fail("input_eof");
+    // The real close listener begins recovery synchronously. Do not await the
+    // modelSet catch before verifying the evidence seen by replacement attach.
+    assert.equal(await attachedWithUnknown.promise, true);
+    await uncertain;
+    assert.equal(replacement.session.state.sessionModel?.configured.model, "alpha/model-a");
+    assert.equal(replacement.session.modelSelectionOutcomeUnknown, true);
+    assert.equal(replacement.transport.log.count("session/setModel"), 0);
+    await waitForApplicationContinuation();
+  } finally {
+    await app.quit();
+    await replacement.host.shutdown();
+  }
 });
 
 it("quitting while remote recovery is pending closes the late connection", async () => {
@@ -2463,10 +2916,10 @@ it("remote recovery reconstructs selected child from replacement authority witho
   const child = subagent("researcher", "sha256:child");
   const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
   const next = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
-  const late = deferred<{ entries: [] }>();
+  const late = deferred<import('../../protocol/app-server/v48.ts').AgentObservation>();
   const reads: string[] = [];
-  Object.assign(old, { agentTranscriptPage: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
-  Object.assign(next, { agentTranscriptPage: async (id: string) => { reads.push(`new:${id}`); return { entries: [] }; } });
+  Object.assign(old, { observeAgent: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
+  Object.assign(next, { observeAgent: async (id: string) => { reads.push(`new:${id}`); return observedChild(child); } });
   let attachments = 0;
   const first = fakeHost({ ownership: "external", onClose: listener => { close = listener; } });
   const second = fakeHost({ ownership: "external", attach: async id => { assert.equal(id, old.sessionId); attachments++; return next; } });
@@ -2481,7 +2934,7 @@ it("remote recovery reconstructs selected child from replacement authority witho
     await waitForApplicationContinuation();
     assert.deepEqual(reads, [`old:${child.agent_id}`, `new:${child.agent_id}`]);
     assert.equal(attachments, 1);
-    late.resolve({ entries: [] }); await waitForApplicationContinuation();
+    late.resolve(observedChild(child)); await waitForApplicationContinuation();
     assert.equal(next.state.agents[0], child);
   } finally { await app.quit(); await running; }
 });
@@ -2490,10 +2943,10 @@ it("switching parent Session fences a child page while the old parent remains at
   const child = subagent("researcher", "sha256:child");
   const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
   const next = fakeSession(emptyPresentationState(sessionModel("beta/model-b")), "ses_e8de016f-bd70-782f-ad23-25e81df82550");
-  const late = deferred<{ entries: [] }>();
+  const late = deferred<import('../../protocol/app-server/v48.ts').AgentObservation>();
   const read = deferred<void>(); const attached = deferred<void>();
   let detached = 0;
-  Object.assign(old, { agentTranscriptPage: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });
+  Object.assign(old, { observeAgent: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });
   const app = appOver(old, fakeHost({
     attach: async () => { attached.resolve(); return next; },
     catalog: { createSession: async () => ({ session: sessionView({ id: next.sessionId }) }) },
@@ -2504,7 +2957,7 @@ it("switching parent Session fences a child page while the old parent remains at
     process.stdin.emit("data", "\r"); await read.promise;
     process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
     process.stdin.emit("data", "/new\r"); await attached.promise; await waitForApplicationContinuation();
-    renders.start(); late.resolve({ entries: [] }); await waitForApplicationContinuation();
+    renders.start(); late.resolve(observedChild(child)); await waitForApplicationContinuation();
     assert.equal(renders.count(), 0, "the old child cannot repaint the new parent");
     assert.equal(detached, 0, "focus switching does not need to detach the old runtime to fence reads");
   } finally { renders.restore(); await app.quit(); await running; }

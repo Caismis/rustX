@@ -18,13 +18,26 @@ struct ChildDelivery {
     store: crate::durable::SqliteConversationStore,
     message: MessageId,
 }
+mod selected_source {
+    use super::*;
+    include!("child_selected_delivery.rs");
+}
 impl ChildDelivery {
     async fn new() -> Self {
+        Self::with_delivery(true).await
+    }
+    async fn with_delivery(delivery: bool) -> Self {
+        eprintln!("ChildDelivery setup: native Fixture start");
         let fixture = Fixture::with_tool(Some("delivery-child")).await;
+        eprintln!("ChildDelivery setup: native Fixture ready");
         let workspace = &fixture.workspaces[0];
         let profile = workspace.join(".agents/agents/reviewer.toml");
         std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
-        std::fs::write(&profile, "description='Delivery child'\ninstructions='Inspect native delivery'\n").unwrap();
+        std::fs::write(
+            &profile,
+            "description='Delivery child'\ninstructions='Inspect native delivery'\n",
+        )
+        .unwrap();
         std::fs::write(
             workspace.join("rustx.toml"),
             "[agent]\nagents=['reviewer']\n",
@@ -35,7 +48,10 @@ impl ChildDelivery {
             tokio_util::sync::CancellationToken::new(),
         );
         initialize(&connection).await;
+        eprintln!("ChildDelivery setup: initialized; attach start");
         let target = attach(&connection, &fixture, 0).await;
+        eprintln!("ChildDelivery setup: attached; TurnStart start");
+        let completion = AttemptCompletion::capture(&fixture, &target);
         fixture.gates[0].release();
         call(
             &connection,
@@ -46,10 +62,13 @@ impl ChildDelivery {
             },
         )
         .await;
+        eprintln!("ChildDelivery setup: TurnStart admitted; actual Child provider gate wait");
         fixture.gates[1].wait_entered().await;
+        eprintln!("ChildDelivery setup: actual Child provider gate held");
         // The child is physically parked; the parent's unrelated continuation
         // must settle before file reads assert that no model request is created.
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
+        eprintln!("ChildDelivery setup: exact parent settlement observed");
         let runtime = fixture
             .manager
             .configuration_runtime(&fixture.sessions[0].id)
@@ -68,11 +87,8 @@ impl ChildDelivery {
                 .join("conversation.sqlite"),
         )
         .unwrap();
-        std::fs::write(
-            workspace.join("child-report.md"),
-            DELIVERED,
-        )
-        .unwrap();
+        eprintln!("ChildDelivery setup: native Child Store opened");
+        std::fs::write(workspace.join("child-report.md"), DELIVERED).unwrap();
         let file = crate::tools::session_files::declare(
             &workspace,
             store.conversation_id(),
@@ -80,7 +96,11 @@ impl ChildDelivery {
             None,
         )
         .unwrap();
-        let message = commit_delivery(&store, "child-present", file);
+        let message = if delivery {
+            commit_delivery(&store, "child-present", file)
+        } else {
+            MessageId::new("unused-delivery-fixture")
+        };
         Self {
             fixture,
             connection,
@@ -96,7 +116,9 @@ impl ChildDelivery {
             target: self.target.clone(),
             source: crate::app_server::product_host::ReadSource::SessionFile {
                 agent_id: Some(self.agent.clone()),
-                message_id: self.message.clone(),
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: self.message.clone(),
+                },
                 delivery_index: 0,
             },
             roots: vec![self.fixture.workspaces[0].clone()],
@@ -109,7 +131,9 @@ impl ChildDelivery {
             call: Method::AgentDeliveryRead {
                 target: self.target.clone(),
                 agent_id: self.agent.clone(),
-                message_id: self.message.clone(),
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: self.message.clone(),
+                },
                 delivery_index: 0,
             },
         }
@@ -144,6 +168,9 @@ impl ChildDelivery {
         self.fixture.close().await;
     }
 }
+
+#[path = "child_observation.rs"]
+mod bounded_observation;
 fn commit_delivery(
     store: &crate::durable::SqliteConversationStore,
     id: &str,
@@ -158,6 +185,8 @@ fn commit_delivery(
         arguments: serde_json::json!({"files":[{"path":file.path}]}),
     };
     let event = |suffix: &str, event| crate::events::types::RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: 1,
         event_id: crate::runtime::identity::EventId::new(format!("{id}-{suffix}")),
         sequence: 0,
@@ -253,10 +282,12 @@ async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
         }
         assert_eq!(host.rejected(wrong_index).await, unavailable());
         let mut wrong_message = child.host_read();
-        if let crate::app_server::product_host::ReadSource::SessionFile { message_id, .. } =
+        if let crate::app_server::product_host::ReadSource::SessionFile { locator, .. } =
             &mut wrong_message.source
         {
-            *message_id = MessageId::new("parent-or-other-child");
+            *locator = crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                message_id: MessageId::new("parent-or-other-child"),
+            };
         }
         assert_eq!(host.rejected(wrong_message).await, unavailable());
         let mut file = crate::tools::session_files::declare(
@@ -275,10 +306,12 @@ async fn child_delivery_shared_owner_and_product_host_registration_are_exact() {
             before.3,
         );
         let mut read = child.host_read();
-        if let crate::app_server::product_host::ReadSource::SessionFile { message_id, .. } =
+        if let crate::app_server::product_host::ReadSource::SessionFile { locator, .. } =
             &mut read.source
         {
-            *message_id = wrong_scope;
+            *locator = crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                message_id: wrong_scope,
+            };
         }
         assert_eq!(host.rejected(read).await, unavailable());
         std::fs::remove_file(child.workspace.join("child-report.md")).unwrap();
@@ -305,7 +338,10 @@ async fn child_delivery_native_and_product_host_reads_use_the_same_frozen_root()
         let child = ChildDelivery::new().await;
         let host = TrustedFileHost::new(&child.fixture).await;
         let before = child.evidence();
-        assert_eq!(delivered_bytes(&host.response(child.host_read()).await), DELIVERED);
+        assert_eq!(
+            delivered_bytes(&host.response(child.host_read()).await),
+            DELIVERED
+        );
         let mut unrelated_only = child.host_read();
         unrelated_only.roots = vec![child.fixture.workspaces[1].clone()];
         assert_eq!(host.rejected(unrelated_only).await, unauthorized());
@@ -472,3 +508,6 @@ async fn child_delivery_mapping_change_and_root_replacement_cannot_retarget_a_re
     }))
     .await;
 }
+
+#[path = "control_intent.rs"]
+mod control_intent;

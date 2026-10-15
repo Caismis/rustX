@@ -2,8 +2,9 @@
 //!
 //! Mutations and revision installation commit under this leaf mutex. Readers
 //! copy one coherent cut; wakeups carry no state and run after unlocking.
-//! The client may coalesce cuts, but must invalidate replay when revisions
-//! were skipped. Workflow revision is neither a journal sequence nor a cursor.
+//! Complete replacement cuts may coalesce native revisions without creating
+//! gaps in Runtime replay. Workflow revision is neither a Journal sequence nor
+//! a Runtime cursor.
 
 use std::sync::{Arc, Mutex};
 
@@ -134,7 +135,7 @@ impl WorkflowInstanceView {
     }
 }
 
-type PublicationObserver = Arc<dyn Fn(Vec<WorkflowSnapshot>, u64) + Send + Sync>;
+type PublicationObserver = Arc<dyn Fn(Vec<Arc<WorkflowSnapshot>>, u64) + Send + Sync>;
 struct PublicationDelivery {
     observer: PublicationObserver,
     revision: WorkflowRevision,
@@ -155,8 +156,8 @@ impl std::fmt::Debug for WorkflowReadModel {
 
 #[derive(Debug, Default)]
 struct NativeReadState {
-    current: WorkflowSnapshot,
-    cuts: std::collections::VecDeque<(WorkflowSnapshot, usize)>,
+    current: Arc<WorkflowSnapshot>,
+    cuts: std::collections::VecDeque<(Arc<WorkflowSnapshot>, usize)>,
     bytes: usize,
 }
 
@@ -192,7 +193,7 @@ impl WorkflowReadModel {
             .lock()
             .expect("Workflow publication observer");
         if let Some(delivery) = publication.as_mut() {
-            let cuts = self.cuts_after(delivery.revision);
+            let cuts = self.source_cuts_after(delivery.revision);
             if let Some(last) = cuts.last() {
                 delivery.revision = last.revision;
             }
@@ -209,13 +210,25 @@ impl WorkflowReadModel {
             .lock()
             .expect("Workflow read state")
             .current
+            .as_ref()
             .clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cuts_after(&self, revision: WorkflowRevision) -> Vec<WorkflowSnapshot> {
+        self.source_cuts_after(revision)
+            .into_iter()
+            .map(|cut| cut.as_ref().clone())
+            .collect()
     }
 
     /// Complete native cuts, never deltas reconstructed from evidence. The
     /// latest cut is repeated when unchanged so independent interaction
     /// projection facts can be correlated under the client's own lock.
-    pub(crate) fn cuts_after(&self, revision: WorkflowRevision) -> Vec<WorkflowSnapshot> {
+    pub(crate) fn source_cuts_after(
+        &self,
+        revision: WorkflowRevision,
+    ) -> Vec<Arc<WorkflowSnapshot>> {
         let state = self.state.lock().expect("Workflow read state");
         let cuts: Vec<_> = state
             .cuts
@@ -230,6 +243,35 @@ impl WorkflowReadModel {
         }
     }
 
+    /// Only cuts whose native durable publication callback has completed.
+    /// Lock order: Workflow publication -> native read state, never Projection.
+    pub(crate) fn published_source_cuts_after(
+        &self,
+        revision: WorkflowRevision,
+    ) -> Vec<Arc<WorkflowSnapshot>> {
+        let publication = self
+            .publication
+            .lock()
+            .expect("Workflow publication frontier");
+        let frontier = publication.as_ref().map(|delivery| delivery.revision);
+        let state = self.state.lock().expect("Workflow read state");
+        let mut cuts: Vec<_> = state
+            .cuts
+            .iter()
+            .filter(|(cut, _)| {
+                cut.revision > revision && frontier.is_none_or(|through| cut.revision <= through)
+            })
+            .map(|(cut, _)| Arc::clone(cut))
+            .collect();
+        if cuts.is_empty()
+            && state.current.revision == revision
+            && frontier.is_none_or(|through| state.current.revision <= through)
+        {
+            cuts.push(Arc::clone(&state.current));
+        }
+        cuts
+    }
+
     pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
         self.wake.subscribe()
     }
@@ -237,13 +279,14 @@ impl WorkflowReadModel {
     fn commit(&self, mutate: impl FnOnce(&mut WorkflowSnapshot) -> bool) {
         let changed = {
             let mut state = self.state.lock().expect("Workflow read state");
-            if mutate(&mut state.current) {
-                state.current.revision.0 = state
+            if mutate(Arc::make_mut(&mut state.current)) {
+                let next = state
                     .current
                     .revision
                     .0
                     .checked_add(1)
                     .expect("Workflow revision exhausted");
+                Arc::make_mut(&mut state.current).revision.0 = next;
                 let cut = state.current.clone();
                 let bytes = serde_json::to_vec(&cut)
                     .expect("native cut serialization")
@@ -611,7 +654,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             [4]
         );
-        assert_eq!(batches[1].0.last(), Some(&owner.snapshot()));
+        assert_eq!(
+            batches[1].0.last().map(Arc::as_ref),
+            Some(&owner.snapshot())
+        );
     }
 
     #[test]

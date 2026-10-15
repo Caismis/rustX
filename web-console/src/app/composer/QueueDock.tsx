@@ -10,7 +10,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/app-server';
 import { IconChevronDownOutline14, IconQueueOutline14 } from '../../presentation/primitives/icons';
-import type { PendingInboundRef } from '../../../../protocol/app-server/v46';
+import type { PendingInboundRef } from '../../../../protocol/app-server/v48';
 import css from './QueueDock.module.css';
 
 const QueueGlyph = () => <span className={css.lead} aria-hidden><IconQueueOutline14 /></span>;
@@ -34,7 +34,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const latestObservation = useRef(observation);
   latestObservation.current = observation;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const [draft, setDraft] = useState<{ expected: PendingInboundRef; text: string }>();
+  const [draft, setDraft] = useState<{ expected: PendingInboundRef; messageId:string; text: string }>();
   const [operation, setOperation] = useState<{ status: 'pending' | 'uncertain' | 'readback'; observation?: object; clearDraft?: boolean }>();
   const [notice, setNotice] = useNotice();
   useEffect(() => {
@@ -43,10 +43,10 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
       setOperation(undefined); setNotice('');
     }
   }, [observation, operation]);
-  const currentDraft = draft && rows.find(row => row.sequence === draft.expected.sequence && row.message.id === draft.expected.message_id);
-  const staleDraft = !!draft && (!currentDraft || currentDraft.revision !== draft.expected.revision);
+  const currentDraft = draft && rows.find(row => row.sequence === draft.expected.sequence && row.message.id === draft.messageId);
+  const staleDraft = !!draft && (!currentDraft || currentDraft.deferred || currentDraft.revision !== draft.expected.revision);
   const locked = disabled || !!operation;
-  const expected = (row: InboundRow): PendingInboundRef => ({ sequence: row.sequence, message_id: row.message.id, revision: row.revision });
+  const expected = (row: InboundRow): PendingInboundRef => ({ sequence: row.sequence, revision: row.revision });
   const apply = async (work: () => Promise<InboundControlOutcome>, editing = false) => {
     if (locked) return;
     setOperation({ status: 'pending', observation }); setNotice('');
@@ -92,9 +92,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
             <span className={css.preview} title={contentPreview(tx, row.message.content)}>{contentPreview(tx, row.message.content)}</span>
             {origin && <span className={css.status}>{origin}</span>}
             {row.message.source === 'human' && (!row.message.kind || row.message.kind === 'message') && <div className={css.actions}>
-              <button type="button" className={css.action} disabled={locked || !edit || row.message.content.length !== 1 || row.message.content[0].type !== 'text'}
-                title={row.message.content.length !== 1 || row.message.content[0].type !== 'text' ? tx('agent:queue-dock.non-text-or-multiple-content-blocks-cannot-be-safely-edited-here') : tx('agent:queue-dock.edit-queued-message')}
-                onClick={() => { setDraft({ expected: expected(row), text: row.message.content[0].type === 'text' ? row.message.content[0].text : '' }); setNotice(''); }}>{tx('agent:queue-dock.edit')}</button>
+              <button type="button" className={css.action} disabled={locked || !edit || row.deferred || row.message.content.length !== 1 || row.message.content[0].type !== 'text'}
+                title={row.deferred ? tx('common:activity.content-deferred') : row.message.content.length !== 1 || row.message.content[0].type !== 'text' ? tx('agent:queue-dock.non-text-or-multiple-content-blocks-cannot-be-safely-edited-here') : tx('agent:queue-dock.edit-queued-message')}
+                onClick={() => { setDraft({ expected: expected(row), messageId:row.message.id, text: row.message.content[0].type === 'text' ? row.message.content[0].text : '' }); setNotice(''); }}>{tx('agent:queue-dock.edit')}</button>
               <button type="button" className={css.action} disabled={locked || !remove} onClick={() => { if (remove) void apply(() => remove(expected(row))); }}>{tx('agent:queue-dock.remove')}</button>
             </div>}
             {count === 1 && <span className={css.status}>{status}</span>}
@@ -116,7 +116,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         <div className={css.actions}>
           <button type="button" className={css.action} disabled={locked || staleDraft || !draft.text.trim() || !edit} onClick={() => { if (edit) void apply(() => edit(draft.expected, draft.text), true); }}>{tx('agent:queue-dock.save')}</button>
           <button type="button" className={css.action} disabled={locked} onClick={() => { setDraft(undefined); setNotice(''); }}>{tx('agent:queue-dock.cancel-edit')}</button>
-          {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft) })}>{tx('agent:queue-dock.use-latest-version')}</button>}
+          {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft),messageId:currentDraft.message.id })}>{tx('agent:queue-dock.use-latest-version')}</button>}
         </div>
         {staleDraft && <p role="status">{currentDraft ? tx('agent:queue-dock.this-queued-message-changed-review-the-latest-version-before-sav') : tx('agent:queue-dock.this-message-is-no-longer-queued')}</p>}
       </div>}

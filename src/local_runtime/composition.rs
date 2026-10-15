@@ -1442,7 +1442,7 @@ impl LocalConversationCore {
             // authoritative conversation runtime coordinator, constructed
             // **inactive**: the final composition path activates it after the
             // optional Runtime Client host binds.
-            let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+            let runtime = ConversationRuntime::new_session_owned(RuntimeConversationConfig {
                 explicit_model: session_state.model.is_some(),
                 agent_id: runtime_config.agent_id.clone(),
                 model,
@@ -1905,25 +1905,21 @@ impl LocalConversationCore {
     /// the child's already-authoritative interaction facts.
     pub(crate) fn into_subagent_child_with_route(
         self,
+        activation: crate::runtime::identity::SubagentId,
         route: Arc<dyn InteractionRoute>,
-    ) -> Result<
-        (
-            LocalConversationRuntime,
-            Arc<crate::runtime::observation::PendingObservations>,
-        ),
-        LocalRuntimeError,
-    > {
-        let runtime = self.into_bound()?;
+    ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+        let host = RuntimeClientHost::new_for_activation(
+            RuntimeClientHostConfig {
+                runtime: self.runtime.clone(),
+                replay_limit: None,
+            },
+            activation,
+        )?;
+        let runtime = LocalConversationRuntime { core: self, host };
         runtime.runtime().install_interaction_route(route);
-        let observations = runtime
-            .runtime()
-            .subscribe_observations()
-            .map_err(|error| LocalRuntimeError::Observation {
-                detail: error.to_string(),
-            })?;
         runtime.runtime().gate_child_turns();
         runtime.activate();
-        Ok((runtime, observations))
+        Ok(runtime)
     }
 
     /// Finishes the composition as a **headless** runtime: the runtime
@@ -1948,6 +1944,40 @@ pub struct LocalConversationRuntime {
     core: LocalConversationCore,
     host: RuntimeClientHost,
 }
+
+/// Failure of a composition owner's shutdown, distinct from execution state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalConversationShutdownError {
+    /// The native semantic owner did not prove shutdown.
+    NativeRuntimeShutdown(crate::runtime::conversation_runtime::ShutdownError),
+    /// Semantic shutdown succeeded, but joining the presentation worker failed.
+    ProjectionJoinFailure(LocalProjectionJoinFailure),
+}
+
+/// Finite classification of a failed presentation join; no panic payload is retained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalProjectionJoinFailure {
+    /// The worker task was cancelled.
+    Cancelled,
+    /// The worker task panicked.
+    Panicked,
+}
+
+impl std::fmt::Display for LocalConversationShutdownError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::NativeRuntimeShutdown(_) => "native runtime shutdown remains unproven",
+            Self::ProjectionJoinFailure(LocalProjectionJoinFailure::Cancelled) => {
+                "presentation worker join failed: cancelled"
+            }
+            Self::ProjectionJoinFailure(LocalProjectionJoinFailure::Panicked) => {
+                "presentation worker join failed: panicked"
+            }
+        })
+    }
+}
+
+impl std::error::Error for LocalConversationShutdownError {}
 
 impl std::fmt::Debug for LocalConversationRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2011,6 +2041,26 @@ impl LocalConversationRuntime {
     #[must_use]
     pub const fn capability(&self) -> &CapabilityCoordinator {
         &self.core.capability
+    }
+
+    /// Drain the semantic runtime, then join its downstream presentation worker.
+    /// The composition still owns its storage until this handle is dropped.
+    ///
+    /// # Errors
+    /// Returns the native settlement failure, or an explicit presentation join failure.
+    pub async fn shutdown(&mut self) -> Result<(), LocalConversationShutdownError> {
+        self.core
+            .runtime
+            .shutdown()
+            .await
+            .map_err(LocalConversationShutdownError::NativeRuntimeShutdown)?;
+        self.host.inner.drain_projection().await.map_err(|error| {
+            LocalConversationShutdownError::ProjectionJoinFailure(if error.is_cancelled() {
+                LocalProjectionJoinFailure::Cancelled
+            } else {
+                LocalProjectionJoinFailure::Panicked
+            })
+        })
     }
 
     /// Creates the Runtime Client endpoint a transport wraps.
@@ -2077,6 +2127,16 @@ impl HeadlessConversationRuntime {
     #[must_use]
     pub const fn capability(&self) -> &CapabilityCoordinator {
         &self.core.capability
+    }
+
+    /// Drain the headless composition's semantic owners; it has no presentation worker.
+    ///
+    /// # Errors
+    /// Returns the native runtime settlement failure.
+    pub async fn shutdown(
+        &mut self,
+    ) -> Result<(), crate::runtime::conversation_runtime::ShutdownError> {
+        self.core.runtime.shutdown().await
     }
 }
 
@@ -2474,12 +2534,15 @@ chat_reasoning_replay = "omit"
         let (_observation_parent, observation) = tokio::net::UnixStream::pair().unwrap();
         let dispatcher =
             crate::local_runtime::dispatcher::ChildControlDispatcher::start(control, observation);
-        let (child, _) = core
-            .into_subagent_child_with_route(Arc::new(
-                crate::local_runtime::subagent_child::ChildInteractionRoute::new(
-                    dispatcher.handle(),
+        let child = core
+            .into_subagent_child_with_route(
+                child_spec.subagent_id.clone(),
+                Arc::new(
+                    crate::local_runtime::subagent_child::ChildInteractionRoute::new(
+                        dispatcher.handle(),
+                    ),
                 ),
-            ))
+            )
             .unwrap();
         // activate already attempted admission synchronously. Exercise another
         // wake synchronously too: neither boundary may pass without Delegate.
@@ -2712,7 +2775,8 @@ chat_reasoning_replay = "omit"
     ) -> Option<crate::runtime_client::settings::EffectivePlugins> {
         child
             .host()
-            .snapshot()
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("the child host projects its snapshot")
             .0
             .effective_plugins
@@ -2820,7 +2884,11 @@ enabled = true
         .expect("the child composes")
         .into_bound()
         .expect("the child binds its own Runtime Client host");
-        let (snapshot, _) = child.host().snapshot().expect("child snapshot");
+        let (snapshot, _) = child
+            .host()
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .expect("child snapshot");
         assert_eq!(
             snapshot.effective_plugins,
             Some(expected_r1.clone()),

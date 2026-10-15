@@ -222,14 +222,16 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let pending = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(20),
         event: RuntimeClientEvent::InteractionPending {
-            interaction: RoutedInteraction {
-                interaction: InteractionRef::new(
-                    request.conversation_id.clone(),
-                    request.id.clone(),
-                ),
-                source: InteractionSource::Primary,
-                request: request.clone(),
-            },
+            interaction: crate::runtime_client::checkpoint::interaction_header(
+                &RoutedInteraction {
+                    interaction: InteractionRef::new(
+                        request.conversation_id.clone(),
+                        request.id.clone(),
+                    ),
+                    source: InteractionSource::Primary,
+                    request: request.clone().into(),
+                },
+            ),
         },
     };
     let submitted_settled = RuntimeClientProtocolEvent {
@@ -264,22 +266,36 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let pending_json = serde_json::to_value(&pending).expect("pending questionnaire JSON");
     assert_eq!(pending_json["event"]["type"], "interaction_pending");
     assert_eq!(
-        pending_json["event"]["interaction"]["request"]["kind"]["type"],
+        pending_json["event"]["interaction"]["kind"],
         "questionnaire"
     );
+    assert_eq!(pending_json["event"]["interaction"]["body_complete"], false);
+    assert!(pending_json["event"]["interaction"]["body"].is_null());
     assert_eq!(
-        pending_json["event"]["interaction"]["request"]["kind"]["questionnaire"],
+        pending_json["event"]["interaction"]["request_id"],
+        serde_json::json!(request.id)
+    );
+    assert_eq!(
+        pending_json["event"]["interaction"]["conversation_id"],
+        serde_json::json!(request.conversation_id)
+    );
+    // A finite header links the original request; it never reconstructs its deferred body.
+    let original_json = serde_json::to_value(&request).expect("canonical native request JSON");
+    assert_eq!(
+        original_json["kind"]["questionnaire"],
         serde_json::to_value(&questionnaire).expect("questionnaire JSON")
     );
-    // Finding 1: the requester identity is projected as canonical facts, so a
-    // Runtime Client can name the MCP server without inferring anything.
     assert_eq!(
-        pending_json["event"]["interaction"]["request"]["kind"]["requester"],
+        original_json["kind"]["requester"],
         serde_json::json!({
-            "tool_id": "mcp:github:create_issue",
-            "tool_name": "create_issue",
+            "tool_id": "mcp:github:create_issue", "tool_name": "create_issue",
             "origin": {"mcp": {"server_id": "github"}},
         })
+    );
+    assert_eq!(
+        serde_json::from_value::<InteractionRequest>(original_json)
+            .expect("canonical request round trip"),
+        request
     );
     // The two dimensions stay independent: the routed source says where the
     // interaction came from, the requester says who asked.
@@ -327,17 +343,21 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn snapshot_dto_round_trips() {
     let host = host().await;
+    host.projection_settled().await;
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
-    let RuntimeClientResult::Initialized {
-        snapshot, cursor, ..
-    } = initialized
-    else {
+    let RuntimeClientResult::Initialized { .. } = initialized else {
         panic!("initialized");
     };
-    // Activation's first publication is the runtime's adoption eligibility.
-    assert_eq!(cursor, RuntimeClientCursor::new(1));
+    let checkpoint = attachment.checkpoint().unwrap();
+    assert_eq!(checkpoint.read_cut.revision, checkpoint.cursor.get());
+    assert_eq!(
+        &checkpoint.read_cut.conversation_id,
+        checkpoint.snapshot.conversation_id()
+    );
+    let (snapshot, cursor) = (checkpoint.snapshot, checkpoint.cursor);
+    // The baseline is the actual published bootstrap cut, never a guessed ordinal.
     assert_eq!(
         snapshot.configuration_adoption_eligibility,
         rustx::local_runtime::configuration::application::AdoptionEligibility::Eligible
@@ -355,13 +375,14 @@ async fn snapshot_dto_round_trips() {
         "no environment internals appear on the wire"
     );
     let response =
-        attachment.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
-    let Some(RuntimeClientResult::Snapshot { snapshot, cursor }) = response.result else {
+        attachment.handle_request(RuntimeClientRequest::CheckpointGet { id: request_id(1) });
+    let Some(RuntimeClientResult::Checkpoint { checkpoint }) = response.result else {
         panic!("snapshot result");
     };
-    assert_eq!(cursor, RuntimeClientCursor::new(1));
+    assert_eq!(checkpoint.cursor, cursor);
+    assert_eq!(checkpoint.read_cut.revision, cursor.get());
     assert_eq!(
-        snapshot.conversation_id().as_str(),
+        checkpoint.snapshot.conversation_id().as_str(),
         "conv_ab537f72-9ee5-7ccf-989d-90fbe352ca87"
     );
     let _ = attachment;
@@ -394,7 +415,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // Multiple pipelined requests correlate by id.
     let responses: Vec<RuntimeClientResponse> = (1..=3)
         .map(|id| {
-            attachment.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(id) })
+            attachment.handle_request(RuntimeClientRequest::CheckpointGet { id: request_id(id) })
         })
         .collect();
     for (index, response) in responses.iter().enumerate() {
@@ -606,14 +627,14 @@ async fn request_ids_are_attachment_scoped() {
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first attach");
     let first_response =
-        first.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
+        first.handle_request(RuntimeClientRequest::CheckpointGet { id: request_id(1) });
     assert!(first_response.error.is_none());
     first.detach();
     let (second, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("second attach");
     let second_response =
-        second.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
+        second.handle_request(RuntimeClientRequest::CheckpointGet { id: request_id(1) });
     assert!(
         second_response.error.is_none(),
         "request id 1 is fresh in the new attachment scope"
@@ -647,7 +668,8 @@ async fn second_attachment_never_evicts_the_first() {
             existing_attachment_id,
         }) if existing_attachment_id == first_id
     ));
-    let still_works = first.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(2) });
+    let still_works =
+        first.handle_request(RuntimeClientRequest::CheckpointGet { id: request_id(2) });
     assert!(still_works.error.is_none());
 }
 
@@ -665,7 +687,7 @@ async fn detach_releases_the_attachment_exactly() {
     let (second, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after detach");
-    let response = second.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(3) });
+    let response = second.handle_request(RuntimeClientRequest::CheckpointGet { id: request_id(3) });
     assert!(response.error.is_none());
 }
 

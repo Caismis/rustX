@@ -1,0 +1,19 @@
+name: PR review signal
+run-name: 'PR review #${{ github.event.pull_request.number }} / ${{ github.event.review.id }}'
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+# Fork reviews have no repository secrets. Only numeric identifiers are carried
+# in run metadata; the privileged workflow verifies the review via GitHub's API.
+permissions: {}
+
+jobs:
+  signal:
+    if: github.event.review.state == 'changes_requested'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Signal changes requested
+        run: echo 'Review notification is ready.'

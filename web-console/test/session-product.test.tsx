@@ -22,7 +22,8 @@ it.each([
   ['connection loss outranks stale work', { snapshot: { ...snapshot(), attempt: running() } }, { connection: 'stale' }, 'reconnect', 'connect'],
   ['incompatible versions require settings, not blind reconnect', {}, { connection: 'incompatible' }, 'failure', 'connection-settings'],
   ['lost attachment', { target: undefined, attachment: 'stale' }, {}, 'reconnect', 'open'],
-  ['failed read with target', { attachment: 'stale' }, {}, 'reconnect', 'refresh'],
+  ['failed read with target', { attachment: 'stale' }, {}, 'unavailable', 'refresh'],
+  ['failed observation after confirmed attach', { attachment: 'error' }, {}, 'unavailable', 'refresh'],
   ['opening is not recovery', { target: undefined, attachment: 'attaching' }, {}, 'connecting', undefined],
   ['uncertain outranks reconnect', {}, { connection: 'stale', uncertain: [uncertain] }, 'uncertain', 'connect'],
   ['uncertain survives suggestive settled state', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } } }, { uncertain: [uncertain] }, 'uncertain', undefined],
@@ -107,17 +108,24 @@ it('lost authoritative attachment exposes one Open Session action and sends one 
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(screen.getByText('Deep diving…', {selector:'[role=status]'})).toBeTruthy();
 });
-it('failed observation exposes one Retry connection action which refreshes without attaching or replaying', async () => {
+it('failed observation exposes one Refresh observation action which refreshes without attaching or replaying', async () => {
   const server = await mount();
-  server.handlers.set('session/snapshot', () => { throw new RpcFailure({ code: -32000, message: 'read unavailable' }); });
+  const original = server.client.getSnapshot().views.A;
+  server.handlers.set('session/checkpoint', () => { throw new RpcFailure({ code: -32000, message: 'read unavailable' }); });
   await act(async () => { await expect(server.client.refresh('A')).rejects.toThrow('read unavailable'); });
-  server.handlers.delete('session/snapshot');
+  expect(screen.getByLabelText('Session status').textContent).toContain('Observation unavailable');
+  expect(screen.getByLabelText('Session status').textContent).not.toContain('Connection interrupted');
+  const unavailable = server.client.getSnapshot().views.A;
+  expect(unavailable.target).toEqual(original.target);
+  expect(unavailable.checkpoint).toBe(original.checkpoint);
+  expect(unavailable.cursor).toBe(original.cursor);
+  server.handlers.delete('session/checkpoint');
   const before = server.requests.length;
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry connection' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh observation' })));
   const operations = server.requests.slice(before).map(row => row.request.method);
-  expect(operations.filter(method => method === 'session/snapshot')).toHaveLength(1);
+  expect(operations.filter(method => method === 'session/checkpoint')).toHaveLength(1);
   expect(operations).not.toContain('session/attach');
   expect(operations).not.toContain('turn/start');
   expect(operations).not.toContain('turn/cancel');
-  expect(screen.queryByRole('button', { name: 'Retry connection' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Refresh observation' })).toBeNull();
 });

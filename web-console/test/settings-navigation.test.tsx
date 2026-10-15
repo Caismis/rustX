@@ -1,9 +1,10 @@
+import {applicationReceipt} from './fixture';
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
 import { AppServerClient } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v46';
+import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v48';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { Server, TOKEN, endpoint } from './fixture';
 import { ConnectionController } from '../src/connection/controller';
@@ -44,7 +45,7 @@ function hostWith(list: () => Promise<WorkspaceCatalog>): ProductHostWorkspaces 
 /** Mount the product shell with a Session configuration failure that names the
  * Workspace author as one owner, then hand back the held catalog lookup. */
 async function mountOwnerFailure() {
-  server.handlers.set('session/configuration', () => ({ type: 'session_configuration', application: failing([{ kind: 'workspace', directory: '/workspace/A' }]) }));
+  server.handlers.set('session/configuration', () => ({ type: 'session_configuration', projection:(applicationReceipt((failing([{ kind: 'workspace', directory: '/workspace/A' }])))) }));
   let hold = false;
   let held = deferred<WorkspaceCatalog>();
   const host = hostWith(async () => { if (hold) { hold = false; return held.promise; } return catalog(); });
@@ -111,7 +112,7 @@ it('navigation D: an authority replacement fences a stale owner-lookup failure',
   const local = new Server(), alternate = new Server();
   const client = new AppServerClient((url, protocols) => (url === endpoint ? local : alternate).socketFactory(url, protocols));
   client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
-  local.handlers.set('session/configuration', () => ({ type: 'session_configuration', application: failing([{ kind: 'workspace', directory: '/workspace/A' }]) }));
+  local.handlers.set('session/configuration', () => ({ type: 'session_configuration', projection:(applicationReceipt((failing([{ kind: 'workspace', directory: '/workspace/A' }])))) }));
   let hold = false;
   let held = deferred<WorkspaceCatalog>();
   const host = hostWith(async () => { if (hold) { hold = false; return held.promise; } return catalog(); });

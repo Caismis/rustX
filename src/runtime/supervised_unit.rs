@@ -567,7 +567,10 @@ pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
 /// Kept pure so the Darwin fail-closed deadline/EPERM contract is testable
 /// without waiting for a real orphan or changing the production deadline.
 #[cfg(any(target_os = "macos", test))]
-fn group_absence_probe(observed: nix::Result<()>, expired: bool) -> Result<bool, String> {
+pub(crate) fn group_absence_probe(
+    observed: nix::Result<()>,
+    expired: bool,
+) -> Result<bool, String> {
     match observed {
         Err(Errno::ESRCH) => Ok(true),
         Ok(()) | Err(Errno::EPERM) if expired => Err(

@@ -3,8 +3,12 @@
 //! Source content is reread per call; admitted configurations own their capture.
 
 pub mod application;
+pub mod effective_observation;
+pub mod observation;
+pub mod repair;
 pub mod settings;
 
+use super::settings::{AdmittedSource, SourceReread};
 use crate::bounded_file::read_bounded;
 use crate::runtime::capability_inspection::{ResourceDefinition, ResourceFamily};
 use settings::SourceScope;
@@ -65,6 +69,8 @@ pub struct UserConfigSources {
 pub struct UserConfigManager {
     pub(super) sources: UserConfigSources,
     runtime_root_origin: Origin,
+    /// Process-local automatic repair observations, shared by every clone.
+    repairs: repair::RepairLedger,
     #[cfg(test)]
     pub(crate) test_hooks: ConfigurationHooks,
 }
@@ -73,7 +79,10 @@ pub struct UserConfigManager {
 type ConfigurationHookMap = BTreeMap<&'static str, Box<dyn FnOnce() + Send>>;
 #[cfg(test)]
 #[derive(Clone, Default)]
-pub(crate) struct ConfigurationHooks(std::sync::Arc<std::sync::Mutex<ConfigurationHookMap>>);
+pub(crate) struct ConfigurationHooks(
+    std::sync::Arc<std::sync::Mutex<ConfigurationHookMap>>,
+    std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<&'static str>>>,
+);
 #[cfg(test)]
 impl std::fmt::Debug for ConfigurationHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,6 +99,14 @@ impl ConfigurationHooks {
         if let Some(hook) = hook {
             hook();
         }
+    }
+    /// Make the next I/O step named `point` fail, once.
+    pub(crate) fn fail_once(&self, point: &'static str) {
+        self.1.lock().unwrap().insert(point);
+    }
+    /// Whether the I/O step named `point` is injected to fail now.
+    pub(crate) fn fault(&self, point: &'static str) -> bool {
+        self.1.lock().unwrap().remove(point)
     }
 }
 
@@ -137,6 +154,7 @@ impl UserConfigManager {
         Ok(Self {
             sources,
             runtime_root_origin: explicit,
+            repairs: repair::RepairLedger::default(),
             #[cfg(test)]
             test_hooks: ConfigurationHooks::default(),
         })
@@ -177,7 +195,9 @@ impl UserConfigManager {
     /// # Errors
     /// Invalid user authoring or policy is rejected before traffic admission.
     pub fn app_server_policy(&self) -> Result<super::app_server_policy::AppServerPolicy, String> {
-        let policy = read_layer(&self.sources.config_path, false, false)
+        let path = &self.sources.config_path;
+        let bytes = reread(&admit_source(path)?).map_err(|error| error.to_string())?;
+        let policy = layer_of(path, bytes.as_deref(), false)
             .map_err(|error| error.to_string())?
             .app_server
             .unwrap_or_default();
@@ -813,16 +833,17 @@ impl ProspectiveSessionConfig {
 }
 
 impl AdmittedSessionConfig {
-    /// The capture a Session model change resolves: this binding with
-    /// `selection`, against the Session's own published catalog — the one
-    /// its `session/models` advertises — never against unpublished sources.
-    pub(crate) fn with_session_model(
+    /// Change only Session intent, retaining the exact published resources,
+    /// catalog and credential capture. No source or physical resource is reopened.
+    pub(crate) fn with_model_selection(
         &self,
         selection: crate::model::session::SessionModelConfig,
-    ) -> ProspectiveSessionConfig {
-        let mut capture = self.prospective.as_ref().clone();
-        capture.input.model = Some(selection);
-        capture
+        revision: u64,
+    ) -> Self {
+        let mut retained = self.clone();
+        retained.prospective.input.model = Some(selection);
+        retained.binding_revision = revision;
+        retained
     }
 
     /// This binding at `binding_revision` with `published`'s catalog and its
@@ -907,8 +928,8 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
-        let layers = self
-            .capture_layers(request, None)
+        let (layers, documents) = self
+            .capture_layers(request)
             .map_err(|error| error.to_string())?;
         after_layers();
         let policy = layers
@@ -931,14 +952,8 @@ impl UserConfigManager {
             .and_then(Self::resolve_runtime_configuration)
             .and_then(|capture| self.resolve_resources(request, capture))
             .map_err(|error| error.diagnostic.reason);
-        for (path, expected) in &revisions {
-            let actual = read_layer_revision(path, false, path != &self.sources.config_path)
-                .map_err(|error| error.to_string())?
-                .1;
-            if &actual != expected {
-                return Err("configuration changed during capture; rescan to retry".into());
-            }
-        }
+        self.verify_documents(&documents, &revisions)
+            .map_err(|error| error.to_string())?;
         let manifest = context
             .as_ref()
             .map_or(&revisions, |capture| &capture.source_revisions);
@@ -966,17 +981,20 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
-        let resolved = self.resolve_model_candidate(request, None)?;
+        let (layers, documents) = self.capture_layers(request)?;
+        let resolved = self.resolve_model_candidate(request, layers)?;
         let resolved = Self::resolve_runtime_configuration(resolved)?;
-        self.resolve_resources(request, resolved)
+        let prospective = self.resolve_resources(request, resolved)?;
+        self.verify_documents(&documents, &prospective.source_revisions)?;
+        Ok(prospective)
     }
 
     fn resolve_model_candidate(
         &self,
         request: &SessionConfigInput,
-        candidate: Option<(&Path, &[u8])>,
+        layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.capture_sources(request, candidate)?;
+        let capture = self.resolve_captured_layers(layers)?;
         let config = &capture.config;
         config.context.validate().map_err(|e| e.to_string())?;
         let (primary, summary) = crate::model::session::analyze_session_model_config(
@@ -1010,52 +1028,42 @@ impl UserConfigManager {
     fn resolve_runtime_configuration(
         capture: SourceCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let config = &capture.config;
-        config.validate().map_err(|e| e.to_string())?;
-        config
-            .tool_deadline_policy
-            .to_policy()
-            .map_err(|e| e.clone())?;
-        config.tool_environment().map_err(|e| e.to_string())?;
+        capture.config.validate().map_err(|e| e.to_string())?;
         Ok(capture)
     }
 
     // One strict source parse, authority, overlay and provenance owner. Lowering
-    // is structural; semantic validation belongs to the consuming domain.
+    // is structural; semantic validation belongs to the consuming domain. Both
+    // documents are read through their admitted directories, which stay
+    // admitted for the capture's revision fence ([`Self::verify_documents`]).
     fn capture_layers(
         &self,
         request: &SessionConfigInput,
-        candidate: Option<(&Path, &[u8])>,
-    ) -> Result<LayerCapture, LaunchFailure> {
-        let read = |path: &Path, required, project| match candidate {
-            Some((target, bytes))
-                if normalize_missing(path).is_ok_and(|canonical| canonical == target) =>
-            {
-                parse_layer(path, bytes, project)
-                    .map(|layer| (layer, super::settings::revision(Some(bytes))))
-            }
-            _ => read_layer_revision(path, required, project),
-        };
+    ) -> Result<(LayerCapture, [AdmittedSource; 2]), LaunchFailure> {
         let host = &self.sources;
         let (locations, identity) = self.resolve_locations(request)?;
         let user_path = host.config_path.clone();
         let project_path = locations.workspace.join("rustx.toml");
-        let (user, user_revision) = read(&user_path, false, false)?;
+        let documents = [admit_source(&user_path)?, admit_source(&project_path)?];
+        let read = |source: &AdmittedSource, workspace| {
+            let bytes = source
+                .read()
+                .map_err(|error| unavailable(source.path(), client_detail(error)))?;
+            let layer = layer_of(source.path(), bytes.as_deref(), workspace)?;
+            Ok::<_, LaunchFailure>((layer, super::settings::revision(bytes.as_deref())))
+        };
+        let (user, user_revision) = read(&documents[0], false)?;
 
         // Both ordinary documents may be absent. Typed resolution determines
         // whether their composed configuration is complete.
-        let (project, workspace_revision) = read(&project_path, false, true)?;
+        let (project, workspace_revision) = read(&documents[1], true)?;
         let revisions = BTreeMap::from([
             (user_path.clone(), user_revision),
             (project_path.clone(), workspace_revision),
         ]);
         // Binding authoring remains strictly validated, but cannot rebind this manager.
 
-        if locations.runtime_root.starts_with(&locations.workspace)
-            || locations.workspace.starts_with(&locations.runtime_root)
-        {
-            return Err("runtime_root must be disjoint from the workspace".into());
-        }
+        storage_disjoint(&locations.runtime_root, &locations.workspace)?;
 
         let mut merged = RuntimeLayer {
             app_server: user.app_server.clone(),
@@ -1087,22 +1095,46 @@ impl UserConfigManager {
             )?);
             merged.overlay(layer, &origin, &mut provenance);
         }
-        Ok(LayerCapture {
-            revisions,
-            locations,
-            identity,
-            merged,
-            provenance,
-            project_resources,
-        })
+        Ok((
+            LayerCapture {
+                revisions,
+                locations,
+                identity,
+                merged,
+                provenance,
+                project_resources,
+            },
+            documents,
+        ))
     }
 
-    fn capture_sources(
+    /// The revision fence of a capture's two documents, after every other
+    /// input was read: each is reread through its admitted directory, which
+    /// the pathname must still name ([`AdmittedSource::reread`]), and must
+    /// still have its captured revision. A directory replaced or redirected
+    /// since admission is refused, never answered from the replacement, even
+    /// with identical bytes.
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the manager reaches its test hook at the verification boundary"
+        )
+    )]
+    fn verify_documents(
         &self,
-        request: &SessionConfigInput,
-        candidate: Option<(&Path, &[u8])>,
-    ) -> Result<SourceCapture, LaunchFailure> {
-        self.resolve_captured_layers(self.capture_layers(request, candidate)?)
+        documents: &[AdmittedSource; 2],
+        revisions: &BTreeMap<PathBuf, String>,
+    ) -> Result<(), LaunchFailure> {
+        #[cfg(test)]
+        self.test_hooks.reach("before_capture_verification");
+        for source in documents {
+            let actual = super::settings::revision(reread(source)?.as_deref());
+            if revisions.get(source.path()) != Some(&actual) {
+                return Err("configuration changed during capture; rescan to retry".into());
+            }
+        }
+        Ok(())
     }
 
     fn resolve_captured_layers(
@@ -1124,17 +1156,20 @@ impl UserConfigManager {
             revisions.insert(root.clone(), super::resource_directory::revision(&root));
         }
         let user_path = self.sources.config_path.clone();
-        let model_result = ModelCatalog::from_document(
-            crate::model::authoring::Catalog {
-                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
-                providers: merged.providers.clone().unwrap_or_default(),
-                models: merged.models.clone().unwrap_or_default(),
+        let model_result = ModelCatalog::from_document(catalog_document(&merged));
+        // A semantic failure names the document that authored its field.
+        let owner = |failure: &SemanticFailure| {
+            // Process policy stays outside the overlay; its source contract
+            // admits it in the bound User document only.
+            if failure.field == "app_server" {
+                Some(user_path.clone())
+            } else {
+                failure.owner(&provenance)
             }
-            .into(),
-        );
+        };
         let model_failure = |e: crate::model::catalog::ModelCatalogError| {
             LaunchFailure::at(
-                Some(user_path.clone()),
+                owner(&SemanticFailure::catalog(&e)),
                 "models",
                 "invalid model catalog semantics",
                 "define Providers and Models in rustx.toml",
@@ -1147,20 +1182,13 @@ impl UserConfigManager {
             .and_then(|agent| agent.model.as_ref())
             .is_none_or(|model| model.model.is_none())
         {
-            if let Err(error) = &model_result
-                && !matches!(
-                    error,
-                    crate::model::catalog::ModelCatalogError::EmptyCatalog
-                )
-            {
-                return Err(LaunchFailure::at(
-                    Some(user_path.clone()),
-                    "models",
-                    "invalid model catalog semantics",
-                    "define Providers and Models in rustx.toml",
-                    error.to_string(),
-                ));
-            }
+            // Incomplete only when everything the composition decides holds;
+            // an independently invalid value is invalid with or without a
+            // default model.
+            composition_semantics(&merged).map_err(|failure| {
+                let document = owner(&failure);
+                failure.launch(document)
+            })?;
             let mut error = LaunchFailure::at(
                 Some(user_path.clone()),
                 "agent.model.model",
@@ -1555,8 +1583,12 @@ impl UserConfigManager {
             revisions.insert(file.path.clone(), super::settings::revision(Some(&bytes)));
         }
         for (path, expected) in &revisions {
+            // Resource roots were compared above; the two documents are
+            // fenced through their admitted directories by the capture.
             if path == &host.home_directory.join("rustx/.agents")
                 || path == &locations.workspace.join(".agents")
+                || path == &host.config_path
+                || path == &locations.workspace.join("rustx.toml")
             {
                 continue;
             }
@@ -1653,6 +1685,16 @@ pub(super) fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// The storage-isolation rule between the bound runtime root and one selected
+/// Workspace: neither contains the other. Session resolution and repair scope
+/// admission apply this one rule to the same canonical pathnames.
+pub(super) fn storage_disjoint(runtime_root: &Path, workspace: &Path) -> Result<(), String> {
+    if runtime_root.starts_with(workspace) || workspace.starts_with(runtime_root) {
+        return Err("runtime_root must be disjoint from the workspace".into());
+    }
+    Ok(())
+}
+
 pub(super) fn normalize_missing(path: &Path) -> Result<PathBuf, String> {
     if present_on_disk(path)? {
         return std::fs::canonicalize(path).map_err(|e| e.to_string());
@@ -1662,28 +1704,59 @@ pub(super) fn normalize_missing(path: &Path) -> Result<PathBuf, String> {
     Ok(normalize_missing(parent)?.join(name))
 }
 
-fn read_layer(path: &Path, required: bool, project: bool) -> Result<RuntimeLayer, LaunchFailure> {
-    read_layer_revision(path, required, project).map(|(layer, _)| layer)
+fn unavailable(path: &Path, detail: String) -> LaunchFailure {
+    LaunchFailure::at(
+        Some(path.into()),
+        "$",
+        "selected configuration file is unavailable",
+        "correct the selected path or create the file",
+        detail,
+    )
 }
-fn read_layer_revision(
-    path: &Path,
-    required: bool,
-    project: bool,
-) -> Result<(RuntimeLayer, String), LaunchFailure> {
-    if !required && !present_on_disk(path)? {
-        return Ok((RuntimeLayer::default(), super::settings::revision(None)));
+
+fn client_detail(error: crate::runtime_client::types::RuntimeClientError) -> String {
+    match error {
+        crate::runtime_client::types::RuntimeClientError::InvalidRequest { message } => message,
+        other => format!("{other:?}"),
     }
-    let bytes = read_bounded(path).map_err(|detail| {
-        LaunchFailure::at(
-            Some(path.into()),
-            "$",
-            "selected configuration file is unavailable",
-            "correct the selected path or create the file",
-            detail,
+}
+
+/// Admit a `rustx.toml` ([`AdmittedSource::admit`]): a pathname reached only
+/// by following a symlink, or through a non-directory, is unavailable.
+fn admit_source(path: &Path) -> Result<AdmittedSource, LaunchFailure> {
+    AdmittedSource::admit(path).map_err(|error| {
+        unavailable(
+            path,
+            format!("its directory cannot be reached without following a symlink: {error}"),
         )
-    })?;
-    let revision = super::settings::revision(Some(&bytes));
-    Ok((parse_layer(path, &bytes, project)?, revision))
+    })
+}
+
+/// A checked read of an admitted `rustx.toml` ([`AdmittedSource::reread`]).
+fn reread(source: &AdmittedSource) -> Result<Option<Vec<u8>>, LaunchFailure> {
+    source.reread().map_err(|failure| match failure {
+        SourceReread::Redirected => unavailable(
+            source.path(),
+            "its directory was replaced or redirected; rustX never follows it".into(),
+        ),
+        SourceReread::Unadmitted(error) => unavailable(
+            source.path(),
+            format!("its directory cannot be reached without following a symlink: {error}"),
+        ),
+        SourceReread::Unreadable(error) => unavailable(source.path(), client_detail(error)),
+    })
+}
+
+/// The layer authored by a document's bytes; an absent document authors none.
+fn layer_of(
+    path: &Path,
+    bytes: Option<&[u8]>,
+    workspace: bool,
+) -> Result<RuntimeLayer, LaunchFailure> {
+    bytes.map_or_else(
+        || Ok(RuntimeLayer::default()),
+        |bytes| parse_layer(path, bytes, workspace),
+    )
 }
 
 pub(super) fn parse_layer(
@@ -1693,6 +1766,17 @@ pub(super) fn parse_layer(
 ) -> Result<RuntimeLayer, LaunchFailure> {
     let layer: RuntimeLayer =
         crate::toml_authoring::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
+    source_restrictions(path, &layer, workspace)?;
+    Ok(layer)
+}
+
+/// The source-specific contract of an already strictly parsed document: process
+/// policy belongs to the User scope, and an explicit version is the current one.
+pub(super) fn source_restrictions(
+    path: &Path,
+    layer: &RuntimeLayer,
+    workspace: bool,
+) -> Result<(), LaunchFailure> {
     if workspace && layer.app_server.is_some() {
         return Err(LaunchFailure::at(
             Some(path.into()),
@@ -1716,7 +1800,179 @@ pub(super) fn parse_layer(
             ),
         ));
     }
-    Ok(layer)
+    Ok(())
+}
+
+/// A native semantic constraint an authored source or composition fails.
+///
+/// `field` (identities only as `*`) and `reason` are native constants, safe to
+/// show anywhere, including automatic repair receipts. `detail` is the native
+/// domain message, which may quote authored values; it stays inside launch
+/// diagnostics.
+#[derive(Debug, Clone)]
+pub(crate) struct SemanticFailure {
+    pub(crate) field: &'static str,
+    pub(crate) reason: &'static str,
+    detail: String,
+}
+
+impl SemanticFailure {
+    fn new(field: &'static str, reason: &'static str, detail: String) -> Self {
+        Self {
+            field,
+            reason,
+            detail,
+        }
+    }
+
+    fn catalog(error: &crate::model::catalog::ModelCatalogError) -> Self {
+        let (field, reason) = error.classification();
+        Self::new(field, reason, error.to_string())
+    }
+
+    /// The safe one-line summary: category and location, never values.
+    pub(crate) fn summary(&self) -> String {
+        format!("{} at {}", self.reason, self.field)
+    }
+
+    /// The one document that authored the failing field, from the overlay
+    /// provenance of the composition: every authored unit containing the
+    /// field, or contained in it, must come from the same User or Workspace
+    /// document. A field spanning both documents, or one no document
+    /// authored, has no owner: its failure belongs to the composition.
+    fn owner(&self, provenance: &BTreeMap<String, Origin>) -> Option<PathBuf> {
+        /// Whether one path is a prefix of the other; a `*` in the field
+        /// stands for one identity, which may itself contain dots.
+        fn overlaps(field: &[&str], unit: &[&str]) -> bool {
+            match (field.split_first(), unit.split_first()) {
+                (None, _) | (_, None) => true,
+                (Some((&"*", field)), Some((_, _))) => {
+                    (1..=unit.len()).any(|taken| overlaps(field, &unit[taken..]))
+                }
+                (Some((segment, field)), Some((name, unit))) => {
+                    segment == name && overlaps(field, unit)
+                }
+            }
+        }
+        let field: Vec<_> = self.field.split('.').collect();
+        let mut owners = provenance.iter().filter_map(|(unit, origin)| {
+            let unit: Vec<_> = unit.split('.').collect();
+            overlaps(&field, &unit).then_some(origin)
+        });
+        let first = owners.next()?;
+        let document = match first {
+            Origin::User { document, .. } | Origin::Workspace { document, .. } => document,
+            Origin::Builtin | Origin::Process { .. } => return None,
+        };
+        owners
+            .all(|origin| origin == first)
+            .then(|| document.clone())
+    }
+
+    /// A launch failure at the authoring document, or at the composition
+    /// (no file) when no single document authored the field.
+    fn launch(self, document: Option<PathBuf>) -> LaunchFailure {
+        LaunchFailure::at(
+            document,
+            self.field,
+            self.reason,
+            "correct this value in User or Workspace rustx.toml",
+            self.detail,
+        )
+    }
+}
+
+impl From<super::config::ConstraintFailure> for SemanticFailure {
+    fn from(failure: super::config::ConstraintFailure) -> Self {
+        Self::new(failure.field, failure.reason, failure.error.to_string())
+    }
+}
+
+/// How complete a composition that satisfies every decidable constraint is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Composition {
+    /// A default model is selected and every model-dependent constraint holds.
+    Complete,
+    /// No default model is selected: the composition is incomplete, not
+    /// invalid, because a Session request may still select one.
+    NoDefaultModel,
+}
+
+fn catalog_document(layer: &RuntimeLayer) -> crate::model::catalog::ModelCatalogDocument {
+    crate::model::authoring::Catalog {
+        schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+        providers: layer.providers.clone().unwrap_or_default(),
+        models: layer.models.clone().unwrap_or_default(),
+    }
+    .into()
+}
+
+/// Source-intrinsic native semantics: every constraint an authored document
+/// decides on its own (Issue #464).
+///
+/// A source may leave facts to the other scope it is composed with — the
+/// default model, the Provider of a Model, the rest of the Model Catalog — but
+/// everything else it authors is decided here, whether or not a default model
+/// is selected: App Server process policy, each Provider and Model entry, and
+/// every [`CurrentRuntimeConfig::validate_authored`] constraint. `.agents`
+/// resources, credentials and preparation are never consulted.
+pub(super) fn source_semantics(layer: &RuntimeLayer) -> Result<(), SemanticFailure> {
+    if let Some(policy) = &layer.app_server {
+        policy.validate().map_err(|detail| {
+            SemanticFailure::new("app_server", "invalid App Server process policy", detail)
+        })?;
+    }
+    ModelCatalog::validate_entries(catalog_document(layer))
+        .map_err(|error| SemanticFailure::catalog(&error))?;
+    let config = layer
+        .clone()
+        .resolve()
+        .map_err(|detail| SemanticFailure::new("agent.model", "invalid model selection", detail))?;
+    config.validate_authored()?;
+    Ok(())
+}
+
+/// Native semantics of one complete User + Workspace composition: its
+/// source-intrinsic constraints and the references between its scopes — Model
+/// Catalog closure and, once a default model is selected, the selected models
+/// and the context budgets they bound. Session resolution applies the same
+/// validators to the same composition.
+pub(super) fn composition_semantics(merged: &RuntimeLayer) -> Result<Composition, SemanticFailure> {
+    source_semantics(merged)?;
+    let catalog = ModelCatalog::from_document(catalog_document(merged));
+    let config = merged
+        .clone()
+        .resolve()
+        .map_err(|detail| SemanticFailure::new("agent.model", "invalid model selection", detail))?;
+    let Some(model) = &config.agent.model else {
+        return match catalog {
+            Ok(_) | Err(crate::model::catalog::ModelCatalogError::EmptyCatalog) => {
+                Ok(Composition::NoDefaultModel)
+            }
+            Err(error) => Err(SemanticFailure::catalog(&error)),
+        };
+    };
+    let models = catalog.map_err(|error| SemanticFailure::catalog(&error))?;
+    let (primary, summary) = crate::model::session::analyze_session_model_config(&models, model)
+        .map_err(|error| {
+            let (field, reason) = error.classification();
+            SemanticFailure::new(field, reason, error.to_string())
+        })?;
+    let summary = summary.as_ref().unwrap_or(&primary);
+    config
+        .context_policy()
+        .validate_budgets(
+            (primary.context_window, primary.max_output_tokens),
+            (summary.context_window, summary.max_output_tokens),
+        )
+        .map_err(|error| {
+            SemanticFailure::new(
+                "context",
+                "context budgets cannot fit the selected models",
+                error.message,
+            )
+        })?;
+    Ok(Composition::Complete)
 }
 
 fn rebase_paths(

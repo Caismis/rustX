@@ -115,6 +115,8 @@ pub struct RuntimeResourceSnapshot {
     configuration: Option<Arc<RuntimeConfiguration>>,
     revision: RuntimeResourceRevision,
     inspection: Arc<crate::runtime::capability_inspection::CapabilityInspection>,
+    inspection_agents: Arc<[SubagentName]>,
+    inspection_workflows: Arc<[crate::runtime::workflow::WorkflowId]>,
     project_context_files: Arc<[ProjectContextFile]>,
     project_instructions: Option<Arc<str>>,
     skill_catalog: Option<Arc<str>>,
@@ -524,6 +526,31 @@ impl RuntimeResourceSnapshot {
                 .resource_diagnostics
                 .clone_from(&configuration.resource_diagnostics);
         }
+        self.index_inspection();
+    }
+    fn index_inspection(&mut self) {
+        self.inspection_agents = self.inspection.agents.keys().cloned().collect();
+        self.inspection_workflows = self.inspection.workflows.keys().cloned().collect();
+    }
+    pub(crate) fn inspection_agent_at(
+        &self,
+        ordinal: usize,
+    ) -> Option<(
+        &SubagentName,
+        &crate::runtime::capability_inspection::AgentInspection,
+    )> {
+        let name = self.inspection_agents.get(ordinal)?;
+        Some((name, self.inspection.agents.get(name)?))
+    }
+    pub(crate) fn inspection_workflow_at(
+        &self,
+        ordinal: usize,
+    ) -> Option<(
+        &crate::runtime::workflow::WorkflowId,
+        &crate::runtime::capability_inspection::WorkflowInspection,
+    )> {
+        let name = self.inspection_workflows.get(ordinal)?;
+        Some((name, self.inspection.workflows.get(name)?))
     }
     /// Read the frozen generation facts without resolution or execution.
     #[must_use]
@@ -587,6 +614,8 @@ impl RuntimeResourceSnapshot {
             configuration: None,
             revision,
             inspection: Arc::new(inspection),
+            inspection_agents: Arc::default(),
+            inspection_workflows: Arc::default(),
             project_context_files: project_context_files.into(),
             project_instructions,
             skill_catalog,
@@ -670,6 +699,7 @@ impl RuntimeResourceSnapshot {
                 .resource_diagnostics
                 .clone_from(&config.resource_diagnostics);
         }
+        snapshot.index_inspection();
         snapshot
     }
 

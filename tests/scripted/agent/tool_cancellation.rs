@@ -19,7 +19,6 @@ use rustx::agent::{
     PreToolView,
 };
 use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
-use rustx::durable::TranscriptCursor;
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
 use rustx::model::event::ModelEvent;
@@ -218,6 +217,8 @@ impl AgentExecutionObserver for NoopObserver {
         _attempt_id: &AttemptId,
         _event: &RuntimeEvent,
         _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
     ) {
     }
 
@@ -225,22 +226,33 @@ impl AgentExecutionObserver for NoopObserver {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, _observation: &AgentStatusObservation) {}
+    fn observe_status(
+        &self,
+        _observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
+    }
 
     fn observe_publication_opened(&self, _attempt_id: &AttemptId, _start: &PublicationStreamStart) {
     }
 
-    fn observe_publication(&self, _attempt_id: &AttemptId, _frame: &PublicationFrame) {}
+    fn observe_publication(
+        &self,
+        _attempt_id: &AttemptId,
+        _frame: &PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
+    ) {
+    }
 
     fn observe_publication_settled(
         &self,
         _attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        _transcript_cursor: TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }
@@ -294,7 +306,14 @@ impl CancelOnToolEvent {
 }
 
 impl AgentExecutionObserver for CancelOnToolEvent {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
+    ) {
         if self.matches(event) {
             let _ = self.cancellation.request_cancel(self.reason);
         }
@@ -304,22 +323,33 @@ impl AgentExecutionObserver for CancelOnToolEvent {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, _observation: &AgentStatusObservation) {}
+    fn observe_status(
+        &self,
+        _observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
+    }
 
     fn observe_publication_opened(&self, _attempt_id: &AttemptId, _start: &PublicationStreamStart) {
     }
 
-    fn observe_publication(&self, _attempt_id: &AttemptId, _frame: &PublicationFrame) {}
+    fn observe_publication(
+        &self,
+        _attempt_id: &AttemptId,
+        _frame: &PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
+    ) {
+    }
 
     fn observe_publication_settled(
         &self,
         _attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        _transcript_cursor: TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }

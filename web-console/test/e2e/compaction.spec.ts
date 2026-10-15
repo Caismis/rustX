@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose, connectionAction } from './shell-actions';
+import { openQuestionnaire } from './source-reading';
 
 for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'] as const) {
   test(`compaction continuation, questionnaire and Harness summary ${locale} ${theme}`, async ({ page }) => {
@@ -147,6 +148,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await message.press('Enter');
+      await openQuestionnaire(page);
       await expect(page.getByRole('heading', { name: 'Continue after compaction?' })).toBeVisible();
       await page.getByRole('radio', { name: 'Continue', exact: true }).click();
       await page.getByRole('button', { name: copy('Submit', '提交'), exact: true }).click();

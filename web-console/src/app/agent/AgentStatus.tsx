@@ -1,7 +1,8 @@
+import { statusIdentity } from '../../../../protocol/app-server/projection';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted ContextInjectionRow chrome; native status semantics. See PROVENANCE.md. */
 import { useState } from 'react';
-import type { AgentStatusView } from '../../../../protocol/app-server/v46';
+import type { AgentStatusView } from '../../../../protocol/app-server/v48';
 import { agentStatusFacets, agentStatusSummary } from '../../bindings/agent-status';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconContextInjectionOutline16 } from '../../presentation/primitives/icons';
@@ -20,7 +21,7 @@ export function AgentStatusAnnotation({ status }: { status: AgentStatusView }) {
   const [expanded, setExpanded] = useState(false);
   const facets = agentStatusFacets(tx, status);
   const summary = agentStatusSummary(tx, status);
-  return <div className={css.root} role="note" aria-label={tx('agent:agent-status.agent-status')} data-agent-status={status.status_message_id}>
+  return <div className={css.root} role="note" aria-label={tx('agent:agent-status.agent-status')} data-agent-status={statusIdentity(status)}>
     <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
       icon={<IconContextInjectionOutline16 size={14} />} title={tx('agent:agent-status.agent-status')} open={expanded} expandable={facets.length > 0} expandOnRowClick
       keepContentWhenOpen onToggle={() => setExpanded(value => !value)}

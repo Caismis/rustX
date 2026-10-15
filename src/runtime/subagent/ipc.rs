@@ -108,7 +108,7 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 32 combines native attachment input with the frozen Session
 /// workspace path and removes workspace policy and Candidate snapshots.
 /// Both incompatible version-31 formats are rejected before composition.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 32;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 33;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -146,6 +146,7 @@ const KIND_GUIDANCE_RESULT: u8 = 112;
 const KIND_SEAL_REQUESTED: u8 = 113;
 const KIND_DELEGATE_ACCEPTED: u8 = 114;
 const KIND_SEAL_OPEN: u8 = 115;
+const KIND_INTERACTION_REMOVED: u8 = 116;
 
 // Observation channel frame kind (disposable, fd 1, child -> parent only).
 const KIND_ACTIVITY: u8 = 107;
@@ -522,7 +523,12 @@ pub(crate) enum ChildFrame {
     /// parent may drop exactly that retained anchor.
     AnchorReleased(ProcessUnitAnchorFrame),
     /// A child-owned interaction request committed by its coordinator.
-    InteractionRequested(crate::runtime::interaction::InteractionRequest),
+    InteractionRequested(Box<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>),
+    /// Originating physical source loss retires this exact read/action locator.
+    /// It is observation only and carries no fabricated execution outcome.
+    InteractionRemoved {
+        interaction: crate::runtime::interaction::InteractionRef,
+    },
     /// A child-owned interaction terminal transition.
     InteractionSettled {
         /// The originating routed identity.
@@ -734,6 +740,9 @@ pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>
         ChildFrame::InteractionRequested(request) => {
             write_frame(stream, KIND_INTERACTION_REQUESTED, &encode(request)?).await
         }
+        ChildFrame::InteractionRemoved { interaction } => {
+            write_frame(stream, KIND_INTERACTION_REMOVED, &encode(interaction)?).await
+        }
         ChildFrame::InteractionSettled {
             interaction,
             outcome,
@@ -782,6 +791,9 @@ pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         KIND_ANCHOR_OFFERED => ChildFrame::AnchorOffered(decode(&payload)?),
         KIND_ANCHOR_RELEASED => ChildFrame::AnchorReleased(decode(&payload)?),
         KIND_INTERACTION_REQUESTED => ChildFrame::InteractionRequested(decode(&payload)?),
+        KIND_INTERACTION_REMOVED => ChildFrame::InteractionRemoved {
+            interaction: decode(&payload)?,
+        },
         KIND_INTERACTION_SETTLED => {
             let (interaction, outcome): (
                 crate::runtime::interaction::InteractionRef,
@@ -1079,10 +1091,15 @@ mod tests {
         let observation = super::super::activity::SubagentObservation {
             revision: 7,
             attempt_id: None,
-            activity: super::super::activity::SubagentActivity::Tool {
-                tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
-                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
-                progress: None,
+            activity: super::super::activity::SubagentActivity::ToolGroup {
+                active: 1,
+                representative: Some(
+                    crate::runtime::subagent::activity::SubagentToolRepresentative {
+                        tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                        tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+                        progress: None,
+                    },
+                ),
             },
             last_activity_at: None,
             counters: super::super::activity::SubagentActivityCounters {
@@ -1182,7 +1199,7 @@ mod tests {
     }
 
     /// Issue #462 (D07): a version-30 parent spoke a workspace snapshot
-    /// object. That Hello cannot decode under version 32, and a current-shape
+    /// object. That Hello cannot decode under version 33, and a current-shape
     /// Hello naming any other version is not this build's protocol, so the
     /// child refuses both before composing anything.
     #[test]
@@ -1200,7 +1217,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 32);
+        assert_eq!(SUBAGENT_IPC_VERSION, 33);
     }
 
     #[test]
@@ -1368,6 +1385,10 @@ mod tests {
             },
         };
         let routed_ref = routed_request.interaction_ref();
+        let routed_header = crate::runtime_client::checkpoint::interaction_request_header(
+            &routed_request,
+            crate::runtime::interaction::InteractionSource::Primary,
+        );
         let response = InteractionResponse::Questionnaire {
             response: QuestionnaireResponse::Declined,
         };
@@ -1432,7 +1453,7 @@ mod tests {
 
         write_child_frame(
             &mut child,
-            &ChildFrame::InteractionRequested(routed_request.clone()),
+            &ChildFrame::InteractionRequested(Box::new(routed_header.clone())),
         )
         .await
         .expect("write routed request");
@@ -1473,7 +1494,9 @@ mod tests {
             read_child_frame(&mut parent)
                 .await
                 .expect("read routed request"),
-            Some(ChildFrame::InteractionRequested(routed_request.clone()))
+            Some(ChildFrame::InteractionRequested(Box::new(
+                routed_header.clone()
+            )))
         );
         assert_eq!(
             read_child_frame(&mut parent)

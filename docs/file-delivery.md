@@ -39,6 +39,23 @@ cards only from successful committed Tool messages. Earlier execution-completion
 observations do not authorize cards. Cards sit outside completed activity's
 collapsed seat while keeping its native message/turn anchors.
 
+Requests name `{target, locator, delivery_index}`. Inline loaded messages may use
+`ByMessageId`; deferred messages use their actual numeric `ByLedgerPosition`.
+Neither locator is a credential. Resolution remains in the exact attached
+Conversation and preserves the delivery's original Conversation/root mapping.
+
+A successful canonical Tool result advertises a delivery head with its exact
+original count and at most eight items. This declaration can arrive before
+execution settlement; it does not settle the Tool. Further items use the head's
+captured collection cut and continuation. Deferred file metadata uses the item's
+selected metadata domain in advancing chunks of at most 64 KiB. Clients retain
+one loaded delivery page and the selected metadata, then dispatch Preview,
+Download, Open or Save using that item's original locator and index. They do not
+load the whole Tool result to discover deliveries. Failed results advertise no
+actionable head. Selected reads support safe original indices beyond eight;
+the native `present` authoring limit remains eight files.
+
+
 ## Two closed identities
 
 Managed `FileReference` / `ArtifactId` refers to immutable Conversation-owned
@@ -71,9 +88,9 @@ Attempt, or model request.
 
 ## Authorized read and containment
 
-App Server v46 has no public `session/fileRead` Method. An ordinary authenticated
+App Server v48 has no public `session/fileRead` Method. An ordinary authenticated
 App Server connection cannot enter the file-read seam, even with the exact
-attachment, canonical Tool message ID, delivery index, Session cwd, and reference.
+attachment, canonical Tool locator, delivery index, Session cwd, and reference.
 Initialize client names are metadata and have no authorization role.
 
 Two transport-authenticated callers enter one native owner,
@@ -92,18 +109,12 @@ child Conversation. A supplied Agent ID, parent message, sibling reference or
 browser path grants no authority. Resume retains the Agent's Conversation and
 workspace ownership; each read fence rechecks the frozen selection.
 
-Product Host child delivery is restricted to `WorkspaceIsolation::Shared`.
-The registry's frozen logical root must equal the original parent Session's
-current canonical mapping, and **that exact physical root** must be in the
-Product Host's current registrations. Isolated `GitWorktree` child deliveries
-are rejected as Unauthorized before descriptor access, even if the parent or
-worktree path is registered. A parent registration is not an isolated-workspace
-delegation. This deliberately avoids adding an authorization framework for
-runtime-managed isolation; it does not change subagent execution or disposal.
-
-Trusted delivery-access clients retain explicit native-process authority over
-an isolated child's registry-owned frozen root. They do not borrow a Product
-Host registration. Shared children still must match the parent Session mapping.
+Children use the Session's frozen shared workspace. The registry's frozen logical
+root must equal the original parent Session's current canonical mapping, and
+**that exact physical root** must be in the Product Host's current registrations.
+Trusted delivery-access clients use their explicit transport grant and native
+registry ownership; they do not borrow a Product Host registration. The frozen
+child workspace still must match the parent Session mapping.
 Both lanes retain the original Session allocation lease, exact attachment,
 child Conversation, recorded device/inode, descriptor and symlink checks.
 Mapping replacement is checked at the physical read fences; detach, cancellation
@@ -284,7 +295,8 @@ unavailable. Native startup rejects reuse of the ordinary credential, symlink or
 non-regular secret files, and files readable by other users.
 
 Only `/product-host/file-read` WebSocket admission accepts the private
-`rustx.product-host.file-read.v3` subprotocol plus `rustx-product-host.<secret>`.
+`rustx.product-host.file-read.v4` subprotocol (the mandatory locator payload;
+version3 is rejected) plus `rustx-product-host.<secret>`.
 The response selects only the public subprotocol name, never the secret. Ordinary
 transport credentials cannot authenticate this lane, and this credential cannot
 authenticate the ordinary App Server lane. Handshake admission creates a native
@@ -300,7 +312,7 @@ response; abnormal transport termination retains the bounded Host admission slot
 as unavailable. The private payload and all public App Server schemas are unchanged.
 
 The browser's authenticated Product Host HTTP carrier accepts only authority scope
-and exact target/message/index coordinates. The Node Host supplies canonical roots
+and exact target/locator/index coordinates. The Node Host supplies canonical roots
 from **current registrations**, after scope/endpoint admission. Configured picker
 locations alone do not authorize file bytes (even though display classification
 may describe them as operator-authorized locations). No browser association cache
@@ -442,7 +454,7 @@ generic card. Status remains the card shell's runtime lifecycle.
 `/files` pages the focused Session's committed history through `session/transcript`
 (one bounded native page per explicit request, newest result first). It keeps no
 index or cache. Each entry shows the filename, type, description, original relative
-path, original Conversation scope, `message#i/n` address and action availability.
+path, original Conversation scope, canonical locator plus `i/n` address and action availability.
 Reconnect, cold resume and forks read the same canonical records.
 
 Actions live in the TUI-owned `app-server/delivery-files.ts`. Renderers and command
@@ -728,7 +740,7 @@ Agent-scoped preview and download share the root renderer and delivery coordinat
 Their source includes the stable AgentId. Native ownership lookup resolves that
 Agent's committed child conversation and frozen workspace; file delivery indices
 are validated against successful child Tool output. Managed artifacts are read
-from the child artifact root. Product Host v3 carries the AgentId through file and
+from the child artifact root. Product Host v4 carries the AgentId through file and
 artifact reads, including document conversion. Root and child resources with equal
 artifact identifiers remain separate namespaces. Existing allocation, revocation,
 bounded read and publication checks apply to both.

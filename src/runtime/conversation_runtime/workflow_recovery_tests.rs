@@ -19,7 +19,7 @@ async fn finish_finite_workflow_child(
     node.block.run.conversation_id = store.conversation_id().clone();
     let spec = SubagentStartSpec {
         authority: DurableAgentAuthority {
-            title: "Explore task".to_owned(),
+            title: "Explore task".into(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("reviewer"),
             approval_mode: ApprovalMode::Policy,

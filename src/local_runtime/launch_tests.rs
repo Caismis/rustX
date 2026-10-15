@@ -14,8 +14,17 @@ use std::path::Path;
 async fn compose_admitted(
     launch: &AdmittedSessionConfig,
 ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
-    use super::session::SessionPersistentState;
     let controller = super::session_controller::SessionController::open(&launch.runtime_root)?;
+    compose_admitted_with_controller(launch, &controller).await
+}
+
+/// Reuses the one catalog owner for independent admitted Session captures,
+/// as the App Server does even while an earlier runtime is shutting down.
+async fn compose_admitted_with_controller(
+    launch: &AdmittedSessionConfig,
+    controller: &super::session_controller::SessionController,
+) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+    use super::session::SessionPersistentState;
     let session = controller
         .create_session(SessionPersistentState::from_input(&launch.input))
         .await?
@@ -57,6 +66,20 @@ struct Fixture {
     host: HostEnvironment,
     credentials: crate::credentials::CredentialSnapshot,
     request: LaunchRequest,
+}
+
+pub(super) fn git(root: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -754,11 +777,91 @@ fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
     assert_bounded_cause(&report, "agents.bad", "invalid");
 }
 
+/// The analyzed failure of a composition without a default model.
+fn analyzed_failure(f: &Fixture) -> super::diagnostics::LaunchFailure {
+    match analyze(&f.request, &f.host) {
+        Ok(_) => panic!("the composition resolved"),
+        Err(failure) => failure,
+    }
+}
+
+#[test]
+fn issue464_semantic_diagnostics_name_the_document_that_authored_the_field() {
+    let invalid = json!({"subagents":{"max_concurrent":0}});
+    let valid = json!({"subagents":{"max_concurrent":2}});
+    for (user, workspace, owner) in [
+        (Some(invalid.clone()), None, Some(true)),
+        (None, Some(invalid.clone()), Some(false)),
+        // The Workspace unit replaces the User unit: it authored the value.
+        (Some(valid.clone()), Some(invalid.clone()), Some(false)),
+        (Some(invalid.clone()), Some(valid.clone()), None),
+    ] {
+        let f = Fixture::new();
+        let user_path = f.host.config_directory.join("rustx.toml");
+        let workspace_path = f.host.launch_directory.join("rustx.toml");
+        match &user {
+            // The User authors only this value; no default model anywhere.
+            Some(value) => f.user(value.clone()),
+            None => std::fs::write(&user_path, "").unwrap(),
+        }
+        if let Some(value) = &workspace {
+            f.project(value.clone());
+        }
+        let failure = analyzed_failure(&f);
+        let Some(user_owned) = owner else {
+            // The Workspace corrected the User value: only the default model
+            // is missing.
+            assert!(failure.incomplete, "{user:?} {workspace:?}");
+            assert_eq!(failure.diagnostic.path, "agent.model.model");
+            continue;
+        };
+        assert!(!failure.incomplete, "{user:?} {workspace:?}");
+        assert_eq!(failure.diagnostic.category, "invalid");
+        assert_eq!(failure.diagnostic.path, "subagents.max_concurrent");
+        assert_eq!(
+            failure.diagnostic.file,
+            Some(if user_owned {
+                user_path
+            } else {
+                workspace_path
+            }),
+            "{user:?} {workspace:?}"
+        );
+    }
+}
+
+#[test]
+fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
+    let f = Fixture::new();
+    // The User defines `host` and its Models; the Workspace adds a Model of a
+    // Provider nobody defines. The failing field `models.*.provider` covers
+    // Models of both documents, so neither owns the failure.
+    f.user(json!({}));
+    f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
+        "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
+        "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
+        "tool_calls":true,"reasoning":false}}}}));
+    let failure = analyzed_failure(&f);
+    assert!(!failure.incomplete);
+    assert_eq!(failure.diagnostic.category, "invalid");
+    assert_eq!(failure.diagnostic.path, "models.*.provider");
+    assert_eq!(failure.diagnostic.file, None);
+    assert!(!failure.diagnostic.reason.contains("missing"));
+
+    // A valid partial composition is incomplete, not invalid.
+    std::fs::remove_file(f.host.launch_directory.join("rustx.toml")).unwrap();
+    let failure = analyzed_failure(&f);
+    assert!(failure.incomplete);
+    assert_eq!(failure.diagnostic.path, "agent.model.model");
+}
+
 #[test]
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();
     f.user(json!({}));
-    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "agent": {"tools": {"builtin": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>()}}}));
+    // Policies naming `.agents` MCP servers are composition facts: valid in
+    // the source, unresolved here, and large enough to omit the projection.
+    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "mcp_tool_policies": (0..12000).map(|index| (format!("unresolved_server_identity_{index}"), json!({"execution": "background_only"}))).collect::<serde_json::Map<_,_>>()}));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 3);
     assert!(report.partial.is_some());
@@ -1310,7 +1413,12 @@ impl Fixture {
             root,
             host,
             credentials: crate::credentials::CredentialSnapshot::default(),
-            request: LaunchRequest::default(),
+            request: LaunchRequest {
+                // Configuration tests own this workspace. Discovery tests
+                // explicitly clear the override at an owned marker boundary.
+                workspace: Some(workspace),
+                ..Default::default()
+            },
         };
         fixture.user(json!({"agent": {"model": {"model":"host/one"}}}));
         fixture
@@ -1455,12 +1563,16 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
     )]);
     let launch = f.resolve();
     f.credentials = crate::credentials::CredentialSnapshot::default();
-    let product = compose_admitted(&launch).await.unwrap();
+    let controller = super::session_controller::SessionController::open(&launch.runtime_root)
+        .expect("one native catalog owner");
+    let product = compose_admitted_with_controller(&launch, &controller)
+        .await
+        .unwrap();
     assert!(!format!("{launch:?}").contains("CFG233_PROVIDER_SENTINEL"));
     product.runtime().shutdown().await.unwrap();
-    drop(product); // Release native catalog ownership before the next launch.
+    drop(product);
     assert!(
-        compose_admitted(&f.resolve())
+        compose_admitted_with_controller(&f.resolve(), &controller)
             .await
             .unwrap_err()
             .to_string()
@@ -1728,6 +1840,7 @@ fn workspace_boundaries_subdirectories_non_git_nested_and_explicit() {
     let mut f = Fixture::new();
     let original = f.resolve();
     f.project(json!({}));
+    f.request.workspace = None;
     let sub = f.host.launch_directory.join("a/b");
     std::fs::create_dir_all(&sub).unwrap();
     f.host.launch_directory = sub.clone();
@@ -1746,10 +1859,11 @@ fn workspace_boundaries_subdirectories_non_git_nested_and_explicit() {
 
 #[cfg(unix)]
 #[test]
-#[allow(clippy::items_after_statements)] // test-local Git assertion helper
 fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() {
-    let f = Fixture::new();
+    let mut f = Fixture::new();
     let original = f.resolve();
+    git(&original.workspace, &["init", "--quiet"]);
+    f.request.workspace = None;
     let alias = f.root.path().join("alias");
     std::os::unix::fs::symlink(&original.workspace, &alias).unwrap();
     let mut host = f.host.clone();
@@ -1758,20 +1872,6 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
         resolve(&f.request, &host).unwrap().identity,
         original.identity
     );
-    fn git(root: &Path, args: &[&str]) {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    git(&original.workspace, &["init", "--quiet"]);
     git(
         &original.workspace,
         &[
@@ -1911,10 +2011,11 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
 fn dangling_workspace_source_is_a_read_error() {
     let f = Fixture::new();
     std::os::unix::fs::symlink("missing.toml", f.host.launch_directory.join("rustx.toml")).unwrap();
+    // Refused as a symlink, never followed: neither absent nor its target.
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
-            .contains("cannot read")
+            .contains("not a symlink")
     );
 }
 
@@ -2209,10 +2310,12 @@ fn cfg270_only_toml_names_are_discovered_and_old_documents_are_inert() {
     std::fs::remove_file(f.host.config_directory.join("rustx.toml")).unwrap();
     let missing = analyze(&f.request, &f.host).unwrap_err();
     assert!(missing.incomplete);
+    git(&f.host.launch_directory, &["init", "--quiet"]);
     let nested = f.host.launch_directory.join("nested");
     std::fs::create_dir(&nested).unwrap();
     std::fs::write(nested.join("rustx.jsonc"), b"{}").unwrap();
-    // An obsolete ancestor marker cannot claim a workspace either.
+    // Discovery walks past the obsolete ancestor marker to our real Git
+    // boundary, without depending on unrelated markers above the fixture.
     let child = nested.join("child");
     std::fs::create_dir(&child).unwrap();
     let mut host = f.host.clone();
@@ -2222,7 +2325,7 @@ fn cfg270_only_toml_names_are_discovered_and_old_documents_are_inert() {
             .unwrap()
             .0
             .workspace,
-        child
+        f.host.launch_directory
     );
 }
 
@@ -2416,6 +2519,7 @@ fn cfg275_committed_end_to_end_example_uses_final_authoring_and_offline_admissio
     let mut f = Fixture::new();
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
     f.host.launch_directory = example.clone();
+    f.request.workspace = Some(example.clone());
     f.request.config = Some(example.join("rustx.toml"));
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
@@ -2755,7 +2859,12 @@ mod session_resolution {
         // Removal cannot cause a semantic reread failure at initial composition.
         std::fs::remove_file(&file).unwrap();
         let admitted_a = a.admit(|| f.credentials.clone()).unwrap();
-        let product_a = compose_admitted(&admitted_a).await.unwrap();
+        let controller =
+            super::super::session_controller::SessionController::open(&admitted_a.runtime_root)
+                .expect("one native catalog owner");
+        let product_a = compose_admitted_with_controller(&admitted_a, &controller)
+            .await
+            .unwrap();
         let resources_a = product_a.runtime().runtime_resources();
         assert_eq!(
             resources_a
@@ -2774,10 +2883,13 @@ mod session_resolution {
             .files
             .clone();
         drop(resources_a);
+        product_a.runtime().shutdown().await.unwrap();
         drop(product_a);
         let inspection_b = b.inspection.clone();
         let admitted_b = b.admit(|| f.credentials.clone()).unwrap();
-        let product_b = compose_admitted(&admitted_b).await.unwrap();
+        let product_b = compose_admitted_with_controller(&admitted_b, &controller)
+            .await
+            .unwrap();
         let resources_b = product_b.runtime().runtime_resources();
         assert_eq!(
             resources_b
@@ -2842,5 +2954,60 @@ mod session_resolution {
                 assert!(!text.contains("secret-model-parameter"));
             }
         }
+    }
+}
+
+/// Every entry below `root`, with the bytes of every regular file.
+fn tree(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    let mut entries = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            let content = if std::fs::symlink_metadata(&path).unwrap().is_dir() {
+                pending.push(path.clone());
+                None
+            } else {
+                Some(std::fs::read(&path).unwrap())
+            };
+            entries.insert(path, content);
+        }
+    }
+    entries
+}
+
+/// FS-AUTH-06: offline inspection — `rustx config check` and `rustx config
+/// show` — is read-only for missing sources, even a missing User source
+/// directory, and for valid ones: no directory, writer lock, staged file or
+/// backup appears, nothing changes, and no effect is performed.
+#[test]
+fn offline_inspection_of_missing_and_valid_sources_is_read_only() {
+    let f = Fixture::new();
+    std::fs::remove_dir_all(&f.host.config_directory).unwrap();
+    for valid in [false, true] {
+        if valid {
+            std::fs::create_dir_all(&f.host.config_directory).unwrap();
+            f.user(json!({"agent": {"model": {"model":"host/one"}}}));
+            std::fs::write(
+                f.host.launch_directory.join("rustx.toml"),
+                "[subagents]\nmax_concurrent = 2\n",
+            )
+            .unwrap();
+        }
+        let before = tree(f.root.path());
+        for operation in ["config_check", "config_show"] {
+            let ((report, _), effects) = super::static_effects::measure(|| {
+                super::diagnostics::inspect(operation, &f.request, &f.host)
+            });
+            assert_eq!(effects, [0; 11], "{operation} valid={valid}");
+            assert_eq!(
+                report.validity == super::diagnostics::Validity::Valid,
+                valid,
+                "{operation}: {:?}",
+                report.diagnostics
+            );
+        }
+        assert_eq!(tree(f.root.path()), before, "valid={valid}");
+        assert_eq!(f.host.config_directory.exists(), valid);
     }
 }

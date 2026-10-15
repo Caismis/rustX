@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { waitFor } from 'xstate';
 import { Server, snapshot } from './fixture';
 import { routeFixture } from './shell-navigation-fixture';
@@ -17,25 +17,49 @@ const idle = (actor: ShellNavigationActor) => waitFor(actor, snapshot => snapsho
 const mutations = (server: Server) => server.requests.filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start'].includes(row.request.method)).map(row => row.request);
 it('failed preparation preserves the committed route, attachment and controls without refresh', async () => {
   const f = await fixture(), controls = f.capture(), before = f.actor.getSnapshot().context.route, target = f.server.client.target('A');
-  const count = mutations(f.server).length, snapshots = f.server.requests.filter(row => row.request.method === 'session/snapshot').length;
+  const count = mutations(f.server).length, snapshots = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;
   f.server.held.add('session/attach'); f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const request = await f.server.waitFor('session/attach', 3);
   expect(controls()).toBe(true); expect(f.server.client.target('A')).toBe(target);
   f.server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'refused', data: { kind: 'operation_failed' } } });
   await idle(f.actor); expect(f.actor.getSnapshot().context.route).toBe(before); expect(controls()).toBe(true);
-  expect(mutations(f.server)).toHaveLength(count + 1); expect(f.server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(snapshots);
+  expect(mutations(f.server)).toHaveLength(count + 1); expect(f.server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(snapshots);
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
 });
 it('an authoritatively attached destination commits synchronously and supersedes held cold settlement', async () => {
   const f = await fixture(); f.server.held.add('session/attach');
+  f.server.held.add('session/checkpoint'); f.server.held.add('session/subscribe');
+  const checkpointCount = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  const subscriptionCount = f.server.requests.filter(row => row.request.method === 'session/subscribe').length;
+  const controlCurrent = () => f.server.client.isAttachmentControlCurrent('C', f.server.client.getSnapshot().views.C.attachmentObservation);
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const request = await f.server.waitFor('session/attach', 3);
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: true } });
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'B' });
-  f.server.reply(request); await f.server.client.waitForAttachment('C', () => true);
+  f.server.reply(request);
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'B' }); expect(f.actor.getSnapshot().context.error).toBeUndefined();
   expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
-  expect(f.server.client.isAttachmentControlCurrent('C', f.server.client.getSnapshot().views.C.attachmentObservation)).toBe(true);
+  const read = await f.server.waitFor('session/checkpoint', checkpointCount + 1);
+  const target = f.server.client.target('C');
+  expect(read.method).toBe('session/checkpoint');
+  if (read.method !== 'session/checkpoint') throw new Error('Expected native checkpoint request');
+  expect(read.params.target).toEqual(target); expect(controlCurrent()).toBe(false);
+  expect(f.server.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(subscriptionCount);
+  f.server.reply(read);
+  const subscription = await f.server.waitFor('session/subscribe', subscriptionCount + 1);
+  if (subscription.method !== 'session/subscribe') throw new Error('Expected native subscription request');
+  expect(subscription.params.target).toEqual(target);
+  expect(subscription.params.after_cursor).toBe(f.server.client.getSnapshot().views.C.checkpoint?.cursor);
+  expect(controlCurrent()).toBe(false);
+  await expect(f.server.client.send('C', 'not before the subscription receipt')).rejects.toThrow();
+  f.server.reply(subscription);
+  await f.server.client.waitForAttachment('C', () => true);
+  expect(controlCurrent()).toBe(true);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'B' });
+  expect(f.server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(checkpointCount + 1);
+  expect(f.server.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(subscriptionCount + 1);
+  expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
+  expect(mutations(f.server).filter(request => request.method !== 'session/attach')).toHaveLength(0);
 });
 for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'rustX')]) it(`Settings ${target.kind} retires admitted preparation while native attachment settles independently`, async () => {
   const f = await fixture(), controls = f.capture(); f.server.held.add('session/attach');
@@ -95,4 +119,41 @@ it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native dr
   expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority']);
   expect(f.server.client.firstSubmissions.draft(binding)?.session?.id).toBe('A-created');
   expect(f.server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(destination === 'Settings' ? 1 : 0);
+});
+
+it('a native attachment ready proof publishes its route across a later same-claim resync', async () => {
+  const f = await fixture();
+  f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
+  const attach = f.server.client.attach.bind(f.server.client);
+  const intercept = vi.spyOn(f.server.client, 'attach').mockImplementation((id, node, current, attached) => attach(id, node, current, target => {
+    attached?.(target);
+    f.server.held.add('session/checkpoint');
+    void f.server.client.refresh(id).catch(() => {});
+  }));
+  try {
+    f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
+    await f.server.waitFor('session/checkpoint', 4);
+    await idle(f.actor);
+    const proof = f.server.client.getSnapshot().views.C.attachmentObservation;
+    expect(f.server.client.isAttachmentObservationCurrent('C', proof)).toBe(true);
+    expect(f.server.client.isAttachmentControlCurrent('C', proof)).toBe(false);
+    expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
+    expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
+  } finally { intercept.mockRestore(); }
+});
+
+it('an identity receipt without checkpoint readiness cannot publish an executable route', async () => {
+  const f = await fixture();
+  f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
+  f.server.held.add('session/checkpoint');
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
+  const checkpoint = await f.server.waitFor('session/checkpoint', 3);
+  const proof = f.server.client.getSnapshot().views.C.attachmentObservation;
+  expect(f.server.client.isAttachmentObservationCurrent('C', proof)).toBe(true);
+  expect(f.server.client.isAttachmentControlCurrent('C', proof)).toBe(false);
+  f.server.socket.deliver({ jsonrpc: '2.0', id: checkpoint.id, error: { code: -32000, message: 'Native source unavailable', data: { kind: 'operation_failed' } } });
+  await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' });
+  expect(f.actor.getSnapshot().context.error).toContain('Native source unavailable');
+  expect(f.server.requests.filter(row => row.request.method === 'session/subscribe' && row.request.params.target.session_id === 'C')).toHaveLength(0);
 });

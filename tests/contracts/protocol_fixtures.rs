@@ -386,6 +386,8 @@ fn additional_event_variants_round_trip() {
     use rustx::runtime::types::CancellationReason;
 
     let cancelled = RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: 1,
         event_id: EventId::new("evt-6"),
         sequence: 6,
@@ -562,4 +564,86 @@ fn user_message_without_timestamp_stays_compatible() {
         decoded_legacy, legacy,
         "the pre-timestamp canonical encoding remains representable"
     );
+}
+
+/// Issue #467: byte locators retain their closed source and representation
+/// through the public generated contract. A partial UTF-8 chunk is bytes,
+/// never repaired or decoded by the protocol envelope.
+#[test]
+fn t08_t19_bounded_content_reference_and_chunk_contract_round_trip() {
+    use base64::Engine;
+    use rustx::message::types::ContentBlockIndex;
+    use rustx::runtime::identity::{
+        AttemptId, ConversationId, PublicationStreamId, RequestId, TurnId,
+    };
+    use rustx::runtime_client::content::{
+        ContentChunk, ContentRef, ContentRepresentation, ContentSource,
+    };
+    let sources = [
+        ContentSource::CanonicalMessageBlock {
+            component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
+            locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                message_id: MessageId::new("message"),
+            },
+            block_index: ContentBlockIndex::new(0),
+        },
+        ContentSource::DurableTranscriptAudit {
+            component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+            stream_id: PublicationStreamId::new("stream"),
+            message_id: MessageId::new("message"),
+            attempt_id: AttemptId::new("attempt"),
+            turn_id: TurnId::new("turn"),
+            publication_request_id: RequestId::new("publication-request"),
+            block_index: ContentBlockIndex::new(0),
+        },
+        ContentSource::LivePublicationPrefix {
+            component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+            stream_id: PublicationStreamId::new("stream"),
+            message_id: MessageId::new("message"),
+            attempt_id: AttemptId::new("attempt"),
+            turn_id: TurnId::new("turn"),
+            publication_request_id: RequestId::new("publication-request"),
+            block_index: ContentBlockIndex::new(0),
+        },
+    ];
+    for source in sources {
+        let reference = ContentRef {
+            conversation_id: ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8a1"),
+            source,
+            representation: ContentRepresentation::Utf8Text,
+            version: 1,
+            content_revision: 1,
+            readable_end: 4,
+        };
+        let chunk = ContentChunk {
+            content_ref: reference,
+            offset: 0,
+            data_base64: "8J8=".into(),
+            end_offset: 2,
+            readable_end: 4,
+            next_offset: Some(2),
+            complete: false,
+        };
+        let decoded = round_trip(&chunk);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(decoded.data_base64)
+                .unwrap(),
+            [0xf0, 0x9f]
+        );
+    }
+}
+#[test]
+fn issue467_obsolete_snapshot_and_child_conversation_methods_are_rejected() {
+    for name in [
+        "session/snapshot",
+        "agent/conversation",
+        "agent/conversationCancel",
+    ] {
+        let record = serde_json::json!({"jsonrpc":"2.0","id":1,"method":name,"params":{}});
+        assert!(
+            serde_json::from_value::<rustx::app_server::protocol::Request>(record).is_err(),
+            "obsolete endpoint {name}"
+        );
+    }
 }

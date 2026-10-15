@@ -67,12 +67,12 @@ pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 1;
 /// endpoint, a protocol, a credential store, or a vendor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ProviderId(String);
+pub struct ProviderId(Arc<str>);
 
 /// The identity of one catalog model within its provider.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ModelId(String);
+pub struct ModelId(Arc<str>);
 
 /// The identity of one Model Profile declared by a model.
 ///
@@ -83,7 +83,7 @@ pub struct ModelId(String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 #[derive(schemars::JsonSchema)]
-pub struct ModelProfileId(String);
+pub struct ModelProfileId(Arc<str>);
 
 impl<'de> Deserialize<'de> for ModelProfileId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -101,7 +101,7 @@ macro_rules! catalog_identity {
             /// runtime already validated.
             #[must_use]
             pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
+                Self(Arc::from(value.into()))
             }
 
             /// Validates and creates the identity.
@@ -121,7 +121,7 @@ macro_rules! catalog_identity {
                 {
                     return Err(ModelCatalogError::InvalidIdentity { kind: $what, value });
                 }
-                Ok(Self(value))
+                Ok(Self(Arc::from(value)))
             }
 
             /// The identity as a string slice.
@@ -146,14 +146,19 @@ catalog_identity!(ModelProfileId, "model profile", true, false);
 /// An authored Model identity. Its spelling has no provider or wire semantics.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, schemars::JsonSchema)]
 #[schemars(with = "String")]
-pub struct ModelRef(String);
+pub struct ModelRef(Arc<str>);
 
 impl ModelRef {
+    /// Borrow the validated native identity without formatting an owned String.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
     /// Constructs an explicitly qualified name; qualification is naming only.
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // Own both explicit naming components at construction.
     pub fn new(provider: ProviderId, model: ModelId) -> Self {
-        Self(format!("{provider}/{model}"))
+        Self(Arc::from(format!("{provider}/{model}")))
     }
 
     /// Parses a nonempty catalog identity, independently of Provider bindings.
@@ -163,7 +168,7 @@ impl ModelRef {
         ModelId::parse(value).map_err(|_| ModelCatalogError::InvalidModelRef {
             value: value.to_owned(),
         })?;
-        Ok(Self(value.to_owned()))
+        Ok(Self(Arc::from(value)))
     }
 }
 impl fmt::Display for ModelRef {
@@ -174,7 +179,7 @@ impl fmt::Display for ModelRef {
 
 impl Serialize for ModelRef {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_str(&self.0)
     }
 }
 
@@ -762,6 +767,12 @@ pub struct ProviderDefinition {
     pub api_key: CredentialSource,
 }
 
+/// Individually validated catalog entries, before reference closure.
+type CatalogEntries = (
+    BTreeMap<ProviderId, ProviderDefinition>,
+    BTreeMap<ModelRef, Arc<ModelDefinition>>,
+);
+
 /// The validated model catalog.
 ///
 /// Validation is complete at this point: every provider has an explicit
@@ -772,6 +783,9 @@ pub struct ProviderDefinition {
 pub struct ModelCatalog {
     providers: BTreeMap<ProviderId, ProviderDefinition>,
     models: BTreeMap<ModelRef, Arc<ModelDefinition>>,
+    // Native immutable ordinal indexes share identity bytes with the authoritative maps.
+    model_ordinals: Arc<[ModelRef]>,
+    profile_ordinals: Arc<[Arc<[ModelProfileId]>]>,
 }
 
 impl ModelCatalog {
@@ -829,14 +843,53 @@ impl ModelCatalog {
     ///
     /// Returns the first validation failure.
     pub fn from_document(document: ModelCatalogDocument) -> Result<Self, ModelCatalogError> {
+        let (providers, models) = Self::validated_entries(document)?;
+        if providers.is_empty() || models.is_empty() {
+            return Err(ModelCatalogError::EmptyCatalog);
+        }
+        if let Some(model) = models
+            .values()
+            .find(|model| !providers.contains_key(&model.provider))
+        {
+            return Err(ModelCatalogError::UnknownProvider {
+                provider: model.provider.clone(),
+            });
+        }
+        let model_ordinals = models.keys().cloned().collect();
+        let profile_ordinals = models
+            .values()
+            .map(|model| model.profiles.keys().cloned().collect::<Arc<[_]>>())
+            .collect();
+        Ok(Self {
+            providers,
+            models,
+            model_ordinals,
+            profile_ordinals,
+        })
+    }
+
+    /// Validates every authored Provider and Model on its own terms.
+    ///
+    /// This is exactly the part of [`Self::from_document`] one entry decides
+    /// alone. Whether a Model's Provider exists and whether the catalog is
+    /// nonempty are facts of the complete catalog: a configuration source may
+    /// leave either to the other scope it is composed with.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first entry validation failure.
+    pub fn validate_entries(document: ModelCatalogDocument) -> Result<(), ModelCatalogError> {
+        Self::validated_entries(document).map(drop)
+    }
+
+    fn validated_entries(
+        document: ModelCatalogDocument,
+    ) -> Result<CatalogEntries, ModelCatalogError> {
         if document.schema_version != MODEL_CATALOG_SCHEMA_VERSION {
             return Err(ModelCatalogError::UnsupportedSchemaVersion {
                 supported: MODEL_CATALOG_SCHEMA_VERSION,
                 found: document.schema_version,
             });
-        }
-        if document.providers.is_empty() {
-            return Err(ModelCatalogError::EmptyCatalog);
         }
         let mut providers = BTreeMap::new();
         for (raw_id, provider) in document.providers {
@@ -847,19 +900,12 @@ impl ModelCatalog {
         let mut models = BTreeMap::new();
         for (name, document) in document.models {
             let reference = ModelRef::parse(&name)?;
-            let provider = ProviderId::parse(&document.provider)?;
-            if !providers.contains_key(&provider) {
-                return Err(ModelCatalogError::UnknownProvider { provider });
-            }
             models.insert(
                 reference.clone(),
                 Arc::new(validate_model(&reference, document)?),
             );
         }
-        if models.is_empty() {
-            return Err(ModelCatalogError::EmptyCatalog);
-        }
-        Ok(Self { providers, models })
+        Ok((providers, models))
     }
 
     /// The providers in deterministic identity order.
@@ -1629,6 +1675,71 @@ pub enum ModelCatalogError {
     },
 }
 
+impl ModelCatalogError {
+    /// The authored location and fixed category of this failure.
+    ///
+    /// Both are native constants: an identity appears only as `*`, and no
+    /// authored value, identity or detail is ever part of either, so they can
+    /// be shown where the [`fmt::Display`] text (which quotes values) cannot.
+    #[must_use]
+    pub fn classification(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Syntax { .. } => ("models", "malformed model catalog"),
+            Self::UnsupportedSchemaVersion { .. } => {
+                ("models", "unsupported model catalog schema version")
+            }
+            Self::EmptyCatalog => (
+                "providers",
+                "the composed model catalog declares no Provider or no Model",
+            ),
+            Self::InvalidIdentity { kind, .. } => match *kind {
+                "provider" => ("providers", "invalid Provider identity"),
+                "model profile" => ("models.*.profiles", "invalid Model Profile identity"),
+                _ => ("models", "invalid Model identity"),
+            },
+            Self::InvalidModelRef { .. } => (
+                "models",
+                "invalid Model reference; expected provider-id/model-id",
+            ),
+            Self::InvalidBaseUrl { .. } => (
+                "providers.*.base_url",
+                "invalid Provider endpoint; an absolute http(s) URL without credentials, query or fragment is required",
+            ),
+            Self::InvalidCredentialSource { .. } => {
+                ("providers.*.api_key", "invalid Provider credential source")
+            }
+            Self::ProviderWithoutModels { .. } => ("providers.*", "a Provider declares no Model"),
+            Self::DuplicateModel { .. } => ("models.*", "duplicate Model identity"),
+            Self::InvalidLimits { .. } => ("models.*", "invalid Model context or output limits"),
+            Self::InvalidCapabilities { .. } => {
+                ("models.*.capabilities", "unusable Model capabilities")
+            }
+            Self::InvalidProfiles { .. } => ("models.*.profiles", "invalid Model Profiles"),
+            Self::InvalidCompat { .. } => ("models.*.compat", "invalid Model compatibility fields"),
+            Self::ProtectedKey { .. } => (
+                "models.*.request_params",
+                "request parameters set a runtime-owned key",
+            ),
+            Self::InexactNumber { .. } => (
+                "models.*.request_params",
+                "request parameters carry a number without an exact binary64 value",
+            ),
+            Self::UnknownProvider { .. } => (
+                "models.*.provider",
+                "a Model names a Provider the composed catalog does not define",
+            ),
+            Self::UnknownModel { .. } => (
+                "agent.model",
+                "a selected Model is not defined by the composed catalog",
+            ),
+            Self::MissingEnvironmentCredential { .. } => (
+                "providers.*.api_key",
+                "the credential environment variable is unset",
+            ),
+        }
+    }
+}
+
 impl fmt::Display for ModelCatalogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1691,6 +1802,190 @@ impl fmt::Display for ModelCatalogError {
 }
 
 impl std::error::Error for ModelCatalogError {}
+
+/// Borrowed credential-free catalog encoding. The authoritative immutable
+/// catalog remains the only owner of growing profile/model identities.
+pub(crate) struct ModelCatalogReadView<'a>(&'a ModelCatalog);
+impl ModelCatalog {
+    pub(crate) fn model_count(&self) -> usize {
+        self.models.len()
+    }
+    pub(crate) fn model_at(&self, ordinal: usize) -> Option<CatalogModelReadView<'_>> {
+        let reference = self.model_ordinals.get(ordinal)?;
+        let model = self.models.get(reference)?;
+        let provider = self.providers.get(&model.provider)?;
+        Some(CatalogModelReadView {
+            model: reference,
+            protocol: model.protocol,
+            context_window: model.context_window,
+            max_output_tokens: model.max_output_tokens,
+            declared_capabilities: &model.capabilities,
+            effective_capabilities: super::invocation::effective_capabilities(
+                &model.capabilities,
+                model.protocol,
+            ),
+            profiles: ProfilesReadView::Native(&model.profiles),
+            default_profile: model.default_profile.as_ref(),
+            credential_source: provider.api_key.read_view(),
+        })
+    }
+    pub(crate) fn profile_count(&self, ordinal: usize) -> Option<usize> {
+        self.profile_ordinals.get(ordinal).map(|keys| keys.len())
+    }
+    pub(crate) fn profile_at(
+        &self,
+        model_ordinal: usize,
+        ordinal: usize,
+    ) -> Option<CatalogProfileReadView<'_>> {
+        let id = self.profile_ordinals.get(model_ordinal)?.get(ordinal)?;
+        let model = self.models.get(self.model_ordinals.get(model_ordinal)?)?;
+        let profile = model.profiles.get(id)?;
+        Some(CatalogProfileReadView {
+            id,
+            reasoning_enabled: profile.reasoning_enabled,
+            max_output_tokens: profile.max_output_tokens,
+        })
+    }
+    pub(crate) fn read_view(&self) -> ModelCatalogReadView<'_> {
+        ModelCatalogReadView(self)
+    }
+}
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum CredentialReadView<'a> {
+    Literal,
+    Environment { variable: &'a str },
+}
+impl CredentialSource {
+    pub(crate) fn read_view(&self) -> CredentialReadView<'_> {
+        match self {
+            Self::Literal(_) => CredentialReadView::Literal,
+            Self::Environment(variable) => CredentialReadView::Environment { variable },
+        }
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CatalogProfileReadView<'a> {
+    pub id: &'a ModelProfileId,
+    pub reasoning_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+}
+pub(crate) enum ProfilesReadView<'a> {
+    Header(Vec<CatalogProfileReadView<'a>>),
+    Native(&'a BTreeMap<ModelProfileId, ModelProfile>),
+    Frozen(Option<(&'a ModelProfileId, bool)>),
+}
+impl Serialize for ProfilesReadView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Profile<'a> {
+            id: &'a ModelProfileId,
+            reasoning_enabled: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            max_output_tokens: Option<u32>,
+        }
+        match self {
+            Self::Header(profiles) => profiles.serialize(serializer),
+            Self::Native(profiles) => {
+                let mut seq = serializer.serialize_seq(Some(profiles.len()))?;
+                for (id, profile) in *profiles {
+                    seq.serialize_element(&Profile {
+                        id,
+                        reasoning_enabled: profile.reasoning_enabled,
+                        max_output_tokens: profile.max_output_tokens,
+                    })?;
+                }
+                seq.end()
+            }
+            Self::Frozen(profile) => {
+                let mut seq = serializer.serialize_seq(Some(usize::from(profile.is_some())))?;
+                if let Some((id, reasoning_enabled)) = profile {
+                    seq.serialize_element(&Profile {
+                        id,
+                        reasoning_enabled: *reasoning_enabled,
+                        max_output_tokens: None,
+                    })?;
+                }
+                seq.end()
+            }
+        }
+    }
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CatalogModelReadView<'a> {
+    pub model: &'a ModelRef,
+    pub protocol: ModelProtocol,
+    pub context_window: u64,
+    pub max_output_tokens: u32,
+    pub declared_capabilities: &'a ModelCapabilities,
+    pub effective_capabilities: ModelCapabilities,
+    pub profiles: ProfilesReadView<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_profile: Option<&'a ModelProfileId>,
+    pub credential_source: CredentialReadView<'a>,
+}
+/// Finite native collection header. Deferred profiles are explicitly identified.
+#[derive(Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeCatalogModelHeader<'a> {
+    #[serde(flatten)]
+    pub model: CatalogModelReadView<'a>,
+    pub profile_count: u64,
+    pub profiles_deferred: bool,
+}
+impl schemars::JsonSchema for CatalogModelReadView<'_> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CatalogModelReadView".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<CatalogModelView>()
+    }
+}
+impl schemars::JsonSchema for CatalogProfileReadView<'_> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CatalogProfileReadView".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<ModelProfileView>()
+    }
+}
+impl Serialize for ModelCatalogReadView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeSeq, SerializeStruct};
+        struct Models<'a>(&'a ModelCatalog);
+        impl Serialize for Models<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut seq = serializer.serialize_seq(Some(self.0.models.len()))?;
+                for (reference, model) in &self.0.models {
+                    let provider = &self.0.providers[&model.provider];
+                    seq.serialize_element(&CatalogModelReadView {
+                        model: reference,
+                        protocol: model.protocol,
+                        context_window: model.context_window,
+                        max_output_tokens: model.max_output_tokens,
+                        declared_capabilities: &model.capabilities,
+                        effective_capabilities: super::invocation::effective_capabilities(
+                            &model.capabilities,
+                            model.protocol,
+                        ),
+                        profiles: ProfilesReadView::Native(&model.profiles),
+                        default_profile: model.default_profile.as_ref(),
+                        credential_source: provider.api_key.read_view(),
+                    })?;
+                }
+                seq.end()
+            }
+        }
+        let mut view = serializer.serialize_struct("ModelCatalogView", 1)?;
+        view.serialize_field("models", &Models(self.0))?;
+        view.end()
+    }
+}
 
 /// The safe public catalog view served to Runtime Clients.
 ///
@@ -1789,6 +2084,129 @@ mod tests {
         )
         .unwrap()
     }
+    fn native_catalog_with_large_profile() -> (ModelCatalog, String) {
+        let mut value = document();
+        let model = value["models"]["chosen"].clone();
+        let rows = value["models"].as_object_mut().unwrap();
+        rows.clear();
+        for ordinal in 0..73 {
+            rows.insert(format!("model-{ordinal:03}"), model.clone());
+        }
+        let enormous = format!("a{}", "x".repeat(2_100_000));
+        let mut profiles = serde_json::Map::new();
+        profiles.insert(enormous.clone(), json!({"reasoningEnabled":false}));
+        for ordinal in 0..72 {
+            profiles.insert(
+                format!("profile-{ordinal:03}"),
+                json!({"reasoningEnabled":false}),
+            );
+        }
+        value["models"]["model-000"]["profiles"] = Value::Object(profiles);
+        value["models"]["model-000"]["defaultProfile"] = enormous.clone().into();
+        let catalog = catalog(value).unwrap();
+        (catalog, enormous)
+    }
+
+    #[test]
+    fn t15_native_catalog_ordinals_preserve_identity_and_advance_past_large_profiles() {
+        let (catalog, enormous) = native_catalog_with_large_profile();
+        assert_eq!(catalog.model_count(), 73);
+        assert_eq!(catalog.model_at(72).unwrap().model.as_str(), "model-072");
+        assert!(catalog.model_at(73).is_none());
+        assert_eq!(catalog.profile_count(0), Some(73));
+        assert_eq!(catalog.profile_at(0, 0).unwrap().id.as_str(), enormous);
+        assert_eq!(
+            catalog.profile_at(0, 72).unwrap().id.as_str(),
+            "profile-071"
+        );
+        let key = catalog.models.keys().next().unwrap();
+        assert!(Arc::ptr_eq(&key.0, &catalog.model_ordinals[0].0));
+        let profile_key = catalog.models[key].profiles.keys().next().unwrap();
+        assert!(Arc::ptr_eq(
+            &profile_key.0,
+            &catalog.profile_ordinals[0][0].0
+        ));
+        assert!(
+            crate::runtime_client::checkpoint::bounded_item_bytes(
+                &catalog.model_at(0).unwrap(),
+                16_384
+            )
+            .is_none()
+        );
+        assert!(
+            crate::runtime_client::checkpoint::bounded_item_bytes(
+                &catalog.profile_at(0, 72).unwrap(),
+                16_384
+            )
+            .is_some()
+        );
+        let state = crate::model::session::SessionModelState::new(
+            crate::model::invocation::ModelBindingRegistry::new(
+                catalog
+                    .resolve(&MapCredentialEnvironment::new([(
+                        "RUSTX_KEY".into(),
+                        "fixture-key".into(),
+                    )]))
+                    .unwrap(),
+            )
+            .unwrap(),
+            crate::model::session::SessionModelConfig::of(ModelRef::parse("model-001").unwrap()),
+        )
+        .unwrap();
+        let source = crate::runtime_client::domain::DomainSource::Catalog(Arc::new(
+            crate::runtime_client::domain::SourceValue::new(Arc::new(
+                state.read_source().catalog_source(),
+            )),
+        ));
+        let cut = crate::runtime_client::checkpoint::CheckpointReadCut {
+            canonical_foreground: None,
+            live_publication: None,
+            conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv_01900000-0000-7000-8000-000000000011",
+            ),
+            activation_id: None,
+            revision: 0,
+            through: 0,
+            source_cut: None,
+            domain_revisions: BTreeMap::new(),
+            collection_cuts: BTreeMap::new(),
+        };
+        for (offset, next) in [(0, Some(32)), (32, Some(64)), (64, None)] {
+            let page = source
+                .page(
+                    &cut,
+                    "model_catalog.models",
+                    &["models".into()],
+                    offset,
+                    32,
+                    false,
+                )
+                .unwrap();
+            assert_eq!(page.total, 73);
+            assert_eq!(page.next_offset, next);
+            assert_eq!(page.items.first().unwrap().offset, offset);
+            assert!(crate::runtime_client::checkpoint::bounded_bytes(&page, 786_432).is_some());
+            if offset == 0 {
+                assert!(page.items[0].deferred);
+                assert!(page.items[1].value.is_some());
+            }
+        }
+        let page = source
+            .page(
+                &cut,
+                "model_catalog.models.@0.profiles",
+                &["models".into(), "@0".into(), "profiles".into()],
+                0,
+                32,
+                false,
+            )
+            .unwrap();
+        assert_eq!(page.total, 73);
+        assert_eq!(page.next_offset, Some(32));
+        assert!(page.items[0].deferred);
+        assert!(page.items[1].value.is_some());
+    }
+
     #[test]
     fn provider_and_model_names_never_supply_semantics() {
         let mut value = document();

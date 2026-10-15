@@ -265,21 +265,30 @@ impl AppServerHost {
     }
 
     /// Commit request ownership and its synchronous downstream admission under
-    /// the same boundary as host drain. Never await or execute work here.
+    /// the same boundary as host drain. Detached operations retain this common
+    /// counter; noncontrol requests leave two slots per configured connection
+    /// for control intent even after their physical connections retire.
+    /// Never await or execute work here.
     pub(crate) fn admit_request<T>(
         &self,
+        lane: super::RequestLane,
         commit: impl FnOnce(ServerOperation) -> T,
     ) -> Result<T, HostAdmissionError> {
         let mut state = self.0.state.lock().expect("host mutex");
         state.accepting()?;
         if *self.0.requests.borrow()
-            >= self.policy().max_connections * super::transport::IN_FLIGHT_REQUESTS
+            >= self.policy().max_connections * lane.host_capacity_per_connection()
         {
             state.refuse("request_capacity");
             return Err(HostAdmissionError::RequestCapacity);
         }
         self.0.requests.send_modify(|n| *n += 1);
         Ok(commit(ServerOperation(self.0.requests.clone())))
+    }
+    /// Observe the existing native operation counter for deterministic admission tests.
+    #[cfg(test)]
+    pub(crate) fn request_operations(&self) -> watch::Receiver<usize> {
+        self.0.requests.subscribe()
     }
     pub(crate) fn prepare_upload<T>(
         &self,

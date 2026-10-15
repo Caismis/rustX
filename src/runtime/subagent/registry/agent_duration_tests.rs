@@ -28,7 +28,9 @@ async fn agent_duration_follows_driver_evidence_through_stopping_and_durable_ter
         let append = |seconds, event| {
             store
                 .append_event(RuntimeEventEnvelope {
-                    schema_version: 1,
+                    tool_occurrence: None,
+                    observation: None,
+ schema_version: 1,
                     event_id: EventId::new(uuid::Uuid::now_v7().to_string()),
                     sequence: 0,
                     conversation_id: accepted.child_conversation_id.clone(),
@@ -203,7 +205,9 @@ async fn agent_duration_freezes_at_durable_evidence_after_control_loss() {
     ] {
         store
             .append_event(RuntimeEventEnvelope {
-                schema_version: 1,
+                tool_occurrence: None,
+                observation: None,
+ schema_version: 1,
                 event_id: EventId::new(format!("event-{seconds}")),
                 sequence: 0,
                 conversation_id: accepted.child_conversation_id.clone(),

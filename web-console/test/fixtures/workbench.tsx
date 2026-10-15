@@ -1,3 +1,5 @@
+import { domainReceipt } from '../fixture';
+import { settingsReceipt } from '../fixture';
 import { createRoot } from 'react-dom/client';
 import { traceRecord, requestDetail } from '../trace-fixture';
 import { App } from '../../src/app/App';
@@ -30,7 +32,7 @@ if (new URL(location.href).searchParams.has('composer-layout')) {
   server.summaries.set('A', { cwd: workspace.location });
   server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: workspace.id }));
   server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), prospective_approval_mode: 'full_access', target: { kind: 'workspace', directory: workspace.location } } });
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: workspace.location } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: workspace.location },'0')));
   const saved = server.snapshots.get('A')!;
   const model = 'DeepSeek/deepseek-flash';
   saved.model = cfg3Effective().effective_model!;
@@ -41,12 +43,12 @@ if (new URL(location.href).searchParams.has('composer-layout')) {
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false };
   const models = [model, 'Short'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'on', reasoningEnabled: false }], defaultProfile: 'on' }));
-  server.handlers.set('session/model', () => ({ type: 'model', model: saved.model! }));
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models } }));
+  server.handlers.set('session/model', () => (domainReceipt('model',[saved.model!])));
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models }).models??[])));
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
     saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
-    return { type: 'model', model: saved.model! };
+    return {type:'model_set',settings_revision:'1'};
   });
 }
 await server.attached('A');

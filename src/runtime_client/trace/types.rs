@@ -1,19 +1,6 @@
-//! The Trace inspection vocabulary: bounded summaries and heavy detail.
-//!
-//! Trace is split into two levels because a ledger and an inspector want
-//! opposite things. A ledger pages over thousands of records and needs each
-//! one to stay small; an inspector opens one record and needs everything
-//! rustX authoritatively knows about it. Putting both in one type forces a
-//! choice between an unusable inspector and an unpageable ledger.
-//!
-//! ```text
-//! TraceRecord   bounded, pageable, one ledger row, one timeline span
-//! TraceDetail   heavy, fetched for one record, never carried by a page
-//! ```
-//!
-//! Every type here is a projection. None of them is history, execution
-//! authority, settlement authority, or recovery input, and constructing one
-//! reads durable state without changing any.
+//! Finite Trace records, independent lifecycle updates and original field evidence.
+//! Selected detail is read through the advertised native bounded readers.
+//! These display carriers are never execution or recovery authority.
 
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -58,11 +45,47 @@ impl TraceCursor {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TracePage {
+    pub read_cut: Option<crate::runtime_client::checkpoint::CheckpointReadCut>,
     /// Current-cut repairs for explicitly requested loaded identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub updates: Vec<TraceLifecycle>,
     pub records: Vec<TraceRecord>,
     pub next_cursor: Option<TraceCursor>,
+}
+
+/// The original bounded reader that owns one deferred Trace field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TraceFieldSource {
+    Value {
+        field: TraceFieldKind,
+        domain: String,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        item_offset: u64,
+        path: Vec<String>,
+        encoded_bytes: u64,
+    },
+    Content {
+        field: TraceFieldKind,
+        binding: crate::runtime_client::checkpoint::ContentBinding,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceFieldKind {
+    RequestId,
+    ProvisionalMessageId,
+    Model,
+    StepId,
+    CallId,
+    ToolId,
+    Name,
+    Arguments,
+    Definition,
+    NativeId,
+    MessageId,
+    Result,
+    Failure,
 }
 
 /// Server-resolved native grouping of one record.
@@ -73,7 +96,9 @@ pub struct TracePage {
 #[serde(deny_unknown_fields)]
 pub struct TraceLocation {
     pub attempt_id: Option<AttemptId>,
+    pub attempt_id_source: Option<crate::runtime_client::response::AttemptIdentitySource>,
     pub step_id: Option<TurnId>,
+    pub step_id_source: Option<TraceFieldSource>,
 }
 
 /// The closed record vocabulary of the ledger.
@@ -177,12 +202,14 @@ pub struct TraceArtifact {
 ///
 /// A proposal proves that the generation assembled a call. It never proves
 /// that execution started: a started Tool record is separate evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceToolCall {
-    pub call_id: ToolCallId,
-    pub tool_id: ToolId,
-    pub name: String,
+    pub call_id: Option<ToolCallId>,
+    pub tool_id: Option<ToolId>,
+    pub name: Option<String>,
+    pub occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence,
+    pub fields: Vec<TraceFieldSource>,
 }
 
 /// How one actual request's frozen System Prompt relates to its predecessor.
@@ -223,12 +250,18 @@ pub struct TraceSystemPromptPresentation {
 }
 
 /// The exact shared predecessor of the prompt and Tool catalog comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "availability", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TraceRequestPredecessor {
     NotApplicable,
-    Unavailable { request_id: Option<RequestId> },
-    Available { request_id: RequestId },
+    Unavailable {
+        request_id: Option<RequestId>,
+        request_id_source: Option<TraceFieldSource>,
+    },
+    Available {
+        request_id: Option<RequestId>,
+        request_id_source: Option<TraceFieldSource>,
+    },
 }
 
 /// Complete frozen Tool definitions are compared before any display bounding.
@@ -287,10 +320,12 @@ pub enum TraceContextSource {
 /// comes from keyed Message Ledger reads. Neither the browser nor Trace
 /// itself decides which request introduced a Context fact: the request that
 /// committed the identity atomically with its own start did.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceContextPresentation {
-    pub message_id: MessageId,
+    pub message_id: Option<MessageId>,
+    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub fields: Vec<TraceFieldSource>,
     /// Exact producer from the committed accepted-contribution record.
     pub producer: crate::runtime::identity::ContextContributorIdentity,
     pub context_kind: TraceContextKind,
@@ -312,14 +347,18 @@ pub struct TraceContextPresentation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceRequestSummary {
-    pub request_id: RequestId,
+    pub accepted_message_locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    pub request_id: Option<RequestId>,
+    pub request_id_source: Option<TraceFieldSource>,
     /// Native actual-request ordinal within the logical step. Zero is the
     /// initial request; retry and recovery requests continue the sequence.
     /// It is read from the frozen snapshot, never inferred from timestamps.
     pub retry_number: u32,
-    pub assistant_message_id: MessageId,
+    pub assistant_message_id: Option<MessageId>,
+    pub assistant_message_id_source: Option<TraceFieldSource>,
     /// Historical model, from the request's own immutable snapshot.
-    pub model: String,
+    pub model: Option<String>,
+    pub model_source: Option<TraceFieldSource>,
     /// The exact preceding actual request's failure class, when recorded.
     pub previous_failure_kind: Option<ModelErrorKind>,
     pub failure_kind: Option<ModelErrorKind>,
@@ -336,14 +375,20 @@ pub struct TraceRequestSummary {
     pub context_additions: Vec<TraceContextPresentation>,
     /// Whether the Context list was shortened by the Trace summary bound.
     pub context_truncated: bool,
+    pub context_total: u64,
+    pub context_domain: String,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub context_next_offset: Option<u64>,
 }
 
 /// Bounded Tool facts carried by a pageable summary row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceToolSummary {
-    pub call_id: ToolCallId,
-    pub tool_id: ToolId,
+    pub call_id: Option<ToolCallId>,
+    pub tool_id: Option<ToolId>,
+    pub occurrence: Option<crate::runtime_client::snapshot::RuntimeClientToolOccurrence>,
+    pub fields: Vec<TraceFieldSource>,
     /// Recorded model-facing name, when the canonical proposal is loadable.
     pub name: Option<String>,
     /// Bounded canonical arguments; absent only when the exact proposal is unavailable.
@@ -372,6 +417,8 @@ pub enum TraceToolOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceRecord {
+    pub fields: Vec<TraceFieldSource>,
+    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
     /// Stable native Trace identity. Selection and detail reads use it, and
     /// it survives paging, prepending and reconnect for the same record.
     pub id: String,
@@ -415,6 +462,8 @@ pub struct TraceRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceLifecycle {
+    pub fields: Vec<TraceFieldSource>,
+    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
     pub id: String,
     /// Current native ownership, including an idle input's answering Attempt.
     pub location: TraceLocation,

@@ -184,7 +184,9 @@ export type AgentStatusAnchor =
 export function agentStatusAnchor(status: AgentStatusView): AgentStatusAnchor {
   const fresh = status.opportunities.fresh_inbound;
   if (fresh != null) {
-    return { kind: "inbound_message", messageId: fresh.target_message_id };
+    if(fresh.target_message_id != null) return { kind: "inbound_message", messageId: fresh.target_message_id };
+    if(fresh.transcript_anchor != null) return { kind: "transcript_position", cursor:fresh.transcript_anchor };
+    return { kind:'unplaced' };
   }
   const batch = status.opportunities.post_tool_batch;
   if (batch?.transcript_anchor != null) {

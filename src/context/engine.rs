@@ -611,6 +611,10 @@ impl ContextEngine {
         observed: Option<&ProviderObservedInput>,
         effective_system_prompt: &str,
     ) -> Result<ContextProjection, ContextError> {
+        #[cfg(test)]
+        let _profile = crate::agent::execution::attribution::Timer::new(
+            crate::agent::execution::attribution::Phase::ContextProjection,
+        );
         let (messages, _) = state
             .structure()
             .map_err(|error| conversation_failed(&error))?;

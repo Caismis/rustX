@@ -35,6 +35,7 @@ const sessions = [
 
 const boundary = {
   surface_revision: "4",
+  locator:{type:"by_message_id" as const,message_id:"user-c"},block_count:"1",content:[],collections:[],
   message: {
     id: "user-c",
     content: [{ type: "text" as const, text: "try the alternate approach" }],
@@ -357,6 +358,7 @@ describe("finite viewports (issue #161)", () => {
   it("keeps the selected boundary visible, starting from the initial end position", () => {
     const boundaries = Array.from({ length: 10 }, (_, index) => ({
       surface_revision: String(index + 1),
+      locator:{type:"by_message_id" as const,message_id:`user-${index}`},block_count:"1",content:[],collections:[],
       message: {
         id: `user-${index}`,
         content: [{ type: "text" as const, text: `approach ${index}` }],
@@ -401,7 +403,7 @@ describe("finite viewports (issue #161)", () => {
     const frame = framed(selector);
     const chosen: string[] = [];
     selector.onSelect = (selection) => {
-      chosen.push(selection.kind === "node" ? selection.node.id : selection.boundary.message.id);
+      chosen.push(selection.kind === "node" ? selection.node.id : selection.boundary.message!.id);
     };
 
     // The initial highlight is the last branch boundary and must be visible.
@@ -427,6 +429,7 @@ describe("finite viewports (issue #161)", () => {
 function boundaryAt(id: string): typeof boundary {
   return {
     surface_revision: String(Number(id.replace("user-", "")) + 1),
+    locator:{type:"by_message_id",message_id:id},block_count:"1",content:[],collections:[],
     message: {
       id,
       content: [{ type: "text", text: id }],

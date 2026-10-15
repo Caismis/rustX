@@ -1,7 +1,7 @@
-import type { McpProbeResult, SourceMutation, SourceSettings } from '../../../protocol/app-server/v46.ts';
-import type { AttachmentTarget, SessionFileReference } from '../../../protocol/app-server/v46.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v48.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v48.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
-export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; message_id: string; delivery_index: number }
+export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number }
 export interface DeliveryBytes { file: SessionFileReference; data: string }
 export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
@@ -13,7 +13,7 @@ export type WorkspaceConfigurationReread =
  * the fact that this mutation committed and the revision it committed at; it is
  * never a projection, an application observation, or a read outcome. */
 export interface WorkspaceConfigurationCommit {
-  acknowledgement: SourceSettings;
+  acknowledgement: { target: SourceTarget; revision: string };
   reread: WorkspaceConfigurationReread;
 }
 /** A Workspace configuration operation outcome: acknowledgement and

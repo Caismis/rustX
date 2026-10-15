@@ -21,6 +21,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
+import { contentRefKey } from "../../protocol/app-server/content-identity.ts";
+import { parseObservedValue } from "../../protocol/app-server/domain-observation.ts";
+import type { ToolExecutionResult } from "../src/protocol/app-server.ts";
+import type { CorrelatedTool } from "../src/presentation/tools.ts";
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
 import { AppServerHost } from "../src/app-server/host.ts";
 import { AppServerRequestError, isDeliveryCancelled } from "../src/app-server/client.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
@@ -57,6 +62,7 @@ const REPORT_BYTES = Buffer.from("# 报告\r\n\r\nOriginal CRLF bytes\r\n\u0000t
 const DATA_BYTES = Buffer.from("a,b\r\n1,2\r\n");
 
 class Fixture {
+  retainFailure = false;
   readonly temp: TempFixture;
   readonly env: NodeJS.ProcessEnv;
 
@@ -88,17 +94,142 @@ class Fixture {
     return workspace;
   }
 
+  cleanup(): void {
+    if (this.retainFailure) {
+      console.error(`Retained owned delivery failure fixture: ${this.temp.root}`);
+    } else this.temp.cleanup();
+  }
+
   get runtimeRoot(): string {
     return this.temp.path("runtime");
   }
 }
 
-async function deliver(host: AppServerHost, cwd: string): Promise<AppServerSession> {
+function cutDiagnostic(cut: import('../../protocol/app-server/v48.ts').CheckpointReadCut | undefined) {
+  if (!cut) return undefined;
+  const source = cut.source_cut;
+  return { conversation_id: cut.conversation_id, activation_id: cut.activation_id,
+    revision: cut.revision, through: cut.through,
+    source: source ? { conversation_id: source.read.conversation_id, journal: source.read.journal,
+      ledger: source.ledger_through, transcript: source.transcript_total, surface: source.surface_revision,
+      pending: source.read.pending_through } : null };
+}
+
+function eventDiagnostic(event: import('../../protocol/app-server/v48.ts').RuntimeClientEvent) {
+  if (event.type === 'checkpoint_advanced') return { type: event.type, cursor: event.checkpoint.cursor,
+    conversation_id: event.checkpoint.snapshot.conversation_id, cut: cutDiagnostic(event.checkpoint.read_cut),
+    attempt: event.checkpoint.snapshot.attempt?.phase.type };
+  if (event.type === 'projection_transition') return { type: event.type, cut: cutDiagnostic(event.metadata.read_cut),
+    facts: event.events.slice(0, 32).map(fact => fact.type) };
+  return { type: event.type };
+}
+
+async function deliver(host: AppServerHost, cwd: string, fixture: Fixture, provider: ProviderEmulator): Promise<AppServerSession> {
   const created = await host.createSession({ cwd });
   const session = await host.attach(created.session.id, created.session.active_node);
-  await session.submitInbound([{ type: "text", text: "tui present: deliver the report" }]);
-  await until(() => session.state.attempt?.phase.type === "settled", "the present turn settles");
-  return session;
+  const records: object[] = [];
+  const stop = host.client.onNotification(notification => {
+    if (notification.method !== 'session/event' && notification.method !== 'session/resyncRequired') return;
+    const target = notification.params.target;
+    if (target.session_id !== session.target.session_id || target.conversation_id !== session.target.conversation_id
+      || target.runtime_incarnation !== session.target.runtime_incarnation || target.attachment_id !== session.target.attachment_id) return;
+    if (records.length === 32) records.shift();
+    records.push(notification.method === 'session/event'
+      ? { cursor: notification.params.cursor, ...eventDiagnostic(notification.params.event) }
+      : { type: notification.method, after: notification.params.after_cursor, reason: notification.params.reason });
+  });
+  try {
+    await session.submitInbound([{ type: "text", text: "tui present: deliver the report" }]);
+    await until(() => session.state.attempt?.phase.type === "settled", "the present turn settles");
+    return session;
+  } catch (error) {
+    // Failure-only evidence; do not repair, restamp a cut, or change execution.
+    fixture.retainFailure = true;
+    let budget = 16 * 1024;
+    const print = (label: string, value: unknown) => {
+      const text = `${label}: ${JSON.stringify(value)}`;
+      const bytes = Buffer.byteLength(text) + 1;
+      if (bytes <= budget) { budget -= bytes; console.error(text); }
+    };
+    print('Delivery settlement owner', { target: session.target, fixture: fixture.temp.root,
+      database: join(fixture.runtimeRoot, 'sessions', session.target.session_id, 'conversations', session.target.conversation_id, 'conversation.sqlite'),
+      applied: session.state.cursor, observation: session.observationPhase, error: session.observationError,
+      attempt: { id: session.state.attempt?.attemptId, phase: session.state.attempt?.phase.type },
+      cut: cutDiagnostic(session.checkpoint?.read_cut), childExit: host.childExit ? { code: host.childExit.code, signal: host.childExit.signal } : null });
+    const requests = await provider.requests().catch(() => undefined);
+    print('Delivery provider metadata', { count: requests?.length,
+      requests: requests?.slice(0, 16).map(request => ({ index: typeof request.index === 'number' ? request.index : null,
+        model: typeof request.model === 'string' ? request.model.slice(0, 256) : null })) });
+    // At most1,024 UTF16 units is at most4KiB of UTF8 diagnostic text.
+    print('Delivery child stderr', host.stderrTail().text.slice(-1024));
+    for (const record of records) print('Delivery original native record', record);
+    throw error;
+  } finally { stop(); }
+}
+
+/** Exercise the actual /content reader for a selected deferred Tool result. */
+async function loadCommittedMetadata(host: AppServerHost, session: AppServerSession, cwd: string, tool: CorrelatedTool): Promise<CorrelatedTool> {
+  if (!tool.committedResultDeferred) {
+    assert.ok(tool.committedResult, "the finite native C result is already loaded");
+    return tool;
+  }
+  const reference = tool.resultMetadataRef;
+  assert.ok(reference, "the native C receipt advertises its original metadata source");
+  assert.equal(reference.representation, "canonical_json_v1");
+  assert.ok(reference.readable_end <= 65_536, "this selected two-file metadata fits one bounded range");
+  const identity = contentRefKey(reference);
+  const index = session.deferredContent.findIndex(binding => contentRefKey(binding.content_ref) === identity);
+  assert.ok(index >= 0, "the actual product content picker exposes this original result");
+  const dispatcher = new CommandDispatcher({host,session,sessionSettings:{cwd},diagnostics:()=>{throw new Error("not requested");}});
+  const outcome = await dispatcher.submit(`/content ${index + 1} 0`);
+  assert.equal(outcome.kind, "inspect");
+  if (outcome.kind !== "inspect") throw new Error("the selected content command must inspect original bytes");
+  const match = outcome.body.match(/^0–(\d+) \/ (\d+) bytes\n([^\n]+)\nEnd of content\.$/);
+  assert.ok(match, "the product viewer returned one complete original canonical range");
+  assert.equal(Number(match[1]), reference.readable_end);
+  assert.equal(Number(match[2]), reference.readable_end);
+  const metadata = parseObservedValue(match[3]!) as {role:string;tool_call_id:string;tool_id:string;result:Omit<ToolExecutionResult,"duration_ms"> & {duration_ms:number}};
+  assert.equal(metadata.role, "tool");
+  assert.equal(metadata.tool_call_id, tool.callId);
+  assert.equal(metadata.tool_id, tool.toolId);
+  assert.ok(Number.isSafeInteger(metadata.result.duration_ms) && metadata.result.duration_ms >= 0);
+  // This schema-owned native clock field is exact in the canonical bytes;
+  // only its typed presentation uses decimal text. Opaque fields stay intact.
+  return {...tool,committedResult:{...metadata.result,duration_ms:String(metadata.result.duration_ms)},committedResultDeferred:false};
+}
+
+/** The same real carrier exposes a finite Tool head and original frozen Definition.
+ * Neither explicit inspection nor a selected field read may ask the model again. */
+async function inspectPresentDefinition(host:AppServerHost,session:AppServerSession,cwd:string,provider:ProviderEmulator) {
+  const before=(await provider.requests()).length;
+  const {page}=await host.client.call('session/trace',{target:session.target,limit:32,records:[]},'trace');
+  const record=page.records.find(record=>record.kind==='tool'&&record.tool?.call_id==='call-tui-present');
+  assert.ok(record,'the actual native present execution has its original Trace record');
+  const dispatcher=new CommandDispatcher({host,session,sessionSettings:{cwd},diagnostics:()=>{throw new Error('not requested');}});
+  const head=await dispatcher.submit(`/observation trace ${record.id}`);
+  assert.equal(head.kind,'inspect');if(head.kind==='inspect')assert.match(head.body,/Tool definition: available/);
+  const fields=session.deferredTraceFields,index=fields.findIndex(field=>field.record===record.id&&field.source.field==='definition');
+  assert.ok(index>=0,'the terminal content picker exposes the native Definition selector');
+  const selected=fields[index]!;
+  assert.equal(selected.source.type,'value');
+  if(selected.source.type!=='value')throw new Error('Definition must use its advertised original indexed field.');
+  assert.deepEqual(selected.source.path,[]);
+  assert.ok(BigInt(selected.source.encoded_bytes)<=65_536n,'this native present Definition fits one original byte window');
+  const ordinal=session.deferredContent.length+session.deferredJournalFields.length+session.deferredAttemptIdentities.length+index+1;
+  const result=await dispatcher.submit(`/content ${ordinal} 0`);
+  assert.equal(result.kind,'inspect');if(result.kind!=='inspect')throw new Error('Original Definition read must return selected bytes.');
+  const matched=/^0–(\d+) \/ (\d+) bytes\n([\s\S]*)\nEnd of original field\.$/.exec(result.body);
+  assert.ok(matched,'the original selected Definition completed without whole-detail hydration');
+  assert.equal(matched[1],selected.source.encoded_bytes);assert.equal(matched[2],selected.source.encoded_bytes);
+  assert.equal(Buffer.byteLength(matched[3]!),Number(selected.source.encoded_bytes));
+  const original=parseObservedValue(matched[3]!);
+  assert.ok(original&&typeof original==='object'&&'name' in original&&'tool_id' in original&&'input_schema' in original);
+  assert.equal(original.name,'present');assert.equal(original.tool_id,'tool-present');
+  const schema=original.input_schema;
+  assert.ok(schema&&typeof schema==='object'&&'truncated' in schema&&'value' in schema);assert.equal(schema.truncated,false);
+  const value=schema.value;assert.ok(value&&typeof value==='object'&&'properties' in value);
+  const properties=value.properties;assert.ok(properties&&typeof properties==='object'&&'files' in properties);
+  assert.equal((await provider.requests()).length,before,'head and Definition observation issue no provider requests');
 }
 
 function rejectedWith(reason: string) {
@@ -114,7 +245,7 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
     fixture = new Fixture(provider.url("/v1"));
   });
   after(async () => {
-    fixture?.temp.cleanup();
+    fixture?.cleanup();
     await provider?.finish();
   });
 
@@ -126,22 +257,29 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
     });
     try {
       const workspace = fixture.workspace("local");
-      const session = await deliver(host, workspace);
+      const session = await deliver(host, workspace, fixture, provider);
+      await inspectPresentDefinition(host,session,workspace,provider);
       assert.equal(session.deliveryAccess, true, "the owned stdio child delegates delivery access");
       const requests = (await provider.requests()).length;
 
       // The card and /files consume the same committed typed facts.
       const correlation = correlateTools(session.state);
       const present = [...correlation.byCallId.values()].find((tool) => tool.toolId === "tool-present");
-      assert.ok(present?.resultCommitted, "the presented card reads the committed canonical result");
-      const card = plainText(renderToolCard(present, {
+      assert.ok(present?.resultCommitted, `the presented card reads the committed canonical result: ${JSON.stringify({
+        calls:[...correlation.byCallId.values()].map(tool=>({callId:tool.callId,toolId:tool.toolId,resultCommitted:tool.resultCommitted,metadata:tool.resultMetadataRef!=null})),
+        foreground:session.state.attempt?.foreground.map(tool=>({call:tool.call_id,tool:tool.tool_id,metadata:tool.result_metadata_ref!=null,body:tool.committed_result!=null})),
+        descriptors:session.state.messageDescriptors.map(message=>({role:message.role,tools:message.tool_calls.map(tool=>({call:tool.call_id,tool:tool.tool_id,metadata:tool.result_metadata_ref!=null,body:tool.committed_result!=null}))})),
+        deferred:session.state.deferredTranscriptEntries.length,
+      })}`);
+      const loadedPresent = await loadCommittedMetadata(host, session, workspace, present);
+      const card = plainText(renderToolCard(loadedPresent, {
         expanded: true,
         budget: { maxLines: DEFAULT_PREVIEW_LINES, maxChars: DEFAULT_PREVIEW_CHARS },
       }));
       assert.match(card, /Delivered 2 files/);
       assert.ok(card.indexOf(REPORT) < card.indexOf("data set.csv"), "canonical order");
       const page = await session.deliveryPage();
-      assert.deepEqual(page.records.map((record) => [record.file.name, record.index, record.file.description ?? null]), [
+      assert.deepEqual(page.records.map((record) => [record.file!.name, record.index, record.file!.description ?? null]), [
         [REPORT, 0, "Final report"],
         ["data set.csv", 1, null],
       ]);
@@ -151,11 +289,11 @@ describe("committed deliveries through an owned stdio child", { skip: SKIP }, ()
       // Save: original bytes, Unicode/spaces name, client-local destination.
       const saved = await saveDelivery(
         () => session.readDelivery(report),
-        deliveryDestination(`saved/${report.file.name}`, fixture.temp.path(".")),
+        deliveryDestination(`saved/${report.file!.name}`, fixture.temp.path(".")),
       ).catch((error: unknown) => error);
       assert.ok(saved instanceof Error, "a missing destination directory fails before writing");
       mkdirSync(fixture.temp.path("saved"));
-      const destination = deliveryDestination(`saved/${report.file.name}`, fixture.temp.path("."));
+      const destination = deliveryDestination(`saved/${report.file!.name}`, fixture.temp.path("."));
       assert.deepEqual(await saveDelivery(() => session.readDelivery(report), destination), { path: destination });
       assert.deepEqual(readFileSync(destination), REPORT_BYTES);
       assert.equal(statSync(destination).mode & 0o777, 0o600, "private to this user, whatever the umask");
@@ -267,7 +405,7 @@ describe("committed deliveries through a remote WebSocket App Server", { skip: S
   });
   after(async () => {
     await server?.stop();
-    fixture?.temp.cleanup();
+    fixture?.cleanup();
     await provider?.finish();
   });
 
@@ -275,11 +413,13 @@ describe("committed deliveries through a remote WebSocket App Server", { skip: S
     const ordinary = await AppServerHost.connectRemote({ endpoint: server.endpoint, token: TRANSPORT_TOKEN });
     let sessionId: string;
     try {
-      const session = await deliver(ordinary, fixture.workspace("remote"));
+      const workspace=fixture.workspace("remote");
+      const session = await deliver(ordinary, workspace, fixture, provider);
+      await inspectPresentDefinition(ordinary,session,workspace,provider);
       sessionId = session.sessionId;
       assert.equal(session.deliveryAccess, false);
       const [report] = (await session.deliveryPage()).records;
-      assert.equal(report?.file.name, REPORT, "metadata is visible to an ordinary client");
+      assert.equal(report?.file?.name, REPORT, "metadata is visible to an ordinary client");
       await assert.rejects(session.readDelivery(report), rejectedWith("unauthorized"));
       await assert.rejects(session.locateDelivery(report), rejectedWith("unauthorized"));
       await session.detach();

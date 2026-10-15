@@ -1,6 +1,7 @@
+import { compactReceipt } from './fixture';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v46';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v48';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/app-server';
@@ -44,15 +45,15 @@ it('eligible double Escape sends exactly one native target; a gated reply and se
   expect(server.requests.filter(row => row.request.method === 'turn/start').map(row => row.request)).toMatchObject([{ params: { content: [{ type: 'upload', ...receipt }, { type: 'text', text: 'replacement draft' }] } }]);
 });
 it('exact gated Attempt replacement between presses cannot cancel the successor', async () => {
-  await mount(); escape(); server.held.add('session/snapshot');
+  await mount(); escape(); server.held.add('session/checkpoint');
   server.snapshots.set('A', { ...snapshot(), attempt: { attempt_id: 'attempt-A', turn: 1, phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } });
-  const nextRead = () => server.requests.filter(row => row.request.method === 'session/snapshot').length + 1;
-  const settledGate = server.waitFor('session/snapshot', nextRead());
+  const nextRead = () => server.requests.filter(row => row.request.method === 'session/checkpoint').length + 1;
+  const settledGate = server.waitFor('session/checkpoint', nextRead());
   const settlement = server.client.refresh('A'); const settledRead = await settledGate;
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
   await act(async () => { server.reply(settledRead); await settlement; });
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('settled');
-  server.snapshots.set('A', running('attempt-B')); const replacementGate = server.waitFor('session/snapshot', nextRead());
+  server.snapshots.set('A', running('attempt-B')); const replacementGate = server.waitFor('session/checkpoint', nextRead());
   const replacement = server.client.refresh('A'); const replacementRead = await replacementGate;
   await act(async () => { server.reply(replacementRead); await replacement; });
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.attempt_id).toBe('attempt-B');
@@ -82,15 +83,15 @@ it('ordinary RPC saturation cannot block exact lifecycle cancellation or its ack
   server.snapshots.set('A', running()); await server.attached('A');
   const expected = server.client.cancellationTarget('A')!;
   server.held.add('server/info'); server.held.add('turn/cancel');
-  const occupied = Array.from({ length: 8 }, () => server.client.request({ method: 'server/info', params: {} }, 'server_info'));
-  await server.waitFor('server/info', 8);
+  const occupied = Array.from({ length: 6 }, () => server.client.request({ method: 'server/info', params: {} }, 'server_info'));
+  await server.waitFor('server/info', 6);
   const cancellation = server.client.cancelTurn(expected);
   // No reply or capacity release occurs before this synchronous wire assertion.
   expect(cancels()).toHaveLength(1);
   expect(cancels()[0]).toMatchObject({ method: 'turn/cancel', params: { target: expected.target } });
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: expected.attemptId, status: 'in-flight' });
   await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
-  const repairRead = server.waitFor('session/snapshot', server.requests.filter(row => row.request.method === 'session/snapshot').length + 1);
+  const repairRead = server.waitFor('session/checkpoint', server.requests.filter(row => row.request.method === 'session/checkpoint').length + 1);
   const acknowledged = new Promise<void>(resolve => {
     const unsubscribe = server.client.subscribe(() => {
       if (server.client.getSnapshot().views.A.cancellation?.status === 'acknowledged') { unsubscribe(); resolve(); }
@@ -109,16 +110,16 @@ it('ordinary RPC saturation cannot block exact lifecycle cancellation or its ack
 });
 
 function occupyControls() {
-  server.held.add('job/cancel');
-  server.handlers.set('job/cancel', () => ({ type: 'job', job: { job_id: 'job-a', tool_id: 'bash', tool_name: 'bash', state: 'cancelled' } }));
-  return Array.from({ length: 2 }, () => server.client.request({ method: 'job/cancel', params: { target: server.target('A'), job_id: 'job-a' } }, 'job'));
+  server.held.add('delivery/cancel');
+  server.handlers.set('delivery/cancel',()=>({type:'delivery_cancel',accepted:false}));
+  return Array.from({length:2},(_,index)=>server.client.request({method:'delivery/cancel',params:{request_id:`reserved-control-${index}`}},'delivery_cancel'));
 }
 function releaseControls() {
-  for (const { request } of server.requests.filter(row => row.request.method === 'job/cancel')) server.reply(request);
+  for (const { request } of server.requests.filter(row => row.request.method === 'delivery/cancel')) server.reply(request);
 }
 it('full bounded control capacity refuses cancellation locally and releases only its marker for a deliberate retry', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
-  const occupied = occupyControls(); await server.waitFor('job/cancel', 2);
+  const occupied = occupyControls(); await server.waitFor('delivery/cancel', 2);
   const expected = server.client.cancellationTarget('A')!;
   const cancelled = server.client.cancelTurn(expected).catch(error => error);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
@@ -141,7 +142,7 @@ it('full bounded control capacity refuses cancellation locally and releases only
 
 it('a locally refused control continuation cannot clear a successor cancellation operation', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
-  const occupied = occupyControls(); await server.waitFor('job/cancel', 2);
+  const occupied = occupyControls(); await server.waitFor('delivery/cancel', 2);
   server.held.add('turn/cancel');
   const older = server.client.cancelTurn(server.client.cancellationTarget('A')!).catch(error => error);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
@@ -191,7 +192,7 @@ it.each(['queue', 'steer'] as const)('resident ContextSeat preserves %s submissi
   expect(screen.getByText('Context compacted')).toBeTruthy();
   expect(input().value).toBe('later draft');
   expect(server.requests.filter(row => ['turn/start', 'turn/steer'].includes(row.request.method))).toHaveLength(1);
-  server.handlers.set('context/compact', () => ({ type: 'context', context: server.snapshots.get('A')!.context! }));
+  server.handlers.set('context/compact', () => (compactReceipt(server.snapshots.get('A')!.context!)));
   await act(async () => server.reply(compact));
   composerPreferences().setBusyEnter('queue');
 });

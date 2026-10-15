@@ -4,56 +4,53 @@
 // token counts, an honest cache-hit share, compact durations and speed.
 import type { Translate } from '../../locale/translation';
 
+/** Native decimal u64 evidence, or a finite locally calculated quantity. */
+export type TokenCount = string | number | bigint;
+const integer = (value: TokenCount): bigint => {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) throw new Error('Token quantity is not exact.');
+  return BigInt(value);
+};
+
 /**
  * Compact token count: 517 / 12.2K / 517K / 1.2M.
  * @param value - non-negative token count.
  * @param tx - locale seat.
  * @returns locale-owned compact display string.
  */
-export function formatTokens(value: number, tx: Translate): string {
-  const scaled = (candidate: number): string =>
-    candidate >= 100 ? String(Math.round(candidate)) : String(Math.round(candidate * 10) / 10);
-  if (value < 1_000) return String(value);
-  if (value < 1_000_000) return tx('agent:usage.thousand', { value: scaled(value / 1_000) });
-  return tx('agent:usage.million', { value: scaled(value / 1_000_000) });
+export function formatTokens(value: TokenCount, tx: Translate): string {
+  const count = integer(value);
+  const scaled = (unit: bigint): string => {
+    const whole = count / unit;
+    if (whole >= 100n) return String((count * 2n + unit) / (unit * 2n));
+    const tenths = (count * 20n + unit) / (unit * 2n);
+    return tenths % 10n === 0n ? String(tenths / 10n) : `${tenths / 10n}.${tenths % 10n}`;
+  };
+  if (count < 1_000n) return String(count);
+  if (count < 1_000_000n) return tx('agent:usage.thousand', { value: scaled(1_000n) });
+  return tx('agent:usage.million', { value: scaled(1_000_000n) });
 }
 
 /**
  * Exact integer token count with locale-owned digit grouping.
- * @param value - non-negative safe integer token count.
+ * @param value - exact non-negative native integer token count.
  * @param tx - locale seat.
  * @returns an unrounded display string.
  */
-export function formatExactTokens(value: number, tx: Translate): string {
-  const digits = String(value);
+export function formatExactTokens(value: TokenCount, tx: Translate): string {
+  const digits = String(integer(value));
   const groups: string[] = [];
   for (let end = digits.length; end > 0; end -= 3) groups.unshift(digits.slice(Math.max(0, end - 3), end));
   return groups.join(tx('agent:usage.group-separator'));
 }
 
-/** Round a cache-read ratio to exact percentage units, with positive ties rounded up. */
-function roundedPercentUnits(cacheReadTokens: number, denominator: number, decimalPlaces: 0 | 1): number {
-  const scale = (decimalPlaces === 0 ? 1 : 10) * 100;
-  const doubledScale = scale * 2;
-  const denominatorQuotient = Math.floor(denominator / doubledScale);
-  const denominatorRemainder = denominator % doubledScale;
-  let lower = 0;
-  let upper = scale;
-  while (lower < upper) {
-    const candidate = Math.floor((lower + upper + 1) / 2);
-    const factor = candidate * 2 - 1;
-    const threshold = factor * denominatorQuotient + Math.ceil(factor * denominatorRemainder / doubledScale);
-    if (cacheReadTokens >= threshold) lower = candidate;
-    else upper = candidate - 1;
-  }
-  return lower;
+/** Positive ties round up, without converting native quantities to floats. */
+function roundedPercentUnits(cached: bigint, prompt: bigint, scale: bigint): bigint {
+  return (cached * scale * 2n + prompt) / (prompt * 2n);
 }
-
-function displayPercentUnits(units: number, decimalPlaces: 0 | 1): string {
-  if (decimalPlaces === 0) return String(units);
-  const whole = Math.floor(units / 10);
-  const tenths = units % 10;
-  return tenths === 0 ? String(whole) : `${whole}.${tenths}`;
+function displayPercentUnits(units: bigint, decimalPlaces: number): string {
+  const scale = 10n ** BigInt(decimalPlaces);
+  const whole = units / scale, fraction = String(units % scale).padStart(decimalPlaces, '0').replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : String(whole);
 }
 
 /**
@@ -64,31 +61,18 @@ function displayPercentUnits(units: number, decimalPlaces: 0 | 1): string {
  * round to 100 use enough additional precision to stay honest.
  * @returns percentage text, or null when there was no prompt input.
  */
-export function formatCacheHitPercent(cacheReadTokens: number, promptTokens: number, decimalPlaces: 0 | 1 = 0): string | null {
-  if (promptTokens === 0) return null;
-  const missedInputTokens = promptTokens - cacheReadTokens;
-  if (missedInputTokens === 0) return '100';
-  const roundedUnits = roundedPercentUnits(cacheReadTokens, promptTokens, decimalPlaces);
-  const fullHitUnits = decimalPlaces === 0 ? 100 : 1_000;
-  if (roundedUnits < fullHitUnits) return displayPercentUnits(roundedUnits, decimalPlaces);
-  let distinguishingPlaces = 1;
-  let scaledDoubleGap = missedInputTokens * 200;
-  const denominatorTens = Math.floor(promptTokens / 10);
-  while (scaledDoubleGap <= denominatorTens) {
-    scaledDoubleGap *= 10;
-    distinguishingPlaces += 1;
+export function formatCacheHitPercent(cacheReadTokens: TokenCount, promptTokens: TokenCount, decimalPlaces: 0 | 1 = 0): string | null {
+  const cached = integer(cacheReadTokens), prompt = integer(promptTokens);
+  if (prompt === 0n || cached < 0n || cached > prompt) return null;
+  if (cached === prompt) return '100';
+  // At most 22 decimal places distinguish a partial hit over the entire u64
+  // domain. Retain the exact native input and make this display choice locally.
+  for (let places: number = decimalPlaces; places <= 22; places++) {
+    const scale = 100n * 10n ** BigInt(places);
+    const units = roundedPercentUnits(cached, prompt, scale);
+    if (units < scale) return displayPercentUnits(units, places);
   }
-  const denominatorOnes = promptTokens % 10;
-  let roundedLoss = 5;
-  for (let loss = 1; loss < 5; loss += 1) {
-    const factor = loss * 2 + 1;
-    const threshold = factor * denominatorTens + Math.floor(factor * denominatorOnes / 10);
-    if (scaledDoubleGap <= threshold) {
-      roundedLoss = loss;
-      break;
-    }
-  }
-  return `99.${'9'.repeat(distinguishingPlaces - 1)}${10 - roundedLoss}`;
+  throw new Error('Native token ratio exceeds its u64 display domain.');
 }
 
 /**

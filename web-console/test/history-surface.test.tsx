@@ -12,7 +12,7 @@ it('read-only history mounts an exact Message landing through ChatViewport, with
  vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => { frames.set(++sequence, frame); return sequence; }); vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
  const entries = Array.from({length: 3}, (_, i) => ({ cursor: String(i+1), item: {type:'message' as const, message:{id:`message-${i}`,role:'user' as const,source:'human' as const,content:[{type:'text' as const,text:`Message ${i}`}]} } }));
- const route: HistoryRoute = { kind:'history',sessionId:'B',nodeId:'old-B',messageId:'message-1',conversationId:'conversation-B',returnTo:{kind:'session',sessionId:'A'},window:{cut:{conversation_id:'conversation-B',journal:'3',transcript:'3',mutation_revision:'0'},target_cursor:'2',page:{entries}} };
+ const route: HistoryRoute = { kind:'history',sessionId:'B',nodeId:'old-B',messageId:'message-1',conversationId:'conversation-B',returnTo:{kind:'session',sessionId:'A'},window:{cut:{conversation_id:'conversation-B',journal:'3',transcript:'3',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'},target_cursor:'2',page:{entries}} };
  const current=vi.fn(()=>true), ui=render(<HistorySurface client={server.client} route={route} current={current} back={()=>{}} settings={settings}/>);
  const viewport=ui.container.querySelector<HTMLElement>('[data-conversation-scroll]')!;
  Object.defineProperties(viewport,{scrollHeight:{value:900},clientHeight:{value:300}});

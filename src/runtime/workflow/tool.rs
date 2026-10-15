@@ -223,6 +223,8 @@ impl WorkflowRuntime {
         self.observations
             .send_modify(|events| events.push(event.clone()));
         let _ = self.event_store.append_event(RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id,
             sequence: 0,

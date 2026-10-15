@@ -1,28 +1,29 @@
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v46';
+import type { Request, TraceDetail, TracePage, TraceRecord } from '../../protocol/app-server/v48';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
   id: `trace:${n}`,
   position: `trace:${n}`,
-  location: { attempt_id: 'attempt-a', step_id: '1' },
+  fields:[],collections:[],
+  location: { attempt_id: 'attempt-a',attempt_id_source:null, step_id: '1',step_id_source:null },
   kind: 'request',
   state: 'completed',
   timing: { started_at: '2026-09-15T00:00:00Z', ended_at: '2026-09-15T00:00:01Z', duration_ms: '1000' },
   preview: { text: `historical-model-${n}`, truncated: false },
   request: {
-    request_id: `request-${n}`,
-    assistant_message_id: `message-${n}`,
+    request_id: `request-${n}`,request_id_source:null,
+    assistant_message_id: `message-${n}`,assistant_message_id_source:null,accepted_message_locator:null,
     retry_number: n,
-    model: 'historical-model',
+    model: 'historical-model',model_source:null,
     previous_failure_kind: null,
     failure_kind: null,
     usage: null,
     generation: null,
     system_prompt: { state: 'unchanged', preview: null },
-    predecessor: { availability: 'available', request_id: 'previous-request' },
+    predecessor: { availability: 'available', request_id: 'previous-request',request_id_source:null },
     tool_catalog: 'unchanged',
     context_additions: [],
-    context_truncated: false,
+    context_truncated: false,context_total:'0',context_domain:`trace.records.${n}.context`,context_next_offset:null,
   },
   tool: null,
   calls: [],
@@ -42,6 +43,7 @@ export const traceTool = (n: number, overrides: Partial<TraceRecord> = {}): Trac
     preview: { text: 'ls -la', truncated: false },
     request: null,
     tool: {
+      occurrence:{locator:{type:'by_message_id',message_id:`assistant-${n}`},block_index:0},fields:[],
       call_id: `call-${n}`,
       tool_id: 'tool-bash',
       name: 'bash',
@@ -72,7 +74,7 @@ export const requestDetail = (n: number, overrides: Partial<TraceDetail> = {}): 
     profile: null,
     options: [{ name: 'temperature', value: { value: 0.25, truncated: false } }],
     omitted_option_count: 2,
-    predecessor: { availability: 'available', request_id: 'previous-request' },
+    predecessor: { availability: 'available', request_id: 'previous-request',request_id_source:null },
     previous_system_prompt: { text: 'Previous prompt.', truncated: false },
     effective_system_prompt: { text: 'You are the historical agent.', truncated: false },
     messages: [
@@ -159,13 +161,15 @@ export function semanticLedgerRecords(): TraceRecord[] {
   const prompt = traceRecord(102, { location: a });
   prompt.request!.system_prompt = { state: 'initial', preview: { text: 'You are the historical agent. Preserve exact native authority.', truncated: false } };
   prompt.request!.retry_number = 0;
-  prompt.request!.context_additions = ['workspace', 'environment'].map((name, n) => ({ message_id: `ledger-context-${name}`, context_kind: n ? 'native_environment' : 'extension_environment', producer: n ? { Native: 'workspace_instructions' } : { CertifiedExtension: 'vendor.workspace' }, source: n ? { type: 'runtime' } : { type: 'certified_extension', contributor: 'vendor.workspace' }, preview: { text: n ? 'Runtime environment: Linux · Rust workspace' : 'Workspace instructions: preserve native ownership and bounded reads', truncated: false }, attachments: [], truncated: false }));
+  prompt.request!.context_additions = ['workspace', 'environment'].map((name, n) => ({locator:{type:'by_message_id',message_id:`ledger-context-${name}`},fields:[], message_id: `ledger-context-${name}`, context_kind: n ? 'native_environment' : 'extension_environment', producer: n ? { Native: 'workspace_instructions' } : { CertifiedExtension: 'vendor.workspace' }, source: n ? { type: 'runtime' } : { type: 'certified_extension', contributor: 'vendor.workspace' }, preview: { text: n ? 'Runtime environment: Linux · Rust workspace' : 'Workspace instructions: preserve native ownership and bounded reads', truncated: false }, attachments: [], truncated: false }));
   const updated = traceRecord(112, { location: b });
   updated.request!.system_prompt = { state: 'changed', preview: { text: 'Inspect the final diff and report validation evidence.', truncated: false } };
   updated.request!.retry_number = 0;
   const tool = traceTool(104, { location: a, preview: { text: '3 files changed, 28 insertions', truncated: false } });
   tool.tool!.arguments = { text: '{"command":"git diff --stat"}', truncated: false };
+  tool.tool!.occurrence={locator:{type:'by_message_id',message_id:'ledger-assistant-103'},block_index:0};
   const failed = traceTool(105, { location: a, state: 'failed', preview: { text: 'error: missing field `name` in source record', truncated: false } });
+  failed.tool!.occurrence={locator:{type:'by_message_id',message_id:'ledger-assistant-103'},block_index:1};
   failed.tool!.arguments = { text: '{"command":"cargo test --lib"}', truncated: false }; failed.tool!.outcome = 'failed';
   const finalTool = traceTool(114, { location: b, preview: { text: 'All focused tests passed. Additional output omitted…', truncated: true } });
   finalTool.tool!.arguments = { text: '{"command":"cargo test --lib runtime_client::trace::', truncated: true };
@@ -176,7 +180,7 @@ export function semanticLedgerRecords(): TraceRecord[] {
     traceRecord(100, { kind: 'attempt', request: null, location: { attempt_id: a.attempt_id } }),
     traceRecord(101, { kind: 'user', request: null, location: { attempt_id: a.attempt_id }, preview: { text: 'Review the workspace and run the focused checks.', truncated: false } }),
     traceRecord(120, { kind: 'step', request: null, location: a }), prompt,
-    traceRecord(103, { kind: 'assistant', request: null, location: a, preview: { text: 'I will inspect the diff and verify the native contracts.', truncated: false }, calls: [tool, failed].map(record => ({ call_id: record.tool!.call_id, tool_id: record.tool!.tool_id, name: 'bash' })) }),
+    traceRecord(103, { kind: 'assistant', request: null, location: a, preview: { text: 'I will inspect the diff and verify the native contracts.', truncated: false }, calls: [tool, failed].map(record => ({ call_id: record.tool!.call_id, tool_id: record.tool!.tool_id, name: 'bash',occurrence:record.tool!.occurrence!,fields:[] })) }),
     tool, failed, traceRecord(121, { kind: 'step', request: null, location: retry.location }), retry, recovery,
     traceRecord(109, { kind: 'assistant', request: null, location: retry.location, preview: { text: 'The missing field is corrected. The retry passed.', truncated: false } }),
     traceRecord(110, { kind: 'attempt', request: null, location: { attempt_id: b.attempt_id } }),
@@ -191,7 +195,7 @@ export function orderedStepRecords(initial = true, emptySteps = 2, withContext =
   const location = (step_id: string) => ({ attempt_id: 'ordered-turn', step_id });
   const first = traceRecord(702, { location: location('z-first') });
   first.request!.system_prompt = { state: 'initial', preview: { text: 'order-match initial prompt', truncated: false } };
-  if (withContext) first.request!.context_additions = [{ message_id: 'hidden-context', context_kind: 'native_environment', producer: { Native: 'workspace_instructions' }, source: { type: 'runtime' }, preview: { text: 'ordinary context', truncated: false }, attachments: [], truncated: false }];
+  if (withContext) first.request!.context_additions = [{locator:{type:'by_message_id',message_id:'hidden-context'},fields:[], message_id: 'hidden-context', context_kind: 'native_environment', producer: { Native: 'workspace_instructions' }, source: { type: 'runtime' }, preview: { text: 'ordinary context', truncated: false }, attachments: [], truncated: false }];
   return [
     traceRecord(700, { kind: 'attempt', request: null, location: { attempt_id: 'ordered-turn' } }),
     traceRecord(701, { kind: 'step', request: null, location: location('z-first') }),
@@ -224,4 +228,13 @@ export function stepLessRecords(): TraceRecord[] {
       location: { attempt_id: 'adopted-attempt', step_id: 'native-step' },
       preview: { text: 'Step-owned answer', truncated: false } }),
   ])) as TraceRecord[];
+}
+
+/** One immutable read-only Trace cut belonging to the original request scope. */
+export function tracePage(request: Request, records: TraceRecord[], revision = '0'): TracePage {
+  if (request.method !== 'session/trace') throw new Error('Trace page requires its exact original request');
+  return { records, read_cut: {
+    conversation_id: request.params.target.conversation_id,
+    revision, through: revision, domain_revisions: {}, collection_cuts: {},
+  } };
 }

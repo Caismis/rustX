@@ -1,4 +1,5 @@
-import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundary } from '../../../../protocol/app-server/v46';
+import { readEditor } from '../../../../protocol/app-server/editor';
+import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v48';
 import { AppServerClient, sameTarget } from '../../client/app-server';
 import { selectSessionModel } from '../model-preference';
 import { lineageSwitchSafe } from '../../bindings/projection';
@@ -6,7 +7,7 @@ import { lineageSwitchSafe } from '../../bindings/projection';
 export interface HistoricalSelection {
   target: AttachmentTarget;
   nodeId: string;
-  boundary: SessionUserMessageBoundary | CompletedResponseView;
+  boundary: SessionUserMessageBoundaryObservation | CompletedResponseView;
 }
 export type HistoryAction = 'fork' | 'branch' | 'retry';
 /** The lineage actions a completed response offers in place. */
@@ -23,18 +24,18 @@ export class CommandSession {
   current = () => {
     const state = this.client.getSnapshot(), view = state.views[this.sessionId];
     return this.navigationCurrent() && state.connection === 'connected' && state.generation === this.generation
-      && this.client.isAttachmentControlCurrent(this.sessionId, this.admission) && sameTarget(view?.target, this.target);
+      && this.client.isAttachmentControlCurrent(this.sessionId, view?.attachmentObservation) && sameTarget(view?.target, this.target);
   };
   private requireCurrent() { if (!this.current()) throw new Error('Obsolete command view. Inspect current authoritative state.'); }
   async models() {
     this.requireCurrent();
     const [current, catalog] = await Promise.all([
-      this.client.request({ method: 'session/model', params: { target: this.target } }, 'model'),
-      this.client.request({ method: 'session/models', params: { target: this.target } }, 'models'),
+      this.client.modelRead(this.target,this.current),
+      this.client.modelCatalogRead(this.target,this.current),
     ]);
     this.requireCurrent();
     if (this.client.getSnapshot().views[this.sessionId]?.modelMutation) await this.client.repairAgentModel(this.sessionId);
-    this.requireCurrent(); return { current: current.model, catalog: catalog.catalog };
+    this.requireCurrent(); return { current, catalog: catalog.catalog, page:catalog.page };
   }
   async setModel(model: string, profile?: string) {
     this.requireCurrent();
@@ -60,8 +61,8 @@ export class CommandSession {
     this.requireCurrent();
     if (!sameTarget(selection.target, this.target)) throw new Error('Historical selection belongs to another attachment.');
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
-    const response = 'closing_message_id' in selection.boundary ? selection.boundary : undefined;
-    const boundary = response ? (action === 'retry' ? response.retry_message_id : response.closing_message_id) : ('message' in selection.boundary ? selection.boundary.message.id : undefined);
+    const response = 'closing_locator' in selection.boundary ? selection.boundary : undefined;
+    const boundary: CanonicalContentLocator | undefined | null = response ? (action === 'retry' ? response.retry_locator : response.closing_locator) : ('locator' in selection.boundary ? selection.boundary.locator : undefined);
     if (!boundary) throw new Error('No native replay input for this response.');
     const params = { side: response && action !== 'retry' ? 'after' as const : 'before' as const, session_id: this.sessionId, node_id: selection.nodeId, surface_revision: selection.boundary.surface_revision, boundary };
     // Fork copies native settings: authorize the source before creating a child,
@@ -86,21 +87,24 @@ export class CommandSession {
     if (!continuing()) return;
     const target = this.client.target(session.id);
     if (target.conversation_id !== session.active_conversation_id) throw new Error('Transition attached a different Conversation; execution refused.');
+    const editorContent = result.editor ? await readEditor(result.editor,
+      async (block_index, offset) => (await this.client.request({ method: 'session/editorRead', params: { locator: result.editor!, block_index, offset, max_bytes: 65_536 } }, 'editor_page', undefined, continuing)).page,
+      continuing) : [];
     if (action === 'retry') {
-      if (!result.editor_content?.length) throw new Error('Branch has no native editor input; execution refused.');
+      if (!editorContent.length) throw new Error('Branch has no native editor input; execution refused.');
       // Native cut excludes the selected User message. Submit the native returned
       // input exactly once, including #319 receipts, to the new Conversation.
-      await this.client.sendContent(session.id, result.editor_content, 'send', undefined, continuing);
+      await this.client.sendContent(session.id, editorContent, 'send', undefined, continuing);
       if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
     }
     await this.client.listSessions();
     if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
-    return { session, content: action === 'retry' ? [] : result.editor_content ?? [] };
+    return { session, content: action === 'retry' ? [] : editorContent };
   }
   async tools() {
     this.requireCurrent();
-    const result = await this.client.request({ method: 'resources/read', params: { target: this.target } }, 'capabilities');
-    this.requireCurrent(); return result.capabilities;
+    const result = await this.client.request({ method: 'resources/read', params: { target: this.target } }, 'domain_page');
+    this.requireCurrent(); return result.page;
   }
   async tree(offset = 0) {
     this.requireCurrent();

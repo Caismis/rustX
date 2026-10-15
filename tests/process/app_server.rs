@@ -5,6 +5,7 @@ use nix::{
     sys::signal::{Signal, kill},
     unistd::Pid,
 };
+use rustx::local_runtime::configuration::observation::SourceFieldName;
 use rustx::{
     app_server::transport::MAX_MESSAGE_BYTES,
     local_runtime::{
@@ -161,29 +162,37 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":46,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":48,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::new().await;
         let mut child = f.command("stdio").spawn().unwrap();
         let driver = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
-        app_server_conformance::representative_scenario(&driver, f.sessions.clone()).await;
+        Box::pin(app_server_conformance::representative_scenario(
+            &driver,
+            f.sessions.clone(),
+        ))
+        .await;
         driver.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
-    })
+    }))
     .await;
 }
 
 #[tokio::test]
 async fn app_server_websocket_real_process_shared_conformance_and_listener_survives() {
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::new().await;
         let (mut child, url, _stderr) = f.ws().await;
         let client = driver::websocket(&url).await;
-        app_server_conformance::representative_scenario(&client, f.sessions.clone()).await;
+        Box::pin(app_server_conformance::representative_scenario(
+            &client,
+            f.sessions.clone(),
+        ))
+        .await;
         client.close().await;
         let mut replacement = driver::socket(&url).await;
         replacement.send(INITIALIZE.into()).await.unwrap();
@@ -197,7 +206,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         )
         .unwrap();
         assert!(child.wait().await.unwrap().success());
-    })
+    }))
     .await;
 }
 
@@ -223,9 +232,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v9, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v46"),
+            Some("rustx.app-server.v48"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v46, rustx-token.wrong"),
+            Some("rustx.app-server.v48, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -341,7 +350,20 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
         drop(input);
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
-        assert!(output.next_line().await.unwrap().is_none());
+        // The only record a negotiated connection may still owe is the User
+        // source's repair level, which is empty here (Issue #464).
+        let mut levels = 0;
+        while let Some(line) = output.next_line().await.unwrap() {
+            let record: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                record["method"], "configuration/sourceRepairChanged",
+                "{record}"
+            );
+            assert_eq!(record["params"]["target"]["kind"], "user", "{record}");
+            assert!(record["params"]["receipt"].is_null(), "{record}");
+            levels += 1;
+        }
+        assert!(levels <= 1);
         for bytes in [
             vec![0xff, b'\n'],
             b"{}".to_vec(),
@@ -574,6 +596,44 @@ async fn attach(
     let MethodResult::Attached { target, .. } = response.result else {
         panic!("attached")
     };
+    let Response::Success(checkpoint_response) = rpc(
+        client,
+        id + 9000,
+        Method::SessionCheckpoint {
+            trace_records: vec![],
+            target: target.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("attachment checkpoint")
+    };
+    let MethodResult::Checkpoint { checkpoint } = checkpoint_response.result else {
+        panic!("bounded checkpoint")
+    };
+    let Response::Success(subscription_response) = rpc(
+        client,
+        id + 10000,
+        Method::SessionSubscribe {
+            target: target.clone(),
+            after_cursor: checkpoint.cursor,
+        },
+    )
+    .await
+    else {
+        panic!("subscription")
+    };
+    let MethodResult::Subscribed {
+        target: following,
+        after_cursor,
+        registration_id,
+    } = subscription_response.result
+    else {
+        panic!("subscription receipt")
+    };
+    assert_eq!(following, target);
+    assert_eq!(after_cursor, checkpoint.cursor);
+    assert!(!registration_id.is_empty());
     target
 }
 
@@ -788,14 +848,14 @@ async fn result(
     }
 }
 
-async fn snapshot(
+async fn checkpoint_state(
     client: &driver::Driver,
     target: &rustx::app_server::protocol::AttachmentTarget,
 ) -> serde_json::Value {
     use rustx::app_server::protocol::*;
-    let MethodResult::Snapshot { snapshot, .. } = result(
+    let MethodResult::Checkpoint { checkpoint } = result(
         client,
-        Method::SessionSnapshot {
+        Method::SessionCheckpoint {
             trace_records: vec![],
             target: target.clone(),
         },
@@ -804,7 +864,7 @@ async fn snapshot(
     else {
         panic!("snapshot")
     };
-    serde_json::to_value(snapshot).unwrap()
+    serde_json::to_value(checkpoint.snapshot).unwrap()
 }
 
 async fn diagnostics(client: &driver::Driver) -> rustx::app_server::host::ServerDiagnostics {
@@ -821,7 +881,7 @@ async fn settled(
     target: &rustx::app_server::protocol::AttachmentTarget,
 ) -> serde_json::Value {
     loop {
-        let value = snapshot(client, target).await;
+        let value = checkpoint_state(client, target).await;
         if value["attempt"]["phase"]["type"] == "settled" {
             return value;
         }
@@ -918,8 +978,13 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             use app_server_conformance::AppServerConformanceDriver;
             let notification = client.next_notification().await.notification;
             // Session metadata invalidation is not a Conversation event and is
-            // not routed by attachment target (Issue #386).
-            if matches!(notification, NotificationMethod::SummaryInvalidated { .. }) {
+            // not routed by attachment target (Issue #386); nor is a
+            // source-scoped repair level (Issue #464).
+            if matches!(
+                notification,
+                NotificationMethod::SummaryInvalidated { .. }
+                    | NotificationMethod::SourceRepairChanged { .. }
+            ) {
                 continue;
             }
             let NotificationMethod::Event { target, event, .. } = notification else {
@@ -932,17 +997,39 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             } else {
                 "A is working"
             }));
+            let expected_attempt = b_done["attempt"]["attempt_id"]
+                .as_str()
+                .expect("B's authoritative settled attempt identity");
             if target == b
-                && matches!(
-                    *event,
-                    rustx::runtime_client::event::RuntimeClientEvent::AttemptSettled { .. }
-                )
+                && event.facts().iter().any(|fact| {
+                    use rustx::runtime_client::{
+                        event::RuntimeClientEvent, snapshot::RuntimeClientAttemptPhase,
+                    };
+                    match fact {
+                        RuntimeClientEvent::AttemptSettled { attempt_id, .. } => {
+                            attempt_id.as_str() == expected_attempt
+                        }
+                        RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                            checkpoint.snapshot.attempt.as_ref().is_some_and(|attempt| {
+                                attempt
+                                    .attempt_id
+                                    .as_ref()
+                                    .is_some_and(|id| id.as_str() == expected_attempt)
+                                    && matches!(
+                                        attempt.phase,
+                                        RuntimeClientAttemptPhase::Settled { .. }
+                                    )
+                            })
+                        }
+                        _ => false,
+                    }
+                })
             {
                 break;
             }
         }
         assert_eq!(
-            snapshot(&client, &a).await["attempt"]["phase"]["type"],
+            checkpoint_state(&client, &a).await["attempt"]["phase"]["type"],
             "running"
         );
         assert_eq!(diagnostics(&client).await.loaded, 2);
@@ -988,7 +1075,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         assert!(!a_done["transcript"].to_string().contains("cancelled"));
         assert_eq!(provider.requests().await.len(), 2, "no transport retry");
         for (target, cwd) in [(&resumed, "a"), (&b, "b")] {
-            let MethodResult::Settings { settings, .. } = result(
+            let MethodResult::Settings { projection, .. } = result(
                 &reconnected,
                 Method::SettingsRead {
                     session_id: target.session_id.clone(),
@@ -998,7 +1085,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             else {
                 panic!("settings")
             };
-            assert_eq!(settings.cwd, f.root.path().join(cwd));
+            assert_eq!(projection.cwd, f.root.path().join(cwd));
         }
         reconnected.close().await;
         observer.close().await;
@@ -1026,9 +1113,10 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         let client = driver::websocket(&url).await;
         initialize_client(&client).await;
         let a = attach(&client, f.sessions[0].clone(), 2).await;
-        let mut selected: rustx::model::session::SessionModelConfig =
-            serde_json::from_value(snapshot(&client, &a).await["model"]["configured"].clone())
-                .unwrap();
+        let mut selected: rustx::model::session::SessionModelConfig = serde_json::from_value(
+            checkpoint_state(&client, &a).await["model"]["configured"].clone(),
+        )
+        .unwrap();
         selected
             .request_params
             .insert("temperature".into(), serde_json::json!(0.42));
@@ -1040,11 +1128,11 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
             },
         )
         .await;
-        let a_initial = snapshot(&client, &a).await;
+        let a_initial = checkpoint_state(&client, &a).await;
         // Deliberate Session selection survives process reconstruction.
         start_turn(&client, &a, "tui multi-session: session A long task").await;
         provider.await_gate("session-a-holding").await;
-        let admitted = snapshot(&client, &a).await["attempt"].clone();
+        let admitted = checkpoint_state(&client, &a).await["attempt"].clone();
         // One canonical current source edit; no alternate resolver or input path.
         std::fs::write(
             &source,
@@ -1055,15 +1143,15 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         )
         .unwrap();
         assert_eq!(
-            snapshot(&client, &a).await["effective_plugins"],
+            checkpoint_state(&client, &a).await["effective_plugins"],
             a_initial["effective_plugins"]
         );
         assert_eq!(
-            snapshot(&client, &a).await["attempt"]["model"],
+            checkpoint_state(&client, &a).await["attempt"]["model"],
             admitted["model"]
         );
         let b = attach(&client, f.sessions[1].clone(), 3).await;
-        let b_initial = snapshot(&client, &b).await;
+        let b_initial = checkpoint_state(&client, &b).await;
         assert!(b_initial["effective_plugins"]["todo"].is_null());
         assert!(!a_initial["effective_plugins"]["todo"].is_null());
         start_turn(&client, &b, "tui multi-session: session B quick task").await;
@@ -1073,11 +1161,11 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         // Composition reconstruction is a process-owner operation here. The
         // internal manager suite proves targeted replacement independently.
         assert_eq!(
-            snapshot(&client, &b).await["effective_plugins"],
+            checkpoint_state(&client, &b).await["effective_plugins"],
             b_initial["effective_plugins"]
         );
         assert_eq!(
-            snapshot(&client, &b).await["attempt"]["phase"]["type"],
+            checkpoint_state(&client, &b).await["attempt"]["phase"]["type"],
             "running"
         );
         provider.release_gate("session-b-holding").await;
@@ -1090,7 +1178,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         initialize_client(&client).await;
         let cold = attach(&client, a.session_id.clone(), 4).await;
         assert_eq!(cold.conversation_id, a.conversation_id);
-        let after = snapshot(&client, &cold).await;
+        let after = checkpoint_state(&client, &cold).await;
         assert!(after["effective_plugins"]["todo"].is_null());
         assert_eq!(
             after["model"]["configured"],
@@ -1099,7 +1187,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         assert_eq!(after["messages"], before["messages"]);
         assert_eq!(diagnostics(&client).await.loaded, 1);
         let MethodResult::Settings {
-            settings: persisted,
+            projection: persisted,
             ..
         } = result(
             &client,
@@ -1112,7 +1200,13 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
             panic!("settings")
         };
         assert_eq!(
-            serde_json::to_value(persisted.model).unwrap(),
+            serde_json::to_value(
+                persisted
+                    .inline
+                    .expect("small inline settings fixture")
+                    .model
+            )
+            .unwrap(),
             a_initial["model"]["configured"]
         );
         assert_eq!(provider.requests().await.len(), 2);
@@ -1130,7 +1224,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
 /// and does not implement authentication, workspace isolation or restart policy.
 #[tokio::test]
 async fn app_server_reference_host_two_users_and_external_crash_recovery() {
-    bounded(async {
+    bounded(Box::pin(async {
         use rustx::app_server::protocol::*;
         let Some(pa) = provider_emulator::ProviderEmulator::start("app_server_user_a").await else { return };
         let Some(pb) = provider_emulator::ProviderEmulator::start("app_server_user_b").await else { return };
@@ -1178,7 +1272,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert!(requests[0]["body"].to_string().contains(&format!("host-{identity}-only resource")));
             assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
             assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
-            let projected = snapshot(&client, &target).await;
+            let projected = checkpoint_state(&client, &target).await;
             assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
             assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
             processes.push(child); clients.push(client); targets.push(target);
@@ -1208,16 +1302,30 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let Response::Failure(failure) = rpc(&clients[1 - index], 12, Method::SessionRead { session_id: id.clone() }).await else { panic!("foreign Session readable") };
             assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: id }));
         }
+        let mut selections = Vec::new();
         for (index, client) in clients.iter().enumerate() {
-            let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(snapshot(client, &targets[index]).await["model"]["configured"].clone()).unwrap();
+            let before = checkpoint_state(client, &targets[index]).await;
+            assert_eq!(before["attempt"]["phase"]["type"], "running");
+            let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(before["model"]["configured"].clone()).unwrap();
             model.request_params.insert("temperature".into(), serde_json::json!(0.42));
-            let Response::Failure(failure) = rpc(client, 100, Method::ModelSet { target: targets[index].clone(), config: Box::new(model) }).await else { panic!("busy model change accepted") };
-            assert_eq!(failure.error.data, Some(ErrorData::ConfigurationAdoption {
-                rejection: rustx::local_runtime::configuration::application::AdoptionError::Busy
-            }));
+            let MethodResult::ModelSet { .. } = result(client, Method::ModelSet { target: targets[index].clone(), config: Box::new(model.clone()) }).await else { panic!("bounded live model selection receipt") };
+            let selected:rustx::model::session::SessionModelView=serde_json::from_value(checkpoint_state(client,&targets[index]).await["model"].clone()).unwrap();
+            assert_eq!(selected.configured, model);
+            assert_eq!(selected.effective.as_ref().unwrap().request_params["temperature"], serde_json::json!(0.42));
+            let during = checkpoint_state(client, &targets[index]).await;
+            assert_eq!(during["model"]["configured"], serde_json::to_value(&model).unwrap());
+            assert_eq!(during["attempt"]["model"], before["attempt"]["model"]);
+            let MethodResult::Settings { projection } = result(client, Method::SettingsRead { session_id: targets[index].session_id.clone() }).await else { panic!("bounded persisted selection") };
+            let settings=projection.inline.expect("finite fixture settings");
+            assert_eq!(settings.model.as_ref(), Some(&model));
+            for request in users[index].2.requests().await {
+                assert_eq!(request["body"]["temperature"], before["attempt"]["model"]["primary"]["requestParams"]["temperature"]);
+                assert_eq!(request["body"]["max_completion_tokens"], before["attempt"]["model"]["primary"]["maxOutputTokens"]);
+            }
+            selections.push(model);
         }
         let a_pid = processes[0].id();
-        let a_before = snapshot(&clients[0], &targets[0]).await;
+        let a_before = checkpoint_state(&clients[0], &targets[0]).await;
         // B dies after its tool result has entered the second provider request.
         // It cannot have received that request's gated answer, and restarting
         // must neither replay the command nor start the untouched Sessions.
@@ -1234,22 +1342,25 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         assert_eq!(sessions.len(), 5);
         assert_eq!(diagnostics(&recovered).await.loaded, 0, "listing never starts Sessions");
         let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
-        let after = snapshot(&recovered, &cold).await;
+        let after = checkpoint_state(&recovered, &cold).await;
+        assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
         assert!(after["messages"].to_string().contains("b:unset"));
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);
-        assert_eq!(snapshot(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
+        assert_eq!(checkpoint_state(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
         // Changing A's source is confined to A; B's admitted composition stays.
         let authored = users[0].1.root.path().join("home/rustx/rustx.toml");
         let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
         source["agent"]["plugins"]["todo"]["enabled"] = false.into();
         std::fs::write(authored, toml::to_string_pretty(&source).unwrap()).unwrap();
-        assert_eq!(snapshot(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
-        assert_eq!(snapshot(&recovered, &cold).await["model"], after["model"]);
+        assert_eq!(checkpoint_state(&recovered, &cold).await["effective_plugins"], after["effective_plugins"]);
+        assert_eq!(checkpoint_state(&recovered, &cold).await["model"], after["model"]);
         assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
         pa.release_gate("host-result").await;
         let completed = settled(&clients[0], &targets[0]).await;
+        assert_eq!(completed["model"]["configured"], serde_json::to_value(&selections[0]).unwrap());
+        assert_eq!(completed["attempt"]["model"], a_before["attempt"]["model"]);
         assert!(completed["messages"].to_string().contains("result-a"));
         assert!(!completed["messages"].to_string().contains("result-b"));
         assert_eq!(pa.requests().await.len(), 2);
@@ -1258,7 +1369,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         for client in clients { client.close().await; }
         terminate(&processes[0]); assert!(processes[0].wait().await.unwrap().success());
         pa.finish().await; pb.finish().await;
-    }).await;
+    })).await;
 }
 
 #[tokio::test]
@@ -1328,7 +1439,7 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
 #[tokio::test]
 async fn app_server_stdio_serves_a_real_conversation_from_host_defaults() {
     use rustx::app_server::protocol::*;
-    bounded(async {
+    bounded(Box::pin(async {
         let server = crate::common::FixtureServer::start(|_attempt, _head| {
             crate::common::sse_fixture("openai_chat", "plain_text.sse")
         })
@@ -1410,7 +1521,7 @@ chat_reasoning_replay = "omit"
         initialize_client(&client).await;
         let target = attach(&client, session, 2).await;
         let snapshot: rustx::runtime_client::RuntimeClientSnapshot =
-            serde_json::from_value(snapshot(&client, &target).await).unwrap();
+            serde_json::from_value(checkpoint_state(&client, &target).await).unwrap();
         let model = snapshot.model.as_ref().unwrap();
         assert_eq!(model.configured.model.to_string(), "fixture/process-model");
         assert_eq!(model.effective.as_ref().unwrap().context_window, 128_000);
@@ -1423,7 +1534,7 @@ chat_reasoning_replay = "omit"
         for expected in ["job_status", "read", "write", "bash"] {
             assert!(names.contains(&expected), "{expected} missing from {names:?}");
         }
-        let MethodResult::Models { catalog } = result(
+        let MethodResult::DomainPage { page } = result(
             &client,
             Method::ModelCatalog {
                 target: target.clone(),
@@ -1433,8 +1544,10 @@ chat_reasoning_replay = "omit"
         else {
             panic!("model catalog")
         };
+        let models = crate::common::native_catalog_page(page).models;
+
         assert_eq!(
-            catalog.models[0].credential_source,
+            models[0].credential_source,
             rustx::model::CredentialSourceView::Environment {
                 variable: "RUSTX_PROCESS_TEST_KEY".to_owned()
             }
@@ -1459,7 +1572,7 @@ chat_reasoning_replay = "omit"
         let output = child.wait_with_output().await.unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         assert!(!String::from_utf8_lossy(&output.stderr).contains("process-secret"));
-    })
+    }))
     .await;
 }
 
@@ -1537,9 +1650,18 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
         else {
             panic!("model")
         };
-        let MethodResult::Model { model } = success.result else {
-            panic!("model")
+        let MethodResult::DomainPage { page } = success.result else {
+            panic!("bounded model read")
         };
+        assert_eq!(page.domain, "model");
+        assert_eq!(page.items.len(), 1);
+        let model: rustx::model::session::SessionModelView = serde_json::from_value(
+            page.items[0]
+                .value
+                .clone()
+                .expect("normal model inline value"),
+        )
+        .unwrap();
         assert_eq!(model.configured, retired);
         assert!(
             model
@@ -1581,7 +1703,7 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
             &client,
             5,
             Method::ModelSet {
-                target,
+                target: target.clone(),
                 config: Box::new(SessionModelConfig::of(
                     ModelRef::parse("local/test").unwrap(),
                 )),
@@ -1591,9 +1713,20 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
         else {
             panic!("model")
         };
-        let MethodResult::Model { model } = success.result else {
-            panic!("model")
+        assert!(matches!(success.result, MethodResult::ModelSet { .. }));
+        let MethodResult::DomainPage { page } = result(&client, Method::ModelGet { target }).await
+        else {
+            panic!("bounded model read after committed receipt")
         };
+        assert_eq!(page.domain, "model");
+        assert_eq!(page.items.len(), 1);
+        let model: rustx::model::session::SessionModelView = serde_json::from_value(
+            page.items[0]
+                .value
+                .clone()
+                .expect("normal model inline value"),
+        )
+        .unwrap();
         assert!(model.unavailable.is_none());
         client.close().await;
         detach_then_shutdown(&mut child).await;
@@ -1711,7 +1844,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v46, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v48, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -1721,7 +1854,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v46, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v48, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),
@@ -1732,6 +1865,327 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
             Signal::SIGTERM,
         )
         .unwrap();
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+fn stdio_with_eof_gate(
+    reader: tokio::process::ChildStdout,
+    mut writer: tokio::process::ChildStdin,
+) -> (driver::Driver, tokio::sync::oneshot::Sender<()>) {
+    let (close_input, mut eof) = tokio::sync::oneshot::channel();
+    let incoming =
+        futures_util::stream::unfold(BufReader::new(reader).lines(), |mut lines| async move {
+            lines.next_line().await.unwrap().map(|line| (line, lines))
+        });
+    let client = driver::Driver::new(incoming, |mut records| async move {
+        loop {
+            tokio::select! {
+                _ = &mut eof => break,
+                record = records.recv() => {
+                    let Some(record) = record else { break };
+                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
+                    writer.flush().await.unwrap();
+                }
+            }
+        }
+        // Drop only the actual ChildStdin. The driver still owns stdout.
+    });
+    (client, close_input)
+}
+
+async fn await_original_stdio_completion(
+    store: &rustx::durable::SqliteConversationStore,
+    attempt: &rustx::runtime::identity::AttemptId,
+) -> rustx::runtime::identity::MessageId {
+    use rustx::{durable::ConversationStore, events::types::RuntimeEvent};
+    let mut after = 0;
+    let mut canonical = None;
+    loop {
+        let page = store.read_events(Some(after), 32).unwrap();
+        for envelope in page.events {
+            after = envelope.sequence;
+            if envelope.attempt_id.as_ref() != Some(attempt) {
+                continue;
+            }
+            match envelope.event {
+                RuntimeEvent::AssistantMessageCommitted { message_id } => {
+                    assert!(canonical.replace((message_id, envelope.sequence)).is_none());
+                }
+                RuntimeEvent::AttemptCompleted { attempt_id, .. } => {
+                    assert_eq!(&attempt_id, attempt);
+                    let (message, committed_at) = canonical.expect("same-attempt canonical C");
+                    assert!(committed_at < envelope.sequence, "C precedes terminal J");
+                    return message;
+                }
+                RuntimeEvent::AttemptCancelled { .. }
+                | RuntimeEvent::AttemptFailed { .. }
+                | RuntimeEvent::AttemptLimitExceeded { .. }
+                | RuntimeEvent::AttemptTimedOut { .. } => {
+                    panic!("stdio EOF must not replace successful native settlement");
+                }
+                _ => {}
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn t10_stdio_cli_eof_preserves_gated_attempt_and_original_canonical_commit() {
+    bounded(Box::pin(async {
+        use rustx::{
+            durable::{ConversationStore, SqliteConversationStore},
+            events::types::RuntimeEvent,
+            message::types::{AssistantContentBlock, MessageBlock},
+            runtime::identity::AttemptId,
+        };
+        let Some(provider) = provider_emulator::ProviderEmulator::start("tui_multi_session").await
+        else {
+            return;
+        };
+        let f = Fixture::new().await;
+        use_emulator(&f, &provider);
+        let controller = SessionController::open(&f.root.path().join("runtime")).unwrap();
+        let access = controller
+            .acquire_session(&f.sessions[0], None)
+            .await
+            .unwrap();
+        let database = access.database_path.clone();
+        let conversation = access.node.conversation_id.clone();
+        drop(access);
+        drop(controller);
+        let mut child = f.command("stdio").spawn().unwrap();
+        let pid = child.id();
+        let (client, eof) =
+            stdio_with_eof_gate(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let a = attach(&client, f.sessions[0].clone(), 2).await;
+        let b = attach(&client, f.sessions[1].clone(), 3).await;
+        assert_eq!(a.conversation_id, conversation);
+        start_turn(&client, &a, "tui multi-session: session A long task").await;
+        provider.await_gate("session-a-holding").await;
+        let held = checkpoint_state(&client, &a).await;
+        assert_eq!(held["attempt"]["phase"]["type"], "running");
+        let attempt: AttemptId =
+            serde_json::from_value(held["attempt"]["attempt_id"].clone()).unwrap();
+        start_turn(&client, &b, "tui multi-session: session B quick task").await;
+        assert_eq!(
+            settled(&client, &b).await["attempt"]["phase"]["outcome"]["type"],
+            "completed"
+        );
+        let store = SqliteConversationStore::open_existing(conversation, &database).unwrap();
+        let starts = store
+            .read_events(None, 32)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter(|event| {
+                event.attempt_id.as_ref() == Some(&attempt)
+                    && matches!(event.event, RuntimeEvent::AttemptStarted { .. })
+            })
+            .count();
+        assert_eq!(starts, 1, "one original admitted A attempt");
+        eof.send(()).unwrap();
+        let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
+        loop {
+            let line = diagnostics.next_line().await.unwrap().unwrap();
+            if line.contains("stdio detached") {
+                break;
+            }
+        }
+        assert_eq!(child.id(), pid);
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "EOF retains the process owner"
+        );
+        // No RPC, replacement attachment, or process-owner shutdown follows EOF.
+        provider.release_gate("session-a-holding").await;
+        let closing = await_original_stdio_completion(&store, &attempt).await;
+        let MessageBlock::Assistant(message) = store.load_messages(&[closing]).unwrap().remove(0)
+        else {
+            panic!("original canonical Assistant");
+        };
+        let text = message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                AssistantContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(text, "A is working and has now finished");
+        assert_eq!(provider.requests().await.len(), 2, "no disconnect retry");
+        assert_eq!(child.id(), pid);
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "native completion retains the owner"
+        );
+        drop(store);
+        client.close().await;
+        terminate(&child);
+        assert!(child.wait().await.unwrap().success());
+        provider.finish().await;
+    }))
+    .await;
+}
+
+async fn startup_source_field(
+    client: &driver::Driver,
+    view: &rustx::local_runtime::configuration::observation::BoundedSourceSettings,
+    name: rustx::local_runtime::configuration::observation::SourceFieldName,
+) -> serde_json::Value {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::{Method, MethodResult};
+    if let Some(source) = &view.inline {
+        let value = serde_json::to_value(source).unwrap();
+        let key = serde_json::to_value(name).unwrap();
+        return value[key.as_str().unwrap()].clone();
+    }
+    let field = view
+        .fields
+        .iter()
+        .find(|field| field.name == name)
+        .expect("the native source advertised this field");
+    if let Some(value) = &field.value {
+        return value.clone();
+    }
+    let reference = field
+        .reference
+        .as_ref()
+        .expect("deferred field has original source evidence");
+    assert_eq!(reference.revision, view.revision);
+    assert_eq!(reference.field, name);
+    assert!(reference.item_index.is_none());
+    assert!(
+        reference.byte_length <= 524_288,
+        "isolated fixture's selected source byte-cache bound"
+    );
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let MethodResult::SourceValueChunk { chunk } = result(
+            client,
+            Method::SourcesValueRead {
+                target: view.target.clone(),
+                reference: reference.clone(),
+                offset,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("original source field chunk");
+        };
+        assert_eq!(chunk.reference, *reference);
+        assert_eq!(chunk.offset, offset);
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.data_base64)
+            .unwrap();
+        assert!(part.len() <= 65_536);
+        let end = offset + u64::try_from(part.len()).unwrap();
+        assert_eq!(chunk.end_offset, end);
+        assert!(end <= reference.byte_length);
+        assert!(end > offset || end == reference.byte_length);
+        assert_eq!(
+            chunk.next_offset,
+            (end < reference.byte_length).then_some(end)
+        );
+        bytes.extend_from_slice(&part);
+        offset = end;
+        if end == reference.byte_length {
+            break;
+        }
+    }
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Issue #464: a real App Server repairs its bound User source before it
+/// parses process policy or opens a transport, and the first client to
+/// connect reads the receipt. Startup selects no Workspace (ISO-05): its
+/// working directory, which here encloses the runtime root, is neither
+/// scanned nor treated as one, and the backup is private.
+#[tokio::test]
+async fn app_server_startup_repairs_the_user_source_before_process_policy() {
+    use rustx::app_server::protocol::{
+        JsonRpcVersion, Method, MethodResult, Request, RequestId, Response,
+    };
+    use rustx::local_runtime::configuration::repair::{ConfigRepairChange, ConfigRepairStatus};
+    use rustx::local_runtime::configuration::settings::SourceTarget;
+    bounded(async {
+        let f = Fixture::new().await;
+        let authored = f.root.path().join("home/rustx/rustx.toml");
+        let valid = std::fs::read_to_string(&authored).unwrap();
+        // Strictly, every one of these rejects the document before policy
+        // parsing; the process policy itself is authored and must survive.
+        let original = format!(
+            "schema_version = 8\nlegacy_root = true\n{valid}\n[app_server]\nmax_connections = 7\nfuture_isolation = \"none\"\n"
+        );
+        std::fs::write(&authored, &original).unwrap();
+        let cwd_source = f.root.path().join("rustx.toml");
+        let cwd_text = "[agent]\nlegacy_cwd = 1\n";
+        std::fs::write(&cwd_source, cwd_text).unwrap();
+        let mut child = f.command("stdio").spawn().unwrap();
+        let driver = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let call = |id: i64, call: Method| {
+            let driver = &driver;
+            async move {
+                let Response::Success(success) = app_server_conformance::AppServerConformanceDriver::request(
+                    driver,
+                    Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(id), call },
+                )
+                .await
+                else {
+                    panic!("request {id} failed")
+                };
+                success.result
+            }
+        };
+        call(1, serde_json::from_str::<Request>(INITIALIZE).unwrap().call).await;
+        let MethodResult::SourceSettings { projection } =
+            call(2, Method::SourcesRead { target: SourceTarget::User }).await
+        else {
+            panic!("source settings")
+        };
+        let process_bindings = startup_source_field(&driver, &projection, SourceFieldName::ProcessBindings).await;
+        assert_eq!(process_bindings["max_connections"], 7);
+        let receipt: rustx::local_runtime::configuration::repair::ConfigRepairReceipt =
+            serde_json::from_value(startup_source_field(&driver, &projection, SourceFieldName::UserRepair).await).unwrap();
+        let user = startup_source_field(&driver, &projection, SourceFieldName::User).await;
+        assert_eq!(receipt.status, ConfigRepairStatus::Repaired);
+        assert_eq!(receipt.target, SourceTarget::User);
+        assert!(receipt.backup_available);
+        assert_eq!(
+            receipt.changes,
+            vec![
+                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 10 },
+                ConfigRepairChange::RemovedField { object_path: String::new() },
+                ConfigRepairChange::RemovedField {
+                    object_path: "app_server".into()
+                },
+            ]
+        );
+        assert_eq!(receipt.after_revision.as_deref(),
+            Some(user["revision"].as_str().expect("exact native User revision")));
+        let repaired = std::fs::read_to_string(&authored).unwrap();
+        assert!(!repaired.contains("legacy_root") && !repaired.contains("future_isolation"));
+        assert!(repaired.contains("max_connections = 7"));
+        let backups: Vec<_> = std::fs::read_dir(f.root.path().join("runtime/configuration-backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
+        let mode = |path: &std::path::Path| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+        };
+        assert_eq!(mode(&backups[0]), 0o600);
+        assert_eq!(mode(backups[0].parent().unwrap()), 0o700);
+        assert_eq!(std::fs::read_to_string(&cwd_source).unwrap(), cwd_text);
+        driver.close().await;
+        detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
     })
     .await;

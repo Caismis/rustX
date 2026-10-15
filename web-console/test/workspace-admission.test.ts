@@ -54,7 +54,7 @@ it.each([true, false])('same adapter, callback and native authority reject delay
 
 it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at the actual socket dispatch boundary', async replacement => {
   const server = new Server(); await server.connect();
-  // Resolve immutable Node evidence before occupying all eight dispatch slots.
+  // Resolve immutable Node evidence before occupying all six dispatch slots.
   await server.client.attach('A'); await server.client.release('A'); server.requests.length = 0;
   let hostId = 'old-host', lists = 0;
   const verifying = deferred<void>(), verification = deferred<void>();
@@ -79,8 +79,8 @@ it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at t
   try {
     const pending = server.client.attach('A'); await verifying.promise;
     server.held.add('session/summary');
-    const occupied = Array.from({ length: 8 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
-    await server.waitFor('session/summary', 8);
+    const occupied = Array.from({ length: 6 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+    await server.waitFor('session/summary', 6);
     verification.resolve(); await queued.promise;
     expect(lists).toBe(1); // Final Host observation must wait for dispatch capacity.
     expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
@@ -171,18 +171,18 @@ async function stalledFinalValidations(retirement: 'navigation' | 'callback' | '
   expect(sent('session/summary')).toHaveLength(0);
   return { retire: () => { presentationCurrent = false; server.client.recheckAdmissions(); }, server, authority, admit, owner, stalled, live, validations, refused, settled, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
 }
-/** Exactly eight native RPC slots remain: a ninth read waits for one to settle. */
+/** Exactly six native RPC slots remain: a seventh read waits for one to settle. */
 async function expectRpcCapacity(server: Server) {
   const before = server.requests.filter(row => row.request.method === 'session/summary').length;
   server.held.add('session/summary');
-  const reads = Array.from({ length: 9 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
-  await server.waitFor('session/summary', before + 8);
+  const reads = Array.from({ length: 7 }, () => server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await server.waitFor('session/summary', before + 6);
   const held = server.requests.filter(row => row.request.method === 'session/summary').slice(before);
-  expect(held).toHaveLength(8);
+  expect(held).toHaveLength(6);
   server.held.delete('session/summary');
   for (const row of held) server.reply(row.request);
   await Promise.all(reads);
-  expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(before + 9);
+  expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(before + 7);
 }
 
 it.each(['navigation', 'callback', 'cleanup', 'reinstall', 'host', 'timeout'] as const)('%s retirement of stalled final validations never blocks cancellation; late Host answers send nothing', async retirement => {
@@ -273,13 +273,13 @@ it('stalled validations reserve their RPC slots, so ordinary native reads never 
   try {
     f.server.held.add('session/summary');
     const before = f.server.requests.filter(row => row.request.method === 'session/summary').length;
-    const reads = Array.from({ length: 7 }, () => f.server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
-    // Two validation reservations + six native reads = the eight-slot bound.
-    expect(f.sent('session/summary')).toHaveLength(6);
+    const reads = Array.from({ length: 5 }, () => f.server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+    // Two validation reservations + four native reads = the six-slot ordinary bound.
+    expect(f.sent('session/summary')).toHaveLength(4);
     f.server.held.delete('session/summary');
     f.server.reply(f.sent('session/summary')[0].request);
-    await f.server.waitFor('session/summary', before + 7);
-    expect(f.sent('session/summary')).toHaveLength(7);
+    await f.server.waitFor('session/summary', before + 5);
+    expect(f.sent('session/summary')).toHaveLength(5);
     expect(f.live()).toBe(2);
     f.retire();
     for (const row of f.sent('session/summary').slice(1)) f.server.reply(row.request);

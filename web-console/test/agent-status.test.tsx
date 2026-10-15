@@ -1,13 +1,14 @@
+import { checkpointSnapshot, foldRuntimeEvent, statusIdentity } from '../../protocol/app-server/projection';
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v46';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v48';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isAgentStatusContext, statusesAt } from '../src/bindings/agent-status';
 import { todoDock } from '../src/bindings/composer-context';
 import { replaceTranscript } from '../src/client/transcript';
-import { Server, snapshot, readingWindow } from './fixture';
+import { Server, snapshot, checkpoint, readingWindow } from './fixture';
 
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); });
@@ -25,12 +26,12 @@ const user = (id: string, cursor: string, text = `Ask ${id}`): RuntimeClientTran
   ({ cursor, item: { type: 'message', message: { role: 'user', id, source: 'human', content: [{ type: 'text', text }] } } });
 const assistant = (id: string, cursor: string, text = `Answer ${id}`): RuntimeClientTranscriptEntry =>
   ({ cursor, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text }, { type: 'tool_call', id: `call-${id}`, tool_id: 'bash', name: 'bash', arguments: {} }] } },
-    tool_calls: [{ message_id: id, block_index: 1, call_id: `call-${id}`, tool_id: 'bash', name: 'bash', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'text', text: 'native tool output' }] } } }] });
+    tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:id},block_index:1},assembly_complete:true, message_id: id, block_index: 1, call_id: `call-${id}`, tool_id: 'bash', name: 'bash', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'native tool output' }] } } }] });
 /** A canonical ToolResult entry. Its standalone body is suppressed by ordinary Web
  * rendering — the native call projection already draws the result beside the call —
  * yet it keeps its authoritative transcript position. */
 const toolResult = (id: string, cursor: string, assistantId: string): RuntimeClientTranscriptEntry =>
-  ({ cursor, item: { type: 'message', message: { role: 'tool', id, occurrence: { assistant_message_id: assistantId, block_index: 1 }, tool_call_id: `call-${assistantId}`, tool_id: 'bash', result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'text', text: 'native tool output' }] } } } });
+  ({ cursor, item: { type: 'message', message: { role: 'tool', id, occurrence: { assistant_message_id: assistantId, block_index: 1 }, tool_call_id: `call-${assistantId}`, tool_id: 'bash', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'native tool output' }] } } } });
 
 /** The conversation used by every placement case: one inbound turn, one Assistant
  * response with a native call, and the settled ToolResult batch that followed it. */
@@ -115,7 +116,7 @@ describe('single-anchor Agent Status placement', () => {
   });
 
   it('renders only typed sections and never parses the rendered prose', () => {
-    const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Ship the dock'), { type: 'background_executions', executions: [{ job_id: 'e1', tool_id: 'bash', tool_name: 'bash', state: 'running' }], omitted_count: 1 }])])} />);
+    const ui = render(<AgentTranscript snapshot={withTranscript(CONVERSATION(), [status('s1', fresh('u1'), [todoSection('Ship the dock'), { type: 'background_executions', executions: [{ job_id: 'e1', tool_name: 'bash', state: 'running' }], omitted_count: 1 }])])} />);
     const note = screen.getByRole('note', { name: 'Agent Status' });
     expect(note.textContent).toContain('todo 1 · background 2');
     expect(ui.container.textContent).not.toContain('rendered prose');
@@ -255,11 +256,27 @@ it('background Agent Status translates every lifecycle label while preserving ex
     timed_out: ['timed out', '已超时'], outcome_unknown: ['outcome unknown', '结果未知'],
   } as const;
   for (const state of Object.keys(labels) as (keyof typeof labels)[]) {
-    const composition = status('status-native', fresh('u1'), [{ type: 'background_executions', executions: [{ job_id: 'e-native', tool_id: 'native-id', tool_name: tool, state }], omitted_count: 0 }]);
+    const composition = status('status-native', fresh('u1'), [{ type: 'background_executions', executions: [{ job_id: 'e-native', tool_name: tool, state }], omitted_count: 0 }]);
     const before = structuredClone(composition);
     for (const [index, locale] of (['en', 'zh'] as const).entries()) {
       expect(agentStatusFacets(translator(locale), composition)[0].values).toEqual([`${tool} · ${labels[state][index]}`]);
     }
     expect(composition).toEqual(before);
   }
+});
+
+it('T14 giant status and inbound identities fold and place by their exact native locators', () => {
+  const one: AgentStatusView = { ...status('unused', {}), status_message_id: null,
+    source_locator: {type:'by_ledger_position',position:41},
+    opportunities: {fresh_inbound:{target_message_id:null,target_locator:{type:'by_ledger_position',position:12},transcript_anchor:'1'},post_tool_batch:{transcript_anchor:'3'}} };
+  const two: AgentStatusView = { ...one, source_locator:{type:'by_ledger_position',position:42} };
+  expect(agentStatusAnchor(one)).toEqual({kind:'transcript_position',cursor:'1'});
+  expect(statusIdentity(one)).not.toEqual(statusIdentity(two));
+  const placement = agentStatusPlacement([one, one, two]);
+  expect(statusesAt(placement,{cursor:'1'})).toEqual([one,two]);
+  expect(statusesAt(placement,{cursor:'3'})).toEqual([]);
+  const initial = checkpointSnapshot(checkpoint({...snapshot(),statuses:[one]}));
+  const folded = foldRuntimeEvent(initial,{type:'agent_status_composed',attempt_id:two.attempt_id,turn:two.turn,status:two,evicted_status_message_id:null,evicted_status_locator:one.source_locator});
+  expect(folded.statuses).toEqual([two]);
+  expect(foldRuntimeEvent(folded,{type:'agent_status_composed',attempt_id:two.attempt_id,turn:two.turn,status:two})).toEqual(folded);
 });

@@ -4,7 +4,7 @@ import { AppServerClient } from '../../src/client/app-server';
 import { ComposerDraft } from '../../src/app/composer/draft';
 import { AttachmentIntake } from '../../src/client/uploads';
 import { CommandSession } from '../../src/app/commands/native';
-import type { Request } from '../../../protocol/app-server/v46';
+import type { Request } from '../../../protocol/app-server/v48';
 
 function barrier<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 for (const replacement of ['reattach', 'switch'] as const) test(`real native ${replacement} settles old input by canonical Conversation, not attachment`, async () => {
@@ -44,14 +44,17 @@ for (const replacement of ['reattach', 'switch'] as const) test(`real native ${r
     let branch: typeof created | undefined;
     if (replacement === 'switch') {
       const cut = await client.request({ method: 'session/boundaries', params: { target, offset: 0, limit: 32 } }, 'boundaries');
-      branch = await client.request({ method: 'session/branch', params: { session_id: sessionId, node_id: created.session.active_node, surface_revision: cut.surface_revision, boundary: cut.boundaries[0].message.id, side: 'before' } }, 'session_transition');
+      branch = await client.request({ method: 'session/branch', params: { session_id: sessionId, node_id: created.session.active_node, surface_revision: cut.surface_revision, boundary: cut.boundaries[0].locator, side: 'before' } }, 'session_transition');
     }
     const owner = new ComposerDraft(), intake = new AttachmentIntake();
     const editor = owner.activate('same-editor', [], 'old-proof', target);
     owner.edit(editor.incarnation, 'Composer identity 1'); const ticket = owner.submit(editor.incarnation, intake, 'send', target)!;
     hold = true;
     // Avoid observing the previous settled Attempt as the new terminal barrier.
-    const secondDone = terminal(client.getSnapshot().views[sessionId].snapshot?.attempt?.attempt_id);
+    const previousAttempt = client.getSnapshot().views[sessionId].snapshot?.attempt?.attempt_id;
+    expect(typeof previousAttempt).toBe('string');
+    if (typeof previousAttempt !== 'string') throw new Error('Settled Composer fixture lacks its native Attempt identity.');
+    const secondDone = terminal(previousAttempt);
     const work = client.send(sessionId, ticket.text, [], 'send', ticket.accepted);
     const deliver = await received.promise;
     await secondDone;

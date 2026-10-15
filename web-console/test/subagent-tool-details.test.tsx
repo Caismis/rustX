@@ -1,13 +1,13 @@
 import { ToolInspectionContext } from '../src/app/agent/tool-inspection';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v46';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v48';
 import { subagentToolDetails } from '../src/app/agent/subagent-tool-details';
 import { DomainActivity } from '../src/app/agent/DomainActivity';
 afterEach(cleanup);
-const call = (name: string, input: unknown, result: unknown): ForegroundToolExecution => ({
+const call = (name: string, input: unknown, result: unknown): ForegroundToolExecution => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'message'},block_index:0},assembly_complete:true,
   call_id: 'call', tool_id: `tool-${name}`, name, message_id: 'message', block_index: 0,
-  state: { type: 'settled', arguments: JSON.stringify(input), result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'json', value: result as never }] } },
+  state: { type: 'settled', arguments: JSON.stringify(input), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'json', value: result as never }] } },
 });
 it('creation is a start receipt, not the child terminal outcome', () => {
   const details = subagentToolDetails(call('subagent', { title: 'Inspect source tree', task: 'Inspect source' }, { agent_id: 'child', activation_id: 'first', state: 'active', agent: 'explore' }));
@@ -38,7 +38,7 @@ it('expanded list keeps human details and delegates Inspect to the native occurr
   expect(ui.getByText('Research')).toBeTruthy();
   expect(ui.getByText('Running')).toBeTruthy();
   fireEvent.click(ui.getByRole('button', { name: 'Inspect' }));
-  expect(inspect).toHaveBeenCalledExactlyOnceWith({ occurrence: { assistant_message_id: 'message', block_index: 0 }, call_id: 'call', tool_id: 'tool-list_agents' });
+  expect(inspect).toHaveBeenCalledExactlyOnceWith({ occurrence: { locator: { type: 'by_message_id' as const, message_id: 'message' }, block_index: 0 }, call_id: 'call', tool_id: 'tool-list_agents' });
   await waitFor(() => expect(ui.getByRole('button', { name: 'Inspect' }).getAttribute('aria-busy')).toBe('false'));
   expect(ui.container.querySelector('pre')).toBeNull();
 });
