@@ -64,9 +64,15 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await page.getByRole('button', { name: copy('Close Settings', '关闭设置'), exact: true }).click();
       const expand = page.getByRole('button', { name: copy('Expand Sidebar', '打开侧边栏'), exact: true });
       if (await expand.isVisible()) await expand.click();
+      const frame = page.locator('[data-harness-frame]');
+      if (theme === 'dark') await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
       await page.locator(`button[data-session-id="${sessionId}"]`).click();
-      const collapse = page.getByRole('button', { name: copy('Collapse Sidebar', '收起侧边栏'), exact: true });
-      if (theme === 'dark' && await collapse.isVisible()) await collapse.click();
+      // Successful native navigation dismisses the narrow sidebar overlay.
+      if (theme === 'dark') {
+        await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
+        await expect(page.locator('main')).not.toHaveAttribute('inert', '');
+        await expect(expand).toBeVisible();
+      }
       await expect(failures).toHaveCount(2);
       await expect(failures.last()).toContainText('malformed chat chunk');
       await expect(page.getByText('Conversation recovered after model errors.', { exact: true })).toBeVisible();

@@ -230,13 +230,14 @@ async fn identical_explicit_selection_is_inert_while_idle() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn identical_explicit_selection_is_inert_during_an_attempt() {
     let stage = NoopStage::new();
-    let mut diagnostic_host = None;
-    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let diagnostic_host = Arc::new(Mutex::new(None));
+    let work_host = diagnostic_host.clone();
+    let mut work = Box::pin(async {
         let f = fixture().await;
         stage.set("idle projection settled");
         let runtime = f.manager.configuration_runtime(&f.sessions[0].id).unwrap();
         let host = f.manager.configuration_host(&f.sessions[0].id).unwrap();
-        diagnostic_host = Some(host.clone());
+        *work_host.lock().unwrap() = Some(host.clone());
         host.projection_settled().await;
         let baseline = host.checkpoint().unwrap();
         assert_eq!(
@@ -281,21 +282,25 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
         let receipt = runtime.child_attempt_settlement(after).await;
         assert_eq!(receipt.ordinal, after + 1);
         stage.set("close");
-        diagnostic_host = None;
+        *work_host.lock().unwrap() = None;
         f.close().await;
-    })
-    .await;
+    });
+    // Keep the actual execution/release guards alive until the deadline's
+    // diagnostic is captured. Cancelling first can advance the very owner
+    // whose blocked stage this failure must identify.
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), work.as_mut()).await;
     if result.is_err()
-        && let Some(host) = diagnostic_host
+        && let Some(host) = diagnostic_host.lock().unwrap().as_ref()
     {
         eprintln!(
-            "no-op liveness at {} (stage {:?}, total {:?}; live state follows cancellation): {}",
+            "no-op liveness at {} (stage {:?}, total {:?}; pre-cancellation state): {}",
             stage.get(),
             stage.entered.get().elapsed(),
             stage.started.elapsed(),
             host.inner.projection_source_debug()
         );
     }
+    drop(work);
     assert!(result.is_ok(), "test liveness at {}", stage.get());
 }
 

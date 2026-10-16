@@ -727,7 +727,7 @@ mod lock_tests {
     #[test]
     fn interrupted_shared_and_initialization_locks_continue_but_other_errors_survive() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("rustx.toml");
+        let path = root.path().canonicalize().unwrap().join("rustx.toml");
         locks::fail_next(libc::EINTR);
         drop(lock_document(&path).unwrap());
         assert_eq!(locks::attempts(), 2);

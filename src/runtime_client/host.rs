@@ -778,6 +778,44 @@ struct PublicationGate {
     settlement_contention_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     settlement_wait: Mutex<Option<SettlementWait>>,
+    #[cfg(test)]
+    diagnostics: Mutex<ProjectionDiagnostics>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct ProjectionDiagnostics {
+    worker: Option<ProjectionStage>,
+    preparation: Option<ProjectionStage>,
+    publication: Option<ProjectionStage>,
+    read: Option<(ProjectionStage, super::projection::ReadDomainCut)>,
+}
+
+#[cfg(test)]
+struct ProjectionStage {
+    name: &'static str,
+    entered: std::time::Instant,
+    thread: std::thread::ThreadId,
+}
+
+#[cfg(test)]
+impl ProjectionStage {
+    fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            entered: std::time::Instant::now(),
+            thread: std::thread::current().id(),
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "{}@{:?} age={:?}",
+            self.name,
+            self.thread,
+            self.entered.elapsed()
+        )
+    }
 }
 
 /// Last failed predicate, retained before cancellation can release native gates.
@@ -793,6 +831,45 @@ struct SettlementWait {
 }
 
 impl PublicationGate {
+    #[cfg(test)]
+    fn worker_stage(&self, name: &'static str) {
+        self.diagnostics.lock().unwrap().worker = Some(ProjectionStage::new(name));
+    }
+
+    #[cfg(test)]
+    fn preparation_stage(&self, name: &'static str) {
+        self.diagnostics.lock().unwrap().preparation = Some(ProjectionStage::new(name));
+    }
+
+    #[cfg(test)]
+    fn publication_stage(&self, name: &'static str) {
+        self.diagnostics.lock().unwrap().publication = Some(ProjectionStage::new(name));
+    }
+
+    #[cfg(test)]
+    fn read_stage(&self, name: &'static str, cut: &super::projection::ReadDomainCut) {
+        self.diagnostics.lock().unwrap().read = Some((ProjectionStage::new(name), cut.clone()));
+    }
+
+    #[cfg(test)]
+    fn diagnostic(&self) -> String {
+        let Ok(state) = self.diagnostics.try_lock() else {
+            return "stage diagnostic busy or poisoned".into();
+        };
+        let describe =
+            |value: &Option<ProjectionStage>| value.as_ref().map(ProjectionStage::describe);
+        format!(
+            "worker={:?} preparation={:?} publication={:?} physical_read={:?}",
+            describe(&state.worker),
+            describe(&state.preparation),
+            describe(&state.publication),
+            state
+                .read
+                .as_ref()
+                .map(|(stage, cut)| (stage.describe(), cut))
+        )
+    }
+
     #[cfg(test)]
     fn settlement_lock<'a>(&self, boundary: &'a Mutex<()>) -> MutexGuard<'a, ()> {
         match boundary.try_lock() {
@@ -887,6 +964,8 @@ fn commit_display<T>(
         .order
         .lock()
         .expect("native display publication gate");
+    #[cfg(test)]
+    publication.publication_stage("fold");
     let (draft, installed) = {
         let mut state = state.lock().expect("native display capture");
         state.projection.begin_publication();
@@ -895,10 +974,14 @@ fn commit_display<T>(
     };
     if let Some(draft) = draft {
         #[cfg(test)]
+        publication.publication_stage("encode");
+        #[cfg(test)]
         if let Some(hook) = publication.encoding_hook.lock().unwrap().take() {
             hook();
         }
         let encoded = draft.encode();
+        #[cfg(test)]
+        publication.publication_stage("install");
         let mut state = state.lock().expect("native display install");
         match encoded {
             Ok(encoded) => state.projection.install_publication(encoded),
@@ -906,6 +989,8 @@ fn commit_display<T>(
         }
         drop(state);
     }
+    #[cfg(test)]
+    publication.publication_stage("idle");
     // A source failure may resolve a pending reader without creating a cursor.
     // Wake readers after every completed CPU fold, including that failure path.
     publication.completed();
@@ -921,6 +1006,8 @@ fn prepared_lock<'a>(
     workflows: Option<&crate::runtime::workflow::read_model::WorkflowReadModel>,
 ) -> MutexGuard<'a, ClientState> {
     let _preparation = preparation.lock().expect("projection preparation mutex");
+    #[cfg(test)]
+    publication.preparation_stage("drain");
     let observations = pending.drain();
     #[cfg(test)]
     if !observations.is_empty() {
@@ -930,6 +1017,8 @@ fn prepared_lock<'a>(
         }
     }
     apply_prepared_observations(state, publication, observations, store, false, true);
+    #[cfg(test)]
+    publication.preparation_stage("workflow");
     if let Some(workflows) = workflows
         && !pending.has_unpublished()
     {
@@ -957,6 +1046,8 @@ fn prepared_lock<'a>(
             );
         }
     }
+    #[cfg(test)]
+    publication.preparation_stage("idle");
     state.lock().expect("runtime client host lock poisoned")
 }
 fn journal_preparation(
@@ -1017,6 +1108,8 @@ fn apply_prepared_observations(
     complete: bool,
 ) {
     for mut observation in observations {
+        #[cfg(test)]
+        publication_gate.preparation_stage("metadata");
         let mut model_capabilities = state
             .lock()
             .expect("source header state")
@@ -1042,6 +1135,8 @@ fn apply_prepared_observations(
         sources.extend(activity_domain_sources(state, &observation, &sources));
         let sources = weighted_sources(sources);
         super::checkpoint::bound_publication_payload(&mut observation);
+        #[cfg(test)]
+        publication_gate.preparation_stage("publish");
         commit_display(state, publication_gate, |projection| {
             projection.prepare_publication_content(publication_content);
             projection.install_content_metadata(references);
@@ -1544,14 +1639,12 @@ impl Drop for ClientInner {
 impl ClientInner {
     #[cfg(test)]
     pub(crate) fn projection_source_debug(&self) -> String {
-        let projection = self
-            .state
-            .lock()
-            .expect("native source diagnostic")
-            .projection
-            .source_prefix_debug();
-        let last_wait = self.publication_gate.settlement_wait.lock().unwrap();
-        let wait = last_wait.as_ref().map(|wait| {
+        let projection = self.state.try_lock().map_or_else(
+            |_| "projection state busy or poisoned".into(),
+            |state| state.projection.source_prefix_debug(),
+        );
+        let last_wait = self.publication_gate.settlement_wait.try_lock().ok();
+        let wait = last_wait.as_ref().and_then(|guard| guard.as_ref()).map(|wait| {
             format!(
                 "checked_ago={:?} elapsed={:?} worker_turn={} pending_settled={} read_cut={:?} source={} queue={}",
                 wait.checked.elapsed(), wait.elapsed, wait.worker_turn, wait.pending_settled,
@@ -1559,8 +1652,9 @@ impl ClientInner {
             )
         });
         format!(
-            "{projection} queue={} last_settlement_wait={wait:?}",
-            self.pending.source_progress_debug()
+            "{projection} queue={} last_settlement_wait={wait:?} stages={}",
+            self.pending.source_progress_debug(),
+            self.publication_gate.diagnostic()
         )
     }
 
@@ -1687,6 +1781,7 @@ impl ClientInner {
     /// Native owner callbacks publish their finite receipts synchronously; this worker
     /// reads remaining indexed sources outside the Projection lock. Its cancellable
     /// blocking read is joined before shutdown releases physical source ownership.
+    #[allow(clippy::too_many_lines)] // Test-only stage probes preserve the production owner sequence.
     pub(crate) fn ensure_worker(self: &Arc<Self>) {
         let Some(mut worker_slot) = self.claim_worker() else {
             return;
@@ -1708,6 +1803,8 @@ impl ClientInner {
         let worker = tokio::spawn(async move {
             let mut reading = None;
             loop {
+                #[cfg(test)]
+                publication_gate.worker_stage("wait");
                 tokio::select! {
                     () = pending.wait() => {},
                     () = async {
@@ -1717,6 +1814,8 @@ impl ClientInner {
                         }
                     } => {},
                     result = next_projection_read(&reads) => {
+                        #[cfg(test)]
+                        publication_gate.worker_stage("read_completion");
                         if let Some((cut, domains)) = completed_projection_read(result, reading.take()) {
                             let Some(source)=store.upgrade() else { break };
                             drop(prepared_lock(&state,&preparation,&publication_gate,&pending,source.as_ref(),workflow_state.as_ref()));
@@ -1731,6 +1830,8 @@ impl ClientInner {
                 if pending.is_closed() {
                     break;
                 }
+                #[cfg(test)]
+                publication_gate.worker_stage("prepare");
                 let cut = {
                     let Some(source) = store.upgrade() else { break };
                     let guard = prepared_lock(
@@ -1755,6 +1856,8 @@ impl ClientInner {
                 if reading.is_none()
                     && let Some(cut) = cut
                 {
+                    #[cfg(test)]
+                    publication_gate.worker_stage("spawn_read");
                     let Some(store) = store.upgrade() else {
                         break;
                     };
@@ -1764,14 +1867,23 @@ impl ClientInner {
                     let hook = read_domain_hook.lock().unwrap().take();
                     let mut read_slot = reads.lock().await;
                     reading = Some(cut.clone());
+                    #[cfg(test)]
+                    let read_diagnostic = publication_gate.clone();
                     *read_slot = Some(tokio::task::spawn_blocking(move || {
+                        #[cfg(test)]
+                        read_diagnostic.read_stage("hook", &cut);
                         #[cfg(test)]
                         if let Some(hook) = hook
                             && let Err(error) = hook()
                         {
+                            read_diagnostic.read_stage("hook_failed", &cut);
                             return (cut, Err(error));
                         }
+                        #[cfg(test)]
+                        read_diagnostic.read_stage("source", &cut);
                         let domains = cut.read(store.as_ref());
+                        #[cfg(test)]
+                        read_diagnostic.read_stage("completed", &cut);
                         (cut, domains)
                     }));
                 }

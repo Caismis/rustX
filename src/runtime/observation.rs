@@ -519,6 +519,8 @@ pub(crate) struct PendingObservations {
     state: Mutex<PendingState>,
     /// Wakes the worker task on every push and on close.
     notify: tokio::sync::Notify,
+    #[cfg(test)]
+    diagnostic: Mutex<QueueDiagnostic>,
     journal: std::sync::OnceLock<std::sync::Weak<dyn crate::durable::ConversationStore>>,
     #[cfg(test)]
     fixture_journal: std::sync::OnceLock<FixtureJournal>,
@@ -536,6 +538,16 @@ pub(crate) struct PendingObservations {
     /// either completed before the park or observes it.
     #[cfg(test)]
     parked: AtomicBool,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct QueueDiagnostic {
+    drain: Option<(&'static str, std::time::Instant)>,
+    window: Option<(u64, u64, Option<u64>)>,
+    ready: Option<(u64, std::time::Instant)>,
+    committed: Option<(Option<u64>, std::time::Instant)>,
+    woke: Option<std::time::Instant>,
 }
 
 /// The one Runtime Client adapter at native source publication boundaries.
@@ -999,6 +1011,8 @@ impl PendingObservations {
                 fixture_progress_counts: (0, 0),
             }),
             notify: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            diagnostic: Mutex::new(QueueDiagnostic::default()),
             journal: std::sync::OnceLock::new(),
             #[cfg(test)]
             fixture_journal: std::sync::OnceLock::new(),
@@ -1419,10 +1433,13 @@ impl PendingObservations {
             .collect()
     }
 
+    #[allow(clippy::too_many_lines)] // Test-only stage probes preserve the production drain sequence.
     fn drain_journal(
         &self,
         store: &dyn crate::durable::ConversationStore,
     ) -> Vec<ConversationObservation> {
+        #[cfg(test)]
+        self.drain_stage("window");
         let (after, through) = match self.journal_source_window() {
             Ok(Some(window)) => window,
             Ok(None) => return Vec::new(),
@@ -1433,10 +1450,19 @@ impl PendingObservations {
                 }];
             }
         };
+        #[cfg(test)]
+        {
+            let mut diagnostic = self.diagnostic.lock().unwrap();
+            diagnostic.window = Some((after, through, None));
+        }
+        #[cfg(test)]
+        self.drain_stage("transcript");
         let Ok(transcript) = store.transcript_source_ready() else {
             self.source_read_failed();
             return Vec::new();
         };
+        #[cfg(test)]
+        self.drain_stage("frontier");
         let Ok(ready) = store.observation_ready_frontier(after, through) else {
             self.source_read_failed();
             return vec![ConversationObservation::JournalBatch {
@@ -1444,10 +1470,17 @@ impl PendingObservations {
                 observations: Vec::new(),
             }];
         };
+        #[cfg(test)]
+        {
+            self.diagnostic.lock().unwrap().window = Some((after, through, Some(ready)));
+            self.drain_stage("witness");
+        }
         let Some(facts) = Self::journal_witness_page(store, after, ready) else {
             self.source_read_failed();
             return Vec::new();
         };
+        #[cfg(test)]
+        self.drain_stage("cursor");
         let mut state = self.state.lock().expect("native source cursor");
         if state.journal_read != after {
             return Vec::new();
@@ -1520,6 +1553,8 @@ impl PendingObservations {
         if more {
             self.notify.notify_one();
         }
+        #[cfg(test)]
+        self.drain_stage("idle");
         transitions
     }
     fn drain_current_sources(
@@ -1564,6 +1599,10 @@ impl PendingObservations {
     /// push or a close between two waits is never missed.
     pub(crate) async fn wait(&self) {
         self.notify.notified().await;
+        #[cfg(test)]
+        {
+            self.diagnostic.lock().unwrap().woke = Some(std::time::Instant::now());
+        }
     }
 
     pub(crate) fn has_unpublished(&self) -> bool {
@@ -1834,22 +1873,53 @@ impl crate::durable::presentation::JournalObserver for PendingObservations {
             state.journal_failed = true;
         }
         drop(state);
+        #[cfg(test)]
+        {
+            self.diagnostic.lock().unwrap().committed = Some((through, std::time::Instant::now()));
+        }
         self.notify.notify_one();
     }
-    fn ready(&self, _through: u64) {
+    fn ready(&self, through: u64) {
+        #[cfg(not(test))]
+        let _ = through;
         self.state
             .lock()
             .expect("native source publication")
             .journal_failed = false;
+        #[cfg(test)]
+        {
+            self.diagnostic.lock().unwrap().ready = Some((through, std::time::Instant::now()));
+        }
         self.notify.notify_one();
     }
 }
 #[cfg(test)]
 impl PendingObservations {
+    fn drain_stage(&self, name: &'static str) {
+        self.diagnostic.lock().unwrap().drain = Some((name, std::time::Instant::now()));
+    }
+
     pub(crate) fn source_progress_debug(&self) -> String {
-        let state = self.state.lock().expect("fixture progress diagnostic");
+        let Ok(state) = self.state.try_lock() else {
+            return "queue state busy or poisoned".into();
+        };
+        let Ok(diagnostic) = self.diagnostic.try_lock() else {
+            return "queue diagnostic busy or poisoned".into();
+        };
+        let stages = format!(
+            "drain={:?} window={:?} ready={:?} committed={:?} woke_ago={:?}",
+            diagnostic.drain.map(|(name, at)| (name, at.elapsed())),
+            diagnostic.window,
+            diagnostic
+                .ready
+                .map(|(through, at)| (through, at.elapsed())),
+            diagnostic
+                .committed
+                .map(|(through, at)| (through, at.elapsed())),
+            diagnostic.woke.map(|at| at.elapsed())
+        );
         format!(
-            "owners={} progress={} reliable={} journal_read={} through={:?} failed={} reports={} matches={} pending_head={} unpublished={} activity={} offhead={}",
+            "owners={} progress={} reliable={} journal_read={} through={:?} failed={} reports={} matches={} pending_head={} unpublished={} activity={} offhead={} {stages}",
             state.progress_owners.len(),
             state.latest_progress.len(),
             state.reliable.len(),

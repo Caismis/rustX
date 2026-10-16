@@ -11,6 +11,172 @@ The normative contract is in [invariants](invariants.md), the public methods and
 lock order in [App Server protocol](app-server-protocol.md), and source/read-cut
 semantics in [conversation reading](conversation-reading.md).
 
+## Archive stream integrity follow-up (after `3b0c0256`)
+
+Independent review identified a remaining consumer omission: archive preflight
+opened a native sealed reader, but ZIP streaming used its raw `Read` implementation
+without verifying payload chunks. Header/length validation and ZIP CRC do not
+prove that copied bytes match the native settled source. The previous lineage
+copy repair remains intact; this is a separate archive consumer.
+
+The correction verifies the existing 64 KiB buffer before writing the same bytes
+into ZIP, then checks aggregate/EOF before successful producer completion. Native
+capture/frontier ownership, cancellation, the two-chunk queue and backpressure
+remain unchanged. No body prescan is added under the capture barrier, no import
+API or format compatibility path is introduced, and archive format v4 remains
+unchanged. The existing HTTP consumer emits its terminating chunk only after
+successful native producer EOF; a verification error follows the existing failed
+stream/partial-download cleanup contract.
+
+The per-cut test hook runs at the actual source-buffer read/verification boundary,
+without global scheduling state. These six real-stream regressions require an
+error before successful EOF for corrupted inputs and join the original producer:
+
+| Exact selector under `local_runtime::session::tests::archive_tests::integrity_tests::` | Controlled boundary |
+| --- | --- |
+| `archive_rejects_equal_length_tamper_after_settlement_before_preflight` | Settled bytes changed before the finite cut; header-only preflight succeeds, streamed verification rejects. |
+| `archive_rejects_equal_length_tamper_after_preflight` | Captured reader/identity retained while same-length bytes change before streaming. |
+| `archive_rejects_future_chunk_mutation_between_verified_buffers` | Hook after first verified buffer changes the next chunk; the next verification fails. |
+| `archive_exports_the_verified_buffer_after_source_mutation` | Hook after physical read changes the source; ZIP contains the already-read original buffer, never a reread. |
+| `archive_checks_completion_for_empty_and_extended_artifacts` | Empty healthy archive succeeds; post-cut extension and extension after the final verified chunk fail exact EOF/length checks. |
+| `archive_rejects_rehashed_chunk_evidence_against_captured_aggregate` | Future payload and per-chunk digest change together; all three chunk checks pass, but captured aggregate rejects successful completion. |
+
+Local archive validation passed `git diff --check`, `cargo fmt --all -- --check`,
+`cargo clippy --all-targets --all-features -- -D warnings`, `cargo build --bins`,
+the six exact integrity regressions, `cargo test --all-targets --all-features archive`
+(39 passed / zero failed), and `cargo run --all-features --example check_test_lanes`.
+The real Session export/Artifact document browser subset passed both tests
+(17.4s), including browser download and remote TUI consuming the same archive.
+
+CI run [38965057499](https://github.com/Caismis/rustX/actions/runs/38965057499)
+belongs to `3b0c0256afad89a69738338e8e3b9a92489297bf` and cannot validate this
+follow-up. Its Linux boundaries passed. Linux contracts reproduced the no-op
+baseline publication guard failure (3,946 passed / one failed / four existing
+ignores): the retained predicate was not rechecked for 29 seconds despite the
+final healthy source. The subsequent gate investigation and correction are recorded below. macOS in-crate boundaries
+failed the new shared/initialization lock fixture at `SourceDirectory::create`
+with `ENOTDIR` (3,260 passed / one failed / three existing ignores); its temporary
+path was not canonicalized before entering the owner that refuses symlinked
+ancestors. The exact path was not logged. The fixture now canonicalizes its temporary root,
+following existing configuration tests; production nofollow behavior is unchanged.
+The external competing-writer CAS test
+was not reached, so this run does not establish its remote outcome.
+
+The no-op diagnostic now retains its work future until the failure snapshot is
+captured, so timeout cleanup cannot first release the held execution gate. Fixed-size
+`#[cfg(test)]` owner snapshots retain only the latest worker, physical read,
+preparation/publication and Journal readiness stages. Failure reporting uses
+nonblocking lock attempts. The production notification path, source work, the
+30-second guard and correctness assertions are unchanged; this diagnostic change
+does not itself repair the Linux failure; the separate gate handoff below addresses the demonstrated scheduling boundary.
+
+The `3b0c0256` Web job completed with 2,853 unit tests passing (four existing
+skips), and 316 browser passes / one failure (34.3m). Both original reading cases
+passed. The failure was `model-errors.spec.ts` / `persistent native model failures
+en dark`, at its conditional Collapse Sidebar click. The retained trace proves
+that successful native navigation dismissed the narrow overlay between the
+visibility check and click; the failure page already contained both expected
+errors and recovered output. The fixture now asserts the positive pre-navigation
+overlay and the navigation-owned closure/interactivity/Expand control, preserving
+all original content assertions and all four locale/theme cases.
+
+The diagnostic validation pass completed formatting, strict Clippy, ten selected
+interrupted-operation tests and all 26 `cfg3_catalog` tests. The four-worker
+`model_selection_noop::` group then failed four existing 30-second setup guards
+(two passed); the active-Attempt case had not completed fixture construction.
+A contemporaneous `/proc/pressure/io` sample reported 83.54% full pressure over ten
+seconds. This is distinct from the remote 29-second post-admission stall and does
+not waive either failure. The driver stopped before the full contracts command.
+Initial diagnostic compilation also found four lint issues, corrected before the
+passing strict-Clippy run; the failed log is retained.
+
+The subsequent owner audit found a concrete harness scheduling defect. The installed
+`attempt_execution_gate` synchronously parks the Tokio admission worker immediately
+after native readiness can wake Projection. Tokio 1.53.1's worker-local LIFO slot
+is not stealable, so this test gate can strand that ready task until timeout cleanup
+releases the gate. No Store, coordinator, mailbox, dispatcher or probe lock remains
+held across this gate. The test-only correction uses `block_in_place` for this
+installed gate alone, preserving its exact post-admission/pre-execution location.
+Absent hooks and production scheduling are unchanged.
+
+`runtime::conversation_runtime::tests::attempt_execution_probe_hands_off_woken_peer_before_parking`
+uses one executor worker, a Notify waiter enabled before admission and an external
+channel controller. Its synchronous negative control proves that the peer cannot
+run while the gate is held; the actual helper must let the peer run before release.
+Both physical tasks are joined before checking the handoff result. This directly
+proves the executor handoff; the pinned Tokio source establishes the LIFO mechanism
+that matches the four-worker CI stall. It is not a captured reproduction of that
+entire CI fixture. The existing
+native no-op fixture still requires an Admitted Attempt and stable native
+projection before measuring the no-op. The exact handoff regression passed (one test), followed by all six native no-op
+tests (3.16s) with one libtest worker and unchanged guards. Formatting, strict
+Clippy and binary build passed on this source. The complete follow-up validation
+results below are from this source; prior runs are not used as proof of the handoff.
+
+
+The first complete Rust run of this follow-up ended with 4,190 passed, one failed
+and four existing ignores. `scripted_suites::agent::tool_progress::parallel_calls_bound_progress_per_call_and_keep_canonical_order`
+exceeded its unchanged ten-second guard (11.315s observed; fixture setup 17.790ms).
+Both Tools, all retained progress, and canonical Tool results had committed;
+the retained Journal ended at the next `TurnStarted`, before the second Model
+request. This direct Agent fixture has no Projection worker or admission gate.
+Synchronous durable commits followed by the existing model-preparation yield are
+consistent with cumulative work exhausting the guard; the snapshot does not
+prove a post-`TurnStarted` deadlock. Host I/O full pressure was 86.90% at the later
+sample, which is environmental evidence, not proof of the cause of every delay.
+The exact test passed unchanged in 1.65s; its complete four-test module passed in
+14.26s. The initial failed full run remains recorded, and a full repeat is required.
+
+The protocol generation/drift check and typecheck, development client checks, TUI
+checks, WebUI typecheck/unit tests/build/i18n/provenance, original skill-identity
+boundary test, and fake-provider tests passed. All four model-error browser
+locale/theme cases passed (29.5s). Both original reading cases passed separately
+(2.8m and 2.5m), retaining all 300 Attempts and the 240-second fixture guard.
+The complete canonical browser suite then passed all 317 tests (21.4m), including
+both reading cases and all four model-error cases. The unchanged repeated full Rust
+run passed 4,872 tests across 20 targets, zero failures and nine existing ignores
+(2,457.19s); the library contributed 4,191 passes and four ignores. It includes all
+47 Subagent integration tests and the originally failing skill-identity test, plus
+real process/Stdio/WebSocket/Unix IPC, storage, publication and shutdown coverage.
+The previously timed-out parallel Tool-progress test passed in that complete run.
+No guards, workloads, assertions or test discovery were weakened.
+
+Final follow-up command ledger (single exclusive local lane;
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=1 RUSTX_REQUIRE_PROVIDER_EMULATOR=1`):
+
+| Command | Final source result |
+| --- | --- |
+| `git diff --check` | Passed. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed. |
+| `cargo build --bins` | Passed. |
+| `cargo test --lib --all-features runtime::conversation_runtime::tests::attempt_execution_probe_hands_off_woken_peer_before_parking -- --exact --nocapture` | One passed; negative control and actual handoff both exercised. |
+| `cargo test --lib --all-features model_selection_noop:: -- --nocapture` | Six passed; also passed in both full library runs. |
+| `cargo test --all-targets --all-features` | Final repeat: 4,872 passed / zero failed / nine existing ignores. Initial failed run retained above. |
+| `cargo run --all-features --example check_test_lanes` | Passed. |
+| `pnpm --dir protocol/app-server check` | Generation/drift passed. |
+| `pnpm --dir protocol/app-server typecheck` | Passed. |
+| `pnpm --dir dev typecheck` / `pnpm --dir dev test` | Passed; 41 tests. |
+| `pnpm --dir tui typecheck` / `pnpm --dir tui test` | Passed; 1,180 passed / one existing platform skip. |
+| `pnpm --dir web-console typecheck` / `pnpm --dir web-console test` | Passed; 2,853 passed / four existing skips. |
+| `pnpm --dir web-console build` | Passed. |
+| `pnpm --dir web-console check:i18n` / `pnpm --dir web-console check:provenance` | Passed. No separate maintained WebUI lint script exists. |
+| `cargo test --test subagent --all-features definitions::skill_version_identity_is_frozen_across_the_boundary -- --exact` | One passed, also passed within all 47 Subagent tests. |
+| `uv run --project test-support/fake-provider --frozen pytest test-support/fake-provider/tests` | 55 passed. No live Model API used. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/model-errors.spec.ts` | Four passed. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'native distant reading rail, detached/latest follow and measured width in both locales'` | One passed, 2.8m. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'Fork source exact Message landing and cancellation by scrolling, newer navigation and attachment replacement'` | One passed, 2.5m. |
+| `pnpm --dir web-console test:e2e` | 317 passed / zero failures / no skips, 21.4m. |
+
+Logs and exact driver results are retained in
+`/home/capi/Documents/codes/rustX-review2-20261016/final-repair-validation/`, with
+successful continuation in `completion/` and targeted timeout reruns in
+`tool-progress-rerun/`. Final fetch still reports main
+`8cb41624eb2dc2ca87e4409961f42553ceb029cf`, already integrated by normal merge
+`b8a961eb`; no additional main merge was required. macOS cannot run on this Linux
+host. Final-head remote checks must be verified separately on [PR #478](https://github.com/Caismis/rustX/pull/478/checks);
+the prior `3b0c0256` failures are not claimed as passing validation.
+
 ## Artifact lineage integrity follow-up (after `fee5d8b7`)
 
 Independent review found a reachable source-authentication gap: `ContentRead`

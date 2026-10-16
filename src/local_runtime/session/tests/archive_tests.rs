@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use tokio_util::sync::CancellationToken;
 
+mod integrity_tests;
+
 async fn decode(cut: SessionArchiveCut) -> BTreeMap<String, Vec<u8>> {
     let mut stream = cut.stream();
     let mut bytes = Vec::new();

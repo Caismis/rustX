@@ -513,4 +513,6 @@ keeps its existing 256-Artifact/64-MiB aggregate copied-payload budget. Destinat
 finalization additionally rereads that payload to bind its seal to the source
 aggregate before publication. A canonical
 ContentRead still reads at most two segments; lineage verification does not add a
-whole-file scan to range reads.
+whole-file scan to range reads. Session archive streaming also verifies each
+existing 64 KiB source buffer before compression and checks the seal aggregate
+before successful completion; it does not prescan bodies under the capture barrier.
