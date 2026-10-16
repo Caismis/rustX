@@ -34,7 +34,7 @@ The external macOS targets were not reached and a new platform run is required.
 and environment qualification. PR #478 remains open for independent review and
 must not be merged by this task.
 
-### Current review corrections (local validation complete; final-head CI pending)
+### Current review corrections (local validation complete)
 
 The current correction starts at `b0928347`. Current-attempt cancellation now
 selects and cancels under the native coordinator mutex shared with admission and
@@ -58,8 +58,8 @@ Compaction proves actual optional-source failure, valid consecutive compactions
 with a held first receipt, and a lost JSONL response over a Tokio duplex connection.
 The latter is not an OS-pipe test. Model-call and native terminal counts remain exact.
 The unchanged reading fixtures and complete local validation now pass as recorded
-below. New-head CI remains required; historical results are not used as proof
-for the repaired source.
+below. Remote results are recorded in [PR #478 checks](https://github.com/Caismis/rustX/pull/478/checks)
+for the exact pushed commit; historical results are not proof for the repaired source.
 
 The current incremental Request Source shares augmentation on the native
 selected-input tree. It retains one finite Request root and its original capture
@@ -101,7 +101,8 @@ in 3.2m (page assertions 6.2s). Wrapper times 260.172s/193.437s include native/w
 setup and are not the fixture durations. The complete `pnpm --dir web-console test:e2e` run then passed all **317 cases**,
 zero failures/skips, in 23.2m (wrapper 1,401.974s), on the default filesystem.
 Both original reading cases passed again in that full run. No fixture timeout,
-workload, screenshot baseline or assertion changed. Final-head CI remains pending.
+workload, screenshot baseline or assertion changed. Remote CI must be read from PR #478 checks for the exact pushed commit;
+these local results do not substitute for it.
 
 ### Native command regression evidence
 
