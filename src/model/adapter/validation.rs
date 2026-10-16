@@ -294,7 +294,7 @@ mod tests {
                 capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
                 compat: crate::model::catalog::ModelCompat::default(),
             },
-            messages: Vec::new(),
+            messages: crate::model::SelectedModelInput::default(),
             tools: Vec::new(),
             effective_system_prompt: String::new(),
             continuation: None,

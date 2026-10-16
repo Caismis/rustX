@@ -128,25 +128,36 @@ it.each(['conversation', 'incarnation', 'authority'] as const)('reconnect retire
   oldSocket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: pending.method === 'context/compact' ? pending.params.target : server.client.target('A'), cursor: String(server.cursor + 1n), event: { type: 'context_compaction_failed', error: 'obsolete poison', context: { ...base, compaction_error: 'obsolete poison' } } } });
   expect(server.client.getSnapshot()).toBe(current);
 });
-it('confirmed commit survives a failed refresh', async () => {
+it('confirmed commit survives a failed explicit refresh', async () => {
   server.handlers.set('context/compact', () => (compactReceipt(base)));
+  server.held.add('context/compact');
   server.held.add('session/checkpoint');
-  compact(); await server.waitFor('session/checkpoint', 2);
+  compact(); const pending = await server.waitFor('context/compact', 1);
+  await act(async () => server.reply(pending));
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
+  const repairing = server.client.refresh('A').catch(() => {});
+  await server.waitFor('session/checkpoint', 2);
   await server.client.disconnect();
+  await repairing;
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
 });
 
-it('real acknowledgement releases its gesture while bounded checkpoint repair fences new controls', async () => {
+it('real acknowledgement releases its gesture while explicit checkpoint repair fences observation-dependent controls', async () => {
   server.handlers.set('context/compact', () => (compactReceipt(base)));
+  server.held.add('context/compact');
   server.held.add('session/checkpoint');
-  compact(); const repair = await server.waitFor('session/checkpoint', 2);
+  compact(); const pending = await server.waitFor('context/compact', 1);
+  await act(async () => server.reply(pending));
   const a = server.client.getSnapshot().views.A.compactionRequest!;
   expect(a.status).toBe('succeeded');
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
+  const repairing = server.client.refresh('A');
+  const repair = await server.waitFor('session/checkpoint', 2);
   expect(server.client.getSnapshot().views.A.observationState).toBe('checkpointLoading');
-  expect(() => server.client.compact('A')).toThrow('not authoritatively attached');
+  expect(() => server.client.target('A')).toThrow('not authoritatively attached');
   expect(count()).toBe(1);
-  await act(async () => server.reply(repair));
+  await act(async () => { server.reply(repair); await repairing; });
   expect(server.client.getSnapshot().views.A.observationState).toBe('following');
   server.held.add('context/compact');
   compact(); await server.waitFor('context/compact', 2);

@@ -21,10 +21,25 @@ fn header_capture_fixture() -> (SqliteConversationStore, RequestSnapshot) {
     (store, snapshot)
 }
 fn captured_header_rows(connection: &Connection, sequence: u64) -> Vec<Vec<u8>> {
-    connection.prepare(
-        "SELECT header_json FROM request_observation_fields WHERE source_id=?1 AND parent_path='[\"messages\"]' ORDER BY ordinal",
-    ).unwrap().query_map([sequence.to_string()], |row| row.get(0)).unwrap()
-        .collect::<Result<Vec<_>, _>>().unwrap()
+    let count: u64 = connection
+        .query_row(
+            "SELECT input_count FROM request_snapshots WHERE started_sequence=?1",
+            [sequence],
+            |row| row.get(0),
+        )
+        .unwrap();
+    (0..count)
+        .map(|ordinal| {
+            observation_request::field_from(
+                connection,
+                "request_observation_fields",
+                &sequence.to_string(),
+                &["messages".into(), ordinal.to_string()],
+            )
+            .unwrap()
+            .3
+        })
+        .collect()
 }
 fn original_provenance_bytes(
     store: &SqliteConversationStore,
@@ -62,26 +77,13 @@ fn original_provenance_bytes(
 fn t08_t14_t19_request_headers_are_constructed_once_with_exact_legacy_headers_and_raw_provenance() {
     let (store, snapshot) = header_capture_fixture();
     let canonical = store.load_canonical().unwrap();
-    observation_request::take_header_constructions();
-    crate::runtime::read_layout::take_field_preview_work();
+    observation_request::composed::take_work();
     let started = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
         .started;
-    assert_eq!(
-        observation_request::take_header_constructions(),
-        snapshot.input.len()
-    );
-    let (computed, skipped) = crate::runtime::read_layout::take_field_preview_work();
-    let spans:usize=store.lock().unwrap().query_row(
-        "SELECT count(*) FROM request_observation_fields WHERE source_id=?1 AND header_kind='original_span'",
-        [started.sequence.to_string()],|row|row.get(0),
-    ).unwrap();
-    assert_eq!(skipped, snapshot.input.len() + spans);
-    assert!(
-        spans > 0 && computed > 0,
-        "only proven small original nodes skip previews"
-    );
+    let work = observation_request::composed::take_work();
+    assert_eq!(work.new_leaves, snapshot.input.len());
     let headers = captured_header_rows(&store.lock().unwrap(), started.sequence);
     assert_eq!(headers.len(), snapshot.input.len());
     assert!(headers.iter().all(|bytes| bytes.len() <= 16_384));
@@ -117,7 +119,7 @@ fn t08_t14_t19_request_headers_are_constructed_once_with_exact_legacy_headers_an
         saw_giant_derived,
         "full native provenance survives finite prefix clipping"
     );
-    observation_request::index_message_headers_oracle(
+    let oracle = observation_request::legacy_field_headers_oracle(
         &store.lock().unwrap(),
         started.sequence,
         store.conversation_id(),
@@ -125,14 +127,13 @@ fn t08_t14_t19_request_headers_are_constructed_once_with_exact_legacy_headers_an
         &snapshot,
     )
     .unwrap();
-    assert_eq!(
-        observation_request::take_header_constructions(),
-        snapshot.input.len()
-    );
-    assert_eq!(
-        captured_header_rows(&store.lock().unwrap(), started.sequence),
-        headers
-    );
+    for (item, header) in headers.iter().enumerate() {
+        let path = vec!["messages".to_owned(), item.to_string()];
+        assert_eq!(
+            *header,
+            oracle.iter().find(|field| field.0 == path).unwrap().4
+        );
+    }
     for (item, bytes) in provenance.iter().enumerate() {
         assert_eq!(
             &original_provenance_bytes(&store, &snapshot, started.sequence, item),
@@ -202,8 +203,8 @@ fn assert_header_capture_fault(trigger: &str) {
 #[test]
 fn t10_t19_request_header_placeholder_failure_rolls_back_only_optional_layout() {
     for trigger in [
-        "CREATE TEMP TRIGGER refuse_captured_offsets BEFORE UPDATE OF start ON request_observation_fields WHEN OLD.start=0 AND OLD.end=0 BEGIN SELECT RAISE(FAIL,'optional item offsets'); END;",
-        "CREATE TEMP TRIGGER remove_captured_header AFTER INSERT ON request_observation_fields WHEN NEW.start=0 AND NEW.end=0 AND NEW.parent_path='[\"messages\"]' BEGIN DELETE FROM request_observation_fields WHERE source_id=NEW.source_id AND path_json=NEW.path_json; END;",
+        "CREATE TEMP TRIGGER refuse_captured_offsets BEFORE INSERT ON request_source_nodes BEGIN SELECT RAISE(FAIL,'optional Source node'); END;",
+        "CREATE TEMP TRIGGER remove_captured_header BEFORE INSERT ON request_observation_fields BEGIN SELECT RAISE(FAIL,'optional original witness'); END;",
     ] {
         assert_header_capture_fault(trigger);
     }
@@ -336,7 +337,7 @@ fn t08_t12_t19_request_headers_already_inline_complete_text_and_retain_deferred_
     let input = store
         .reconstruct_model_request(&snapshot.request_id)
         .unwrap();
-    observation_request::index_message_headers_oracle(
+    let oracle = observation_request::legacy_field_headers_oracle(
         &store.lock().unwrap(),
         started.sequence,
         store.conversation_id(),
@@ -344,10 +345,13 @@ fn t08_t12_t19_request_headers_already_inline_complete_text_and_retain_deferred_
         &snapshot,
     )
     .unwrap();
-    assert_eq!(
-        captured_header_rows(&store.lock().unwrap(), started.sequence),
-        current
-    );
+    for (item, header) in current.iter().enumerate() {
+        let path = vec!["messages".to_owned(), item.to_string()];
+        assert_eq!(
+            *header,
+            oracle.iter().find(|field| field.0 == path).unwrap().4
+        );
+    }
     for (item, original) in provenance.iter().enumerate() {
         assert_eq!(
             &original_provenance_bytes(&store, &snapshot, started.sequence, item),
@@ -393,20 +397,26 @@ fn assert_deferred_text_remains_original(store: &SqliteConversationStore, start:
         text.as_bytes()
     );
     assert!(chunk.complete && chunk.next_offset.is_none());
-    let connection = store.lock().unwrap();
-    let nested = |item| {
-        connection.query_row(
-        "SELECT count(*) FROM request_observation_fields WHERE source_id=?1 AND json_extract(path_json,'$[0]')='messages' AND json_extract(path_json,'$[1]')=?2 AND json_extract(path_json,'$[2]')='content' AND json_array_length(path_json)>3",
-        params![start.to_string(),item],|row| row.get::<_,u64>(0),
-    ).unwrap()
-    };
+    let inline = store
+        .request_field_header_at(
+            start,
+            start,
+            &["messages".into(), "0".into(), "content".into()],
+        )
+        .unwrap();
     assert_eq!(
-        nested("0"),
-        0,
-        "complete inline text already has no duplicate reference subtree"
+        inline.children_total, 0,
+        "complete inline text has no duplicate reference subtree"
     );
+    let deferred = store
+        .request_field_header_at(
+            start,
+            start,
+            &["messages".into(), "1".into(), "content".into()],
+        )
+        .unwrap();
     assert!(
-        nested("1") > 10,
-        "deferred original references retain complete selected evidence"
+        deferred.children_total > 0,
+        "deferred original references retain selected evidence"
     );
 }

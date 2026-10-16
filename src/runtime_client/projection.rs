@@ -215,8 +215,11 @@ enum ForegroundSettlement {
     Missing,
 }
 
-type DomainSources =
-    std::collections::BTreeMap<String, (Arc<super::domain::DomainSource>, usize, u64)>;
+// The working owner and an issued cut share immutable map nodes. Updating a
+// single source copies only its tree path; published roots remain unchanged.
+type DomainSources = imbl::OrdMap<String, (Arc<super::domain::DomainSource>, usize, u64)>;
+type ContentMetadata =
+    imbl::OrdMap<(&'static str, String, u32, &'static str), Arc<super::content::ContentRef>>;
 
 #[derive(Default)]
 struct ObservationSourceState {
@@ -268,10 +271,7 @@ pub(crate) struct RuntimeClientProjection {
     #[cfg(test)]
     pending_transcript: std::collections::BTreeMap<MessageId, crate::durable::TranscriptCursor>,
     publication_start: Option<crate::publication::PublicationStreamStart>,
-    content_metadata: std::collections::BTreeMap<
-        (&'static str, String, u32, &'static str),
-        super::content::ContentRef,
-    >,
+    content_metadata: ContentMetadata,
     prepared_publication_content: Vec<super::checkpoint::PreparedPublicationContent>,
     batch_events: Option<(Vec<RuntimeClientEvent>, usize, bool)>,
     transcript_prefix: u64,
@@ -402,10 +402,7 @@ pub(crate) struct CheckpointSeed {
     collection_cuts:
         std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
     domain_revisions: std::collections::BTreeMap<&'static str, u64>,
-    content_metadata: std::collections::BTreeMap<
-        (&'static str, String, u32, &'static str),
-        super::content::ContentRef,
-    >,
+    content_metadata: ContentMetadata,
     publication_start: Option<crate::publication::PublicationStreamStart>,
     live_frontiers: std::collections::BTreeMap<
         (
@@ -427,7 +424,7 @@ pub(crate) struct PublicationDraft {
     seed: CheckpointSeed,
     events: Vec<RuntimeClientEvent>,
     replacement: bool,
-    sources: std::collections::BTreeMap<String, (Arc<super::domain::DomainSource>, usize, u64)>,
+    sources: DomainSources,
 }
 
 #[cfg(test)]
@@ -458,7 +455,7 @@ pub(crate) struct EncodedPublication {
     seed: Arc<CheckpointSeed>,
     event: RuntimeClientEvent,
     bytes: usize,
-    sources: std::collections::BTreeMap<String, (Arc<super::domain::DomainSource>, usize, u64)>,
+    sources: DomainSources,
 }
 
 fn encoded_event_bytes(event: &RuntimeClientEvent, limit: usize) -> Option<Vec<u8>> {
@@ -1066,12 +1063,15 @@ impl CheckpointSeed {
                     "live",
                 ))
             });
-            let canonical_arguments = self.content_metadata.get(&(
-                "canonical",
-                tool.occurrence.locator.key().into_owned(),
-                tool.block_index.get(),
-                super::content::ContentRepresentation::RawJsonUtf8.key(),
-            ));
+            let canonical_arguments = self
+                .content_metadata
+                .get(&(
+                    "canonical",
+                    tool.occurrence.locator.key().into_owned(),
+                    tool.block_index.get(),
+                    super::content::ContentRepresentation::RawJsonUtf8.key(),
+                ))
+                .map(Arc::as_ref);
             if let Some(reference) = live_arguments.or(canonical_arguments) {
                 let arguments = match &tool.state {
                     ForegroundToolState::Assembled { arguments }
@@ -1237,18 +1237,24 @@ impl CheckpointSeed {
                 block_index,
             } = &binding.content_ref.source
             {
-                let raw = self.content_metadata.get(&(
-                    component.key(),
-                    locator.key().into_owned(),
-                    block_index.get(),
-                    super::content::ContentRepresentation::RawJsonUtf8.key(),
-                ));
-                let native = self.content_metadata.get(&(
-                    component.key(),
-                    locator.key().into_owned(),
-                    block_index.get(),
-                    binding.content_ref.representation.key(),
-                ));
+                let raw = self
+                    .content_metadata
+                    .get(&(
+                        component.key(),
+                        locator.key().into_owned(),
+                        block_index.get(),
+                        super::content::ContentRepresentation::RawJsonUtf8.key(),
+                    ))
+                    .map(Arc::as_ref);
+                let native = self
+                    .content_metadata
+                    .get(&(
+                        component.key(),
+                        locator.key().into_owned(),
+                        block_index.get(),
+                        binding.content_ref.representation.key(),
+                    ))
+                    .map(Arc::as_ref);
                 let reference = if binding
                     .path
                     .last()
@@ -2007,7 +2013,7 @@ impl RuntimeClientProjection {
             #[cfg(test)]
             pending_transcript: std::collections::BTreeMap::new(),
             publication_start: None,
-            content_metadata: std::collections::BTreeMap::new(),
+            content_metadata: ContentMetadata::new(),
             prepared_publication_content: Vec::new(),
             batch_events: None,
             transcript_prefix: 0,
@@ -2033,7 +2039,7 @@ impl RuntimeClientProjection {
             read_failure: None,
             read_revision: 0,
             domain_revisions: std::collections::BTreeMap::new(),
-            domain_sources: std::collections::BTreeMap::new(),
+            domain_sources: DomainSources::new(),
             domain_source_bytes: 0,
             source_frontiers: std::collections::BTreeMap::default(),
             collection_cuts: std::collections::BTreeMap::new(),
@@ -2946,7 +2952,7 @@ impl RuntimeClientProjection {
                                     super::content::CanonicalContentLocator::ByLedgerPosition {
                                         position,
                                     };
-                                slot.metadata_ref=self.content_metadata.get(&("canonical_block_metadata",format!("ledger:{position}"),slot.block_index.get(),super::content::ContentRepresentation::CanonicalJsonV1.key())).cloned().or_else(||header.content.iter().find_map(|binding|match &binding.content_ref.source {
+                                slot.metadata_ref=self.content_metadata.get(&("canonical_block_metadata",format!("ledger:{position}"),slot.block_index.get(),super::content::ContentRepresentation::CanonicalJsonV1.key())).map(Arc::as_ref).cloned().or_else(||header.content.iter().find_map(|binding|match &binding.content_ref.source {
                                     super::content::ContentSource::CanonicalMessageBlock {component:super::content::CanonicalContentComponent::BlockMetadata,block_index,..} if *block_index==slot.block_index=>Some(binding.content_ref.clone()),
                                     _=>None,
                                 }));
@@ -5265,6 +5271,7 @@ impl RuntimeClientProjection {
                                     slot.block_index.get(),
                                     super::content::ContentRepresentation::CanonicalJsonV1.key(),
                                 ))
+                                .map(Arc::as_ref)
                                 .cloned()
                         });
                     events.push(RuntimeClientEvent::ToolOccurrenceRebound {
@@ -5708,10 +5715,14 @@ impl RuntimeClientProjection {
             };
             *revision = next;
             if *owner == "jobs" || *owner == "agents" {
-                for (key, (_, _, version)) in &mut self.domain_sources {
-                    if key.split('.').next() == Some(*owner) {
-                        *version = *revision;
-                    }
+                let keys: Vec<_> = self
+                    .domain_sources
+                    .range(owner.to_string()..format!("{owner}/"))
+                    .filter(|(key, _)| key.split('.').next() == Some(*owner))
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                for key in keys {
+                    self.domain_sources.get_mut(&key).unwrap().2 = *revision;
                 }
             }
         }
@@ -6180,7 +6191,7 @@ impl RuntimeClientProjection {
                     block_index.get(),
                     reference.representation.key(),
                 );
-                self.content_metadata.insert(key, reference);
+                self.content_metadata.insert(key, Arc::new(reference));
             }
         }
         // This cache contains finite read evidence only. The immutable Store is
@@ -12692,6 +12703,11 @@ mod tests {
         if let Some(draft) = projection.finish_publication() {
             projection.install_publication(draft.encode().unwrap());
         }
+    }
+
+    mod metadata_root_tests {
+        use super::*;
+        include!("projection/metadata_root_tests.rs");
     }
 
     mod prepared_trace_tests {

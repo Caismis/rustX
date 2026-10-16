@@ -19,6 +19,7 @@ it.each([
   ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [] }] }, {}, 'queued', undefined],
   ['unaccepted request is not queued', { inboundRequests: 1 }, {}, 'idle', undefined],
   ['stopping outranks working', { snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'private-attempt', status: 'acknowledged' } }, {}, 'stopping', undefined],
+  ['another native receipt does not label stale working as stopping', { snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'actual-other-attempt', status: 'acknowledged' } }, {}, 'working', undefined],
   ['connection loss outranks stale work', { snapshot: { ...snapshot(), attempt: running() } }, { connection: 'stale' }, 'reconnect', 'connect'],
   ['incompatible versions require settings, not blind reconnect', {}, { connection: 'incompatible' }, 'failure', 'connection-settings'],
   ['lost attachment', { target: undefined, attachment: 'stale' }, {}, 'reconnect', 'open'],

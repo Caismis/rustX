@@ -44,11 +44,12 @@ interface OutlineRead {
   refresh: boolean;
 }
 
-/** Expected observed cancellation identity; never substituted with a successor Attempt. */
+/** Exact attachment for a current-Attempt command; attemptId is presentation only. */
 export interface CancellationTarget {
   readonly generation: number;
   readonly target: AttachmentTarget;
   readonly attemptId: string;
+  readonly attachment: SessionView['attachmentObservation'];
 }
 export type InboundControlOutcome =
   | { status: 'known'; outcome: PendingMutationOutcome; observed: boolean }
@@ -67,6 +68,7 @@ export interface CompactionRequestEvidence {
   target: AttachmentTarget;
   status: 'submitting' | 'uncertain' | 'succeeded' | 'failed';
   diagnostic?: string;
+  receipt?: Extract<MethodResult, {type:'context_compacted'}>['compaction'];
 }
 export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentIntentRevision'> {
   /** Readonly actor projection; absent on catalog-only presentation rows. */
@@ -902,7 +904,9 @@ export class AppServerClient {
       && operation.method !== 'session/detach' && operation.method !== 'session/switchNode' && operation.method !== 'session/subscribe') {
       const target = operation.params.target, id = target.session_id;
       const admission = this.state.views[id]?.attachmentObservation;
-      const current = () => this.isAttachmentControlCurrent(id, admission) && sameTarget(admission?.target, target);
+      const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact'
+        ? this.lifecycles.observes(id, admission)
+        : this.isAttachmentControlCurrent(id, admission)) && sameTarget(admission?.target, target);
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
       authority = current;
     }
@@ -2091,7 +2095,9 @@ export class AppServerClient {
     const mutation = this.state.views[id].modelMutation;
     if (mutation && mutation.generation !== this.state.generation) this.setSession(id, { modelMutation: undefined });
     const cancellation = this.state.views[id].cancellation;
-    if (cancellation && (snapshot.attempt?.attempt_id !== cancellation.attemptId || snapshot.attempt.phase.type === 'settled')) this.setSession(id, { cancellation: undefined });
+    if (cancellation && (snapshot.attempt?.attempt_id === cancellation.attemptId
+      ? snapshot.attempt.phase.type === 'settled'
+      : cancellation.status !== 'acknowledged')) this.setSession(id, { cancellation: undefined });
     const frontier=observationCheckpoint(snapshot,this.state.views[id].cursor??'0')?.collections.find(value=>value.domain==='pending_interactions');
     // A bounded head cannot establish absence from the complete native set.
     if(frontier&&BigInt(frontier.total)>BigInt(snapshot.pending_interactions?.length??0))return;
@@ -2378,23 +2384,24 @@ export class AppServerClient {
   private compactionRequests = new Map<string, CompactionRequestEvidence>();
   /** Claims the local gesture synchronously. Native maintenance owns admission. */
   compact(id: string, consume: () => void = () => {}): boolean {
-    const target = this.target(id), generation = this.state.generation;
+    const attachment = this.lifecycles.observe(id);
+    if (!attachment) throw new RequestNotDispatched('Attachment control authority was revoked.');
+    const target = attachment.target, generation = this.state.generation;
     const pending = this.compactionRequests.get(id);
     if (pending?.generation === generation && sameTarget(pending.target, target)) return false;
     const operation: CompactionRequestEvidence = { baselineCount: this.state.views[id]?.snapshot?.context?.compaction_count ?? 0, generation, requestId: crypto.randomUUID(), authorityId: this.state.authorityId, target, status: 'submitting' };
     this.compactionRequests.set(id, operation);
     this.setSession(id, { compactionRequest: operation });
     consume();
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+    const current = () => this.current(generation) && attachment.current() && sameTarget(this.state.views[id]?.target, target)
       && this.state.views[id]?.compactionRequest?.requestId === operation.requestId;
     const release = () => { if (this.compactionRequests.get(id) === operation) this.compactionRequests.delete(id); };
     void this.request({ method: 'context/compact', params: { target, request_id: operation.requestId } }, 'context_compacted', undefined, current)
-      .then(async () => {
+      .then(result => {
         release();
         if (!current()) return;
         // The response follows native release. Read failure cannot erase this fact.
-        this.setSession(id, { compactionRequest: { ...operation, status: 'succeeded' } });
-        await this.refresh(id).catch(() => {});
+        this.setSession(id, { compactionRequest: { ...operation, status: 'succeeded', receipt: result.compaction } });
       }, error => {
         release();
         if (this.state.views[id]?.compactionRequest !== operation) return;
@@ -2425,29 +2432,27 @@ export class AppServerClient {
   cancellationTarget(id: string): CancellationTarget | undefined {
     const view = this.state.views[id], attempt = view?.snapshot?.attempt;
     if (!this.isAttachmentControlCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
-      || !view.target || view.deleting || view.cancellation || !attempt || attempt.attempt_id == null || !['admitted','running'].includes(attempt.phase.type)
+      || !view.target || view.deleting || this.cancellationPending(id) || !attempt || attempt.attempt_id == null || !['admitted','running'].includes(attempt.phase.type)
       || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length) return;
-    return { generation: this.state.generation, target: view.target, attemptId: attempt.attempt_id };
+    return { generation: this.state.generation, target: view.target, attemptId: attempt.attempt_id, attachment: view.attachmentObservation };
+  }
+  private cancellationPending(id: string): boolean {
+    const view = this.state.views[id], cancellation = view?.cancellation;
+    return !!cancellation && (cancellation.status !== 'acknowledged'
+      || cancellation.attemptId === view.snapshot?.attempt?.attempt_id);
   }
   async cancelTurn(expected: CancellationTarget) {
-    const { target, generation, attemptId } = expected, id = target.session_id;
-    const live = this.cancellationTarget(id);
-    if (!live || live.generation !== generation || !sameTarget(live.target, target) || live.attemptId !== attemptId) return;
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    const { target, generation, attemptId, attachment } = expected, id = target.session_id;
+    const current = () => this.current(generation) && this.initialized && this.state.connection === 'connected'
+      && this.lifecycles.observes(id, attachment) && sameTarget(this.state.views[id]?.target, target);
+    if (!current() || this.cancellationPending(id)) return;
     const operation = { attemptId, status: 'in-flight' as const };
     this.setSession(id, { cancellation: operation });
     try {
-      await this.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted', undefined, () => {
-        // Exact lifecycle control: revalidate beside the actual socket dispatch.
-        const view = this.state.views[id];
-        return current() && this.initialized && this.state.connection === 'connected' && view?.attachmentIntent === 'wanted'
-          && view.attachment === 'attached' && !view.deleting && !view.snapshot?.shutting_down && !view.snapshot?.durability_failure
-          && !view.snapshot?.pending_interactions?.length && view.snapshot?.attempt?.attempt_id === attemptId
-          && ['admitted','running'].includes(view.snapshot.attempt.phase.type) && view.cancellation === operation;
-      });
-      if (current() && this.state.views[id].cancellation?.attemptId === attemptId) {
-        this.setSession(id, { cancellation: { attemptId, status: 'acknowledged' } });
-        await this.refresh(id);
+      const accepted = await this.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted', undefined,
+        () => current() && this.state.views[id]?.cancellation === operation);
+      if (current() && this.state.views[id].cancellation === operation) {
+        this.setSession(id, { cancellation: { attemptId: accepted.attempt_id, status: 'acknowledged' } });
       }
     } catch (error) {
       // The exact operation owns cleanup even if its unsent transport was retired.

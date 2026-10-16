@@ -1475,7 +1475,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         .iter()
         .cloned()
         .map(Into::into)
-        .collect::<Vec<ModelInputMessage>>();
+        .collect::<rustx::model::SelectedModelInput>();
     let unconstrained = rustx::context::planning::summary_prefix(
         &planner,
         &candidate_messages,
@@ -3700,8 +3700,8 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
     oracle.set_image_projection(tool_runtime.artifacts().clone(), image);
     oracle
         .prepare_media(
-            &historical,
-            &historical,
+            &historical.clone().into(),
+            &historical.clone().into(),
             &rustx::runtime::CancellationSignal::new(),
         )
         .await
@@ -3712,9 +3712,9 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
                 retired: historical[..*n].to_vec(),
             }
             .model_input();
-            oracle.estimate_model_input(&summary.messages, "", &[]) <= summary_limit
+            oracle.estimate_model_input(&summary.messages.into(), "", &[]) <= summary_limit
                 && oracle
-                    .estimate_model_input(&historical[*n..], "", &[])
+                    .estimate_model_input(&historical[*n..].to_vec().into(), "", &[])
                     .saturating_add(128)
                     <= 9_999
         })

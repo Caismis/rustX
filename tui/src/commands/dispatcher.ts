@@ -649,14 +649,10 @@ export class CommandDispatcher {
     if (argument.length > 0) {
       return transient("error", "usage: /compact");
     }
-    const context = await session.compactContext();
-    const latest = context.latest_compaction;
-    if (latest == null) {
-      return transient("info", "context compacted");
-    }
+    const receipt = await session.compactContext();
     return transient(
       "info",
-      `context compacted to generation ${latest.generation}: ${latest.tokens_before.input_tokens} → ${latest.estimated_tokens_after} tokens`,
+      `context compacted to generation ${receipt.generation}: ${receipt.tokens_before.input_tokens} → ${receipt.estimated_tokens_after} tokens`,
     );
   }
 

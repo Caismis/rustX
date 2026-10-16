@@ -68,7 +68,13 @@ pub(crate) fn request_labels(
         0
     };
     let mut calls = Vec::new();
-    for (message, item) in request.messages.iter().enumerate().skip(start) {
+    for message in request
+        .messages
+        .tool_indices()
+        .into_iter()
+        .filter(|index| *index >= start)
+    {
+        let item = &request.messages[message];
         if let ModelMessageView::Assistant(content) = item.view() {
             for (block, item) in content.iter().enumerate() {
                 if let AssistantContentBlock::ToolCall(call) = item {

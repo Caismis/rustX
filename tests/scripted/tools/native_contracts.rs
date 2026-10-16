@@ -1278,8 +1278,8 @@ async fn read_search_product_defaults_run_adjacent_calls_with_independent_state(
             .await
             .expect("barrier liveness guard");
         let audit = common::durable_agent_result(result, fixture.store.as_ref());
-        let results = audit
-            .messages()
+        let canonical_messages = audit.messages();
+        let results = canonical_messages
             .iter()
             .filter_map(|message| match message {
                 MessageBlock::Tool(tool) => Some(tool),
@@ -1382,8 +1382,9 @@ async fn native_agent_loop_invocation_has_one_start_and_one_completion_in_order(
     assert_eq!(completed_positions.len(), 1, "one native completion event");
     assert!(started_positions[0] < completed_positions[0]);
 
-    let tool_message = audit
-        .messages()
+    let canonical_messages = audit.messages();
+
+    let tool_message = canonical_messages
         .iter()
         .find_map(|message| match message {
             MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-native-read" => {
@@ -1427,8 +1428,8 @@ async fn native_agent_loop_preflight_rejection_settles_without_starting_an_execu
                 if tool_call_id.as_str() == "call-invalid-write"
         )
     }));
-    let tool_message = audit
-        .messages()
+    let canonical_messages = audit.messages();
+    let tool_message = canonical_messages
         .iter()
         .find_map(|message| match message {
             MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-invalid-write" => {
@@ -1482,8 +1483,8 @@ async fn malformed_ask_user_rejects_before_interaction_publication() {
                 if tool_call_id.as_str() == "call-invalid-ask-user"
         )
     }));
-    let tool_message = audit
-        .messages()
+    let canonical_messages = audit.messages();
+    let tool_message = canonical_messages
         .iter()
         .find_map(|message| match message {
             MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-invalid-ask-user" => {

@@ -1,6 +1,6 @@
 //! Original RequestStart-owned allowlisted structural inspection layout.
-//! One byte stream and path offsets preserve source identity without copying a
-//! subtree for every locator; every read seeks at most two finite BLOB rows.
+//! Request inspection composes authenticated fragments over the native selected
+//! tree. Other finite state domains retain their original segmented layouts.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::durable::observation::{
     HEADER_PAGE_MAX, ObservationValueChunk, RequestObservationField, RequestObservationHeader,
@@ -8,110 +8,10 @@ use crate::durable::observation::{
 };
 use crate::runtime::identity::RequestId;
 use std::io::Write;
-pub(in crate::durable::sqlite) mod fragments;
+pub(in crate::durable::sqlite) mod composed;
 mod input;
 pub(super) mod provenance;
-pub(in crate::durable::sqlite) mod shape;
 const SEGMENT: usize = 65_536;
-#[cfg(test)]
-thread_local! {
-    pub(super) static LAST_INDEX_PROFILE: std::cell::Cell<(std::time::Duration,std::time::Duration,std::time::Duration,u64)> = const {std::cell::Cell::new((std::time::Duration::ZERO,std::time::Duration::ZERO,std::time::Duration::ZERO,0))};
-}
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct RequestIndexProfile {
-    /// Completed index calls; only trace-request calls count model requests.
-    pub(crate) requests: u64,
-    pub(crate) layout_us: u128,
-    pub(crate) bytes_us: u128,
-    pub(crate) fields_us: u128,
-    pub(crate) field_count: u64,
-    pub(crate) max_field_count: u64,
-}
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SourceStatisticsProfile {
-    pub(crate) calls: u64,
-    /// Includes the existing optional-layout savepoint and event/member pair.
-    pub(crate) total_us: u128,
-}
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SourceIndexProfile {
-    pub(crate) request: RequestIndexProfile,
-    pub(crate) journal: RequestIndexProfile,
-    pub(crate) goal: RequestIndexProfile,
-    pub(crate) todo: RequestIndexProfile,
-    pub(crate) context: RequestIndexProfile,
-    pub(crate) other: RequestIndexProfile,
-    pub(crate) statistics: SourceStatisticsProfile,
-}
-#[cfg(test)]
-static INDEX_PROFILE: std::sync::Mutex<Option<SourceIndexProfile>> = std::sync::Mutex::new(None);
-
-/// One explicit ignored measurement; ordinary tests retain no aggregate.
-#[cfg(test)]
-pub(crate) struct RequestIndexProfileGuard {
-    active: bool,
-}
-#[cfg(test)]
-impl RequestIndexProfileGuard {
-    pub(super) fn start() -> Self {
-        let mut profile = INDEX_PROFILE.lock().unwrap();
-        assert!(profile.is_none(), "one native request-index measurement");
-        *profile = Some(SourceIndexProfile::default());
-        Self { active: true }
-    }
-    pub(crate) fn snapshot(&self) -> RequestIndexProfile {
-        self.sources().request
-    }
-    pub(crate) fn sources(&self) -> SourceIndexProfile {
-        assert!(self.active, "active scoped Source profile");
-        INDEX_PROFILE
-            .lock()
-            .unwrap()
-            .expect("active request-index measurement")
-    }
-}
-#[cfg(test)]
-impl Drop for RequestIndexProfileGuard {
-    fn drop(&mut self) {
-        self.active = false;
-        *INDEX_PROFILE.lock().unwrap() = None;
-    }
-}
-#[cfg(test)]
-fn profile_index(
-    kind: &str,
-    layout: std::time::Duration,
-    bytes: std::time::Duration,
-    fields: std::time::Duration,
-    count: u64,
-) {
-    if let Some(source) = INDEX_PROFILE.lock().unwrap().as_mut() {
-        let profile = match kind {
-            "trace_request" => &mut source.request,
-            "observation_journal" => &mut source.journal,
-            "observation_goal" => &mut source.goal,
-            "observation_todo" => &mut source.todo,
-            "observation_context" => &mut source.context,
-            _ => &mut source.other,
-        };
-        profile.requests += 1;
-        profile.layout_us += layout.as_micros();
-        profile.bytes_us += bytes.as_micros();
-        profile.fields_us += fields.as_micros();
-        profile.field_count += count;
-        profile.max_field_count = profile.max_field_count.max(count);
-    }
-}
-#[cfg(test)]
-pub(super) fn profile_statistics(elapsed: std::time::Duration) {
-    if let Some(profile) = INDEX_PROFILE.lock().unwrap().as_mut() {
-        profile.statistics.calls += 1;
-        profile.statistics.total_us += elapsed.as_micros();
-    }
-}
 struct SourceWriter<'a> {
     connection: &'a Connection,
     id: &'a str,
@@ -163,63 +63,21 @@ impl Write for SourceWriter<'_> {
 fn encoded_path(path: &[String]) -> Result<String, ConversationStoreError> {
     serde_json::to_string(path).map_err(|error| storage(error.to_string()))
 }
-#[cfg(test)]
-pub(super) fn index(
+pub(in crate::durable::sqlite) fn index_selection(
     connection: &Connection,
     source_sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
-    messages: &[crate::model::ModelInputMessage],
+    messages: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
+    selection: &super::manifest::Selection,
 ) -> Result<(), ConversationStoreError> {
-    index_with_fragments(connection, source_sequence, scope, messages, snapshot, None)
-}
-pub(in crate::durable::sqlite) fn index_with_fragments(
-    connection: &Connection,
-    source_sequence: u64,
-    scope: &crate::runtime::identity::ConversationId,
-    messages: &[crate::model::ModelInputMessage],
-    snapshot: &crate::model::RequestSnapshot,
-    fragments: Option<&std::cell::RefCell<fragments::Session<'_>>>,
-) -> Result<(), ConversationStoreError> {
-    let id = source_sequence.to_string();
-    // One finite item at a time: the source stream and display header share
-    // producer shaping. Offsets are filled only after the immutable stream seals.
-    let headers = std::cell::RefCell::new(connection.prepare_cached(
-        "INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json) VALUES(?1,?2,'[\"messages\"]',?3,0,0,0,'inline',?4)"
-    ).map_err(|error| storage(error.to_string()))?);
-    let capture_header = |ordinal: u64, bytes: &[u8], key: Option<&fragments::Key>| {
-        headers
-            .borrow_mut()
-            .execute(params![
-                id,
-                encoded_path(&["messages".into(), ordinal.to_string()])?,
-                ordinal,
-                bytes,
-            ])
-            .map_err(|error| storage(error.to_string()))?;
-        shape::capture_item(connection, &id, ordinal, bytes, key)?;
-        Ok(())
-    };
-    let value = crate::runtime_client::trace::frozen_request_detail(
-        snapshot,
-        FrozenMessages {
-            connection,
-            messages,
-            scope,
-            snapshot,
-            sequence: source_sequence,
-            capture_header: &capture_header,
-            fragments,
-        },
-    );
-    index_stream_with_fragments(
+    composed::index_selection(
         connection,
-        "trace_request",
-        &id,
-        "request_observation_fields",
-        &value,
-        fragments,
-        true,
+        source_sequence,
+        scope,
+        messages,
+        snapshot,
+        selection,
     )
 }
 pub(super) fn index_state<T: serde::Serialize + schemars::JsonSchema>(
@@ -237,30 +95,8 @@ fn index_stream<T: serde::Serialize + schemars::JsonSchema>(
     table: &'static str,
     value: &T,
 ) -> Result<(), ConversationStoreError> {
-    index_stream_with_fragments(connection, kind, id, table, value, None, false)
-}
-fn index_stream_with_fragments<T: serde::Serialize + schemars::JsonSchema>(
-    connection: &Connection,
-    kind: &'static str,
-    id: &str,
-    table: &'static str,
-    value: &T,
-    fragments: Option<&std::cell::RefCell<fragments::Session<'_>>>,
-    native_messages: bool,
-) -> Result<(), ConversationStoreError> {
-    #[cfg(test)]
-    let began = std::time::Instant::now();
-    let capture = fragments.map(|session| session.borrow().capture());
-    let source = if let Some(capture) = &capture {
-        crate::runtime::read_layout::SeekableObservationSource::new_with_fragments(value, capture)
-    } else {
-        crate::runtime::read_layout::SeekableObservationSource::new(value)
-    }
-    .map_err(storage)?;
-    #[cfg(test)]
-    let layout_elapsed = began.elapsed();
-    #[cfg(test)]
-    let bytes_began = std::time::Instant::now();
+    let source =
+        crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
     let mut writer = SourceWriter {
         connection,
         id,
@@ -274,241 +110,88 @@ fn index_stream_with_fragments<T: serde::Serialize + schemars::JsonSchema>(
         .copy_original_bytes_to(&mut writer)
         .map_err(|error| storage(error.to_string()))?;
     writer.flush().map_err(|error| storage(error.to_string()))?;
-    #[cfg(test)]
-    let bytes_elapsed = bytes_began.elapsed();
-    #[cfg(test)]
-    let fields_began = std::time::Instant::now();
-    // Only the typed native request producer certifies canonical message shapes.
-    // Generic state/cfg field-policy fixtures still use the same field visitor.
-    let reader = native_messages
-        .then(|| source.message_shape_reader())
-        .transpose()
-        .map_err(storage)?;
-    let shapes = if let Some(reader) = &reader {
-        shape::prepare(connection, id, &source, reader)?
-    } else {
-        Vec::new()
-    };
-    let field_count = index_fields(&writer, &source, &shapes, reader.as_ref())?;
-    #[cfg(not(test))]
-    let _ = field_count;
-    #[cfg(test)]
-    {
-        let fields_elapsed = fields_began.elapsed();
-        if kind == "trace_request" {
-            LAST_INDEX_PROFILE.with(|profile| {
-                profile.set((layout_elapsed, bytes_elapsed, fields_elapsed, field_count));
-            });
-        }
-        profile_index(
-            kind,
-            layout_elapsed,
-            bytes_elapsed,
-            fields_elapsed,
-            field_count,
-        );
-    }
+    index_fields(&writer, &source)?;
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3)",
             params![kind, id, writer.written],
         )
         .map_err(|error| storage(error.to_string()))?;
-    if let Some(fragments) = fragments {
-        fragments.borrow_mut().finish(&source);
-    }
     Ok(())
 }
-fn kind_is_request(writer: &SourceWriter<'_>) -> bool {
-    writer.kind == "trace_request" && writer.table == "request_observation_fields"
-}
-fn captured_message_header(writer: &SourceWriter<'_>, path: &[String]) -> bool {
-    kind_is_request(writer)
-        && path.len() == 2
-        && path[0] == "messages"
-        && path[1].parse::<u64>().is_ok()
-}
-type EncodedFieldHeader = (&'static str, Option<u64>, Option<Vec<u8>>);
 fn stored_preview(
     source: &crate::runtime::read_layout::SeekableObservationSource,
     path: &[String],
     start: u64,
     end: u64,
-    request: bool,
     preview: crate::runtime::read_layout::FieldPreview<'_>,
-) -> Result<EncodedFieldHeader, ConversationStoreError> {
-    use crate::runtime::read_layout::FieldPreview;
-    Ok(match preview {
-        FieldPreview::Inline(preview) => {
-            let original_message =
-                if !request && path.len() == 2 && path[0] == "messages" && end - start <= 16_384 {
-                    Some(
-                        serde_json::from_slice(
-                            &source
-                                .indexed_span(start, end, 16_384)
-                                .map_err(|error| storage(error.to_string()))?,
-                        )
-                        .map_err(|error| storage(error.to_string()))?,
-                    )
-                } else {
-                    None
-                };
-            let value = original_message.as_ref().unwrap_or(preview);
-            (
-                "inline",
-                None,
-                Some(
-                    crate::runtime_client::checkpoint::bounded_bytes(value, 16_384)
-                        .unwrap_or_else(|| b"null".to_vec()),
-                ),
+) -> Result<Vec<u8>, ConversationStoreError> {
+    let crate::runtime::read_layout::FieldPreview::Inline(preview) = preview else {
+        return Err(storage("uncaptured state field preview unavailable"));
+    };
+    let original_message = if path.len() == 2 && path[0] == "messages" && end - start <= 16_384 {
+        Some(
+            serde_json::from_slice(
+                &source
+                    .indexed_span(start, end, 16_384)
+                    .map_err(|error| storage(error.to_string()))?,
             )
-        }
-        FieldPreview::OriginalSpan { recursive_nodes } if request => {
-            ("original_span", Some(recursive_nodes), None)
-        }
-        _ => return Err(storage("uncaptured field preview unavailable")),
-    })
-}
-type CapturedField<'a> = (&'a [String], &'a str, Option<(&'a str, u64)>, u64, u64, u64);
-fn finish_captured_header(
-    writer: &SourceWriter<'_>,
-    captured: &mut rusqlite::Statement<'_>,
-    shapes: &[crate::runtime::read_layout::CertifiedMessageShape<'_>],
-    field: CapturedField<'_>,
-) -> Result<(), ConversationStoreError> {
-    let (path, path_json, parent, start, end, children) = field;
-    let item = path[1]
-        .parse()
-        .map_err(|_| storage("invalid request item"))?;
-    if let Ok(index) = shapes.binary_search_by_key(&item, |shape| shape.item) {
-        let root = shapes[index].root;
-        if (start, end, children) != (root.start, root.end, root.children)
-            || parent != Some(("[\"messages\"]", item))
-        {
-            return Err(storage("finalized request root differs from native source"));
-        }
-        // The same-source certificate already finalized this guarded placeholder
-        // with its witness. Keep the visitor check without repeating two writes.
-        return Ok(());
-    }
-    let rows = captured
-        .execute(params![
-            writer.id,
-            path_json,
-            parent.map(|(path, _)| path),
-            parent.map(|(_, ordinal)| ordinal),
-            start,
-            end,
-            children,
-        ])
-        .map_err(|error| storage(error.to_string()))?;
-    if rows != 1 {
-        return Err(storage(
-            "native request item header placeholder unavailable",
-        ));
-    }
-    shape::finish_item(writer.connection, writer.id, item, start, end, children)?;
-    Ok(())
+            .map_err(|error| storage(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    Ok(crate::runtime_client::checkpoint::bounded_bytes(
+        original_message.as_ref().unwrap_or(preview),
+        16_384,
+    )
+    .unwrap_or_else(|| b"null".to_vec()))
 }
 fn index_fields(
     writer: &SourceWriter<'_>,
     source: &crate::runtime::read_layout::SeekableObservationSource,
-    shapes: &[crate::runtime::read_layout::CertifiedMessageShape<'_>],
-    reader: Option<&crate::runtime::read_layout::MessageShapeReader<'_>>,
-) -> Result<u64, ConversationStoreError> {
+) -> Result<(), ConversationStoreError> {
     let (connection, id, table) = (writer.connection, writer.id, writer.table);
-    let mut field_count = 0;
-    let request = kind_is_request(writer);
-    let insert = if request {
-        "INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_nodes,header_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)".to_owned()
-    } else {
-        format!(
-            "INSERT INTO {table}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)"
-        )
-    };
+    let insert = format!(
+        "INSERT INTO {table}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)"
+    );
     let mut fields = connection
         .prepare_cached(&insert)
         .map_err(|error| storage(error.to_string()))?;
-    let mut captured = connection.prepare_cached(
-        "UPDATE request_observation_fields SET parent_path=?3,ordinal=?4,start=?5,end=?6,children=?7 WHERE source_id=?1 AND path_json=?2 AND parent_path='[\"messages\"]' AND ordinal=?4 AND start=0 AND end=0 AND header_kind='inline' AND header_nodes IS NULL"
-    ).map_err(|error| storage(error.to_string()))?;
     let mut failure = None;
-    let policy = |path: &[String]| {
-        use crate::runtime::read_layout::FieldPreviewPolicy as P;
-        if captured_message_header(writer, path) {
-            P::Skip
-        } else if request {
-            P::OriginalSpanIfSmall
-        } else {
-            P::Inline
-        }
-    };
-    let visit = |path: &[String],
-                 path_json: &str,
-                 parent: Option<(&str, u64)>,
-                 start: u64,
-                 end: u64,
-                 children: u64,
-                 key_span: Option<(u64, u64)>,
-                 preview: crate::runtime::read_layout::FieldPreview<'_>| {
-        field_count += 1;
-        let result = (|| -> Result<(), ConversationStoreError> {
-            if captured_message_header(writer, path) {
-                finish_captured_header(
-                    writer,
-                    &mut captured,
-                    shapes,
-                    (path, path_json, parent, start, end, children),
-                )?;
-                return Ok(());
-            }
-            let (header_kind, nodes, header) =
-                stored_preview(source, path, start, end, request, preview)?;
-            if request {
-                fields.execute(params![
-                    id,
-                    path_json,
-                    parent.map(|(path, _)| path),
-                    parent.map(|(_, ordinal)| ordinal),
-                    start,
-                    end,
-                    children,
-                    header_kind,
-                    nodes,
-                    header
-                ])
-            } else {
-                fields.execute(params![
-                    id,
-                    path_json,
-                    parent.map(|(path, _)| path),
-                    parent.map(|(_, ordinal)| ordinal),
-                    start,
-                    end,
-                    children,
-                    header
-                ])
-            }
-            .map_err(|error| storage(error.to_string()))?;
-            if let Some((start, end)) = key_span
-                && path.last().is_some_and(|part| part.starts_with('@'))
-            {
-                index_key(writer, path, "", start, end)?;
-            }
-            Ok(())
-        })();
-        result.map_err(|error| {
-            failure = Some(error);
-            "native persistent layout unavailable"
-        })
-    };
-    let result = if let Some(reader) = reader {
-        reader.visit_fields_with_packed_message_shapes(shapes, policy, visit)
-    } else {
-        source.visit_fields_selecting_previews(policy, visit)
-    };
-    result.map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
-    Ok(field_count)
+    source
+        .visit_fields_selecting_previews(
+            |_| crate::runtime::read_layout::FieldPreviewPolicy::Inline,
+            |path, path_json, parent, start, end, children, key_span, preview| {
+                let result = (|| {
+                    let header = stored_preview(source, path, start, end, preview)?;
+                    fields
+                        .execute(params![
+                            id,
+                            path_json,
+                            parent.map(|(path, _)| path),
+                            parent.map(|(_, ordinal)| ordinal),
+                            start,
+                            end,
+                            children,
+                            header
+                        ])
+                        .map_err(|error| storage(error.to_string()))?;
+                    if let Some((start, end)) = key_span
+                        && path.last().is_some_and(|part| part.starts_with('@'))
+                    {
+                        index_key(writer, path, "", start, end)?;
+                    }
+                    Ok(())
+                })();
+                result.map_err(|error| {
+                    failure = Some(error);
+                    "native persistent layout unavailable"
+                })
+            },
+        )
+        .map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
+    Ok(())
 }
 fn provenance_source(
     sequence: u64,
@@ -566,23 +249,17 @@ pub(super) fn index_test_request_fields<T: serde::Serialize + schemars::JsonSche
     sequence: u64,
     value: &T,
 ) -> Result<(), ConversationStoreError> {
-    index_stream(
-        connection,
-        "trace_request",
-        &sequence.to_string(),
-        "request_observation_fields",
-        value,
-    )
+    composed::index_scalar(connection, sequence, value)
 }
 #[cfg(test)]
 pub(super) fn legacy_request_source_bytes(
     connection: &Connection,
     sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
-    messages: &[crate::model::ModelInputMessage],
+    messages: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
 ) -> Result<Vec<u8>, ConversationStoreError> {
-    let capture = |_ordinal: u64, _bytes: &[u8], _key: Option<&fragments::Key>| Ok(());
+    let capture = |_ordinal: u64, _bytes: &[u8]| Ok(());
     let value = crate::runtime_client::trace::frozen_request_detail(
         snapshot,
         FrozenMessages {
@@ -592,7 +269,6 @@ pub(super) fn legacy_request_source_bytes(
             snapshot,
             sequence,
             capture_header: &capture,
-            fragments: None,
         },
     );
     let source =
@@ -618,11 +294,11 @@ pub(super) fn legacy_field_headers_oracle(
     connection: &Connection,
     sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
-    messages: &[crate::model::ModelInputMessage],
+    messages: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
 ) -> Result<Vec<LegacyFieldHeader>, ConversationStoreError> {
     let headers = std::cell::RefCell::new(Vec::new());
-    let capture = |_ordinal: u64, bytes: &[u8], _key: Option<&fragments::Key>| {
+    let capture = |_ordinal: u64, bytes: &[u8]| {
         headers.borrow_mut().push(bytes.to_vec());
         Ok(())
     };
@@ -635,7 +311,6 @@ pub(super) fn legacy_field_headers_oracle(
             snapshot,
             sequence,
             capture_header: &capture,
-            fragments: None,
         },
     );
     let source =
@@ -668,44 +343,18 @@ pub(super) fn legacy_field_headers_oracle(
     Ok(fields)
 }
 #[cfg(test)]
-pub(super) fn index_message_headers_oracle(
-    connection: &Connection,
-    sequence: u64,
-    scope: &crate::runtime::identity::ConversationId,
-    messages: &[crate::model::ModelInputMessage],
-    snapshot: &crate::model::RequestSnapshot,
-) -> Result<(), ConversationStoreError> {
-    for (ordinal, message) in messages.iter().enumerate() {
-        let frozen = snapshot
-            .input
-            .get(ordinal)
-            .ok_or_else(|| storage("frozen request item absent"))?;
-        let (mut view, header) = input_view(connection, scope, message, frozen)?;
-        let bytes = provenance::Raw::frozen(frozen, &view.provenance).encoded_bytes()?;
-        view.provenance_source = Some(provenance_source(sequence, ordinal as u64, bytes));
-        let value = if let Some(header) = header {
-            message_value(&header, &view)?
-        } else {
-            bounded_message_descriptor(&view, view.blocks.len(), false)?
-        };
-        let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
-            .ok_or_else(|| storage("request item header exceeds bound"))?;
-        connection.execute("UPDATE request_observation_fields SET header_json=?1 WHERE source_id=?2 AND path_json=?3",params![bytes,sequence.to_string(),encoded_path(&["messages".into(),ordinal.to_string()])?]).map_err(|error|storage(error.to_string()))?;
-    }
-    Ok(())
-}
-type CaptureHeader<'a> =
-    dyn Fn(u64, &[u8], Option<&fragments::Key>) -> Result<(), ConversationStoreError> + 'a;
-struct FrozenMessages<'a, 'cache> {
+type CaptureHeader<'a> = dyn Fn(u64, &[u8]) -> Result<(), ConversationStoreError> + 'a;
+#[cfg(test)]
+struct FrozenMessages<'a> {
     connection: &'a Connection,
     scope: &'a crate::runtime::identity::ConversationId,
-    messages: &'a [crate::model::ModelInputMessage],
+    messages: &'a crate::model::SelectedModelInput,
     snapshot: &'a crate::model::RequestSnapshot,
     sequence: u64,
     capture_header: &'a CaptureHeader<'a>,
-    fragments: Option<&'a std::cell::RefCell<fragments::Session<'cache>>>,
 }
-impl serde::Serialize for FrozenMessages<'_, '_> {
+#[cfg(test)]
+impl serde::Serialize for FrozenMessages<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::{Error as _, SerializeSeq as _};
         let mut sequence = serializer.serialize_seq(Some(self.messages.len()))?;
@@ -715,23 +364,6 @@ impl serde::Serialize for FrozenMessages<'_, '_> {
                 .input
                 .get(ordinal)
                 .ok_or_else(|| S::Error::custom("frozen request item absent"))?;
-            let key = fragments::Key::original(self.connection, message, frozen)
-                .map_err(S::Error::custom)?;
-            if let (Some(fragments), Some(key)) = (self.fragments, key.as_ref()) {
-                let mut fragments = fragments.borrow_mut();
-                if let Some(item) = fragments
-                    .item(key, self.sequence, ordinal as u64)
-                    .map_err(S::Error::custom)?
-                {
-                    let bytes = item.header().ok_or_else(|| {
-                        S::Error::custom("canonical fragment header exceeds bound")
-                    })?;
-                    (self.capture_header)(ordinal as u64, &bytes, Some(key))
-                        .map_err(S::Error::custom)?;
-                    sequence.serialize_element(&item)?;
-                    continue;
-                }
-            }
             let (mut view, header) = input_view(self.connection, self.scope, message, frozen)
                 .map_err(S::Error::custom)?;
             let bytes = provenance::Raw::frozen(frozen, &view.provenance)
@@ -739,17 +371,10 @@ impl serde::Serialize for FrozenMessages<'_, '_> {
                 .map_err(S::Error::custom)?;
             view.provenance_source = Some(provenance_source(self.sequence, ordinal as u64, bytes));
             if let Some(header) = header {
-                let (value, untrimmed) =
-                    message_value_capture(&header, &view).map_err(S::Error::custom)?;
+                let (value, _) = message_value_capture(&header, &view).map_err(S::Error::custom)?;
                 let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
                     .ok_or_else(|| S::Error::custom("request item header exceeds bound"))?;
-                (self.capture_header)(ordinal as u64, &bytes, key.as_ref().filter(|_| untrimmed))
-                    .map_err(S::Error::custom)?;
-                if untrimmed && let (Some(fragments), Some(key)) = (self.fragments, key) {
-                    fragments
-                        .borrow_mut()
-                        .candidate(key, ordinal as u64, &bytes);
-                }
+                (self.capture_header)(ordinal as u64, &bytes).map_err(S::Error::custom)?;
                 sequence.serialize_element(&provenance::Canonical {
                     value: &value,
                     provenance: provenance::Raw::frozen(frozen, &view.provenance),
@@ -759,7 +384,7 @@ impl serde::Serialize for FrozenMessages<'_, '_> {
                     .map_err(S::Error::custom)?;
                 let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16_384)
                     .ok_or_else(|| S::Error::custom("request item header exceeds bound"))?;
-                (self.capture_header)(ordinal as u64, &bytes, None).map_err(S::Error::custom)?;
+                (self.capture_header)(ordinal as u64, &bytes).map_err(S::Error::custom)?;
                 sequence.serialize_element(&input::Input {
                     original: message,
                     view: &view,
@@ -781,21 +406,7 @@ fn started(
     })
 }
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    shape::verify_schema(connection)?;
-    let sql:String=connection.query_row("SELECT sql FROM sqlite_schema WHERE type='table' AND name='request_observation_fields'",[],|row|row.get(0))
-        .map_err(|error|storage(error.to_string()))?;
-    for proof in [
-        "header_kind TEXT NOT NULL",
-        "header_kind='inline' AND typeof(header_json)='blob' AND length(header_json)<=16384 AND header_nodes IS NULL",
-        "header_kind='original_span' AND header_json IS NULL AND typeof(header_nodes)='integer' AND header_nodes BETWEEN 1 AND 32 AND end>start AND end-start<=16384",
-    ] {
-        if !sql.contains(proof) {
-            return Err(ConversationStoreError::IncompatibleSchema(
-                "invalid native field header storage layout".into(),
-            ));
-        }
-    }
-    Ok(())
+    composed::verify_schema(connection)
 }
 fn field_path(path: &[String]) -> Result<String, ConversationStoreError> {
     if path.len() > 256
@@ -808,7 +419,7 @@ fn field_path(path: &[String]) -> Result<String, ConversationStoreError> {
     }
     encoded_path(path)
 }
-fn field_coordinates(
+pub(super) fn field_coordinates(
     connection: &Connection,
     table: &'static str,
     id: &str,
@@ -816,9 +427,7 @@ fn field_coordinates(
 ) -> Result<(u64, u64, u64), ConversationStoreError> {
     if table == "request_observation_fields" {
         field_path(path)?;
-        if let Some(coordinates) = shape::coordinates(connection, id, path)? {
-            return Ok(coordinates);
-        }
+        return composed::coordinates(connection, id, path);
     }
     let coordinates: (u64, u64, u64) = connection
         .query_row(
@@ -838,22 +447,11 @@ fn field_coordinates(
     }
     Ok(coordinates)
 }
-#[cfg(test)]
-thread_local! {static HEADER_SPAN_WORK:std::cell::Cell<(usize,usize,usize)>=const {std::cell::Cell::new((0,0,0))};}
-#[cfg(test)]
-pub(super) fn take_header_span_work() -> (usize, usize, usize) {
-    HEADER_SPAN_WORK.with(|work| work.replace((0, 0, 0)))
-}
-// Header storage is derived evidence on the same original request field row.
-// OriginalSpan reuses the already committed source bytes; it owns no new data.
 struct StoredField {
     start: u64,
     end: u64,
     children: u64,
-    kind: Option<String>,
-    nodes: Option<u64>,
     bytes: Option<Vec<u8>>,
-    absent: bool,
 }
 impl StoredField {
     fn row(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Self> {
@@ -861,69 +459,18 @@ impl StoredField {
             start: row.get(offset)?,
             end: row.get(offset + 1)?,
             children: row.get(offset + 2)?,
-            kind: row.get(offset + 3)?,
-            nodes: row.get(offset + 4)?,
-            bytes: row.get(offset + 5)?,
-            absent: row.get(offset + 6)?,
+            bytes: row.get(offset + 3)?,
         })
     }
-    fn materialize(
-        self,
-        connection: &Connection,
-        table: &str,
-        id: &str,
-    ) -> Result<(u64, u64, u64, Vec<u8>), ConversationStoreError> {
+    fn materialize(self) -> Result<(u64, u64, u64, Vec<u8>), ConversationStoreError> {
         if self.start > self.end
             || self.end > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
         {
             return Err(storage("native field coordinates unavailable"));
         }
-        let bytes = match self.kind.as_deref() {
-            Some("inline") if self.nodes.is_none() && !self.absent => self
-                .bytes
-                .ok_or_else(|| storage("native inline field header unavailable"))?,
-            Some("original_span")
-                if table == "request_observation_fields" && self.absent && self.bytes.is_none() =>
-            {
-                let count = self
-                    .end
-                    .checked_sub(self.start)
-                    .filter(|count| *count > 0 && *count <= 16_384)
-                    .ok_or_else(|| storage("native original field span exceeds bound"))?;
-                let nodes = self
-                    .nodes
-                    .filter(|nodes| (1..=32).contains(nodes))
-                    .ok_or_else(|| storage("native original field node evidence unavailable"))?;
-                let raw = super::content::range_bytes(
-                    connection,
-                    (
-                        "trace_request",
-                        id,
-                        0,
-                        crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
-                    ),
-                    self.start,
-                    self.end,
-                )?;
-                #[cfg(test)]
-                HEADER_SPAN_WORK.with(|work| {
-                    let (calls, max_rows, max_bytes) = work.get();
-                    let (rows, bytes) = super::content::last_read_work();
-                    work.set((calls + 1, max_rows.max(rows), max_bytes.max(bytes)));
-                });
-                if u64::try_from(raw.len()).ok() != Some(count) {
-                    return Err(storage("native original field span incomplete"));
-                }
-                let value: serde_json::Value = serde_json::from_slice(&raw)
-                    .map_err(|_| storage("native original field JSON unavailable"))?;
-                if original_node_count(&raw)? != nodes {
-                    return Err(storage("native original field node evidence differs"));
-                }
-                crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
-                    .unwrap_or_else(|| b"null".to_vec())
-            }
-            _ => return Err(storage("native field header storage evidence unavailable")),
-        };
+        let bytes = self
+            .bytes
+            .ok_or_else(|| storage("native state field header unavailable"))?;
         Ok((self.start, self.end, self.children, bytes))
     }
 }
@@ -987,15 +534,12 @@ fn original_node_count(bytes: &[u8]) -> Result<u64, ConversationStoreError> {
         .map_err(|_| storage("native original field node evidence unavailable"))
 }
 fn header_columns(table: &str) -> Result<&'static str, ConversationStoreError> {
-    match table {
-        "request_observation_fields" => Ok(
-            "start,end,children,CASE WHEN header_kind IN ('inline','original_span') THEN header_kind END,CASE WHEN header_nodes IS NULL THEN NULL WHEN typeof(header_nodes)='integer' THEN header_nodes ELSE -1 END,CASE WHEN header_kind='inline' AND typeof(header_json)='blob' AND length(header_json)<=16384 THEN header_json END,header_json IS NULL",
-        ),
-        "state_observation_fields" => Ok(
-            "start,end,children,'inline',NULL,CASE WHEN typeof(header_json)='blob' AND length(header_json)<=16384 THEN header_json END,header_json IS NULL",
-        ),
-        _ => Err(storage("unknown native field header table")),
+    if table != "state_observation_fields" {
+        return Err(storage("unknown native state header table"));
     }
+    Ok(
+        "start,end,children,CASE WHEN typeof(header_json)='blob' AND length(header_json)<=16384 THEN header_json END",
+    )
 }
 type FieldWithKey = (u64, u64, u64, Vec<u8>, Option<Vec<u8>>);
 fn field_with_key(
@@ -1005,22 +549,13 @@ fn field_with_key(
     path: &[String],
 ) -> Result<FieldWithKey, ConversationStoreError> {
     field_path(path)?;
-    let selected = if table == "request_observation_fields" {
-        shape::field(connection, id, path)?
-    } else {
-        None
-    };
-    let (field, key) = if let Some(selected) = selected {
-        selected
-    } else {
-        connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|storage(error.to_string()))?
-            .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(7)?))).optional().map_err(|error|storage(error.to_string()))?
-            .ok_or_else(||ConversationStoreError::InvalidReference("request field is unavailable".into()))?
-    };
-    let (start, end, children, bytes) = field.materialize(connection, table, id)?;
     if table == "request_observation_fields" {
-        shape::validate_header(connection, id, path, &bytes)?;
+        return composed::field(connection, id, path);
     }
+    let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|storage(error.to_string()))?
+        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(4)?))).optional().map_err(|error|storage(error.to_string()))?
+        .ok_or_else(||ConversationStoreError::InvalidReference("request field is unavailable".into()))?;
+    let (start, end, children, bytes) = field.materialize()?;
     Ok((start, end, children, bytes, key))
 }
 pub(super) fn field_from(
@@ -1126,28 +661,12 @@ pub(super) fn page(
 fn page_metadata_columns() -> &'static str {
     "CASE WHEN typeof(path_json)='text' AND length(CAST(path_json AS BLOB))<=4096 THEN path_json END,CASE WHEN key_header IS NULL OR (typeof(key_header)='blob' AND length(key_header)<=4096) THEN key_header ELSE 0 END"
 }
-#[cfg(test)]
-thread_local! {static PAGE_METADATA_WORK:std::cell::Cell<(usize,usize)>=const{std::cell::Cell::new((0,0))};}
-#[cfg(test)]
-pub(super) fn take_page_metadata_work() -> (usize, usize) {
-    PAGE_METADATA_WORK.with(|work| work.replace((0, 0)))
-}
 fn page_metadata(
     row: &rusqlite::Row<'_>,
     path_index: usize,
 ) -> rusqlite::Result<(String, Option<Vec<u8>>)> {
     let path: String = row.get(path_index)?;
-    #[cfg(test)]
-    PAGE_METADATA_WORK.with(|work| {
-        let (previous, key) = work.get();
-        work.set((previous.max(path.len()), key));
-    });
     let key: Option<Vec<u8>> = row.get(path_index + 1)?;
-    #[cfg(test)]
-    PAGE_METADATA_WORK.with(|work| {
-        let (path, previous) = work.get();
-        work.set((path, previous.max(key.as_ref().map_or(0, Vec::len))));
-    });
     Ok((path, key))
 }
 pub(super) fn page_from(
@@ -1163,9 +682,7 @@ pub(super) fn page_from(
     }
     if table == "request_observation_fields" {
         field_path(path)?;
-        if let Some(page) = shape::page(connection, id, path, offset, limit)? {
-            return Ok(page);
-        }
+        return composed::page(connection, id, path, offset, limit);
     }
     let (_, _, total) = field_coordinates(connection, table, id, path)?;
     if offset > total {
@@ -1178,12 +695,9 @@ pub(super) fn page_from(
     let mut fields = rows
         .into_iter()
         .map(|(path, field, key)| {
-            let (start, end, children_total, bytes) = field.materialize(connection, table, id)?;
+            let (start, end, children_total, bytes) = field.materialize()?;
             let path: Vec<String> =
                 serde_json::from_str(&path).map_err(|error| storage(error.to_string()))?;
-            if table == "request_observation_fields" {
-                shape::validate_header(connection, id, &path, &bytes)?;
-            }
             let content = metadata_list(table, &path, &bytes, "content")?;
             let collections = metadata_list(table, &path, &bytes, "collections")?;
             let value: serde_json::Value =
@@ -1270,6 +784,10 @@ pub(super) fn read_from(
     offset: u64,
     max_bytes: u32,
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
+    if table == "request_observation_fields" {
+        field_path(path)?;
+        return composed::range(connection, id, path, offset, max_bytes);
+    }
     let (start, end, _) = field_coordinates(connection, table, id, path)?;
     let readable_end = end - start;
     if max_bytes == 0 || max_bytes > 65_536 || offset > readable_end {
@@ -1629,13 +1147,6 @@ fn bounded_message_descriptor(
     };
     Ok(value)
 }
-#[cfg(test)]
-fn message_value(
-    header: &crate::durable::observation::MessageHeader,
-    message: &crate::runtime_client::trace::TraceRequestMessage,
-) -> Result<serde_json::Value, ConversationStoreError> {
-    message_value_capture(header, message).map(|(value, _)| value)
-}
 fn message_value_capture(
     header: &crate::durable::observation::MessageHeader,
     message: &crate::runtime_client::trace::TraceRequestMessage,
@@ -1837,14 +1348,10 @@ fn index_key(
     let header = serde_json::to_vec(&descriptor).map_err(|error| storage(error.to_string()))?;
     let key_value =
         serde_json::to_vec(&descriptor.preview).map_err(|error| storage(error.to_string()))?;
-    let insert = if kind_is_request(writer) {
-        "INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json) VALUES(?1,?2,NULL,NULL,?3,?4,0,'inline',?5)".to_owned()
-    } else {
-        format!(
-            "INSERT INTO {}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,NULL,NULL,?3,?4,0,?5)",
-            writer.table
-        )
-    };
+    let insert = format!(
+        "INSERT INTO {}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,NULL,NULL,?3,?4,0,?5)",
+        writer.table
+    );
     writer
         .connection
         .execute(

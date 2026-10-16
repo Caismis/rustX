@@ -956,7 +956,7 @@ async fn stored_continuation_rejects_omitted_remote_coverage_and_changed_output(
     ));
     crate::common::bind_accepted_continuation_source(&mut request, 1);
     let mut omitted = request.clone();
-    omitted.messages.remove(0);
+    omitted.messages = omitted.messages.range(1..omitted.messages.len());
     let events = collect_events(
         &adapter(&server),
         with_storage(omitted, ResponsesStorageMode::Stored),
@@ -1395,7 +1395,8 @@ async fn continuation_tail_preserves_tool_then_users_order() {
         })),
         rustx::model::ModelInputMessage::Canonical(user("A")),
         rustx::model::ModelInputMessage::Canonical(user("B")),
-    ];
+    ]
+    .into();
     request.continuation = Some(ProviderContinuationState::OpenAiResponses(
         OpenAiResponsesContinuation::Stored {
             previous_response_id: "resp_prev".to_owned(),
@@ -1472,7 +1473,8 @@ async fn continuation_no_tool_tail_preserves_both_users() {
         )),
         rustx::model::ModelInputMessage::Canonical(user("msg-a", "A")),
         rustx::model::ModelInputMessage::Canonical(user("msg-b", "B")),
-    ];
+    ]
+    .into();
     request.continuation = Some(ProviderContinuationState::OpenAiResponses(
         OpenAiResponsesContinuation::Stored {
             previous_response_id: "resp_prev".to_owned(),

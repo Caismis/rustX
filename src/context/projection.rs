@@ -4,21 +4,18 @@
 //! request-time Effective System Prompt. It owns no contributor, provenance,
 //! admission, or provider semantics; those are settled before this boundary.
 
-use serde::{Deserialize, Serialize};
-
 use crate::conversation::SurfaceRevision;
-use crate::model::ModelInputMessage;
+use crate::model::SelectedModelInput;
 use crate::runtime::types::TokenMeasurement;
 
 /// The measured typed model input at one canonical append frontier.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContextProjection {
     /// Canonical append frontier used to identify this measured input.
     pub surface_revision: SurfaceRevision,
     /// Ordered complete typed messages selected by checkpoint compilation.
-    pub messages: Vec<ModelInputMessage>,
+    pub messages: SelectedModelInput,
     /// The exact rustX-owned Effective System Prompt for this request.
-    #[serde(default)]
     pub effective_system_prompt: String,
     /// The measured or estimated input for the full provider-neutral request.
     pub estimated_input: TokenMeasurement,
@@ -27,9 +24,9 @@ pub struct ContextProjection {
 impl ContextProjection {
     /// Returns a deterministic fingerprint of the exact projected context.
     ///
-    /// Provider measurements are reusable only when this fingerprint matches:
-    /// the revision, messages, and rendered system prompt are all part of the
-    /// measured input identity.
+    /// Retains the established flat serialization and FNV algorithm for explicit
+    /// fingerprint consumers. Native measurement reuse compares the immutable
+    /// selected root and exact scalar context without serializing this history.
     ///
     /// # Panics
     ///

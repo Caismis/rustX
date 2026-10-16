@@ -1112,8 +1112,42 @@ fn timed_request_snapshot(
     )
 }
 
+fn assert_request_source_point_indexes(connection: &rusqlite::Connection, sequence: u64) {
+    for (sql, key) in [
+        (
+            "EXPLAIN QUERY PLAN SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE hash=?1",
+            rusqlite::types::Value::Blob(vec![0; 32]),
+        ),
+        (
+            "EXPLAIN QUERY PLAN SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+            rusqlite::types::Value::Text(sequence.to_string()),
+        ),
+    ] {
+        let plan: String = connection.query_row(sql, [key], |row| row.get(3)).unwrap();
+        assert!(plan.contains("USING PRIMARY KEY"), "{plan}");
+        assert!(!plan.contains("SCAN"), "{plan}");
+    }
+}
+
+fn assert_request_scalar_range_work() {
+    let work = SqliteConversationStore::request_source_read_work();
+    // One field lookup and at most nine 8KiB chunks for a 64KiB window;
+    // every independent authenticated fragment descent has at most 16 pages.
+    assert!((1..=10 * 16).contains(&work.index_pages), "{work:?}");
+    assert!((1..=65_536).contains(&work.max_index_page));
+    assert!(work.index_bytes <= work.index_pages * 65_536);
+    assert_eq!(work.source_nodes, 1, "one original Request root");
+    assert!(work.source_metadata_bytes <= 16_384);
+    assert!(work.max_source_metadata <= 16_384);
+    assert_eq!(work.native_nodes, 0, "this Request has no selected inputs");
+    assert_eq!(
+        work.header_decodes, 0,
+        "ranges do not build display headers"
+    );
+}
+
 #[test]
-fn t08_t20_request_source_ranges_hold_only_two_finite_native_blob_rows() {
+fn t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("request-range.sqlite");
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8b4");
@@ -1160,11 +1194,7 @@ fn t08_t20_request_source_ranges_hold_only_two_finite_native_blob_rows() {
     connection
         .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
         .unwrap();
-    let plan: String = connection.query_row(
-        "EXPLAIN QUERY PLAN SELECT start,end,children,header_json FROM request_observation_fields WHERE source_id=?1 AND path_json=?2",
-        rusqlite::params![started.sequence.to_string(), "[\"effective_system_prompt\",\"text\"]"], |row| row.get(3),
-    ).unwrap();
-    assert!(plan.contains("USING PRIMARY KEY"), "{plan}");
+    assert_request_source_point_indexes(&connection, started.sequence);
     drop(connection);
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
     let field = vec!["effective_system_prompt".into(), "text".into()];
@@ -1174,13 +1204,19 @@ fn t08_t20_request_source_ranges_hold_only_two_finite_native_blob_rows() {
     let mut offset = 0;
     let mut bytes = Vec::new();
     while offset < header.encoded_bytes {
+        SqliteConversationStore::request_source_read_work();
         let chunk = store
             .request_value_read(&request, started.sequence, &field, offset, 65_536)
             .unwrap();
-        let (rows, materialized) = SqliteConversationStore::content_read_work();
-        assert!((1..=2).contains(&rows));
-        assert!(materialized <= 131_072);
+        assert_request_scalar_range_work();
+        assert!(chunk.bytes.len() <= 65_536);
         assert!(chunk.end_offset > offset);
+        assert_eq!(chunk.end_offset, offset + chunk.bytes.len() as u64);
+        assert_eq!(chunk.readable_end, header.encoded_bytes);
+        assert_eq!(
+            chunk.next_offset,
+            (chunk.end_offset < chunk.readable_end).then_some(chunk.end_offset)
+        );
         bytes.extend_from_slice(&chunk.bytes);
         offset = chunk.end_offset;
     }

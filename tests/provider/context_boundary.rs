@@ -41,7 +41,8 @@ fn request(protocol: ModelProtocol) -> ModelRequest {
                 kind: InboundKind::Message,
                 timestamp: None,
             })),
-        ],
+        ]
+        .into(),
         tools: Vec::new(),
         effective_system_prompt: format!("{SYSTEM_TEXT}\n\n{SKILL_TEXT}"),
         continuation: None,
@@ -197,14 +198,14 @@ fn effective_prompt_is_part_of_projection_measurement() {
     .expect("engine");
     let without = engine.build_projection_input(
         rustx::conversation::SurfaceRevision::INITIAL,
-        vec![],
+        rustx::model::SelectedModelInput::default(),
         &[],
         None,
         "",
     );
     let with_prompt = engine.build_projection_input(
         rustx::conversation::SurfaceRevision::INITIAL,
-        vec![],
+        rustx::model::SelectedModelInput::default(),
         &[],
         None,
         SKILL_TEXT,
@@ -263,7 +264,8 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
                 invocation: snapshot.invocation.clone(),
                 messages: rustx::model::input::canonical_input(
                     &conversation.active_messages().unwrap(),
-                ),
+                )
+                .into(),
                 tools: snapshot.tool_definitions.clone(),
                 effective_system_prompt: snapshot.effective_system_prompt.clone(),
                 continuation: snapshot.continuation.clone(),

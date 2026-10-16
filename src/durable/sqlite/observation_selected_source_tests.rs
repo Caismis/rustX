@@ -431,7 +431,8 @@ fn assert_delivery_metadata_coordinates(
 fn t08_t12_t14_t19_escaped_delivery_metadata_advances_beyond_inline_budget() {
     let store = store();
     let root = tempfile::tempdir().unwrap();
-    let original_file = escaped_delivery_file(root.path(), store.conversation_id());
+    let root_path = root.path().canonicalize().unwrap();
+    let original_file = escaped_delivery_file(&root_path, store.conversation_id());
     let mut message = selected_delivery_fixture(&store, "escaped-selected-file");
     let MessageBlock::Tool(tool) = &mut message else {
         unreachable!()
@@ -471,12 +472,12 @@ fn t08_t12_t14_t19_escaped_delivery_metadata_advances_beyond_inline_budget() {
         .unwrap();
     assert_eq!(selected.file, original_file);
     assert_eq!(
-        crate::tools::session_files::read_authorized(root.path(), &selected.file, || Ok(()))
+        crate::tools::session_files::read_authorized(&root_path, &selected.file, || Ok(()))
             .unwrap(),
         b"original authorized bytes"
     );
     assert!(
-        crate::tools::session_files::read_authorized(root.path(), &selected.file, || Err(
+        crate::tools::session_files::read_authorized(&root_path, &selected.file, || Err(
             std::io::ErrorKind::PermissionDenied.into()
         ))
         .is_err()
@@ -518,7 +519,7 @@ fn t08_t12_t14_t19_original_nine_deliveries_advance_and_select_last_index() {
     let files = (0..9)
         .map(|index| {
             let path = format!("original-{index}.txt");
-            std::fs::write(root.path().join(&path), format!("original file {index}")).unwrap();
+            std::fs::write(root_path.join(&path), format!("original file {index}")).unwrap();
             crate::tools::session_files::declare(&root_path, store.conversation_id(), &path, None)
                 .unwrap()
         })
@@ -570,7 +571,7 @@ fn t08_t12_t14_t19_original_nine_deliveries_advance_and_select_last_index() {
         (source.clone(), 8, files[8].clone())
     );
     assert_eq!(
-        crate::tools::session_files::read_authorized(root.path(), &selected.file, || Ok(()))
+        crate::tools::session_files::read_authorized(&root_path, &selected.file, || Ok(()))
             .unwrap(),
         b"original file 8"
     );

@@ -544,8 +544,8 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
     assert_eq!(server.attempt_count(), 2, "exactly two provider turns");
 
     // The tool result rustX sent into the second provider turn.
-    let tool_message = result
-        .messages()
+    let canonical_messages = result.messages();
+    let tool_message = canonical_messages
         .iter()
         .find_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),

@@ -36,44 +36,41 @@ fn assert_native_span_authority(
 }
 
 #[test]
-fn t08_t19_original_span_header_storage_rejects_corruption_without_losing_original_ranges() {
-    let path = "[\"retry_number\"]";
+fn t08_t19_composed_source_corruption_preserves_native_request_and_restored_exact_ranges() {
     for mutation in [
-        "header_kind='unknown'",
-        "header_kind='inline',header_nodes=NULL,header_json=NULL",
-        "header_nodes=0",
-        "header_nodes=33",
-        "header_nodes=2",
-        "header_nodes='invalid'",
-        "end=start+16385",
-        "end=start",
-        "header_json=zeroblob(4000000)",
+        "metadata=zeroblob(4000000)",
+        "metadata='{}'",
+        "metadata=x'7b7d'",
+        "witness=zeroblob(32)",
     ] {
         let (store, snapshot, sequence) = span_integrity_fixture();
         let connection = store.lock().unwrap();
-        let before:(u64,u64)=connection.query_row(
-            "SELECT start,end FROM request_observation_fields WHERE source_id=?1 AND path_json=?2",
-            params![sequence.to_string(),path],|row|Ok((row.get(0)?,row.get(1)?)),
-        ).unwrap();
         connection
-            .execute_batch("PRAGMA ignore_check_constraints=ON")
+            .execute_batch("SAVEPOINT corrupt_source; PRAGMA ignore_check_constraints=ON")
             .unwrap();
-        connection.execute(&format!("UPDATE request_observation_fields SET {mutation} WHERE source_id=?1 AND path_json=?2"),
-            params![sequence.to_string(),path]).unwrap();
-        connection
-            .execute_batch("PRAGMA ignore_check_constraints=OFF")
-            .unwrap();
-        drop(connection);
+        assert_eq!(
+            connection
+                .execute(
+                    &format!("UPDATE request_source_roots SET {mutation} WHERE source_id=?1"),
+                    [sequence.to_string()]
+                )
+                .unwrap(),
+            1
+        );
         assert!(
             matches!(
-                store.request_field_header_at(sequence, sequence, &["retry_number".into()]),
+                observation_request::field_header_at(
+                    &connection,
+                    sequence,
+                    sequence,
+                    &["retry_number".into()]
+                ),
                 Err(ConversationStoreError::Storage(_))
             ),
             "{mutation}"
         );
-        // Coordinates remain independent of presentation-header corruption.
-        store.lock().unwrap().execute("UPDATE request_observation_fields SET header_kind='original_span',header_nodes=1,header_json=NULL,start=?3,end=?4 WHERE source_id=?1 AND path_json=?2",
-            params![sequence.to_string(),path,before.0,before.1]).unwrap();
+        connection.execute_batch("ROLLBACK TO corrupt_source; RELEASE corrupt_source; PRAGMA ignore_check_constraints=OFF").unwrap();
+        drop(connection);
         assert_native_span_authority(&store, &snapshot, sequence);
         assert_eq!(
             store
@@ -150,7 +147,7 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
                 },
             )
             .unwrap();
-        connection.execute_batch("CREATE TRIGGER reject_original_span BEFORE INSERT ON request_observation_fields WHEN NEW.header_kind='original_span' BEGIN SELECT test_original_span_attempt(); SELECT RAISE(FAIL,'optional span insert'); END;").unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_original_span BEFORE INSERT ON request_observation_fields BEGIN SELECT test_original_span_attempt(); SELECT RAISE(FAIL,'optional span insert'); END;").unwrap();
     }
     let started = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
@@ -210,16 +207,17 @@ fn t14_t19_original_span_schema_requires_explicit_kind_and_consistent_native_bou
         "header_kind='unknown'",
         "header_kind=NULL",
         "header_json=x'30'",
-        "header_nodes=NULL",
-        "header_nodes=0",
-        "header_nodes=33",
-        "end=start+16385",
-        "end=start",
+        "path_json='[1]'",
+        "parent_path='[]'",
+        "ordinal=0",
+        "start=1",
+        "end=9007199254740992",
+        "children=1",
+        "shape_witness=zeroblob(31)",
     ] {
-        assert!(connection.execute(&format!("UPDATE request_observation_fields SET {mutation} WHERE source_id=?1 AND path_json='[\"retry_number\"]'"),
-            [sequence.to_string()]).is_err(),"{mutation}");
+        assert!(connection.execute(&format!("UPDATE request_observation_fields SET {mutation} WHERE source_id=?1 AND path_json='[]'"), [sequence.to_string()]).is_err(), "{mutation}");
     }
-    assert!(connection.execute("INSERT INTO request_observation_fields(source_id,path_json,start,end,children,header_json) VALUES(?1,'[\"missing-tag\"]',0,1,0,x'30')",[sequence.to_string()]).is_err());
+    assert!(connection.execute("INSERT INTO request_observation_fields(source_id,path_json,start,end,children,header_json) VALUES(?1,'[]',0,1,0,x'30')", [sequence.to_string()]).is_err());
     drop(connection);
     assert_native_span_authority(&store, &snapshot, sequence);
 }

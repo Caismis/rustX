@@ -1244,24 +1244,6 @@ fn t08_t12_t19_native_request_summary_survives_large_original_canonical_input() 
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
         .started;
-    if store
-        .observation_request_summary_at(started.sequence, started.sequence)
-        .is_err()
-    {
-        // Reveal a concrete optional-producer error, not only its downstream hole.
-        let native = store
-            .reconstruct_model_request(&snapshot.request_id)
-            .unwrap();
-        observation_request::index(
-            &store.lock().unwrap(),
-            started.sequence,
-            store.conversation_id(),
-            &native.messages,
-            &snapshot,
-        )
-        .expect("original canonical request layout capture");
-        panic!("native start must have retained its request summary before any explicit recapture");
-    }
     let summary = store
         .observation_request_summary_at(started.sequence, started.sequence)
         .unwrap()

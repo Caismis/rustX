@@ -43,6 +43,13 @@ settlement heads and publication frontiers remain authority despite cache evicti
 (C1, N3). Native Journal readiness and direct-publication provenance index existing
 source facts; they create no second journal, client ACK registry or execution owner.
 
+A successful manual compaction command returns its own native
+`ManualCompactionOutcome`: generation, checkpoint identity, activation identity,
+before-token measurement and after-token estimate. Published `latest_compaction`
+is presentation state, not the command receipt. A delayed response retains its
+original outcome even after another valid compaction commits; unavailable
+observation or response delivery never authorizes repeating semantic work.
+
 Replay eviction is recoverable only while the authoritative observation source
 is serviceable. Source failure produces typed unavailability, fences ordinary
 registration delivery and preserves the client Applied Cursor. A retained valid
@@ -2742,7 +2749,7 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** The current SQLite 64, child IPC 33,
+- **Retired formats are refused.** The current SQLite 65, child IPC 33,
   Runtime Client 71 and App Server 50 gates include the subsequent bounded
   observation changes (#467) and refuse earlier stores and peers. Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.
@@ -5985,13 +5992,16 @@ semantic normalization boundary. The frozen invariants:
   request ids are attachment-scoped; cursor/replay state belongs to the
   runtime observation stream and survives detach.
 - **Current-attempt coordination is one coordinator boundary.** The
-  current-attempt slot, `cancel_current_attempt`, and the next admitted
-  attempt linearize through the one coordinator lock; snapshots and the
-  terminal Runtime Client event linearize through the projection boundary,
-  which folds the coordinator's observations in commit order.
-  `cancel_current_attempt` verifies the named attempt is still current
-  under the coordinator lock, so a settlement/admission race can never
-  cancel a newer attempt. The cancellation acceptance response is never
+  current-attempt slot, current-attempt cancellation, and the next admitted
+  attempt linearize through the one coordinator lock. The native
+  `cancel_active_attempt` selects the current identity and requests its exact
+  cancellation while retaining that guard, including existing Goal pause
+  handling. The Host never selects from a published snapshot, drains observation
+  preparation, or repairs Source unavailability to authorize cancellation.
+  Native callers that already own an exact identity retain identity-checked
+  cancellation; a stale identity cannot transfer to its successor. Snapshots
+  and terminal display events remain separate presentation boundaries.
+  The cancellation acceptance response is never
   terminal settlement: the Agent Loop remains the settlement authority,
   and the coordinator holds the exact cancellation trigger the attempt
   task runs against.

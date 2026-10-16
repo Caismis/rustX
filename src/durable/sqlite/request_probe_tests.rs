@@ -166,10 +166,13 @@ fn t14_t19_native_request_probe_rejects_duplicate_original_starts_and_owner_mism
             params![serde_json::to_string(&started).unwrap(), started.sequence],
         )
         .unwrap();
-    assert_eq!(
+    let (metadata, actual_start, actual_completion) =
         require_started_request_tx(&transaction, store.conversation_id(), &snapshot.request_id)
-            .unwrap(),
-        (snapshot.clone(), started.sequence, Some(completed.sequence))
+            .unwrap();
+    assert_eq!(metadata.0, snapshot);
+    assert_eq!(
+        (actual_start, actual_completion),
+        (started.sequence, Some(completed.sequence))
     );
     let mut duplicate = started;
     duplicate.sequence = 3;

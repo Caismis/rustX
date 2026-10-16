@@ -5,34 +5,74 @@ import { connectRemote, choose, openSettingsPage } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { followRoot } from './source-reading';
 
+const READING_PREPARATION_MS = 240_000;
+
 // Building 300 durable Attempts is preparation, with its own fixture budget.
 // Browser/race assertions retain the repository's 120-second deadline and gates.
 const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<ReturnType<typeof startDogfood>>; id: string; forkId: string; sourceNode: string; sourceMessage: string; sourceCursor: string; pass: () => void } }>({
   readingScenario: ['web_reading_surface', { option: true }],
   reading: [async ({ readingScenario }, use) => {
-    const fixture = await startDogfood(readingScenario);
+    const begun = performance.now();
+    let phase = 'native startup';
+    let settledAttempts = 0;
+    let inFlight: number | undefined;
+    const recent: { attempt: number; admissionMs: number; settlementMs: number }[] = [];
+    let following: Awaited<ReturnType<typeof followRoot>> | undefined;
+    // Observe the existing fixture deadline only. This neither cancels nor
+    // retries native work; it preserves bounded evidence if setup never returns.
+    let fixture: Awaited<ReturnType<typeof startDogfood>> | undefined;
+    let prepared = false;
+    let diagnosed = false;
+    const diagnose = (reason: string) => {
+      if (diagnosed) return;
+      diagnosed = true;
+      console.error('READING_PREPARATION_INCOMPLETE', JSON.stringify({
+        reason, scenario: readingScenario, phase, completed: settledAttempts, inFlight,
+        elapsedMs: performance.now() - begun, recent, observation: following?.diagnostics(), native: fixture?.diagnostics().native,
+      }));
+    };
+    const diagnostic = setTimeout(() => diagnose('fixture deadline'), READING_PREPARATION_MS);
+    diagnostic.unref();
     let passed = false;
     try {
+    fixture = await startDogfood(readingScenario);
+    phase = 'connect';
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    phase = 'session/create';
     const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     const id = created.session.id;
+    phase = 'session/attach';
     const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
-    const following = await followRoot(remote, attached.target);
+    phase = 'checkpoint/subscribe';
+    following = await followRoot(remote, attached.target);
     // Every terminal barrier is a real native event. Seeding does not repeatedly
     // rebuild full snapshots or synthesize any history entry.
     for (let i = 0; i < 300; i++) {
+      inFlight = i;
+      phase = 'turn/start';
+      const started = performance.now();
       const terminal = following.nextSettlement();
       await remote.client.call('turn/start', { target: attached.target, content: [{ type: 'text', text: `Reading ${i}` }] }, 'inbound_accepted');
+      const admitted = performance.now();
+      phase = 'terminal event';
       await terminal;
+      settledAttempts++;
+      recent.push({ attempt: i, admissionMs: admitted - started, settlementMs: performance.now() - admitted });
+      if (recent.length > 8) recent.shift();
     }
     following.stop();
+    inFlight = undefined;
+    phase = 'first turn page';
     const firstPage = (await remote.client.call('session/turns', { target: attached.target, offset: 0, limit: 64 }, 'conversation_turns')).page;
     const first=firstPage.turns[0];
+    phase = 'latest transcript';
     const latest = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'latest' }, limit: 32 }, 'transcript_window')).window;
     expect(BigInt(latest.page.entries![0].cursor) - BigInt(first.cursor!)).toBeGreaterThan(512n);
+    phase = 'first turn transcript';
     const firstWindow = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'turn_ordinal', ordinal: first.ordinal, cut: firstPage.cut }, limit: 32 }, 'transcript_window')).window;
     const sourceEntry = firstWindow.page.entries!.find(entry => entry.item.type === 'message' && entry.item.message.role === 'assistant')!;
     if (sourceEntry.item.type !== 'message') throw new Error('Missing canonical source message');
+    phase = 'exact original message';
     const exact = (await remote.client.call('session/transcript', { target: attached.target, at: { type: 'message', id: sourceEntry.item.message.id, cut: firstWindow.cut }, limit: 1 }, 'transcript_window')).window;
     expect(exact.target_cursor).toBe(sourceEntry.cursor);
     expect(exact.target ?? null).toBeNull();
@@ -40,11 +80,18 @@ const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<
     expect(exact.page.entries![0].item).toMatchObject({ type: 'message', message: { id: sourceEntry.item.message.id } });
     const completed = sourceEntry.completed_response;
     if (!completed) throw new Error('The selected source Message has no native completed-response cut.');
+    phase = 'session/fork';
     const fork = await remote.client.call('session/fork', { session_id: id, node_id: created.session.active_node, surface_revision: completed.surface_revision, boundary: completed.closing_locator, side: 'after' }, 'session_transition');
+    phase = 'session/detach';
     await remote.client.call('session/detach', { target: attached.target }, 'detached'); await remote.shutdown();
+      clearTimeout(diagnostic);
+      prepared = true;
       await use({ fixture, id, forkId: fork.session.id, sourceNode: created.session.active_node, sourceMessage: sourceEntry.item.message.id, sourceCursor: sourceEntry.cursor, pass: () => { passed = true; } });
-    } finally { await fixture.stop(passed); }
-  }, { timeout: 240_000 }],
+    } catch (error) {
+      if (!prepared) diagnose(error instanceof Error ? error.message.slice(0, 1024) : 'setup failed');
+      throw error;
+    } finally { clearTimeout(diagnostic); await fixture?.stop(passed); }
+  }, { timeout: READING_PREPARATION_MS }],
 });
 
 // Gates delay transport replies, not native history or semantic owners.

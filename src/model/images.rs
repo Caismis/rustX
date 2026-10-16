@@ -90,6 +90,17 @@ pub fn omit_images(messages: &mut [crate::model::input::ModelInputMessage]) {
 /// become request-only textual artifact references. Canonical history is never changed.
 /// Repeated references count as occurrences because each is a provider-visible block.
 pub fn project(messages: &mut [crate::model::input::ModelInputMessage], image_input: bool) {
+    project_with_changes(messages, image_input, |_, _| {});
+}
+
+/// Report the exact items selected for image downgrade before changing them.
+/// Counting image occurrences is the transform's admission rule, not a body
+/// comparison or a serialization-based identity proof.
+pub(crate) fn project_with_changes(
+    messages: &mut [crate::model::input::ModelInputMessage],
+    image_input: bool,
+    mut changed: impl FnMut(usize, &crate::model::input::ModelInputMessage),
+) {
     use crate::message::{
         content::TextBlock,
         types::{AssistantContentBlock, MessageBlock, UserContentBlock},
@@ -99,14 +110,17 @@ pub fn project(messages: &mut [crate::model::input::ModelInputMessage], image_in
         text: omission_text(id),
     };
     let mut remaining = if image_input { 16 } else { 0 };
-    for message in messages.iter_mut().rev() {
+    for (index, message) in messages.iter_mut().enumerate().rev() {
+        let requires_projection = needs_projection(message, image_input, remaining);
+        if requires_projection {
+            changed(index, message);
+        }
         let Some(message) = (match message {
             crate::model::input::ModelInputMessage::Canonical(message) => Some(message),
             crate::model::input::ModelInputMessage::RequestOnly(_) => None,
             crate::model::input::ModelInputMessage::Derived(derived) => {
-                let before = derived.message.clone();
                 project_derived_images(&mut derived.message, image_input, &mut remaining);
-                if before != derived.message
+                if requires_projection
                     && !derived
                         .transformations
                         .contains(&crate::model::projected::SemanticTransformation::ImageDowngrade)
@@ -153,6 +167,42 @@ pub fn project(messages: &mut [crate::model::input::ModelInputMessage], image_in
                 }
             }
         }
+    }
+}
+
+fn needs_projection(
+    message: &crate::model::input::ModelInputMessage,
+    enabled: bool,
+    remaining: usize,
+) -> bool {
+    use crate::message::types::{AssistantContentBlock, UserContentBlock};
+    use crate::model::projected::ModelMessageView;
+    use crate::tools::types::ToolResultContent;
+    match message.view() {
+        ModelMessageView::User(content) => {
+            content
+                .iter()
+                .filter(|block| matches!(block, UserContentBlock::Image(_)))
+                .take(remaining + 1)
+                .count()
+                > remaining
+        }
+        ModelMessageView::Tool(_, result) => {
+            result
+                .content
+                .iter()
+                .filter(|block| matches!(block, ToolResultContent::Image(_)))
+                .take(remaining + 1)
+                .count()
+                > remaining
+        }
+        ModelMessageView::Assistant(content) => {
+            !enabled
+                && content
+                    .iter()
+                    .any(|block| matches!(block, AssistantContentBlock::Image(_)))
+        }
+        ModelMessageView::RequestOnly(_) => false,
     }
 }
 
@@ -206,12 +256,14 @@ fn project_derived_images(
 }
 
 /// Number of provider-visible User/Tool image blocks, including repeated identities.
-pub(crate) fn image_count(messages: &[crate::model::input::ModelInputMessage]) -> usize {
+pub(crate) fn image_count<'a>(
+    messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
+) -> usize {
     use crate::message::types::UserContentBlock;
     use crate::model::projected::ModelMessageView;
     use crate::tools::types::ToolResultContent;
     messages
-        .iter()
+        .into_iter()
         .map(|message| match message.view() {
             ModelMessageView::User(user) => user
                 .iter()

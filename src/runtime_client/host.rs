@@ -1441,10 +1441,20 @@ pub(crate) struct ClientInner {
     audit_commit_hook: Mutex<Option<AuditCommitHook>>,
     #[cfg(test)]
     snapshot_read_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    #[cfg(test)]
+    cancellation_receipt_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    manual_compaction_response_gate: Mutex<Option<ManualCompactionResponseGate>>,
     /// Test-only: advanced after every projection worker turn.
     #[cfg(test)]
     worker_turns: Arc<tokio::sync::watch::Sender<u64>>,
 }
+
+#[cfg(test)]
+type ManualCompactionResponseGate = (
+    tokio::sync::oneshot::Sender<crate::runtime::conversation_runtime::ManualCompactionOutcome>,
+    tokio::sync::oneshot::Receiver<()>,
+);
 
 #[cfg(test)]
 type ReadDomainHook =
@@ -2017,47 +2027,27 @@ impl ClientInner {
         })
     }
 
-    /// Requests cancellation of the current attempt.
+    /// Requests cancellation through the native current-attempt owner.
     ///
-    /// The deciding observation (the projection's attempt view, drained
-    /// under the host lock) and the coordinator's identity-checked
-    /// cancellation share the same attempt naming, so the signal is never
-    /// delivered to a different attempt. Acceptance is not terminal
-    /// settlement: actual settlement remains owned by the Agent Loop and is
-    /// observed asynchronously.
+    /// Selection and cancellation share the coordinator's admission/settlement
+    /// lock. Observation availability and publication progress do not select
+    /// the target or gate this control. The returned native identity denotes
+    /// acceptance, while terminal settlement remains owned by the Agent Loop.
     ///
     /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::NoCurrentAttempt`] when no attempt
-    /// is currently cancellable.
+    /// Returns the native no-current-attempt or Goal-pause failure.
     pub(crate) fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
-        let attempt_id = {
-            let state = self.lock_state();
-            let Some(attempt) = state.projection.snapshot_ref().attempt.as_ref() else {
-                return Err(RuntimeClientError::NoCurrentAttempt);
-            };
-            if matches!(
-                attempt.phase,
-                super::snapshot::RuntimeClientAttemptPhase::Settled { .. }
-            ) {
-                return Err(RuntimeClientError::NoCurrentAttempt);
-            }
-            attempt.attempt_id.clone().ok_or_else(|| {
-                RuntimeClientError::ObservationUnavailable {
-                    message: "native attempt identity is deferred".into(),
-                }
-            })?
-        };
-        // The coordinator verifies under its own lock that the named attempt
-        // is still the current one, so a settlement/admission race can
-        // never cancel a newer attempt.
-        match self
+        let result = self
             .runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .cancel_current_attempt(&attempt_id)
-        {
+            .cancel_active_attempt();
+        #[cfg(test)]
+        if let Some(hook) = self.cancellation_receipt_hook.lock().unwrap().take() {
+            hook();
+        }
+        match result {
             Ok(attempt_id) => Ok(RuntimeClientResult::AttemptCancellationAccepted { attempt_id }),
             Err(CancelAttemptError::NoCurrentAttempt) => Err(RuntimeClientError::NoCurrentAttempt),
             // The attempt was cancelled, but the interrupt's durable Goal
@@ -2074,13 +2064,14 @@ impl ClientInner {
     }
 
     /// Runs one manual idle context compaction to its terminal result and
-    /// returns the authoritative context projection after success.
+    /// returns the exact native commit receipt for this invocation.
     pub(crate) async fn compact_context(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
-        self.runtime
+        let outcome = self
+            .runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
             .compact_context(request_id)
@@ -2116,9 +2107,22 @@ impl ClientInner {
                     message: context.message,
                 },
             })?;
-        let context = self.lock_state().projection.snapshot_ref().context.clone();
+        #[cfg(test)]
+        {
+            let gate = self.manual_compaction_response_gate.lock().unwrap().take();
+            if let Some((committed, release)) = gate {
+                let _ = committed.send(outcome.clone());
+                let _ = release.await;
+            }
+        }
         Ok(RuntimeClientResult::ContextCompacted {
-            compaction: context.latest_compaction,
+            compaction: Some(super::snapshot::RuntimeClientCompactionView {
+                generation: outcome.generation,
+                checkpoint_id: outcome.checkpoint_id,
+                activation_id: outcome.activation_id,
+                tokens_before: outcome.tokens_before,
+                estimated_tokens_after: outcome.estimated_tokens_after,
+            }),
         })
     }
 
@@ -5152,6 +5156,10 @@ impl RuntimeClientHost {
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
+            cancellation_receipt_hook: Mutex::new(None),
+            #[cfg(test)]
+            manual_compaction_response_gate: Mutex::new(None),
+            #[cfg(test)]
             read_domain_hook: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             worker_turns: Arc::new(tokio::sync::watch::channel(0).0),
@@ -5245,6 +5253,10 @@ impl RuntimeClientHost {
             audit_commit_hook: Mutex::new(None),
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            cancellation_receipt_hook: Mutex::new(None),
+            #[cfg(test)]
+            manual_compaction_response_gate: Mutex::new(None),
             #[cfg(test)]
             read_domain_hook: Arc::new(Mutex::new(None)),
             #[cfg(test)]
@@ -5972,6 +5984,9 @@ mod tests {
     }
     mod source_recovery_tests {
         include!("host/source_recovery_tests.rs");
+    }
+    mod native_cancellation_tests {
+        include!("host/native_cancellation_tests.rs");
     }
     mod settlement_tests {
         include!("host/settlement_tests.rs");
@@ -7970,47 +7985,6 @@ mod tests {
         ));
     }
 
-    fn print_index_delta(
-        turns: usize,
-        kind: &str,
-        current: &crate::durable::sqlite::RequestIndexProfile,
-        previous: &crate::durable::sqlite::RequestIndexProfile,
-    ) {
-        eprintln!(
-            "native source indexing turns={} kind={} calls={} layout_us={} bytes_us={} fields_us={} field_count={} max_field_count={}",
-            turns,
-            kind,
-            current.requests - previous.requests,
-            current.layout_us - previous.layout_us,
-            current.bytes_us - previous.bytes_us,
-            current.fields_us - previous.fields_us,
-            current.field_count - previous.field_count,
-            current.max_field_count,
-        );
-    }
-
-    fn print_source_index_delta(
-        turns: usize,
-        current: &crate::durable::sqlite::SourceIndexProfile,
-        previous: &crate::durable::sqlite::SourceIndexProfile,
-    ) {
-        for (kind, current, previous) in [
-            ("trace_request", &current.request, &previous.request),
-            ("observation_journal", &current.journal, &previous.journal),
-            ("observation_goal", &current.goal, &previous.goal),
-            ("observation_todo", &current.todo, &previous.todo),
-            ("observation_context", &current.context, &previous.context),
-            ("other", &current.other, &previous.other),
-        ] {
-            print_index_delta(turns, kind, current, previous);
-        }
-        eprintln!(
-            "native source statistics turns={turns} calls={} inclusive_us={}",
-            current.statistics.calls - previous.statistics.calls,
-            current.statistics.total_us - previous.statistics.total_us,
-        );
-    }
-
     fn print_agent_request_delta(
         turns: usize,
         current: &crate::agent::execution::attribution::AgentRequestProfile,
@@ -8020,11 +7994,57 @@ mod tests {
             ("prepare", &current.prepare, &previous.prepare),
             ("start", &current.start, &previous.start),
             ("commit", &current.commit, &previous.commit),
-            ("reconstruct", &current.reconstruct, &previous.reconstruct),
+            (
+                "commit_evidence",
+                &current.commit_evidence,
+                &previous.commit_evidence,
+            ),
             (
                 "context_projection",
                 &current.context_projection,
                 &previous.context_projection,
+            ),
+            ("source", &current.source, &previous.source),
+            (
+                "source_capture",
+                &current.source_capture,
+                &previous.source_capture,
+            ),
+            (
+                "source_authenticate",
+                &current.source_authenticate,
+                &previous.source_authenticate,
+            ),
+            ("source_leaf", &current.source_leaf, &previous.source_leaf),
+            (
+                "source_scalar",
+                &current.source_scalar,
+                &previous.source_scalar,
+            ),
+            (
+                "source_paths",
+                &current.source_paths,
+                &previous.source_paths,
+            ),
+            (
+                "source_length",
+                &current.source_length,
+                &previous.source_length,
+            ),
+            (
+                "context_observe",
+                &current.context_observe,
+                &previous.context_observe,
+            ),
+            (
+                "context_measure",
+                &current.context_measure,
+                &previous.context_measure,
+            ),
+            (
+                "input_assembly",
+                &current.input_assembly,
+                &previous.input_assembly,
             ),
         ] {
             eprintln!(
@@ -8032,6 +8052,70 @@ mod tests {
                 current.calls - previous.calls,
                 current.total_us - previous.total_us,
             );
+        }
+    }
+
+    fn print_agent_work_delta(
+        turns: usize,
+        current: &crate::agent::execution::attribution::AgentRequestProfile,
+        previous: &crate::agent::execution::attribution::AgentRequestProfile,
+    ) {
+        for (scope, current, previous) in [
+            ("request", &current.source_work, &previous.source_work),
+            (
+                "authenticate",
+                &current.source_auth_work,
+                &previous.source_auth_work,
+            ),
+            (
+                "new_leaf",
+                &current.source_leaf_work,
+                &previous.source_leaf_work,
+            ),
+        ] {
+            eprintln!(
+                "native source work turns={turns} scope={scope} inclusive={:?}",
+                current.since(previous)
+            );
+        }
+        eprintln!(
+            "native context work turns={turns} delta={:?}",
+            current.context_work.since(&previous.context_work)
+        );
+        eprintln!(
+            "native input work turns={turns} delta={:?}",
+            current.native_work.since(&previous.native_work)
+        );
+    }
+
+    fn assert_agent_profile_complete(
+        agent: &crate::agent::execution::attribution::AgentRequestProfile,
+        turns: usize,
+    ) {
+        let turns = u64::try_from(turns).unwrap();
+        for phase in [
+            agent.prepare,
+            agent.start,
+            agent.commit,
+            agent.commit_evidence,
+            agent.source,
+            agent.source_capture,
+            agent.source_scalar,
+            agent.source_paths,
+            agent.source_length,
+        ] {
+            assert_eq!(phase.calls, turns);
+        }
+        assert_eq!(agent.source_work.samples, turns);
+        assert!(agent.source_work.index_pages > 0 && agent.source_work.index_bytes > 0);
+        assert!(agent.source_work.metadata_blobs > 0 && agent.source_work.metadata_bytes > 0);
+        assert!(
+            agent.source_work.native_header_queries > 0
+                && agent.source_work.native_node_queries > 0
+        );
+        assert!(agent.source_work.new_leaves > 0 && agent.source_work.new_nodes > 0);
+        if turns > 1 {
+            assert!(agent.source_auth_work.samples > 0);
         }
     }
 
@@ -8054,7 +8138,7 @@ mod tests {
         );
     }
 
-    /// Measures scalar CPU phases of frozen publication and native request indexing.
+    /// Measures inclusive elapsed phases of frozen publication and native execution.
     /// Source receipts, runtime admission and every settlement remain native.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "measurement only; run explicitly with --ignored --nocapture"]
@@ -8062,7 +8146,7 @@ mod tests {
         let turns = std::env::var("RUSTX_PUBLICATION_PROFILE_TURNS").map_or(20, |value| {
             value.parse::<usize>().expect("profile turn count")
         });
-        assert!((1..=300).contains(&turns));
+        assert!((1..=1000).contains(&turns));
         let (adapter, fixture) = host_fixture_with_native_tools(
             (0..turns).map(|_| one_turn_stop()).collect(),
             ToolRegistry::new(),
@@ -8089,8 +8173,6 @@ mod tests {
             .unwrap();
         let started = std::time::Instant::now();
         let mut previous = super::super::projection::PublicationEncodingProfile::default();
-        let request_profile = SqliteConversationStore::profile_request_index();
-        let mut previous_source = request_profile.sources();
         let agent_profile = crate::agent::execution::attribution::start();
         let mut previous_agent = agent_profile.snapshot();
         for turn in 0..turns {
@@ -8115,11 +8197,9 @@ mod tests {
                     current.content_metadata_max
                 );
                 previous = current;
-                let current_source = request_profile.sources();
-                print_source_index_delta(turn + 1, &current_source, &previous_source);
-                previous_source = current_source;
                 let current_agent = agent_profile.snapshot();
                 print_agent_request_delta(turn + 1, &current_agent, &previous_agent);
+                print_agent_work_delta(turn + 1, &current_agent, &previous_agent);
                 previous_agent = current_agent;
             }
         }
@@ -8129,16 +8209,10 @@ mod tests {
         let profile = profile.lock().unwrap();
         assert!(profile.records >= turns as u64);
         assert!(profile.bytes > 0);
-        let requests = request_profile.snapshot();
-        assert_eq!(requests.requests, turns as u64);
-        assert!(requests.field_count > 0);
         let agent = agent_profile.snapshot();
-        for phase in [agent.prepare, agent.start, agent.commit, agent.reconstruct] {
-            assert_eq!(phase.calls, turns as u64);
-        }
-        let sources = request_profile.sources();
+        assert_agent_profile_complete(&agent, turns);
         eprintln!(
-            "native publication encoding{turns} elapsed_ms={} {profile:?} source_index={sources:?} agent_inclusive={agent:?}",
+            "native publication encoding{turns} elapsed_ms={} {profile:?} agent_inclusive={agent:?}",
             elapsed.as_millis()
         );
     }

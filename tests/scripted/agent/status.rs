@@ -301,11 +301,11 @@ async fn run_attempt(
     (execution.run().await, recorder)
 }
 
-fn status_messages(result: &rustx::agent::AgentExecutionResult) -> Vec<&UserMessageBlock> {
+fn status_messages(result: &rustx::agent::AgentExecutionResult) -> Vec<UserMessageBlock> {
     result
         .messages()
-        .iter()
-        .filter(|message| message.is_agent_status())
+        .into_iter()
+        .filter(MessageBlock::is_agent_status)
         .filter_map(|message| match message {
             MessageBlock::User(user) => Some(user),
             _ => None,

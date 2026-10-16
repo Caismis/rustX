@@ -84,6 +84,30 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
+        if matches!(authority, Authority::Requests) {
+            let connection = self.lock().map_err(error)?;
+            let selected: Option<(i64, Option<String>)> = connection.query_row(
+                "SELECT rowid,CASE WHEN octet_length(request_id)<=67108864 THEN request_id END FROM request_snapshots
+                 WHERE rowid>?1 AND rowid<=?2 ORDER BY rowid LIMIT 1",
+                params![after, through], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().map_err(error)?;
+            return selected
+                .map(|(ordinal, request)| {
+                    let request = request
+                        .ok_or_else(|| error("archived request identity exceeds byte bound"))?;
+                    // Archives expose the original logical Snapshot, not its
+                    // normalized storage metadata. The native loader checks the
+                    // exact root and the combined 64 MiB bound before hydration.
+                    let snapshot = super::load_request_snapshot(
+                        &connection,
+                        &self.conversation_id,
+                        &crate::runtime::identity::RequestId::new(request),
+                    )
+                    .map_err(error)?;
+                    Ok((ordinal, serde_json::to_string(&snapshot).map_err(error)?))
+                })
+                .transpose();
+        }
         if matches!(authority, Authority::Projections) {
             let connection = self.lock().map_err(error)?;
             let checkpoint = super::projection::timeline(
@@ -143,10 +167,12 @@ impl Authority {
             Self::Journal => ("events", "sequence", "event_json"),
             Self::Messages => ("message_ledger", "position", "message_json"),
             Self::Surface => ("surface_ops", "revision", "op_json"),
-            Self::Requests => ("request_snapshots", "rowid", "snapshot_json"),
             Self::PublicationAudits => ("publication_audits", "rowid", "audit_json"),
-            Self::InheritedResponses | Self::InheritedTurns | Self::Projections => {
-                unreachable!("bootstrap provenance uses its immutable presence frontier")
+            Self::Requests
+            | Self::InheritedResponses
+            | Self::InheritedTurns
+            | Self::Projections => {
+                unreachable!("this authority requires its native logical record reader")
             }
         }
     }

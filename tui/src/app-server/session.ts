@@ -73,7 +73,6 @@ import {
   type ModelCatalogView,
   type Notification,
   type RuntimeClientJob,
-  type RuntimeClientContextView,
   type RuntimeClientCursor,
   type RuntimeClientSnapshot,
   type RuntimeClientAgent,
@@ -616,9 +615,10 @@ export class AppServerSession {
 
   /** Requests cancellation of the current attempt. Acceptance, not settlement. */
   async cancelCurrentAttempt(): Promise<string> {
-    const attempt=this.#state.attempt;
-    if(!attempt?.attemptId||!['admitted','running'].includes(attempt.phase.type))throw new Error('Exact live Attempt identity is unavailable for cancellation.');
-    const accepted = await this.#call(
+    if (this.#released || this.#serverClosed) throw new Error('Session attachment is unavailable.');
+    // The native coordinator selects its current Attempt under its admission
+    // lock. A retained observation cannot establish that owner's absence.
+    const accepted = await this.#client.call(
       "turn/cancel",
       { target: this.#target },
       "cancellation_accepted",
@@ -926,15 +926,15 @@ export class AppServerSession {
     return detail;
   }
   /** Runs one manual idle compaction to its durable terminal result. */
-  async compactContext(): Promise<RuntimeClientContextView> {
-    await this.#call(
+  async compactContext(): Promise<NonNullable<ResultOf<'context_compacted'>['compaction']>> {
+    if (this.#released || this.#serverClosed) throw new Error('Session attachment is unavailable.');
+    const { compaction } = await this.#client.call(
       "context/compact",
       { target: this.#target, request_id: globalThis.crypto.randomUUID() },
       "context_compacted",
     );
-    const {checkpoint}=await this.#call('session/checkpoint',{target:this.#target,trace_records:[]},'checkpoint');
-    const {page}=await this.#call('conversation/checkpointPage',{target:this.#target,agent_id:null,cut:checkpoint.read_cut,domain:'context',offset:0,limit:32},'checkpoint_page');
-    return domainValue<RuntimeClientContextView>(page,this.#domainReader());
+    if (!compaction) throw new Error('Native compaction response omitted its commit receipt.');
+    return compaction;
   }
 
   /** Reads or mutates the root Goal through its native owner. */

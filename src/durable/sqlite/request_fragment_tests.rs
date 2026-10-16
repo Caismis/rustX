@@ -33,8 +33,32 @@ fn fragment_snapshot(store: &SqliteConversationStore, turn: u32, retry: u32) -> 
         Vec::new(),
     );
     snapshot.invocation.model = format!("original-model-{turn}");
-    freeze_test_input(store, &mut snapshot, &[]);
+    let history = store.projected_history().unwrap();
+    snapshot.history_cut = history.cut;
+    let request = ModelRequest {
+        messages: history.messages,
+        images: crate::model::images::ResolvedImages::new(),
+        invocation: snapshot.invocation.clone(),
+        tools: snapshot.tool_definitions.clone(),
+        effective_system_prompt: snapshot.effective_system_prompt.clone(),
+        continuation: snapshot.continuation.clone(),
+        continuation_source: None,
+    };
     snapshot
+        .freeze_selected_input(store.conversation_id(), &request, &history.input_manifest)
+        .unwrap();
+    snapshot
+}
+fn source_row_counts(store: &SqliteConversationStore) -> (u64, u64, u64) {
+    let connection = store.lock().unwrap();
+    connection.query_row("SELECT (SELECT count(*) FROM request_source_pages),(SELECT count(*) FROM request_source_nodes),(SELECT count(*) FROM request_source_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap()
+}
+fn assert_composed_work(work: observation_request::composed::Work) {
+    assert!(
+        work.max_index_page <= 65536 && work.max_source_metadata <= 65536,
+        "{work:?}"
+    );
+    assert!(work.native_nodes <= 512 * 32 * 32, "{work:?}");
 }
 fn fragment_root_bytes(
     store: &SqliteConversationStore,
@@ -44,11 +68,11 @@ fn fragment_root_bytes(
     let mut bytes = Vec::new();
     let mut offset = 0;
     loop {
+        observation_request::composed::take_work();
         let chunk = store
             .request_value_read(&snapshot.request_id, sequence, &[], offset, 65_536)
             .unwrap();
-        let (rows, materialized) = content::last_read_work();
-        assert!(rows <= 2 && materialized <= 131_072);
+        assert_composed_work(observation_request::composed::take_work());
         assert_eq!(chunk.end_offset, offset + chunk.bytes.len() as u64);
         bytes.extend_from_slice(&chunk.bytes);
         if let Some(next) = chunk.next_offset {
@@ -100,10 +124,16 @@ fn assert_fragment_oracle(
         let mut offset = 0;
         let mut bytes = Vec::new();
         loop {
+            observation_request::composed::take_work();
             let chunk =
                 observation_request::read_at(&connection, sequence, sequence, path, offset, 257)
                     .unwrap();
-            assert!(content::last_read_work().0 <= 2);
+            let work = observation_request::composed::take_work();
+            assert_eq!(
+                work.header_decodes, 0,
+                "raw range must not construct selected headers"
+            );
+            assert_composed_work(work);
             bytes.extend_from_slice(&chunk.bytes);
             if let Some(next) = chunk.next_offset {
                 assert!(next > offset);
@@ -158,46 +188,45 @@ fn t08_t12_t14_t19_t20_canonical_fragments_match_full_source_every_field_and_ori
     let store = fragment_fixture();
     let canonical = store.load_canonical().unwrap();
     let first = fragment_snapshot(&store, 1, 0);
+    observation_request::composed::take_work();
     let started = store
         .commit_model_turn_start(&[], &first, Utc::now())
         .unwrap()
         .started;
-    let stats = store.conn.request_fragments.lock().unwrap().stats();
-    eprintln!("canonical fragment stats (entries,resident,hits,captures,peak): {stats:?}");
-    assert!(
-        stats.0 >= 12 && stats.3 >= 12,
-        "actual canonical prototypes: {stats:?}"
-    );
-    assert_eq!(stats.2, 0);
+    let first_work = observation_request::composed::take_work();
+    assert_eq!(first_work.new_leaves, first.input.len());
+    assert!(first_work.new_nodes >= first.input.len());
     assert_fragment_oracle(&store, &first, started.sequence);
     let second = fragment_snapshot(&store, 2, 0);
     observation_request::take_header_constructions();
+    observation_request::composed::take_work();
     let next = store
         .commit_model_turn_start(&[], &second, Utc::now())
         .unwrap()
         .started;
-    assert!(observation_request::take_header_constructions() < second.input.len());
-    let stats = store.conn.request_fragments.lock().unwrap().stats();
-    eprintln!("canonical fragment stats (entries,resident,hits,captures,peak): {stats:?}");
-    assert!(stats.2 >= 12, "actual repeated original reuse: {stats:?}");
-    assert!(stats.1 <= 8 * 1024 * 1024 && stats.4 <= 8 * 1024 * 1024);
+    let work = observation_request::composed::take_work();
+    assert_eq!(
+        work.new_leaves, 0,
+        "every immutable occurrence shares its native node"
+    );
+    assert_eq!(work.new_nodes, 0, "no second metadata topology");
+    assert_eq!(observation_request::take_header_constructions(), 0);
     assert_fragment_oracle(&store, &second, next.sequence);
     assert_ne!(first.request_id, second.request_id);
+    let before = source_row_counts(&store);
     let replay = store
         .commit_model_turn_start(&[], &second, Utc::now())
         .unwrap();
     assert_eq!(replay.started, next);
+    assert_eq!(source_row_counts(&store), before);
     assert_eq!(store.load_canonical().unwrap(), canonical);
     assert_eq!(store.presentation_frontier().unwrap(), next.sequence);
-    store.conn.request_fragments.lock().unwrap().evict();
-    assert_eq!(store.conn.request_fragments.lock().unwrap().stats().0, 0);
-    assert_fragment_oracle(&store, &second, next.sequence);
-    store.conn.request_fragments.lock().unwrap().disable();
     let third = fragment_snapshot(&store, 3, 0);
     let last = store
         .commit_model_turn_start(&[], &third, Utc::now())
         .unwrap()
         .started;
+    assert_fragment_oracle(&store, &first, started.sequence);
     assert_fragment_oracle(&store, &third, last.sequence);
 }
 #[test]
@@ -218,8 +247,11 @@ fn t10_t19_canonical_fragment_admission_requires_optional_and_native_transaction
         store.lock().unwrap().execute_batch(trigger).unwrap();
         let committed = store.commit_model_turn_start(&[], &snapshot, Utc::now());
         assert_eq!(committed.is_err(), native_failure);
-        assert_eq!(store.conn.request_fragments.lock().unwrap().stats().0, 0);
-        assert_eq!(store.conn.request_fragments.lock().unwrap().stats().2, 0);
+        assert_eq!(
+            source_row_counts(&store),
+            (0, 0, 0),
+            "optional rollback leaves no captured Source index"
+        );
         if let Ok(committed) = committed {
             assert_eq!(
                 store.load_request_snapshot(&snapshot.request_id).unwrap(),
@@ -255,7 +287,7 @@ fn t10_t19_canonical_fragment_admission_requires_optional_and_native_transaction
             healthy.input.len()
         );
         assert_fragment_oracle(&store, &healthy, next.sequence);
-        assert!(store.conn.request_fragments.lock().unwrap().stats().0 > 0);
+        assert!(source_row_counts(&store).0 > 0);
     }
 }
 #[test]
@@ -267,7 +299,7 @@ fn t14_t19_canonical_fragment_hits_cannot_bypass_native_identity_or_current_head
         .unwrap();
     let canonical = store.load_canonical().unwrap();
     let before = store.presentation_frontier().unwrap();
-    let cache_before = store.conn.request_fragments.lock().unwrap().stats();
+    let cache_before = source_row_counts(&store);
     let mut foreign = fragment_snapshot(&store, 2, 0);
     let crate::model::projected::FrozenModelInput::Original(original) = &mut foreign.input[0]
     else {
@@ -278,10 +310,7 @@ fn t14_t19_canonical_fragment_hits_cannot_bypass_native_identity_or_current_head
         store.commit_model_turn_start(&[], &foreign, Utc::now()),
         Err(ConversationStoreError::InvalidReference(_))
     ));
-    assert_eq!(
-        store.conn.request_fragments.lock().unwrap().stats(),
-        cache_before
-    );
+    assert_eq!(source_row_counts(&store), cache_before);
     assert_eq!(store.presentation_frontier().unwrap(), before);
     let second = fragment_snapshot(&store, 3, 0);
     store.lock().unwrap().execute_batch(
@@ -297,58 +326,73 @@ fn t14_t19_canonical_fragment_hits_cannot_bypass_native_identity_or_current_head
         .execute_batch("DROP TRIGGER corrupt_fragment_original")
         .unwrap();
     assert_eq!(store.load_canonical().unwrap(), canonical);
-    assert_eq!(
-        store.conn.request_fragments.lock().unwrap().stats(),
-        cache_before
-    );
-    let header: Vec<u8> = store
+    assert_eq!(source_row_counts(&store), cache_before);
+    assert_uncaptured_fragment_header_failure(&store, &first);
+}
+fn assert_uncaptured_fragment_header_failure(
+    store: &SqliteConversationStore,
+    first: &RequestSnapshot,
+) {
+    let first_sequence = store.presentation_frontier().unwrap();
+    let oracle = shape_oracle(store, first, first_sequence);
+    store
+        .append_canonical(&user_message("uncaptured-fragment", "new native original"))
+        .unwrap();
+    let canonical = store.load_canonical().unwrap();
+    let third = fragment_snapshot(store, 4, 0);
+    let before = source_row_counts(store);
+    let (position, header): (u64, Vec<u8>) = store
         .lock()
         .unwrap()
         .query_row(
-            "SELECT header_json FROM observation_headers WHERE ledger_position=1",
+            "SELECT ledger_position,header_json FROM observation_headers ORDER BY ledger_position DESC LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
     store
         .lock()
         .unwrap()
         .execute(
-            "UPDATE observation_headers SET header_json=X'7b' WHERE ledger_position=1",
-            [],
+            "UPDATE observation_headers SET header_json=X'7b' WHERE ledger_position=?1",
+            [position],
         )
         .unwrap();
-    let third = fragment_snapshot(&store, 4, 0);
+    let before_j = store.presentation_frontier().unwrap();
     let committed = store
         .commit_model_turn_start(&[], &third, Utc::now())
         .unwrap();
+    assert_eq!(committed.started.sequence, before_j + 1);
     assert!(
         store
             .request_summary_header(&third.request_id, committed.started.sequence)
             .is_err()
     );
     assert_eq!(
-        store.conn.request_fragments.lock().unwrap().stats().2,
-        cache_before.2
+        source_row_counts(store),
+        before,
+        "failed new-leaf Source capture rolls back atomically"
     );
     assert_eq!(
         store.load_request_snapshot(&third.request_id).unwrap(),
         third
     );
     assert_eq!(store.load_canonical().unwrap(), canonical);
+    assert_shape_oracle(store, first, first_sequence, &oracle);
     store
         .lock()
         .unwrap()
         .execute(
-            "UPDATE observation_headers SET header_json=?1 WHERE ledger_position=1",
-            [header],
+            "UPDATE observation_headers SET header_json=?1 WHERE ledger_position=?2",
+            params![header, position],
         )
         .unwrap();
-    let fourth = fragment_snapshot(&store, 5, 0);
+    let fourth = fragment_snapshot(store, 5, 0);
     let completed = store
         .commit_model_turn_start(&[], &fourth, Utc::now())
         .unwrap();
-    assert_fragment_oracle(&store, &fourth, completed.started.sequence);
+    assert_fragment_oracle(store, &fourth, completed.started.sequence);
+    assert_shape_oracle(store, first, first_sequence, &oracle);
 }
 #[test]
 fn t12_t19_canonical_fragments_preserve_reordered_repeated_and_compacted_native_occurrences() {
@@ -360,12 +404,12 @@ fn t12_t19_canonical_fragments_preserve_reordered_repeated_and_compacted_native_
         .unwrap();
     let mut reordered = fragment_snapshot(&store, 2, 0);
     let history = store.projected_history().unwrap();
-    let mut messages = history.messages;
+    let mut messages = history.messages.to_vec();
     messages.reverse();
     messages.push(messages[0].clone());
     let request = ModelRequest {
         invocation: reordered.invocation.clone(),
-        messages,
+        messages: messages.into(),
         tools: reordered.tool_definitions.clone(),
         effective_system_prompt: reordered.effective_system_prompt.clone(),
         continuation: None,
@@ -375,7 +419,7 @@ fn t12_t19_canonical_fragments_preserve_reordered_repeated_and_compacted_native_
     reordered
         .freeze_input(store.conversation_id(), &request)
         .unwrap();
-    let before = store.conn.request_fragments.lock().unwrap().stats();
+    let before = source_row_counts(&store);
     let journal = store.presentation_frontier().unwrap();
     let original = fragment_root_bytes(&store, &initial, journal);
     assert!(
@@ -385,7 +429,7 @@ fn t12_t19_canonical_fragments_preserve_reordered_repeated_and_compacted_native_
         ),
         "native selection order/occurrence admission stays authoritative"
     );
-    assert_eq!(store.conn.request_fragments.lock().unwrap().stats(), before);
+    assert_eq!(source_row_counts(&store), before);
     assert_eq!(store.presentation_frontier().unwrap(), journal);
     assert_eq!(fragment_root_bytes(&store, &initial, journal), original);
     let checkpoint = checkpoint_fixture(
@@ -405,20 +449,31 @@ fn t12_t19_canonical_fragments_preserve_reordered_repeated_and_compacted_native_
             .any(|input| matches!(input, crate::model::projected::FrozenModelInput::Derived(_)))
     );
     observation_request::take_header_constructions();
+    observation_request::composed::take_work();
     let next = store
         .commit_model_turn_start(&[], &compacted, Utc::now())
         .unwrap();
     let constructions = observation_request::take_header_constructions();
-    assert!(
-        constructions > 0 && constructions < compacted.input.len(),
-        "Derived rebuilt, eligible Originals reused: {constructions}"
+    let work = observation_request::composed::take_work();
+    assert_eq!(
+        work.new_leaves,
+        compacted.input.len(),
+        "activation owns new native occurrences"
+    );
+    assert_eq!(
+        constructions, work.new_leaves,
+        "one display capture per new native occurrence"
     );
     assert_fragment_oracle(&store, &compacted, next.started.sequence);
     let retry = fragment_snapshot(&store, 3, 1);
+    observation_request::take_header_constructions();
+    observation_request::composed::take_work();
     let retried = store
         .commit_model_turn_start(&[], &retry, Utc::now())
         .unwrap();
     assert_ne!(retry.request_id, compacted.request_id);
+    assert_eq!(observation_request::take_header_constructions(), 0);
+    assert_eq!(observation_request::composed::take_work().new_leaves, 0);
     assert_fragment_oracle(&store, &retry, retried.started.sequence);
 }
 
@@ -494,58 +549,34 @@ fn assert_reading_fragment_source(
 fn t20_reading_300_pairs_report_actual_canonical_fragment_role_coverage_and_capture_work() {
     let store = reading_fragment_fixture();
     let canonical = store.load_canonical().unwrap();
-    let mut previous = 0;
-    for turn in 1..=20 {
-        let snapshot = fragment_snapshot(&store, turn, 0);
-        observation_request::take_header_constructions();
-        crate::runtime::read_layout::take_fragment_work();
-        store
-            .commit_model_turn_start(&[], &snapshot, Utc::now())
-            .unwrap();
-        let cache = store.conn.request_fragments.lock().unwrap();
-        let stats = cache.stats();
-        let sizes = cache.entry_sizes();
-        let users = sizes
-            .iter()
-            .filter(|(position, _)| position % 2 == 1)
-            .count();
-        eprintln!(
-            "reading cache turn={turn} users={users} assistants={} stats={stats:?} header_constructions={} capture_work={:?}",
-            sizes.len() - users,
-            observation_request::take_header_constructions(),
-            crate::runtime::read_layout::take_fragment_work()
-        );
-        assert!(stats.1 <= 8 * 1024 * 1024 && stats.4 <= 8 * 1024 * 1024);
-        assert!(sizes.iter().all(|(_, bytes)| *bytes <= 65_536));
-        if stats.0 == 600 || stats.0 == previous {
-            break;
-        }
-        previous = stats.0;
-    }
-    let sizes = store.conn.request_fragments.lock().unwrap().entry_sizes();
-    let before = store.conn.request_fragments.lock().unwrap().stats();
-    assert!(sizes.iter().any(|(position, _)| position % 2 == 1));
-    assert!(sizes.iter().any(|(position, _)| position % 2 == 0));
-    let snapshot = fragment_snapshot(&store, 21, 0);
-    observation_request::take_header_constructions();
-    crate::runtime::read_layout::take_fragment_work();
-    let started = store
-        .commit_model_turn_start(&[], &snapshot, Utc::now())
+    let first = fragment_snapshot(&store, 1, 0);
+    observation_request::composed::take_work();
+    let original = store
+        .commit_model_turn_start(&[], &first, Utc::now())
         .unwrap()
         .started;
-    let work = crate::runtime::read_layout::take_fragment_work();
-    let after = store.conn.request_fragments.lock().unwrap().stats();
+    let work = observation_request::composed::take_work();
     assert_eq!(
-        after.2 - before.2,
-        sizes.len(),
-        "every admitted original reused"
+        work.new_leaves, 600,
+        "all actual User and Assistant occurrences captured once"
     );
-    assert_eq!(
-        observation_request::take_header_constructions(),
-        600 - sizes.len()
-    );
-    eprintln!("reading cache final entries={sizes:?} stats={after:?} capture_work={work:?}");
-    assert_reading_fragment_source(&store, &snapshot, started.sequence);
+    assert_reading_fragment_source(&store, &first, original.sequence);
+    let nodes = source_row_counts(&store).1;
+    for turn in 2..=4 {
+        let snapshot = fragment_snapshot(&store, turn, 0);
+        observation_request::composed::take_work();
+        observation_request::take_header_constructions();
+        let started = store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap()
+            .started;
+        let work = observation_request::composed::take_work();
+        assert_eq!(work.new_leaves, 0);
+        assert_eq!(work.new_nodes, 0);
+        assert_eq!(observation_request::take_header_constructions(), 0);
+        assert_eq!(source_row_counts(&store).1, nodes);
+        assert_reading_fragment_source(&store, &snapshot, started.sequence);
+    }
     assert_eq!(store.load_canonical().unwrap(), canonical);
 }
 

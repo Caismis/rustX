@@ -548,7 +548,7 @@ fn activation_ledger_is_commit_time_frontier_and_not_checkpoint_base() {
     assert_eq!(at.projections.len(), 1);
     let history = store.projected_history().unwrap();
     assert_eq!(
-        history.messages.last().unwrap().canonical_id(),
+        history.messages.iter().last().unwrap().canonical_id(),
         Some(&MessageId::new("M2"))
     );
 }

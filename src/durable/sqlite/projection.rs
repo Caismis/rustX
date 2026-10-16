@@ -557,6 +557,32 @@ pub(super) fn head(
     }
     selected.map(|n| activated(connection, n)).transpose()
 }
+/// Finite selector used when the request needs only current head identity.
+/// Payload integrity is still checked by cold selection, or by the existing
+/// owner/epoch certificate before warm selection can avoid that materialization.
+pub(super) fn current_checkpoint_id(
+    connection: &Connection,
+) -> Result<Option<CheckpointId>, ConversationStoreError> {
+    let selected: Option<u64> = connection
+        .query_row(
+            "SELECT activation FROM projection_head WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| storage(e.to_string()))?;
+    let published = journal_frontier(connection, i64::MAX as u64)?;
+    if selected != (published > 0).then_some(published) {
+        return Err(invalid(
+            "Projection Head disagrees with latest durable publication",
+        ));
+    }
+    selected
+        .map(|id| {
+            eligibility_header(connection, id).map(|header| CheckpointId::new(header.checkpoint))
+        })
+        .transpose()
+}
 pub(super) fn checkpoint(
     connection: &Connection,
     id: &CheckpointId,
@@ -993,6 +1019,197 @@ pub(super) fn commit(
     Ok(result)
 }
 
+/// Warm native selection is the same persistent root extended by committed C delta.
+/// External/same-connection mutation invalidates this owner before reuse.
+pub(super) fn selected_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    owner: &super::manifest::Owner,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    let epoch = owner.capture(connection)?;
+    let cut = super::compaction_resources::cut(connection, scope)?;
+    let published = journal_frontier(connection, i64::MAX as u64)?;
+    let selected: Option<u64> = connection
+        .query_row(
+            "SELECT activation FROM projection_head WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| storage(e.to_string()))?;
+    if selected != (published > 0).then_some(published) {
+        return Err(invalid(
+            "Projection Head disagrees with latest durable publication",
+        ));
+    }
+    let mut slot = owner
+        .history
+        .lock()
+        .map_err(|_| storage("native selected history owner"))?;
+    let cached = slot
+        .as_ref()
+        .filter(|(prior, h)| {
+            epoch != u64::MAX
+                && *prior == epoch
+                && h.cut.activation.0 == published
+                && h.cut.ledger <= cut.ledger
+        })
+        .map(|(_, h)| h.clone());
+    let mut result = if let Some(mut history) = cached {
+        append_history_delta(connection, scope, &cut, &mut history)?;
+        history
+    } else {
+        history(connection, scope)?
+    };
+    result
+        .input_manifest
+        .certify_selection(owner.id, epoch, result.cut.clone());
+    result.messages = result.input_manifest.messages();
+    owner
+        .frontier
+        .store(cut.ledger.0, std::sync::atomic::Ordering::Release);
+    owner
+        .journal_frontier
+        .store(cut.journal.0, std::sync::atomic::Ordering::Release);
+    *slot = Some((epoch, result.clone()));
+    Ok(result)
+}
+
+type PendingTailCalls = std::collections::BTreeMap<
+    crate::message::types::ToolCallOccurrenceRef,
+    (
+        u32,
+        u32,
+        crate::model::projected::CanonicalMessageRef,
+        crate::runtime::identity::ToolCallId,
+        crate::runtime::identity::ToolId,
+    ),
+>;
+fn append_history_message(
+    scope: &ConversationId,
+    history: &mut crate::durable::projection::HistoricalModelInput,
+    pending: &mut PendingTailCalls,
+    message: crate::message::types::MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    use crate::model::projected::FrozenModelInput;
+    let index = u32::try_from(history.input_manifest.len())
+        .map_err(|_| invalid("request occurrence overflow"))?;
+    history.input_manifest = history
+        .input_manifest
+        .append(scope, &crate::model::ModelInputMessage::Canonical(message));
+    let FrozenModelInput::Original(reference) = history.input_manifest.get(index as usize).unwrap()
+    else {
+        unreachable!()
+    };
+    let reference = reference.clone();
+    let selected_messages = history.input_manifest.messages();
+    let value = &selected_messages[index as usize];
+    let crate::model::ModelInputMessage::Canonical(message) = value else {
+        unreachable!()
+    };
+    match message {
+        crate::message::types::MessageBlock::Assistant(assistant) => {
+            for (block, content) in assistant.content.iter().enumerate() {
+                if let crate::message::types::AssistantContentBlock::ToolCall(call) = content {
+                    let block = u32::try_from(block)
+                        .map_err(|_| invalid("canonical call block overflow"))?;
+                    let occurrence = crate::message::types::ToolCallOccurrenceRef::new(
+                        assistant.id.clone(),
+                        crate::message::types::ContentBlockIndex::new(block),
+                    );
+                    pending.insert(
+                        occurrence,
+                        (
+                            index,
+                            block,
+                            reference.clone(),
+                            call.id.clone(),
+                            call.tool_id.clone(),
+                        ),
+                    );
+                }
+            }
+        }
+        crate::message::types::MessageBlock::Tool(result) => {
+            let (call_message, call_block, assistant, wire_id, tool_id) = pending
+                .remove(&result.occurrence)
+                .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
+            if result.tool_call_id != wire_id || result.tool_id != tool_id {
+                return Err(invalid(
+                    "Tail ToolResult disagrees with physical call occurrence",
+                ));
+            }
+            history.tool_associations.push_back(
+                crate::model::occurrence::HistoricalToolAssociation {
+                    call_message,
+                    call_block,
+                    result_message: index,
+                    source: crate::model::occurrence::CanonicalCallSource {
+                        assistant,
+                        block: result.occurrence.block_index,
+                    },
+                    wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                        wire_id.to_string(),
+                    ),
+                },
+            );
+        }
+        crate::message::types::MessageBlock::User(_) => {}
+    }
+    history
+        .items
+        .push_back(crate::context::checkpoint::CheckpointItem {
+            message: CheckpointMessage::Original(reference),
+            call_sources: Vec::new(),
+            result_call: None,
+        });
+    Ok(())
+}
+
+fn append_history_delta(
+    connection: &Connection,
+    scope: &ConversationId,
+    cut: &crate::context::resources::ResourceReadCut,
+    history: &mut crate::durable::projection::HistoricalModelInput,
+) -> Result<(), ConversationStoreError> {
+    let mut after = history.cut.ledger;
+    let mut pending = std::collections::BTreeMap::new();
+    loop {
+        let page = super::compaction_resources::messages(
+            connection,
+            scope,
+            cut,
+            after,
+            None,
+            ResourceLimits::default(),
+        )?;
+        if page.rows.is_empty() {
+            break;
+        }
+        history.materialized_bytes = history
+            .materialized_bytes
+            .checked_add(page.bytes)
+            .ok_or_else(|| invalid("historical Tail byte overflow"))?;
+        if history.materialized_bytes > ResourceLimits::default().total_bytes
+            || history.messages.len() + page.rows.len() > ResourceLimits::default().total_items
+        {
+            return Err(invalid("historical Tail materialization exceeds bound"));
+        }
+        for (position, message) in page.rows {
+            append_history_message(scope, history, &mut pending, message)?;
+            after = LedgerFrontier(position);
+        }
+    }
+    if !pending.is_empty() {
+        return Err(invalid(
+            "canonical Tail ends inside an incomplete Tool batch",
+        ));
+    }
+    history.cut.ledger = cut.ledger;
+    history.messages = history.input_manifest.messages();
+    Ok(())
+}
+
 pub(super) fn history(
     connection: &Connection,
     scope: &ConversationId,
@@ -1173,8 +1390,9 @@ pub(super) fn history_at(
             "canonical Tail ends inside an incomplete Tool batch",
         ));
     }
+    let input_manifest = crate::model::SelectedInputManifest::from_messages(scope, &messages);
     Ok(HistoricalModelInput {
-        tool_associations,
+        tool_associations: tool_associations.into_iter().collect(),
         cut: RequestHistoryCut {
             ledger: read_cut.ledger,
             checkpoint_id: checkpoint
@@ -1185,8 +1403,10 @@ pub(super) fn history_at(
                 .map_or(ProjectionActivationId(0), |p| p.activation.activation),
             base_frontier: base,
         },
-        messages,
-        items,
+        messages: input_manifest.messages(),
+        input_manifest,
+        items: items.into_iter().collect(),
+        materialized_bytes: bytes,
     })
 }
 
@@ -1345,6 +1565,101 @@ fn activation_at_journal_cut(
     }
 }
 
+/// Certifies an unchanged native history plus explicit newly committed Context delta.
+/// Any unsupported edit or mutation evidence uses the full independent validator.
+pub(super) fn validate_warm_selection(
+    connection: &Connection,
+    scope: &ConversationId,
+    snapshot: &crate::model::RequestSnapshot,
+    owner: &super::manifest::Owner,
+    epoch: u64,
+) -> Result<bool, ConversationStoreError> {
+    use crate::model::projected::FrozenModelInput;
+    use crate::model::selected_input::{InputNodeKind, SelectionEdit};
+    let Some(origin) = &snapshot.input.origin else {
+        return Ok(false);
+    };
+    if owner.epoch.load(std::sync::atomic::Ordering::Acquire) != epoch
+        || origin.owner != owner.id
+        || origin.epoch != epoch
+        || origin.cut != snapshot.history_cut
+        || epoch == u64::MAX
+        || !snapshot.selected_fingerprint_matches()
+    {
+        return Ok(false);
+    }
+    let slot = owner
+        .history
+        .lock()
+        .map_err(|_| storage("native selected history owner"))?;
+    let Some((cached_epoch, history)) = slot.as_ref() else {
+        return Ok(false);
+    };
+    let same_root = match (&origin.baseline, &history.input_manifest.root) {
+        (None, None) => true,
+        (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+        _ => false,
+    };
+    if *cached_epoch != epoch
+        || history.cut != origin.cut
+        || !same_root
+        || snapshot.unresolved_output_carryover.is_some()
+    {
+        return Ok(false);
+    }
+    if (!history.tool_associations.is_empty() || !snapshot.tool_associations.is_empty())
+        && !snapshot.tool_associations.certifies(origin, snapshot)
+    {
+        return Ok(false);
+    }
+    let mut expected = history.input_manifest.len();
+    let mut seen = std::collections::BTreeSet::new();
+    for edit in &snapshot.input.edits {
+        let SelectionEdit::Append { index, node } = edit;
+        if *index != expected {
+            return Err(invalid("native selected append order"));
+        }
+        let InputNodeKind::Leaf(value) = &node.kind else {
+            return Ok(false);
+        };
+        let Some(FrozenModelInput::Original(reference)) = value.as_deref() else {
+            return Ok(false);
+        };
+        if !snapshot.request_context_ids.contains(&reference.message_id)
+            && !snapshot
+                .contributions
+                .iter()
+                .any(|c| c.message_id == reference.message_id)
+        {
+            return Err(invalid("native selected append is not admitted Context"));
+        }
+        if !seen.insert(reference.message_id.clone()) {
+            return Err(invalid("duplicate native selected Context"));
+        }
+        let message = super::load_message(connection, &reference.message_id)?;
+        if reference.conversation_id != *scope
+            || !reference.matches(&message)
+            || !matches!(message,crate::message::types::MessageBlock::User(user) if matches!(user.kind,crate::message::types::InboundKind::Context(_)))
+        {
+            return Err(invalid("native selected Context integrity"));
+        }
+        expected += 1;
+    }
+    if expected != snapshot.input.len() {
+        return Err(invalid("native selected append count"));
+    }
+    for id in snapshot
+        .request_context_ids
+        .iter()
+        .chain(snapshot.contributions.iter().map(|c| &c.message_id))
+    {
+        if !seen.contains(id) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Validate selection without repeating any dynamic semantic transformation.
 /// The frozen bodies remain Agent-owned; this checks their immutable history origins and order.
 pub(super) fn validate_request_selection(
@@ -1355,7 +1670,7 @@ pub(super) fn validate_request_selection(
     use crate::model::{ModelInputMessage, projected::FrozenModelInput};
     let history = history_at(connection, scope, Some(&snapshot.history_cut))?;
     let historical_len = history.messages.len();
-    let mut expected = history.messages;
+    let mut expected = history.messages.to_vec();
     let mut core_ids = Vec::new();
     for id in snapshot
         .contributions

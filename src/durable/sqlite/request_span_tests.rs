@@ -62,14 +62,38 @@ fn request_span_oracle(
     .unwrap()
 }
 
-fn assert_span_work(expected_calls: usize) {
-    let (calls, rows, bytes) = observation_request::take_header_span_work();
-    assert_eq!(calls, expected_calls);
-    assert!(rows <= 2, "selected header read {rows} native rows");
-    assert!(
-        bytes <= 16_384,
-        "selected header materialized {bytes} bytes"
+fn assert_span_work(_expected_calls: usize) -> observation_request::composed::Work {
+    let work = observation_request::composed::take_work();
+    assert!(work.max_index_page <= 65_536);
+    assert!(work.max_source_metadata <= 65_536);
+    // A bounded preview visits at most 512 pieces through paths of height 32.
+    assert!(work.native_nodes <= 512 * 32);
+    assert!(work.source_nodes <= 512 * 32);
+    work
+}
+
+fn assert_span_public_key(
+    field: &crate::durable::observation::RequestObservationField,
+    oracle: &[LegacyRequestField],
+) {
+    let Some(name) = field.path.last().filter(|name| name.starts_with('@')) else {
+        assert!(field.key.is_none());
+        return;
+    };
+    assert!(name.len() > 1);
+    let key = field.key.as_ref().expect("original aliased-key descriptor");
+    let mut path = field.path.clone();
+    path.push("$key".into());
+    let (_, start, end, _, bytes) = oracle
+        .iter()
+        .find(|(candidate, ..)| candidate == &path)
+        .unwrap();
+    assert_eq!(key.path, path, "descriptor uses this selected occurrence");
+    assert_eq!(
+        key.preview,
+        serde_json::from_slice::<String>(bytes).unwrap()
     );
+    assert_eq!(key.encoded_bytes, end - start, "original key byte extent");
 }
 
 fn assert_span_public_field(
@@ -131,15 +155,16 @@ fn assert_span_pages(connection: &Connection, sequence: u64, oracle: &[LegacyReq
             .collect::<Vec<_>>();
         let mut offset = 0;
         loop {
-            observation_request::take_header_span_work();
+            observation_request::composed::take_work();
             let page =
                 observation_request::page_at(connection, sequence, sequence, &parent, offset, 32)
                     .unwrap();
             assert_eq!(page.total, expected.len() as u64);
             assert_eq!(page.offset, offset);
             assert!(page.fields.len() <= 32 && !page.fields.is_empty());
-            let (calls, rows, bytes) = observation_request::take_header_span_work();
-            assert!(calls <= 32 && rows <= 2 && bytes <= 16_384);
+            let work = observation_request::composed::take_work();
+            assert!(work.max_index_page <= 65_536 && work.max_source_metadata <= 65_536);
+            assert!(work.native_nodes <= 32 * 512 * 32);
             for (index, field) in page.fields.iter().enumerate() {
                 assert_span_public_field(field, expected[usize::try_from(offset).unwrap() + index]);
             }
@@ -157,20 +182,28 @@ fn assert_span_pages(connection: &Connection, sequence: u64, oracle: &[LegacyReq
 }
 
 fn assert_span_admission_boundaries(connection: &Connection, sequence: u64) {
-    for (name, kind, bytes, nodes) in [
-        ("exact_bytes", "original_span", 16_384, Some(1)),
-        ("over_bytes", "inline", 16_385, None),
-        ("exact_nodes", "original_span", 63, Some(32)),
-        ("over_nodes", "inline", 65, None),
-        ("unsafe_integer", "original_span", 20, Some(1)),
+    for (name, bytes, deferred) in [
+        ("exact_bytes", 16_384, false),
+        ("over_bytes", 16_385, true),
+        ("exact_nodes", 63, false),
+        ("over_nodes", 65, true),
+        // The opaque integer remains exact in Source bytes; the established
+        // finite JSON preview is null because it exceeds the JS-safe range.
+        ("unsafe_integer", 20, true),
     ] {
-        let path = ["tools", "0", "input_schema", "value", name];
-        let stored: (String, u64, Option<u64>) = connection.query_row(
-            "SELECT header_kind,end-start,header_nodes FROM request_observation_fields WHERE source_id=?1 AND path_json=?2",
-            params![sequence.to_string(), serde_json::to_string(&path).unwrap()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).unwrap();
-        assert_eq!(stored, (kind.to_owned(), bytes, nodes), "{name}");
+        let path = ["tools", "0", "input_schema", "value", name].map(str::to_owned);
+        let field =
+            observation_request::field_header_at(connection, sequence, sequence, &path).unwrap();
+        assert_eq!(field.encoded_bytes, bytes, "{name}");
+        assert_eq!(field.deferred, deferred, "{name}");
+        if name == "unsafe_integer" {
+            assert_eq!(field.value, serde_json::Value::Null);
+            let raw =
+                observation_request::read_at(connection, sequence, sequence, &path, 0, 64).unwrap();
+            assert_eq!(raw.bytes, u64::MAX.to_string().as_bytes());
+            assert_eq!((raw.end_offset, raw.readable_end), (20, 20));
+            assert_eq!(raw.next_offset, None);
+        }
     }
     let deferred = observation_request::field_header_at(
         connection,
@@ -192,25 +225,9 @@ fn t08_t14_t15_t19_original_span_headers_match_every_legacy_field_and_advancing_
     let cut = store.observation_read_cut().unwrap();
     let oracle = request_span_oracle(&store, &snapshot, sequence);
     let connection = store.lock().unwrap();
-    let fields =
-        observation_request::shape::normalized_field_kinds(&connection, &sequence.to_string())
-            .unwrap();
-    assert_eq!(
-        fields.len(),
-        oracle.len(),
-        "no original field or synthetic key disappeared"
-    );
-    let mut span_count = 0;
-    let mut inline_count = 0;
     for expected in &oracle {
         let (path, start, end, children, bytes) = expected;
-        let kind = fields
-            .get(path)
-            .expect("every original field remains indexed");
-        let calls = usize::from(kind == "original_span");
-        span_count += calls;
-        inline_count += usize::from(kind == "inline");
-        observation_request::take_header_span_work();
+        observation_request::composed::take_work();
         assert_eq!(
             observation_request::field_from(
                 &connection,
@@ -222,14 +239,14 @@ fn t08_t14_t15_t19_original_span_headers_match_every_legacy_field_and_advancing_
             (*start, *end, *children, bytes.clone()),
             "legacy normalized header changed at {path:?}"
         );
-        assert_span_work(calls);
-        observation_request::take_header_span_work();
+        assert_span_work(0);
+        observation_request::composed::take_work();
         let field =
             observation_request::field_header_at(&connection, sequence, sequence, path).unwrap();
-        assert_span_work(calls);
+        assert_span_work(0);
         assert_span_public_field(&field, expected);
+        assert_span_public_key(&field, &oracle);
     }
-    assert!(span_count > 50 && inline_count > 0);
     assert_span_admission_boundaries(&connection, sequence);
     assert_span_pages(&connection, sequence, &oracle);
     drop(connection);
@@ -243,8 +260,8 @@ fn deny_request_span_headers(
     use rusqlite::hooks::{AuthAction, Authorization};
     match context.action {
         AuthAction::Read {
-            table_name: "request_observation_fields",
-            column_name: "header_json" | "header_kind" | "header_nodes",
+            table_name: "request_snapshots",
+            column_name: "snapshot_json",
         } => Authorization::Deny,
         _ => Authorization::Allow,
     }
@@ -254,9 +271,15 @@ fn request_span_raw(connection: &Connection, sequence: u64, path: &[String]) -> 
     let mut bytes = Vec::new();
     let mut offset = 0;
     loop {
+        observation_request::composed::take_work();
         let chunk =
             observation_request::read_at(connection, sequence, sequence, path, offset, 16_384)
                 .unwrap();
+        assert_eq!(
+            assert_span_work(0).header_decodes,
+            0,
+            "raw byte ranges do not materialize display headers"
+        );
         assert!(chunk.bytes.len() <= 16_384);
         assert_eq!(chunk.end_offset, offset + chunk.bytes.len() as u64);
         bytes.extend_from_slice(&chunk.bytes);
@@ -277,16 +300,16 @@ fn t08_t15_t19_original_span_raw_ranges_preserve_original_bytes_without_material
     let connection = store.lock().unwrap();
     connection.authorizer(Some(deny_request_span_headers));
     assert!(
-        observation_request::field_header_at(
-            &connection,
-            sequence,
-            sequence,
-            &["retry_number".into()],
-        )
-        .is_err(),
-        "the original-range proof really forbids header reads"
+        connection
+            .query_row(
+                "SELECT snapshot_json FROM request_snapshots LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .is_err(),
+        "full native snapshot reads really are forbidden"
     );
-    observation_request::take_header_span_work();
+    observation_request::composed::take_work();
     let original = request_span_raw(&connection, sequence, &[]);
     assert_span_work(0);
     assert!(

@@ -856,9 +856,10 @@ pub enum RuntimeClientResult {
         /// The attempt cancellation was requested for.
         attempt_id: AttemptId,
     },
-    /// `compact_context` succeeded after the durable summary/Surface commit.
+    /// This invocation committed its native context checkpoint.
     ContextCompacted {
-        /// Exact finite summary/Surface commit evidence.
+        /// Always present on success: the exact receipt for this invocation,
+        /// independently of the latest published context.
         compaction: Option<super::snapshot::RuntimeClientCompactionView>,
     },
 

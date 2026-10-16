@@ -120,7 +120,7 @@ pub(crate) async fn execute_compaction(
         crate::context::resources::ResourceLimits::default(),
     )
     .map_err(resource_failure)?;
-    let complete = crate::model::input::assemble_model_input(
+    let complete = super::engine::assemble_context_input(
         &history.messages,
         constraints.staged_request_context,
         constraints.carryover,
@@ -147,7 +147,7 @@ pub(crate) async fn execute_compaction(
     let (retired_count, summary) = loop {
         let n = super::planning::summary_prefix(
             &engine,
-            &history.messages,
+            &projection.messages,
             effective_system_prompt,
             tools,
             budgets,
@@ -191,7 +191,7 @@ pub(crate) async fn execute_compaction(
             .into());
         }
         let request = crate::context::summarizer::SummaryRequest {
-            retired: history.messages[..n].to_vec(),
+            retired: projection.messages.range(0..n).to_vec(),
         };
         let result = model_resources.summarize(request).await;
         match result {
@@ -218,7 +218,7 @@ pub(crate) async fn execute_compaction(
     let mut sources = std::collections::BTreeMap::new();
     let mut checkpoint_sources = std::collections::BTreeMap::new();
     let mut includes_previous_summary = false;
-    for message in &history.messages[..retired_count] {
+    for message in projection.messages.iter().take(retired_count) {
         match message {
             crate::model::ModelInputMessage::Canonical(original) => {
                 let source = CanonicalMessageRef::of(conversation_id, original);
@@ -341,7 +341,7 @@ pub(crate) async fn execute_compaction(
         })?;
     let after_projection = engine.build_projection_input(
         conversation.revision(),
-        compiled.messages,
+        compiled.messages.into(),
         tools,
         None,
         effective_system_prompt,

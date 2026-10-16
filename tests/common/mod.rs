@@ -466,7 +466,8 @@ pub fn simple_request(
                 kind: rustx::message::types::InboundKind::Message,
                 timestamp: None,
             }),
-        )],
+        )]
+        .into(),
         tools: Vec::new(),
         effective_system_prompt: String::new(),
         continuation: None,
@@ -501,7 +502,7 @@ pub fn bind_accepted_continuation_source(
             &rustx::runtime::identity::ConversationId::new(
                 "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
             ),
-            &request.messages[..accepted_item],
+            &request.messages.range(0..accepted_item),
             accepted,
         )
         .expect("fixture accepted Assistant"),

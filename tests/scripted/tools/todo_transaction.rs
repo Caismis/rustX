@@ -687,8 +687,9 @@ async fn every_committed_list_survives_the_restart_that_reads_it_back() {
     .await;
     assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
 
-    let results: Vec<&rustx::message::types::ToolMessageBlock> = audit
-        .messages()
+    let canonical_messages = audit.messages();
+
+    let results: Vec<&rustx::message::types::ToolMessageBlock> = canonical_messages
         .iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) if tool.tool_id.as_str() == TODO_TOOL_ID => Some(tool),

@@ -5,6 +5,93 @@ Archived chronological investigation and validation evidence. Statements such as
 and protocol versions are in [issue-467-validation.md](issue-467-validation.md).
 Earlier passing runs do not override later failures or current verification.
 
+## Native command ownership review (uncommitted correction)
+
+Combined library compilation passed (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4
+cargo test --lib --all-features --no-run`, 2m43s). The four compaction-head tests
+passed in 2.00s; all 30 native read-layout tests passed in 2.49s. The first run of
+the cancellation group failed its initial identical-cursor assertion (15 versus
+14), then poisoned the projection mutex during assertion unwinding. Accepted-input
+presentation may advance independently of Attempt publication. The test now
+captures outside the guard and asserts the exact original settled Attempt A while
+native B is active; it does not require unrelated presentation to stand still.
+The corrected test has not yet been rerun at this recorded stage.
+
+The normal binary build passed in 1m19s. The first standalone reading benchmark
+launcher failed before startup because bare Node could not resolve the existing
+extensionless TypeScript import; the established loader was restored for the actual
+measurement. This launcher failure did not execute an Attempt or modify fixtures.
+
+The same original 300-Attempt preparation with only cached selected-record SQL
+preparation (reading132) exhausted the unchanged 240s guard after 292 settled
+Attempts. It still advanced normally at Attempt 289 (237.43s), and the original
+process/directory were gone after cleanup (240.623s). CPU was 227.64s at failure;
+startup took 16s and the first ten Attempts 41.15s, versus 3.46s for the previous
+baseline. These timing differences prevent a clean end-to-end improvement claim.
+The statement cache alone is not considered a resolution. The remaining three
+cancellation regressions passed on the original combined binary (0.86s): held
+receipt versus successor, unavailable source, and blocked physical read.
+
+Review134 passed all four native cancellation tests (1.28s), four compaction-head
+tests (2.04s), 30 fragment tests (43.05s), and eight request-shape tests (14.56s).
+This includes both new captured-header byte/geometry/tamper tests. Review135 strict
+Clippy then rejected a test mutex guard with an explicit `drop` before later
+cleanup awaits. The test now clones the finite latest-compaction value in one
+statement and asserts outside the guard; no lint suppression or production change.
+Full validation restarts from that correction (review136).
+
+## Final-head CI and bounded reading diagnostics (b0928347)
+
+Run [38816665394](https://github.com/Caismis/rustX/actions/runs/38816665394)
+passed both Linux native lanes. The contract lane executed 3,866 library tests
+(zero failures, five existing ignores); the boundary lane executed 237 in-crate
+and 451 external tests, including the original skill-version storage-lock test.
+Both new publication-contention regressions, source repair, shutdown/recomposition,
+model no-op and DTO regressions passed. Protocol, lint, TUI and macOS Node also
+passed. macOS native compilation completed; its library run passed 3,178 tests
+and failed three delivery-source tests (four existing ignores, 894 filtered).
+The external targets were not reached. Two fixtures declared files under a
+canonical root but passed the raw TempDir root to the strict no-symlink reader.
+On macOS `/var` is a symlink, so ancestor walking returned `NotADirectory`. A
+third fixture similarly passed a noncanonical foreign root, producing
+`Unauthorized` before reaching its intended file-identity mismatch. Fixture
+roots are corrected consistently; production `O_NOFOLLOW` admission and original
+byte/error assertions are preserved. This requires another actual macOS run.
+
+Web unit tests passed 2,823 cases (four existing skips), but the complete browser
+run passed 315 and failed the two `reading.spec.ts` scenarios. Both failures were
+the unchanged 240,000ms preparation deadline for 300 real durable Attempts,
+before browser assertions. The CI log did not identify the last completed
+Attempt or the pending preparation operation. This failure is not relabeled an
+infrastructure exemption or a passing browser run.
+
+The exact existing production binary then completed the same 300 Attempts plus
+bounded source lookup and Fork locally in 208.378s (reading128). A separately
+qualified profiling run completed in 223.145s (reading129). Both used the default
+filesystem and original deadline; both original native processes and temporary
+directories were absent after cleanup. The first run spent 23.79s in admission
+and 183.52s waiting for real terminal events. In the second run, an owned native
+thread was observed in `jbd2_log_wait_commit`. This proves local physical waiting,
+not the cause of the remote failure. No lost terminal event was observed.
+
+The current binary's eight-second CPU sample at Attempt 200 attributed 27.36%
+inclusive to request Source indexing (13.03% shape preparation) and 11.14% to
+publication encoding. Sampling perturbs timing; these overlapping percentages
+are diagnostic, not a performance improvement claim. No unmeasured production
+optimization, reduced workload or longer timeout was introduced.
+
+The maintained fixture now records bounded failure-only evidence: preparation
+phase, completed/in-flight Attempt, the last eight admission/settlement timings,
+and the original spawned native process's CPU/I/O/wait counters. PID start-token
+checks fence process reuse; at most 64 worker wait channels are read. The timer
+only observes the existing deadline and never cancels, retries, performs an RPC,
+or changes execution. It is cleared before browser assertions and cleanup.
+
+The maintained focused browser command
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 RUSTX_BINARY=/home/capi/Documents/codes/rustX-issue-467/target/debug/rustx bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts`
+then passed both original scenarios (7.6 minutes). This validates the diagnostic
+fixture but does not replace the failed remote complete browser result.
+
 ## PR #478 repair and latest-main integration (in progress)
 
 Final102 `cargo test --all-targets --all-features` PASSED (635.101s command),
@@ -1083,3 +1170,329 @@ binary build passed (79.229s); subsequent Rust changes are cfg-only tests.
 Main was fetched again and remains `8cb41624eb2dc2ca87e4409961f42553ceb029cf`.
 The follow-up retains all original CI test selectors and budgets and awaits its
 own remote results; the earlier macOS cancellation is not counted as a pass.
+
+### Review-fix validation 136 (before incremental manifest work)
+
+`git diff --check`, `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo build --bins` passed. `CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=1 CARGO_INCREMENTAL=0 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features` passed in 2280.218 seconds: 4793 passed, 0 failed, 10 ignored across 20 target reports. The original `definitions::skill_version_identity_is_frozen_across_the_boundary` passed within the complete subagent target. This run compiled the R1/R2 fixes and captured-header reuse, before persistent-map/manifest work. The immediately following `cargo run --all-features --example check_test_lanes` failed to compile because concurrent persistent-map edits preceded the `imbl` dependency addition; it is not final-source lane evidence and must be rerun.
+
+### Reading measurement 137 (captured-header reuse, before persistent manifests)
+
+The same 300 sequential real App Server Attempts, bounded history reads, exact Message landing and Fork completed in 207.070 seconds; physical cleanup finished at 207.451 seconds and confirmed the owned native process and temporary workspace were gone. The unchanged 240-second setup guard was retained. Native CPU was 233.48 seconds; physical writes were 3,209,183,232 bytes and read-system-call bytes were 9,468,600,236. Per-Attempt medians for the first/middle/last 50 were 355.46 / 636.69 / 917.33 ms. This establishes continuing history-dependent growth: captured-header reuse is a constant-factor improvement, not resolution of the incremental-work requirement. These measurements used the binary built in review136 and do not validate subsequent persistent-manifest changes. `uv run --frozen pytest` in `test-support/fake-provider` separately passed all 54 tests (0.12 seconds).
+
+### Incremental integration diagnostics (not final-head validation)
+
+- `cargo check --all-targets --all-features --locked` (144) failed on composed
+  module visibility and fixtures still accessing the retired fragment cache.
+- `cargo check --lib --all-features --locked` (145) passed; obsolete-path warnings
+  remained. This was not a Clippy pass.
+- `cargo test --lib --all-features --no-run` (146) failed on six misplaced test
+  fixture imports and 21 retired-cache references. The imports were corrected;
+  the storage tests are being translated to the new authoritative representation.
+- `cargo build --bins --all-features --locked` (147) passed with warnings. The
+  resulting binary was used only for diagnostics while tests were still changing.
+- The real App Server measurement (148) completed 100 sequential fake-provider
+  Attempts, distant history reads, exact Message landing, fork and detach in
+  86.940 seconds; physical cleanup completed at 87.015 seconds. Native CPU was
+  64.88 seconds and physical writes were 694,910,976 bytes. Early/middle/late
+  20-Attempt medians were 506.36/543.68/565.97 ms. Several large outliers remain
+  unexplained (largest 17.591 seconds); this is not evidence of an infrastructure
+  exemption. The workload guard was measurement-only. The original browser
+  fixture still requires 300 Attempts within its unchanged 240-second guard.
+- The 300-Attempt diagnostic (149), using the same build-147 binary, completed
+  Attempts, history, exact Message landing, fork and detach in 194.968 seconds;
+  cleanup completed at 195.246 seconds. Native CPU was 217.34 seconds, physical
+  writes 2,245,373,952 bytes, and early/middle/late 50-Attempt medians were
+  520.08/585.04/689.16 ms. This diagnostic is not either browser assertion test
+  and does not establish final-head conformance. The prior build-136 diagnostic
+  (137) took 207.070 seconds and showed medians 355.46/636.69/917.33 ms.
+- Compile attempts 150 and 151 each found one stale test adaptation (old tuple
+  work counter and unsigned SQL test value respectively). Both were corrected
+  before the first focused integrated Source test (153).
+- Direct execution of the compiled-153 test binary (155) passed four persistent
+  input tests, six native mutation/persistence tests, two actual Store tests
+  (including 100/300/1000 appends), three normalized-request/archive tests, three
+  metadata-root tests, four cancellation tests and four compaction receipt tests.
+  The media filter in that batch discovered zero tests; after correcting it to
+  `model::media::tests::selected_tests::`, run 158 discovered and passed all four.
+  These are targeted results, not a final full-suite pass.
+- The first Source oracle (153) caught a genuine root-preview budget error:
+  the composed root reused the scalar prototype's small-node classification even
+  after inserting native messages. Coordinates and raw bytes matched, but the
+  preview exceeded the old producer's node budget. The implementation was fixed;
+  no expected-byte assertion was relaxed. Run 159 then passed the first exact
+  byte/field/page oracle and found a sharing fixture still using the explicit
+  cold full-input constructor for its second Request. That fixture is being
+  changed to exercise the real native producer root for its sharing assertion.
+- Diagnostic 152 stopped after 300 Attempts because `web_reading_surface`
+  deliberately rejects request 301. This was a measurement-fixture limit, not
+  a native hang. A separate `web_reading_scale_1000` scenario was added. Its
+  test proves the original browser scenario still has exactly 300 reading
+  Attempts plus its gated follow step, and the larger scenario preserves the
+  first 300 responses unchanged. `uv run --project test-support/fake-provider
+  --frozen pytest test-support/fake-provider/tests/test_scenario.py -q` (154)
+  discovered and passed 21 tests.
+
+- Diagnostic 156 completed all 1,000 actual Attempts, transcript/exact-source
+  reads, fork and detach in 838.986 seconds; physical process cleanup completed
+  at 841.459 seconds and the workspace was removed. It used diagnostic build
+  147, not final code. Native CPU was 921.15 seconds and writes were
+  7,841,017,856 bytes. This enlarged measurement uses its separate tested fake
+  scenario; neither original browser workload nor its timeout was changed.
+  Early/middle/late 100-Attempt median durations were 542.55/785.54/980.65
+  ms. Remaining whole-request provider materialization/fingerprinting is not
+  claimed to be constant work; the native Store tests measure the incremental
+  selection and Source maintenance independently.
+
+- Client validation 160 passed: `pnpm --dir protocol/app-server check` and
+  `typecheck`; Dev `typecheck` and `test` (41 passed); TUI `typecheck` and
+  `test` (1,158 passed, one existing skip); Web `typecheck`, `test` (2,823
+  passed, four existing skips), `build`, `check:i18n`, and `check:provenance`.
+  Protocol generation compiled before the last association-wrapper edits, so
+  final drift validation remains required. The first formatting check in 161
+  found a test-helper wrapping difference in `tests/support/context.rs`;
+  `cargo fmt --all` corrected it.
+
+- Direct compiled-161 native Store regressions (162) passed all five tests in
+  154.83 seconds: 100/300/1000 incremental appends, AFTER INSERT canonical
+  mutation rejection/rollback, unchanged compaction checkpoint reuse, completed
+  Tool-history warm reuse, and relationship-mutation proof invalidation.
+- The first Clippy pass after replacing the old layout (163) failed with 45
+  lint diagnostics. These are being corrected in the owning modules; this is
+  not a passing final lint result. Web type checking was repeated after making
+  the failure-only reading diagnostic also report early setup rejection.
+
+- Source suite 161 discovered 22 tests: 20 passed and two failed in 412.20
+  seconds. The two failures were the near-limit fixture calibration and the
+  obsolete expectation of Source leaf reuse across a new native compaction
+  selection. Exact full bytes/fields/pages, old-read retention, optional rollback,
+  tamper rejection and the 300-pair Source coverage test passed. Corrected
+  fixtures must be rerun; these failures are not treated as a green suite.
+
+## Full-chain preparation ownership audit (review174 onward, in progress)
+
+Store-only 100/300/1000 results did not prove end-to-end scaling. The subsequent
+review found old-input work above that boundary: staged input and contributor
+body copies, flat request assembly, observation anchors and token measurement,
+and post-commit Store reconstruction. Corrections carry the same immutable
+compiled input root through those owners. Canonical contributor input remains a
+separate canonical Surface selection, sharing Ledger body allocations; it never
+substitutes compiled Derived input for canonical history. The existing Surface
+owns its immutable selection and status/count indexes, updated on canonical
+append or rebuilt from the exact durable selection at bootstrap.
+
+The controlled pre-change native profile (review174) used the saved all-feature
+library binary from review168, with no concurrent task-owned compilation or
+other tests. Its 300 real scripted Attempts completed in 201.407s (one passed
+test). Inclusive phase totals were: prepare 8.500303s, start 103.906528s, commit
+81.603369s, Store reconstruction 19.303716s, and context projection 1.184694s.
+Start includes commit and reconstruction; these totals must not be added. This
+profile retains every fake adapter request, including its final diagnostic clone,
+and does not measure actual provider encoding. It is not a substitute for the
+real App Server/browser workload. The saved default-feature binary from review172
+is separately running the unchanged real native fixture path at 1000 Attempts
+(review175, measurement-only scenario). The original formal browser fixture
+remains 300 Attempts with its original 240-second deadline.
+
+Review171 passed the complete 22-test composed Source group, eight snapshot
+validation tests, four cancellation tests, four compaction receipt tests and four
+header capture tests. Its separate span group passed one test and failed one:
+field enumeration returned the original serialized `$key` value rather than the
+public `RequestObservationKey` descriptor. The correction derives that bounded
+descriptor from the exact current rebased path and original key extent; it does
+not alter the original raw key bytes. Verification of that correction and the
+new full-chain changes is pending. Review173 strict all-target/all-feature Clippy
+passed before these subsequent changes and is not final-tree validation.
+
+
+Review175 completed the isolated pre-full-chain App Server measurement at 1000
+Attempts, including history reads, exact Source landing, Fork and detach, in
+864.990 seconds; physical cleanup completed at 867.225 seconds. The first and
+last 50-Attempt median durations were 538.731 and 1093.178 milliseconds. No other
+task-owned build or test ran concurrently, but recorded host I/O pressure was
+high; this is not a claim of an otherwise exclusive machine. The preserved
+binary and fixed measurement scenario permit a like-configured comparison.
+
+Full-chain integration checks176–180 exposed compile/lint mismatches in cold
+fixtures and owned canonical views. These were corrected without executing live
+provider tests. Review181 strict all-target/all-feature Clippy passed. The first
+compiled targeted run182 passed raw Source ranges but exposed an unsafe-integer
+expectation mismatch in the new descriptor table; its complete independent legacy
+header oracle had passed. Review183 exposed two initialization-test authorizer
+rejections. Neither run is recorded as passing; their focused corrections require
+fresh verification.
+
+Review184 ran the remaining tests against the same compiled binary: 37 passed,
+zero failed or ignored. These cover selected request roots (3), exact token
+measurement (5), canonical selection (13), real Agent preparation at 100/300/1000
+(1), native commit evidence (1), actual-only input refusal (1), same-transaction
+Source proof reuse (1), cancellation ownership (4), exact compaction receipts (4),
+Source recovery (2), physical shutdown retry (1), and same-cut Source repair (1).
+The real Agent test proves bounded old-input preparation visits, zero selected
+input flattening, zero post-commit reconstruction, exactly two scripted provider
+requests and exactly one terminal event for the measured Attempt. It does not
+claim provider wire encoding is constant work. Final full-suite/browser/CI
+validation remains outstanding.
+
+
+Review185 reran the repaired groups: Source spans 2 passed; native initialization
+3 passed, zero failures/ignores. The unsafe-integer preview stays null/deferred
+under the established JS-safe contract while its exact original 20 bytes remain
+readable. The initialization authorizer allows SQLite's empty-column row-presence
+callback only for the identity table; explicit attempts to prepare occupancy or
+canonical body reads still fail with SQLITE_AUTH. These are test-policy
+corrections, not relaxed production read bounds.
+
+
+Reviews187–189 passed protocol generation/drift, protocol type checking, Dev
+41 tests and type checking, formatting and diff checks. Client cancellation audit
+also removed projected-Attempt admission in TUI and both Web dispatch layers;
+the returned native identity owns the marker, and no refresh follows the receipt.
+Focused commands, from their respective package directories:
+
+- TUI `node --test test/cancellation-authority.test.ts test/control-readiness.test.ts test/root-checkpoint.test.ts`: 25 passed.
+- TUI and Web `pnpm exec tsc --noEmit`: passed.
+- Web `pnpm exec vitest run test/composer-cancellation.test.tsx test/agent.test.tsx test/root-checkpoint.test.ts test/session-product.test.tsx`: 96 passed.
+- Web `pnpm exec vitest run test/session-product.test.tsx` after the final status row: 27 passed.
+
+Initial focused Web failures identified its second generic observation-readiness
+guard and an obsolete hardcoded fixture receipt; both were corrected before the
+listed passes. These focused results do not replace final complete client/browser
+validation.
+
+
+### Controlled full-chain measurements (review190)
+
+The default debug App Server binary completed the same 1000-Attempt measurement
+scenario plus exact Source landing, Fork and detach in 600.121 seconds, versus
+864.990 seconds for the preserved pre-full-chain review172 binary. Physical
+cleanup completed at 602.350 seconds; the original process and temporary storage
+were absent. Native CPU fell from 972.04 to 669.45 seconds. Physical writes stayed
+approximately 7.85 GB: the change does not claim to eliminate durable writes.
+There were no concurrent task-owned builds/tests. Both runs recorded high and
+variable host I/O pressure, so these are qualified measurements, not a guaranteed
+speedup on other machines. The formal browser fixture remains 300 Attempts/240s.
+
+| Attempt bucket | Preserved baseline median ms | Shared full-chain median ms |
+| --- | ---: | ---: |
+| 1–50 | 538.731 | 516.556 |
+| 251–300 | 715.535 | 554.062 |
+| 501–550 | 836.302 | 574.533 |
+| 751–800 | 974.549 | 582.782 |
+| 951–1000 | 1093.178 | 602.734 |
+
+The separate 300-Attempt scripted native profile passed with 600 preparation
+leaf visits, zero old items revisited, zero estimator materialized items and
+144,709 incremental hash bytes. Its measured Attempt interval was 222.121s,
+compared with 201.407s in review174; overall scripted elapsed time did **not**
+improve in this run. Inclusive prepare/start/commit/evidence phases were
+4.852/90.565/84.602/0.071 seconds; the former post-commit reconstruction phase
+was 19.304 seconds. These phases overlap and must not be added.
+
+Source consumed 73.017 inclusive seconds: current-request scalar metadata capture
+52.318s, capture18.975s (including new-leaf15.762s and authentication1.798s),
+paths0.859s and length0.786s. Scalar capture omits messages and its per25-Request
+cost stayed approximately4.33–4.44s. It is measured per-request work, not evidence
+of old-message traversal or justification for a new cross-request cache. Source
+query counts include authentication counts and are themselves included in native
+index counts. No old canonical bytes, publication checks or storage exclusion
+were removed to obtain these results. Formal browser and complete validation
+remain distinct required evidence.
+
+
+## Complete validation191–195: failures retained, corrections in progress
+
+Review191 strict Clippy passed. The unqualified default-parallel
+`cargo test --all-targets --all-features` then stopped after its library harness:
+4,105 passed,34 failed,four ignored in1130.23s; external targets and lane checks
+were not reached. Full diagnostics are preserved in the validation log. Two
+assertions still named schema64 storage: the Request range test used the retired
+content-segment counter, and old-schema rejection expected64 rather than65.
+Their corrections preserve original bytes, fixed cut, cold reopen and actual
+bounded physical reads. The unchanged canonical two-row test remains.
+
+The same run exposed a real frozen retry-contribution mismatch and a media
+projection work-bound violation; these require owner fixes and deterministic
+reruns. Many other failures were original liveness guards (including native
+Tool/Child startup); one Child interaction was no longer pending. Their causes
+are not waived as infrastructure failures. One exact file-read rerun passed14.05s;
+the stale Request two-row assertion reproduced independently. Remaining exact
+and containing-suite validation is required. No correctness deadline was raised.
+The long final SQL history-cost test passed after completing its original2056
+requests; its cold fixture recreates the same nine selected leaves for the final
+2048 requests. This is repeated fixed-size fixture setup, not production warm-root
+reuse or evidence of quadratic history traversal. Debugger/perf sampling was
+unavailable under the local OS policy; system permissions were not changed.
+
+Full TUI193 passed1,163 tests with one existing skip. Web193 passed2,825,
+failed three and skipped four: two tests awaited the removed automatic compaction
+refresh; one Settings case repeatedly reopened the same unchanged detail for
+each status assertion. The corrected tests explicitly invoke repair when testing
+repair and read each unchanged detail once while preserving every assertion.
+Their focused49-test run passed. Full Web194 then passed2,827,failed one and
+skipped four: the real Office converter exceeded its unchanged15s deadline.
+This run overlapped the heavy native harness, so a separate exact and complete
+Web run remains required; it is not recorded as a passing suite. Web typechecking
+passed. Fake-provider `uv run --frozen pytest` passed 55 tests.
+
+### Review199–200 isolated client validation and final audit
+
+With the prior native stress run fully terminated, the canonical Web command
+`pnpm --dir web-console test` passed 2,828 tests, zero failed, four existing skips
+in 34.902s. Production build, i18n and provenance checks also passed. The exact
+Office integration file had first passed all four cases in 4.95s in isolation.
+This resolves the local overlapping-work validation failure; it does not replace
+the original browser reading fixtures or final-head CI.
+
+The final ownership audit confirmed that `current_input` resets at every logical
+turn, and corrective restaging retains only that step's committed contribution
+receipts. Native start still validates the original Context bodies, selected input
+membership and committed emission. Compaction protects those logical Context IDs;
+approved media transformations retain their explicit Derived provenance.
+
+Review200 strict all-target/all-feature Clippy passed. Its complete Rust test run
+uses `RUST_TEST_THREADS=4`, with no concurrent task-owned heavy test/build workload.
+It preserves every original timeout and assertion. Results remain pending here.
+A fresh fetch confirmed main `8cb41624eb2dc2ca87e4409961f42553ceb029cf`, already
+contained in the published branch; no additional merge was needed.
+
+Review200 library result: 4,137 passed, three failed, four existing ignores,
+983.99s. Both the corrected retry-contribution and production media-bound tests
+passed, as did all eight R1/R2 native regressions. The failures were the first
+three `boundary_suites::app_server_file_read` scenarios, each expiring the outer
+30s guard during initial `session/attach` (call10), before tested file operations.
+The short call durations (139us–300ms) do not measure prior fixture/schema setup.
+A cold shared schema initialization under concurrent native stress is a hypothesis,
+not proven by these logs. The entire five-case group then passed in 7.93s using
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=1 cargo test --lib --all-features boundary_suites::app_server_file_read:: -- --nocapture`.
+No guard, workload, assertion, or CI selection was changed. The complete serial
+all-target/all-feature run (review202) is required to validate the integrated
+source without the preceding local concurrency qualification.
+
+Review202 completed: all-target/all-feature Rust passed 4,821 tests, zero failed,
+nine existing ignores with RUST_TEST_THREADS=1; total 3,272.496s. Library 4,140
+passed/four ignored in 2,761.96s; subagent 47 passed, including the original skill
+identity/recomposition regression; Tool 135 passed; provider 179 passed/five ignored.
+The lane checker passed in 15.989s with actual Linux discovery. No source changed
+during this run, and no other task-owned heavy tests/builds ran concurrently.
+Host I/O pressure remained substantial and is recorded separately.
+
+Review203 passed the original skill-identity test alone (one discovered test),
+default `cargo build --bins`, App Server generation/drift and TypeScript,
+`cargo fmt --all -- --check`, and `git diff --check`.
+Review201's first original reading browser selector passed with its unchanged
+300-Attempt workload and 240s preparation budget on the default filesystem.
+Playwright reported one passed in 3.5m and 4.1s for page assertions; the complete
+wrapper (including native/web setup) took 260.172s, which is not fixture duration.
+The independent Fork selector and complete suite remain pending.
+
+The independent Fork-reading selector also passed: one test in 3.2m, page
+assertions 6.2s, complete wrapper 193.437s. The same 300 Attempts/240s limit and
+default filesystem were used; the full 317-case `pnpm --dir web-console test:e2e`
+run began only after both independent selectors passed.
+
+Review201 complete browser result: `pnpm --dir web-console test:e2e` passed
+all 317 cases, zero failures/skips, Playwright 23.2m / wrapper 1,401.974s. Both
+original 300-Attempt reading fixtures passed again inside this full run. The
+default filesystem, pinned browser, one worker, 240s fixture deadline, original
+assertions and screenshot baselines were retained. There were no concurrent
+task-owned heavy builds/tests. Final-head GitHub Actions remains required.

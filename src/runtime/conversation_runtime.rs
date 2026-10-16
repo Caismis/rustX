@@ -5942,13 +5942,43 @@ impl ConversationRuntime {
         attempt_id: &AttemptId,
     ) -> Result<AttemptId, CancelAttemptError> {
         let mut state = self.inner.lock_state();
-        let Some(current) = state
+        if state
             .current_attempt
             .as_ref()
-            .filter(|current| current.attempt_id == *attempt_id)
-        else {
+            .is_none_or(|current| current.attempt_id != *attempt_id)
+        {
             return Err(CancelAttemptError::NoCurrentAttempt);
-        };
+        }
+        self.cancel_attempt_locked(&mut state)
+    }
+
+    /// Selects and cancels the native current attempt under one coordinator lock.
+    ///
+    /// This is the current-attempt control operation used by clients. It does
+    /// not obtain an execution identity from an observation. Selection, the
+    /// exact admitted Goal pause (when required), and cancellation are one
+    /// critical section shared with settlement and successor admission. The
+    /// returned identity belongs to that operation even if settlement and a
+    /// successor admission precede delivery of the acceptance receipt.
+    /// Acceptance does not claim terminal settlement.
+    ///
+    /// # Errors
+    /// Returns [`CancelAttemptError::NoCurrentAttempt`] if no native attempt is
+    /// current, or the same [`CancelAttemptError::GoalPauseFailed`] containment
+    /// result as [`Self::cancel_current_attempt`].
+    pub fn cancel_active_attempt(&self) -> Result<AttemptId, CancelAttemptError> {
+        let mut state = self.inner.lock_state();
+        self.cancel_attempt_locked(&mut state)
+    }
+
+    fn cancel_attempt_locked(
+        &self,
+        state: &mut CoordinatorState,
+    ) -> Result<AttemptId, CancelAttemptError> {
+        let current = state
+            .current_attempt
+            .as_ref()
+            .ok_or(CancelAttemptError::NoCurrentAttempt)?;
         let attempt_id = current.attempt_id.clone();
         let cancellation = current.cancellation.clone();
         let pause = match &current.provenance {
@@ -5972,7 +6002,7 @@ impl ConversationRuntime {
             Some(Ok(Err(error))) => {
                 let diagnostic = error.to_string();
                 self.inner.record_durability_failure(
-                    &mut state,
+                    state,
                     DurableOperation::GoalPause,
                     diagnostic.clone(),
                 );
@@ -8012,7 +8042,7 @@ impl ConversationRuntime {
             .expect("runtime lock")
             .conversation
             .as_ref()
-            .map(|conversation| conversation.ledger().audit_records().to_vec())
+            .map(|conversation| conversation.ledger().audit_records())
     }
 
     /// The runtime-owned Message Ledger records, or `None` while an attempt
@@ -8030,7 +8060,7 @@ impl ConversationRuntime {
             .expect("runtime lock")
             .conversation
             .as_ref()
-            .map(|conversation| conversation.active_ids().to_vec())
+            .map(ConversationState::active_ids)
     }
 
     /// Whether idle maintenance currently owns the conversation state.
@@ -19471,7 +19501,7 @@ mod tests {
                     .freeze_input(
                         store.conversation_id(),
                         &crate::model::ModelRequest {
-                            messages: history.messages,
+                            messages: history.messages.clone(),
                             images: crate::model::images::ResolvedImages::new(),
                             invocation: snapshot.invocation.clone(),
                             tools: snapshot.tool_definitions.clone(),
@@ -19607,7 +19637,7 @@ mod tests {
                     .freeze_input(
                         store.conversation_id(),
                         &crate::model::ModelRequest {
-                            messages: history.messages,
+                            messages: history.messages.clone(),
                             images: crate::model::images::ResolvedImages::new(),
                             invocation: snapshot.invocation.clone(),
                             tools: snapshot.tool_definitions.clone(),

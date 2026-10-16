@@ -65,10 +65,11 @@ mod tests {
             let id = artifacts.put_bounded(&png(size, size)).unwrap();
             let canonical = vec![image(id, 0)];
             let estimator = image_engine(artifacts.clone(), true);
-            let cost = estimator.estimate_model_input(&canonical_input(&canonical), "", &[]);
+            let cost = estimator.estimate_model_input(&canonical_input(&canonical).into(), "", &[]);
             let plain = image_engine(artifacts.clone(), false);
             assert!(
-                cost > plain.estimate_model_input(&canonical_input(&canonical), "", &[]) + 1000
+                cost > plain.estimate_model_input(&canonical_input(&canonical).into(), "", &[])
+                    + 1000
             );
             let database = root.path().join("conversation.sqlite");
             let store = SqliteConversationStore::open(conversation.clone(), &database).unwrap();
@@ -78,7 +79,7 @@ mod tests {
             assert_eq!(
                 cost,
                 estimator.estimate_model_input(
-                    &canonical_input(&reopened.load_canonical().unwrap()),
+                    &canonical_input(&reopened.load_canonical().unwrap()).into(),
                     "",
                     &[]
                 )
@@ -94,12 +95,12 @@ mod tests {
             .unwrap();
             engine.set_image_projection(artifacts, true);
             assert_eq!(
-                engine.estimate_model_input(&canonical_input(&canonical), "", &[]),
+                engine.estimate_model_input(&canonical_input(&canonical).into(), "", &[]),
                 cost
             );
             let projection = engine.build_projection_input(
                 crate::conversation::SurfaceRevision::new(canonical.len() as u64),
-                canonical_input(&canonical),
+                canonical_input(&canonical).into(),
                 &[],
                 None,
                 "",
@@ -137,7 +138,12 @@ mod tests {
             .len(),
             16
         );
-        let anchor = ObservedAnchor::of_model_input(&first, "", &[]);
+        let anchor = ObservedAnchor::of_selected(
+            crate::conversation::SurfaceRevision::new(16),
+            &first.clone().into(),
+            "",
+            &[],
+        );
         let mut projected = canonical_input(&canonical);
         crate::model::images::project(&mut projected, true);
         let resolved = crate::model::images::resolve(&projected, |id| {
@@ -148,7 +154,7 @@ mod tests {
         assert!(!resolved.contains_key(&crate::runtime::ArtifactId::new("artifact_1")));
         assert!(
             anchor
-                .covered_prefix_model_input(&projected, "", &[])
+                .covered_prefix_model_input(&projected.clone().into(), "", &[])
                 .is_none()
         );
         let mut text = canonical_input(&canonical);
@@ -203,7 +209,7 @@ mod tests {
             "test",
             "",
         );
-        request.messages = canonical_input(&[image(id.clone(), 0)]);
+        request.messages = canonical_input(&[image(id.clone(), 0)]).into();
         request.images.insert(id, png(1, 1));
         assert_eq!(
             estimator.estimate_model_input(&request.messages, "", &[]),

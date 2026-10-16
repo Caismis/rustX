@@ -11,6 +11,7 @@
 //! facts, never gives Derived projected content a canonical `MessageId`.
 
 pub mod ledger;
+pub mod selection;
 pub mod surface;
 
 pub use ledger::{LedgerAccess, LedgerError, MessageLedger, message_id_of};
@@ -181,20 +182,17 @@ pub fn recovery_safety(messages: &[MessageBlock]) -> Result<(), RecoverySafetyEr
 
 /// One immutable active Surface snapshot and its keyed canonical bodies.
 ///
-/// `ConversationState::freeze_active_surface` obtains the Surface head once,
-/// then hydrates exactly those active identities from the Message Ledger. It
-/// is a transient read value, never a second mutable visibility authority.
+/// The root shares canonical Ledger allocations selected by the existing Surface.
+/// Capturing it neither hydrates messages nor copies the selected identity list.
+/// It is an immutable read value, never a second mutable visibility authority.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationSurfaceSnapshot {
     /// The exact Surface revision represented by this snapshot.
     pub revision: SurfaceRevision,
     /// The compaction generation represented by this snapshot.
     pub compaction_generation: u64,
-    /// Canonical working-set identities in cache order.
-    pub active_message_ids: Vec<MessageId>,
-    /// Canonical message bodies keyed by the identities above, in the same
-    /// order.
-    pub messages: Vec<MessageBlock>,
+    /// Shared canonical bodies in exact working-set order.
+    pub messages: selection::CanonicalSelection,
 }
 
 /// The one canonical conversation state of a conversation.
@@ -273,15 +271,18 @@ impl ConversationState {
         let mut active_ids = active_ids;
         let mut seen = BTreeSet::new();
         active_ids.retain(|id| seen.insert(id.clone()));
+        let mut selected = selection::CanonicalSelection::default();
         for id in &active_ids {
-            if !ledger.contains(id) {
-                return Err(ConversationError::DanglingSurfaceIdentity(id.clone()));
-            }
+            selected.append(
+                ledger
+                    .shared(id)
+                    .ok_or_else(|| ConversationError::DanglingSurfaceIdentity(id.clone()))?,
+            );
         }
         Ok(Self {
             ledger,
             surface: ConversationSurface::from_current_head(
-                active_ids,
+                selected,
                 revision,
                 compaction_generation,
             ),
@@ -321,7 +322,7 @@ impl ConversationState {
 
     /// The current active ordered message identities.
     #[must_use]
-    pub fn active_ids(&self) -> &[MessageId] {
+    pub fn active_ids(&self) -> Vec<MessageId> {
         self.surface.active()
     }
 
@@ -391,7 +392,8 @@ impl ConversationState {
         debug_assert!(!self.surface.is_active(&id));
         debug_assert!(!self.ledger.contains(&id));
         self.ledger.append_after_validation(prepared.message);
-        self.surface.append_after_validation(id.clone());
+        self.surface
+            .append_after_validation(self.ledger.shared(&id).expect("installed canonical fact"));
         id
     }
 
@@ -407,28 +409,21 @@ impl ConversationState {
     /// Returns [`ConversationError::DanglingSurfaceIdentity`] when a Surface
     /// identity has no committed record.
     pub fn active_messages(&self) -> Result<Vec<MessageBlock>, ConversationError> {
-        self.hydrate(self.surface.active())
+        self.hydrate(&self.surface.active())
     }
 
-    /// Freezes the current canonical working set and hydrates its bodies.
+    /// Freezes the existing canonical Surface root and its revision.
     ///
-    /// The Surface head is read once. Bodies are then resolved only through
-    /// keyed Ledger lookups for the captured active identities; the complete
-    /// Ledger is never enumerated by this path.
+    /// Canonical commit and durable bootstrap resolve Ledger allocations once.
+    /// Subsequent freezes share that immutable selection without enumerating it.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if an active Surface identity cannot be hydrated from
-    /// the canonical Message Ledger.
-    pub fn freeze_active_surface(&self) -> Result<ConversationSurfaceSnapshot, ConversationError> {
-        let head = self.surface.head();
-        let messages = self.hydrate(&head.active_message_ids)?;
-        Ok(ConversationSurfaceSnapshot {
-            revision: head.revision,
-            compaction_generation: head.compaction_generation,
-            active_message_ids: head.active_message_ids,
-            messages,
-        })
+    #[must_use]
+    pub fn freeze_active_surface(&self) -> ConversationSurfaceSnapshot {
+        ConversationSurfaceSnapshot {
+            revision: self.surface.revision(),
+            compaction_generation: self.surface.compaction_generation(),
+            messages: self.surface.selection(),
+        }
     }
 
     /// Hydrates an explicit ordered identity list through keyed lookups.
@@ -546,13 +541,17 @@ mod tests {
         );
     }
     #[test]
-    fn finite_hot_hydration_uses_only_keyed_canonical_reads() {
+    fn frozen_canonical_surface_shares_bodies_without_rehydration() {
         let state = ConversationState::from_messages([user("a", "A"), user("b", "B")]).unwrap();
         state.ledger_access().reset();
-        let snapshot = state.freeze_active_surface().unwrap();
+        let snapshot = state.freeze_active_surface();
         assert_eq!(snapshot.messages.len(), 2);
         assert_eq!(state.ledger_access().enumerations(), 0);
-        assert_eq!(state.ledger_access().keyed_reads(), 2);
+        assert_eq!(state.ledger_access().keyed_reads(), 0);
+        assert!(std::ptr::eq(
+            snapshot.messages.get(&MessageId::new("a")).unwrap(),
+            state.ledger().get(&MessageId::new("a")).unwrap()
+        ));
     }
     #[test]
     fn durable_working_set_keeps_global_commit_frontier_without_historical_hydration() {

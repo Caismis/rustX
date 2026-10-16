@@ -192,19 +192,22 @@ pub(in crate::durable::sqlite) fn tool_definition(
             "original Tool definition identity or first ordinal differs",
         ));
     }
-    let path = serde_json::to_string(&["tools".to_owned(), definition.to_string()])
-        .map_err(|error| storage(error.to_string()))?;
-    let bytes: Option<u64> = connection.query_row(
-        "SELECT f.end-f.start FROM request_observation_fields f WHERE f.source_id=?1 AND f.path_json=?2 AND EXISTS(SELECT 1 FROM request_trace_definitions d WHERE d.source_sequence=?3 AND d.ordinal=?4)",
-        params![start.to_string(),path,start,definition], |row|row.get(0),
-    ).optional().map_err(|error|storage(error.to_string()))?;
+    let path = ["tools".to_owned(), definition.to_string()];
+    let (start_offset, end_offset, _) = super::super::observation_request::field_coordinates(
+        connection,
+        "request_observation_fields",
+        &start.to_string(),
+        &path,
+    )?;
+    let bytes = end_offset
+        .checked_sub(start_offset)
+        .ok_or_else(|| storage("original Tool definition field geometry unavailable"))?;
     Ok(Some(TraceFieldSource::Value {
         field: TraceFieldKind::Definition,
         domain: format!("trace.records.{start}.detail.request.tools"),
         item_offset: definition,
         path: Vec::new(),
-        encoded_bytes: bytes
-            .ok_or_else(|| storage("original Tool definition field layout unavailable"))?,
+        encoded_bytes: bytes,
     }))
 }
 

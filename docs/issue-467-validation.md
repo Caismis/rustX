@@ -13,17 +13,136 @@ semantics in [conversation reading](conversation-reading.md).
 
 ## PR #478 repair and latest-main integration
 
-Status: the final repaired source passes **4,784 Rust tests** (zero failures,
+Historical validation at `b0928347`: the repaired source passed **4,784 Rust tests** (zero failures,
 ten existing ignores) with `RUST_TEST_THREADS=1`, including the new publication
-contention tests and corrected real-process readiness handshakes. The merged
-production/client source also passed **317 browser cases**, locally and in the
-remote Web lane. Strict Clippy, binary build and test-lane discovery pass.
-The merge macOS lane exhausted its existing 70-minute budget during harness
-compilation, before any test execution. The next run serializes Cargo compiler
-jobs while preserving all test settings; a macOS pass is not yet claimed.
+contention tests and corrected real-process readiness handshakes. Earlier merged production/client validation passed **317 browser cases** under
+the filesystem qualifications recorded in the historical sections. That is not
+a passing Web result for `b0928347`. Strict Clippy, binary build and test-lane
+discovery passed for that historical source.
+That head’s Linux contract and boundary lanes passed. Its Web lane
+passed 315 browser cases but exceeded the unchanged preparation budget in both
+300-Attempt reading fixtures; bounded failure diagnostics now retain their exact
+phase and original native process counters. Local exact preparation runs completed
+in 208.378s and 223.145s, which do not override the CI failure. The merge macOS
+lane exhausted its existing 70-minute compilation budget; the follow-up serializes
+compiler jobs and completed native compilation. Its library run found three
+fixture-root failures (3,178 passed): raw macOS TempDir ancestors hit the intended
+no-symlink reader admission before file-identity checks. The fixtures now use
+their exact canonical roots; production admission and assertions are unchanged.
+The external macOS targets were not reached and a new platform run is required.
 [Repair history](issue-467-repair-history.md) records every intervening failure
 and environment qualification. PR #478 remains open for independent review and
 must not be merged by this task.
+
+### Current review corrections (local validation complete; final-head CI pending)
+
+The current correction starts at `b0928347`. Current-attempt cancellation now
+selects and cancels under the native coordinator mutex shared with admission and
+settlement; the Host never consults a published Attempt or prepares observation
+to authorize that control. Exact-ID cancellation retains its native identity check.
+Manual compaction maps all five fields from that invocation’s native
+`ManualCompactionOutcome`, without reading the latest presentation context.
+
+TUI and Web cancellation dispatch use the exact live attachment authority even
+when its observation is unavailable or behind. They do not treat a projected
+Attempt as the command target. Web binds its acknowledgement marker to the
+returned native Attempt identity, and cancellation does not request or await a
+checkpoint refresh. The existing contiguous observation fold owns settlement.
+
+All four `runtime_client::host::tests::native_cancellation_tests::` and four
+`runtime_client::host::tests::compaction_head_tests::` tests pass on the combined
+source. Cancellation proves exact settled-A display versus active native B,
+a held native cancellation receipt across successor admission, real source
+unavailability, and an actually blocked physical read plus held preparation lock.
+Compaction proves actual optional-source failure, valid consecutive compactions
+with a held first receipt, and a lost JSONL response over a Tokio duplex connection.
+The latter is not an OS-pipe test. Model-call and native terminal counts remain exact.
+The unchanged reading fixtures and complete local validation now pass as recorded
+below. New-head CI remains required; historical results are not used as proof
+for the repaired source.
+
+The current incremental Request Source shares augmentation on the native
+selected-input tree. It retains one finite Request root and its original capture
+witness instead of recopying every historical descriptor, field row and content
+segment on each append. The former transient fragment import, message-shape
+packing and `OriginalSpan` request-header implementations have been removed.
+The independent flat byte/header producer remains a test oracle. The current
+contracts and validation requirements are recorded under
+[bounded work and source identity](#bounded-work-and-source-identity).
+
+### Integrated native and client validation (review202)
+
+On the frozen integrated source,
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=1 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features`
+passed **4,821 tests, zero failures, nine existing ignores** in 3,272.496s.
+The library contributed 4,140 passes/four ignores; external provider tests
+contributed 179 passes/five ignored credentialed tests. All 47 subagent tests
+passed, including `definitions::skill_version_identity_is_frozen_across_the_boundary`.
+No live provider test was enabled.
+`cargo run --all-features --example check_test_lanes` passed and confirmed
+Linux contract/boundary discovery and coverage. Strict all-target/all-feature
+Clippy had passed on this same production/test source in review200.
+
+The preceding four-worker run passed 4,137 library tests but failed three initial
+file-read fixture setups under their unchanged 30s guard. All five file-read
+boundary tests then passed in isolation in 7.93s, and again in the complete serial
+run. Their prior failure evidence and unproven cold-validator/contention hypothesis
+remain in the repair history; the serial pass does not claim arbitrary parallel
+scheduling robustness or final-head CI success.
+
+Client checks passed: protocol generation/drift and TypeScript, dev TypeScript
+and 41 tests, TUI TypeScript and 1,163 tests with one existing skip, and Web
+TypeScript plus 2,828 tests with four existing skips. The isolated canonical Web
+production build, i18n and provenance checks passed. The fake provider suite
+passed 55 tests. Both original reading selectors then passed independently on the default
+filesystem with the pinned browser, 300 Attempts and unchanged 240s setup limit:
+distant-reading one pass in 3.5m (page assertions 4.1s); Fork-reading one pass
+in 3.2m (page assertions 6.2s). Wrapper times 260.172s/193.437s include native/web
+setup and are not the fixture durations. The complete `pnpm --dir web-console test:e2e` run then passed all **317 cases**,
+zero failures/skips, in 23.2m (wrapper 1,401.974s), on the default filesystem.
+Both original reading cases passed again in that full run. No fixture timeout,
+workload, screenshot baseline or assertion changed. Final-head CI remains pending.
+
+### Native command regression evidence
+
+| Requirement | Exact deterministic selector | Controlled interleaving and evidence |
+| --- | --- | --- |
+| R1-A: stale settled display, native successor active | `runtime_client::host::tests::native_cancellation_tests::cancellation_selects_native_successor_while_real_source_fault_retains_settled_display` | Native A settles, then a real SQLite trigger refuses optional event-witness capture during genuine B submission/execution. The original published settled-A attempt remains exact while the provider request-count watch proves B was invoked. A separate thread holds observation preparation before the actual cancellation RPC. Its correlated response names native B; original J contains exactly one Completed terminal for A and one Cancelled terminal for B; two model calls total. Unrelated nonattempt cursor advancement is permitted. No native fact, canonical write, or admission receipt is fabricated. |
+| R1-B: successor cannot inherit cancellation | `runtime_client::host::tests::native_cancellation_tests::held_cancellation_receipt_keeps_selected_identity_after_native_successor_admission` | A cfg hook signals only after native cancellation has returned and physically holds the RPC response. The retained native settlement receipt proves A cancelled, then real successor B reaches its parked provider call. Releasing the response returns original request ID 51 and A's identity. A stale exact native cancellation naming A is refused. Releasing B's model gate yields Completed, with one original terminal per attempt and exactly two model calls. |
+| R1-C: unavailable observation is not a cancellation prerequisite | `runtime_client::host::tests::native_cancellation_tests::native_cancellation_remains_available_during_real_observation_source_failure` | The original occupancy Source BLOB is made unavailable through SQLite; the actual subscriber reports typed Unavailable. With observation preparation held, the correlated cancellation RPC succeeds for the exact active native attempt while observation remains unavailable. The native settlement receipt and original J prove one Cancelled terminal, with one model call. The original BLOB is restored for cleanup. |
+| R1-D: blocked physical observation read | `runtime_client::host::tests::native_cancellation_tests::native_cancellation_does_not_join_or_cancel_the_blocked_physical_observation_read` | An existing physical-reader hook signals actual blocked Source work. Observation preparation is also held. Cancellation succeeds and the exact native attempt settles Cancelled while the reader's cancellation signal is still absent. Only subsequent explicit cleanup cancels/releases and joins that original read. One model call and one original Cancelled terminal. |
+| R2-A: committed receipt despite unavailable published context | `runtime_client::host::tests::compaction_head_tests::manual_compaction_receipt_survives_unavailable_published_context` | A real optional `projection_activations.observation_header` capture trigger fails inside its savepoint. Native compaction J and the immutable checkpoint still commit; published latest compaction remains old/absent and checkpoint reads report typed Unavailable. The successful response exactly matches the one original CompactionCompleted outcome and native checkpoint/activation; two model calls and no extra compaction. |
+| R2-B: late A response after valid B commit | `runtime_client::host::tests::compaction_head_tests::manual_compaction_wire_receipt_keeps_a_after_a_valid_successor_b_commits` | A oneshot signals native A's committed outcome and holds its response. A genuine intervening Attempt supplies new history, then B commits through the real endpoint. The published context names B. Releasing and JSON-encoding/decoding A's endpoint response still gives request ID 41 and A's exact original outcome; B's response has ID 42 and B's outcome. Two original compactions and four model calls remain exact. |
+| R2-C: lost response, reconcile without replay | `runtime_client::host::tests::compaction_head_tests::manual_compaction_lost_stdio_response_reconciles_without_replaying_operation` | The real JSONL serve/dispatch/write path runs over `tokio::io::duplex`, not OS pipes or a spawned stdio process. After the native committed-outcome signal, the client is dropped before the held response is released; the writer reports OutputBrokenPipe. Reattachment and the existing checkpoint reconcile that same outcome without another CompactContext request. Original compaction count stays one and model calls stay two. |
+| Existing synchronous compaction publication contract | `runtime_client::host::tests::compaction_head_tests::committed_compaction_head_is_atomic_with_context_while_domain_reads_are_parked` | The actual worker is parked before the second compaction. Its checkpoint and contiguous replay already carry the exact second native head, Source cut and J frontier; one ContextCompacted replay fact, two original completion events and four model calls. Unparking preserves the same head. |
+
+Client cancellation evidence on review189 includes TUI
+`native cancellation forwards under stale unavailable observation and returns its actual owner`
+and Web `unavailable stale A forwards cancellation and retains native B receipt without a repair read`.
+They inject unavailable observation while keeping the real attachment authority,
+then assert the exact native acceptance identity and no checkpoint request.
+`native B acknowledgement survives stale A folds and permits a genuine observed successor`
+holds the receipt/observation order and proves unrelated stale-A publication does
+not mislabel or discard B's acknowledgement. The ordinary-RPC saturation test
+keeps those slots occupied while cancellation resolves through its reserved lane,
+with zero observation rereads. Retired attachment dispatch remains refused.
+
+The earlier 30-test fragment group and eight request-shape passes describe the
+pre-incremental implementation. Its header-emission and Native imported-shape
+selectors were removed with that implementation and are not current acceptance
+proofs. Current Source tests compare the composed representation with independent
+flat serialization, every field, page and original range, and preserve reopen,
+corruption, native-commit and original-witness checks. Native default structural
+encoding, path and physical source-copy tests remain active.
+
+On the compiled epoch-153 artifact, seven of the eight migrated request-shape
+tests passed. The remaining test imposed a global successor-capture failure after
+a selected leaf was corrupted; the current test instead proves that the successor
+retains the original expected hash and that selecting the corrupted leaf still
+fails. That test correction and the subsequent removal of retired code require a
+fresh integrated run. The exact 20-by-4 Journal/rank admission matrix, normalized
+Request/archive paths and persistent-manifest scaling tests are current selectors
+below; no historical full-run result validates the final combined source.
 
 ### Repository and ownership
 
@@ -72,36 +191,58 @@ by original registration/activation. Real Child Unix recovery preserves activati
 and never falls back to a second Parent projection or semantic replay.
 
 Current independent versions: App Server **50**, WebSocket **rustx.app-server.v50**,
-Runtime Client **71**, SQLite **64**, Runtime Event **1**, Subagent Control **33**,
+Runtime Client **71**, SQLite **65**, Runtime Event **1**, Subagent Control **33**,
 private Product Host **4**, Session catalog **16**. Generated contracts agree.
 
 ### Bounded work and source identity
 
-Request Source indexing reuses only bounded immutable relative geometry. Every
-request retains its own original bytes, original producer/cut witness and readable
-extent. Static metadata is capped at 64 KiB/512 facts; each request-owned generated
-provenance hole is capped at 16 KiB/32 facts. Neither pack contains replacement
-content. SQL type/length checks precede BLOB allocation; hashes, exact original
-capture witnesses and geometry checks precede use. Corruption cannot be laundered
-through a later request. Unsupported/oversized inputs keep the existing Own layout.
-Optional display-index failure rolls back its savepoint without refusing native
-request, Journal or canonical commitment.
+Schema 65 replaces the prior per-Request copied segments and shape packs with
+one native persistent selected-input tree and optional Source augmentation on
+those same nodes. Request metadata binds the exact root; full historical input is
+materialized only by explicit consumers. Publication and terminal checks use a
+metadata-only path without selected-message hydration. Native semantic SHA and provider input identity
+remain unchanged. SQL mutation certificates and post-INSERT validation retain
+canonical trigger rejection and rollback behavior.
 
-Store point/range reads admit one bounded metadata BLOB; a message-root page may
-admit two. The tested selected-field public route reads at most three metadata
-BLOBs. Each underlying range operation reads at most two original 64 KiB
-segments; a composed ValueRead may perform up to six segment reads across its
-header, optional one-item page and range operations. A 32-result page may normalize
-32 bounded 16 KiB headers. These are distinct primitive and composed-route bounds,
-not a two-segment bound for every RPC. Canonical/publication frontiers and original
-byte-oriented range semantics are unchanged.
+The same immutable compiled root now survives staging, selected-input assembly,
+context anchors, default measurement, native Request commitment and provider input.
+Exact incremental SHA state extends only for a certified append; edits, reordered
+selection, changed media and compaction invalidate that evidence. Public fingerprint
+algorithms and flat provider wire encoding are unchanged. Arbitrary estimators
+still receive the whole original input; only the established JSON-byte estimator
+uses the exact aggregate with its original rounding. Post-COMMIT evidence binds
+the exact prepared values rather than reconstructing the whole Request a second
+time. Canonical contributor snapshots separately share the existing Ledger bodies
+through the Surface's exact selection; they never substitute model Derived input.
+
+Incremental selected-input and Source maintenance does not make all request work
+constant. Provider request materialization and exact wire fingerprinting still
+visit actual input. Exact per-Request Tool association metadata is also serialized
+into each Request and decoded by publication open/terminal/settlement checks;
+ordinary frame staging does not perform that metadata read. The native validated
+association proof removes repeated canonical-body validation, but does not remove
+this metadata cost. Production observation Source omits the association array and
+serves its own bounded authenticated pages. The scaling evidence must distinguish
+these costs rather than claim constant work for an entire Tool-bearing request.
+
+Source roots retain original capture witnesses and bind exact native identities.
+Fragments are authenticated pages capped at 64 KiB, with fragment depth below 16
+and native path height at most 32. Range reads emit at most 64 pieces and return an
+advancing partial chunk when needed; previews admit at most 512 pieces and retain
+the 32-node display budget. The old schema-64 two-segment bound is retired rather
+than attributed to composed reads. Tests count actual page, node and metadata
+work and compare every original byte, field and continuation against the old
+serialization oracle. Optional Source failure still rolls back independently of
+native Request, canonical and Journal commitment. Authenticating a reused subtree
+also follows its original capture path: worst-case node work can scale with
+changed-path depth times origin-path depth, each bounded by 32. The implementation
+does not claim a single-path visit count or maintain another cross-request cache.
 
 The source-copy path pins one original file owner, reads at most 64 KiB at a time,
-and copies only its certified extent. Certified root finalization avoids duplicate
-SQL updates, with actual update-counter and uncached-layout oracles. Provider
-outcome and publication P/U/C/audit validation reuse the same already-validated
-request row inside one Immediate transaction; original integrity, start, envelope,
-outcome and error-precedence checks remain. No cross-transaction cache is added.
+and copies only its certified extent. Physical ownership remains with that read
+until termination. The new incremental storage tests and browser scaling evidence
+must pass on the integrated source before these changes are treated as validated;
+previous full-run passes below belong to the earlier source.
 
 Prepared capability and Trace heads retain bounded normalized DTOs and their exact
 encoded/conservative admission charges under their original owner. Changed records
@@ -146,16 +287,28 @@ Opening-adoption regression selectors (six Store tests and one production-wire/F
 | `a_projection_summary_without_adoption_cannot_invent_a_retry_opening` | A real committed context projection and frozen Summary without adoption confer no retry authority. |
 | `opening_adoption_retry_is_identical_in_live_wire_and_fork_lineage_after_steering` | Opening A, first request, later steering B, second request and settlement use the production bounded transcript serializer; real native lineage/Fork bootstrap preserves original A/C1 and execution origin without executing the copied Attempt. |
 
-Additional bounded-work regression selectors:
+Additional bounded-work regression selectors follow. Unqualified composed-Source
+selectors use `durable::sqlite::tests::request_fragment_tests::`; the three
+unqualified same-transaction validation selectors and normalized load/archive
+selectors use `durable::sqlite::tests::request_snapshot_validation_tests::`.
+This is a current proof directory, not a claim that the final integrated run has
+completed.
 
 | Selector | Proof |
 | --- | --- |
-| `t08_t14_t19_packed_message_hole_facts_reconstruct_every_default_field_and_original_byte` | Independent uncached full field/page/range reconstruction preserves every original byte. |
-| `t08_t12_t19_packed_request_holes_reject_corruption_before_allocation_and_restore_exactly` | SQL admission bounds and exact restored metadata; no corrupt-reference expansion. |
-| `t10_t12_t19_packed_hole_geometry_cannot_be_rehashed_or_laundered_into_new_requests` | Original capture witness prevents rebasing and later-request laundering. |
-| `t10_t14_t19_packed_hole_update_failure_never_refuses_native_request_or_journal` | Optional-index savepoint failure leaves native commitments intact. |
-| `t08_t14_t19_certified_request_roots_finalize_once_with_exact_legacy_geometry_and_witness` | Actual SQL update counters plus complete legacy geometry/byte oracle, including Own fallback. |
-| `t10_t14_t19_certified_root_finalization_failure_rolls_back_only_optional_source` | Actual SQL failure trigger and healthy subsequent capture; no native rollback. |
+| `durable::sqlite::tests::request_fragment_tests::t08_t12_t14_t19_t20_canonical_fragments_match_full_source_every_field_and_original_range` | Independent flat producer versus composed Source: every original byte, selected field and advancing page/range. |
+| `t08_t12_t19_parametric_request_holes_reject_root_corruption_before_allocation_and_restore_exactly` | SQL admission bounds and exact restored root metadata; no corrupt-reference expansion. |
+| `t10_t12_t19_parametric_hole_identity_cannot_be_rehashed_or_laundered_into_new_requests` | Original capture witness prevents rebasing and later-request laundering. |
+| `t10_t14_t19_parametric_root_insert_failure_preserves_native_request_and_recovers_missing_augmentation` | Optional-index savepoint failure leaves native commitments intact. |
+| `t08_t19_exact_j_rank_pair_variants_preserve_admission_and_every_original_byte_at_the_16k_boundary` | Independent full producer for all 80 Journal/rank width pairs, including equal-width sums with different admission outcomes. |
+| `t08_t14_t19_certified_request_roots_finalize_once_with_exact_legacy_geometry_and_witness` | Current composed root geometry and original witness versus the independent flat oracle. The historical selector name remains; retired packed-shape finalization is not exercised. |
+| `t10_t14_t19_certified_root_finalization_failure_rolls_back_only_optional_source` | Actual root-insert failure trigger and healthy subsequent capture; no native rollback. |
+| `model::selected_input::tests::selected_append_insert_replace_share_old_leaves_with_logarithmic_actual_node_work` | Persistent-root sharing and actual leaf/branch allocation counters at 100, 300, 1,000 and the 8,192-item boundary. |
+| `durable::sqlite::tests::manifest_store_tests::native_manifest_warm_store_appends_are_delta_and_depth_bounded_at_100_300_1000` | Native warm append work and original full-input identity, without historical input reconstruction. |
+| `durable::sqlite::tests::request_snapshot_validation_tests::normalized_request_metadata_publication_never_hydrates_selected_input_bodies` | SQLite authorizer refuses original input-body reads while scalar publication validation succeeds; explicit historical reconstruction still requires those bodies. |
+| `normalized_request_resource_budget_charges_metadata_and_the_exact_flat_input_array` and `archived_normalized_request_preserves_the_exact_original_flat_snapshot` | Full-load budget boundary and exact archived original flat Snapshot JSON after normalized storage. |
+| `normalized_request_metadata_budget_rejects_before_returning_any_owned_json` | SQL rejects metadata above the caller budget before returning an owned String; counters distinguish metadata rejection, exact metadata admission and full-budget reconstruction. |
+| `normalized_request_digest_guards_every_reader_before_materializing_malformed_cells` | Every native Request digest reader admits only a 64-byte text cell; corrupt-size/type rejection returns zero owned digest bytes, preserves J and retains exact reconstruction after restoration. |
 | `t14_t19_t20_provider_outcomes_decode_the_same_transaction_snapshot_once` | Old two-read versus new one-read materialization counters, for success and failure. |
 | `t14_t19_snapshot_reuse_preserves_original_provider_validation_errors_and_precedence` | Independent original-path oracle across twelve malformed/foreign/duplicate cases. |
 | `t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot` | Actual public P/U/C/audit transactions retain all native start/outcome checks. |
@@ -383,7 +536,7 @@ do not prepare the worker or drain its queued facts. The parked-worker proof is
 | --- | --- |
 | Complete transport record | `app_server/transport`: 1,048,576 encoded bytes including envelope/ID/escaping. |
 | Checkpoint | `runtime_client/checkpoint.rs`: 786,432 target bytes; item budget 16,384; ordinary page 32 items; native head 8 items; two attempts under one five-second deadline. Final encoding still checks aggregate size. |
-| Source byte window | `durable/sqlite/content.rs`: 65,536 returned decoded bytes; SQL `substr` over at most two finite segments. Metadata reads have their own finite-column guards; small replies alone are not the work bound. |
+| Source byte window | Ordinary segmented canonical/Journal/state sources: 65,536 returned decoded bytes and at most two finite segment rows. Composed Request Source: at most 64 emitted pieces per range, possibly a shorter positive chunk; authenticated pages ≤65,536 bytes, fragment depth <16 and native height ≤32. Previews admit at most 512 pieces under the 32-node display budget. Metadata has independent finite-column guards. |
 | Native Replay | `runtime_client/projection.rs`: 4,096 records and 16 MiB; initial-cut evidence is charged to this owner and expires with its Replay cursor. A retained Trace cache separately pins only its actual represented cut. |
 | Request admission | Per connection: eight Observe, six ordinary and two control associations. The existing shared AppServerHost residual-work counter separately reserves controls at `max_connections × 14` ordinary / `max_connections × 16` total; retired connections cannot free still-running operations. |
 | Child inspection | `ClientInner.inspection_capacity`: eight physical inspection permits. One admission-time 15-second deadline survives Registry, Unix initialization, materialization and fallback. Blocking Source work owns its permit until physical exit; the Unix listener also bounds and reaps its workset. |
@@ -537,8 +690,8 @@ absorption and explicit Source unavailability. The second retains original
 Assistant C bytes, mandatory canonical-call ownership and commit sequence, and
 the actual Tool occurrence despite derived Assistant/Tool-coordinate failures.
 Both verify a subsequent unfaulted native event has available Source evidence;
-no canonical Tool result or execution settlement is invented. These focused
-passes do not establish the pending full-suite or browser results.
+no canonical Tool result or execution settlement is invented. At that historical stage, these focused passes did not establish the then-pending
+full-suite or browser results. Current integrated results are recorded above.
 
 Recoverable readiness has a separate existing owner flag.
 `observation_readiness_missing` fences a row until `observe_journal` has installed
@@ -551,8 +704,8 @@ unavailable. The deterministic regressions are
 and
 `durable::sqlite::tests::t10_t19_t20_readiness_repair_preserves_independent_auxiliary_failure`.
 The first exposed the stale marker in the epoch-102 full run; the repaired
-implementation and strengthened cases are compiled in 104. Their presence in
-discovery is not a substitute for the pending current full Rust execution.
+implementation and strengthened cases are compiled in 104. At that historical stage, their presence in discovery did not substitute for
+full execution. The current integrated run executes both regressions.
 
 The epoch-95 retained delivery database isolated a separate healthy-path failure:
 generic event-field paging interpreted original Tool result properties named
@@ -946,7 +1099,7 @@ are liveness guards, never race evidence.
 | T05 | `protocol/app-server/observation.ts` ObservationChain, `tui/test/reconnect-observation.test.ts`, `local_runtime::session_runtime_manager::tests::transports::t17_partial_event_disconnect_replays_from_locally_applied_cursor` (`tests/scripted/app_server/transports.rs`), Child observation/hide/reopen tests | 05, 06, 08, 14, 17 | Exact native cursor identity, contiguous fold and locally Applied reconnect cursor; deferred content is unnecessary for advancement. |
 | T06 | `runtime_client::projection::tests::t06_t14_oversized_transition_is_one_foldable_checkpoint_and_converges`, `runtime_client::host::tests::t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exhaustion`, real WebSocket oversized-notification recovery in `tests/scripted/app_server/oversized_notification.rs` | 02, 05, 06, 16 | Native publication constructs one complete bounded transition. A deterministic transport-budget fault fences the affected registration; the independent checkpoint includes the original native canonical commitment and a fresh subscription resumes contiguously while held execution and a sibling Session continue. |
 | T07 | `local_runtime::session_runtime_manager::tests::transports::t07_oversized_controlled_response_keeps_publication_owner_at_websocket_handoff`, existing Delivery Access acceptance/cancel/revoke tests | 01, 07, 15 | Actual final tungstenite handoff; original publication owner arbitrates substituted errors and exactly one accepted response. |
-| T08 | `publication::t08_large_canonical_content_exact_byte_chunks_survive_restart` (`--test durable`), `boundary_suites::durable::content::t08_t20_content_range_reads_touch_at_most_two_finite_sqlite_rows`, `boundary_suites::durable::content::t08_t20_request_source_ranges_hold_only_two_finite_native_blob_rows`, `boundary_suites::durable::content::t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable`, `durable::sqlite::tests::t08_t14_t19_agent_statistics_use_fixed_headers_with_giant_original_bodies`, `runtime_client::host::tests::pure_read_tests::t08_t14_t19_pages_and_value_reads_leave_native_progress_queued`; `durable::sqlite::tests::t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_bodies` | 02, 10, 11, 12, 14, 16 | Text/raw/CanonicalJson use real SQLite BLOB ranges ≤65,536 decoded bytes and ≤2 finite rows. Binary uses frozen retained ManagedArtifactStore authority with positioned reads under its shared lock. Statistics read one ≤16 KiB original-J aggregate and no full event/request/message bodies. Exact bytes survive reopen. New finite-head selectors are listed in the [epoch-107 proof directory](#epoch-107-finite-inspection-proof-directory): original tiny/giant Tool payload, result and frozen Schema, canonical-kind dispatch and bounded Store-only source reads; all 14 additions passed in the exact epoch-108 run. |
+| T08 | `publication::t08_large_canonical_content_exact_byte_chunks_survive_restart` (`--test durable`), `boundary_suites::durable::content::t08_t20_content_range_reads_touch_at_most_two_finite_sqlite_rows`, `boundary_suites::durable::content::t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages`, `boundary_suites::durable::content::t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable`, `durable::sqlite::tests::t08_t14_t19_agent_statistics_use_fixed_headers_with_giant_original_bodies`, `runtime_client::host::tests::pure_read_tests::t08_t14_t19_pages_and_value_reads_leave_native_progress_queued`; `durable::sqlite::tests::t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_bodies` | 02, 10, 11, 12, 14, 16 | Ordinary segmented Text/raw/CanonicalJson ranges return ≤65,536 decoded bytes from ≤2 finite rows. The Request scalar range selector checks actual composed-page work: ≤160 page handoffs of ≤64 KiB, one ≤16 KiB root, no native-node traversal or header decoding for its scalar-only fixture, exact bytes and advancing chunks. General composed reads retain the separate ≤64-piece bound; the retired two-segment representation is not asserted. Binary uses frozen retained ManagedArtifactStore authority with positioned reads under its shared lock. Statistics read one ≤16 KiB original-J aggregate and no full event/request/message bodies. Exact bytes survive reopen. New finite-head selectors are listed in the [epoch-107 proof directory](#epoch-107-finite-inspection-proof-directory): original tiny/giant Tool payload, result and frozen Schema, canonical-kind dispatch and bounded Store-only source reads; all 14 additions passed in the exact epoch-108 run. |
 | T09 | `boundary_suites::durable::content::t09_t12_pending_edits_never_alias_immutable_canonical_content`, `publication::t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier`, `web-console/test/trace-deferred-detail.test.tsx`: exact selected-window extent/representation and late-owner rejection | 09, 10, 12, 15 | Native revision/stream replacement with old reads in flight; old references remain fixed or explicitly expire. |
 | T10 | `app_server::t10_stdio_cli_eof_preserves_gated_attempt_and_original_canonical_commit` (`--test process`), `local_runtime::session_runtime_manager::tests::transports::adapter_disconnect_preserves_active_execution_and_replacement_authority`, `local_runtime::subagent_child::tests::t10_t18_t19_closed_observation_source_preserves_native_child_completion`, real Web/TUI parity | 01, 13, 17 | Provider/Tool gates and actual carrier/listener close; original incarnation, activation, request counts and settlement remain authoritative. |
 | T11 | `boundary_suites::subagent::conformance::observation::t11_t12_t20_nested_pending_reads_follow_authenticated_direct_routes_over_two_unix_peers`, `web-console/test/bounded-observation-native.test.ts` (real disconnect and byte-exact WebUI/TUI recovery), `tui/test/integration.test.ts` (same operations/projection over Stdio and WebSocket), `local_runtime::session_runtime_manager::tests::transports::t11_t15_effective_configuration_ranges_survive_model_commit_on_real_websocket` | 05, 08, 10, 13, 17 | Actual Root/Middle/Leaf Unix routing and client carriers; many bounded configuration chunks preserve unrelated held execution and carrier progress. The real Child live/cold finite-head selector and native large-J identity proof in the [epoch-107 directory](#epoch-107-finite-inspection-proof-directory) cover shared native routes. All 14 directory proofs passed at 108. The four real TUI Root Delivery/Child Stdio/WebSocket cases passed at 111 with zero skips. The final 113 Child cases additionally select the actual canonical Tool result collection and reconstruct its original questionnaire bytes; browser114 Chat separately validates the advertised image block and original binary bytes, preview and reconnect. |
@@ -1485,3 +1638,42 @@ must be reported from their actual run states, independently of these local pass
 Pre-review staged-tree `git diff --cached --check` and protocol regeneration/drift checks
 passed. The index contains v48 generated contracts and all intended source/tests,
 with v47 artifacts removed and no logs, databases or browser recordings staged.
+
+
+### Controlled full-chain measurements (review190)
+
+The default debug App Server binary completed the same 1000-Attempt measurement
+scenario plus exact Source landing, Fork and detach in 600.121 seconds, versus
+864.990 seconds for the preserved pre-full-chain review172 binary. Physical
+cleanup completed at 602.350 seconds; the original process and temporary storage
+were absent. Native CPU fell from 972.04 to 669.45 seconds. Physical writes stayed
+approximately 7.85 GB: the change does not claim to eliminate durable writes.
+There were no concurrent task-owned builds/tests. Both runs recorded high and
+variable host I/O pressure, so these are qualified measurements, not a guaranteed
+speedup on other machines. The formal browser fixture remains 300 Attempts/240s.
+
+| Attempt bucket | Preserved baseline median ms | Shared full-chain median ms |
+| --- | ---: | ---: |
+| 1–50 | 538.731 | 516.556 |
+| 251–300 | 715.535 | 554.062 |
+| 501–550 | 836.302 | 574.533 |
+| 751–800 | 974.549 | 582.782 |
+| 951–1000 | 1093.178 | 602.734 |
+
+The separate 300-Attempt scripted native profile passed with 600 preparation
+leaf visits, zero old items revisited, zero estimator materialized items and
+144,709 incremental hash bytes. Its measured Attempt interval was 222.121s,
+compared with 201.407s in review174; overall scripted elapsed time did **not**
+improve in this run. Inclusive prepare/start/commit/evidence phases were
+4.852/90.565/84.602/0.071 seconds; the former post-commit reconstruction phase
+was 19.304 seconds. These phases overlap and must not be added.
+
+Source consumed 73.017 inclusive seconds: current-request scalar metadata capture
+52.318s, capture18.975s (including new-leaf15.762s and authentication1.798s),
+paths0.859s and length0.786s. Scalar capture omits messages and its per25-Request
+cost stayed approximately4.33–4.44s. It is measured per-request work, not evidence
+of old-message traversal or justification for a new cross-request cache. Source
+query counts include authentication counts and are themselves included in native
+index counts. No old canonical bytes, publication checks or storage exclusion
+were removed to obtain these results. The complete native/client/browser validation above is separate from these
+qualified performance measurements.

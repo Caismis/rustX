@@ -77,10 +77,10 @@ pub use crate::context::contribution::ContributionStart;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
     /// Associations in actual-request coordinates, distinct from checkpoint and physical call coordinates.
-    pub tool_associations: Vec<crate::model::occurrence::ActualRequestToolAssociation>,
+    pub tool_associations: crate::model::occurrence::FrozenToolAssociations,
     pub history_cut: crate::durable::projection::RequestHistoryCut,
     /// Ordered frozen input. Reconstruction never selects history or transforms it.
-    pub input: Vec<crate::model::projected::FrozenModelInput>,
+    pub input: crate::model::SelectedInputManifest,
     /// Image bytes selected before start, retained for exact reconstruction.
     pub images: crate::model::images::ResolvedImages,
     /// Semantic input identity, independent of actual-request identities.
@@ -195,6 +195,38 @@ impl std::io::Write for InputByteBudget {
     }
 }
 
+fn validate_frozen_budget(request: &ModelRequest) -> Result<(), String> {
+    if request.messages.len() > MAX_FROZEN_INPUT_ITEMS {
+        return Err("frozen input exceeds item budget".into());
+    }
+    if request
+        .images
+        .values()
+        .try_fold(0usize, |total, bytes| total.checked_add(bytes.len()))
+        .is_none_or(|total| total > MAX_FROZEN_IMAGE_BYTES)
+    {
+        return Err("frozen input exceeds image byte budget".into());
+    }
+    let mut bytes = InputByteBudget {
+        remaining: MAX_FROZEN_DERIVED_BYTES,
+    };
+    let mut provenance = MAX_FROZEN_PROVENANCE_REFS;
+    for message in &request.messages {
+        if let ModelInputMessage::Derived(derived) = message {
+            provenance = provenance
+                .checked_sub(
+                    derived
+                        .sources
+                        .len()
+                        .saturating_add(derived.checkpoint_sources.len()),
+                )
+                .ok_or("frozen input exceeds provenance budget")?;
+            serde_json::to_writer(&mut bytes, derived)
+                .map_err(|_| "frozen Derived input exceeds byte budget")?;
+        }
+    }
+    Ok(())
+}
 impl RequestSnapshot {
     /// Builds the frozen snapshot from the exact effective values used to
     /// create a primary request.
@@ -220,7 +252,7 @@ impl RequestSnapshot {
         let semantic_input_fingerprint = ModelRequest {
             images: crate::model::images::ResolvedImages::new(),
             invocation: invocation.clone(),
-            messages: Vec::new(),
+            messages: crate::model::SelectedModelInput::default(),
             tools: tool_definitions.clone(),
             effective_system_prompt: effective_system_prompt.clone(),
             continuation: continuation.clone(),
@@ -228,7 +260,7 @@ impl RequestSnapshot {
         }
         .semantic_input_fingerprint();
         Self {
-            tool_associations: Vec::new(),
+            tool_associations: Vec::new().into(),
             history_cut: crate::durable::projection::RequestHistoryCut {
                 ledger: crate::context::resources::LedgerFrontier(
                     canonical_frontier
@@ -239,7 +271,7 @@ impl RequestSnapshot {
                 activation: crate::context::checkpoint::ProjectionActivationId(0),
                 base_frontier: crate::context::resources::LedgerFrontier(0),
             },
-            input: Vec::new(),
+            input: crate::model::SelectedInputManifest::default(),
             images: crate::model::images::ResolvedImages::new(),
             semantic_input_fingerprint,
             request_id: identity.request_id(),
@@ -296,11 +328,35 @@ impl RequestSnapshot {
         conversation: &crate::runtime::identity::ConversationId,
         request: &ModelRequest,
     ) -> Result<(), String> {
-        use crate::model::projected::{CanonicalMessageRef, FrozenModelInput};
-        request.continuation_boundary()?;
-        if request.messages.len() > MAX_FROZEN_INPUT_ITEMS {
-            return Err("frozen input exceeds item budget".into());
+        validate_frozen_budget(request)?;
+        let selected = request.messages.freeze(conversation);
+        self.freeze_selected_input(conversation, request, &selected)?;
+        self.tool_associations = crate::model::occurrence::canonical_associations(
+            conversation,
+            &self.request_id,
+            request,
+        )
+        .unwrap_or_default()
+        .into();
+        Ok(())
+    }
+
+    /// Freeze the exact immutable selection carried by native request assembly.
+    /// The native producer updates this handle at the same insertion/media edit
+    /// boundary as the request. External callers use `freeze_input`.
+    pub(crate) fn freeze_selected_input(
+        &mut self,
+        _conversation: &crate::runtime::identity::ConversationId,
+        request: &ModelRequest,
+        selected: &crate::model::SelectedInputManifest,
+    ) -> Result<(), String> {
+        #[cfg(test)]
+        let _reads = super::selected_input::PreparationReads::new();
+        if !selected.messages().same_input(&request.messages) {
+            return Err("native selected input count disagrees with request".into());
         }
+        request.continuation_boundary()?;
+        selected.validate_budget()?;
         if request
             .images
             .values()
@@ -309,45 +365,14 @@ impl RequestSnapshot {
         {
             return Err("frozen input exceeds image byte budget".into());
         }
-        let mut bytes = InputByteBudget {
-            remaining: MAX_FROZEN_DERIVED_BYTES,
-        };
-        let mut provenance = MAX_FROZEN_PROVENANCE_REFS;
-        for message in &request.messages {
-            if let ModelInputMessage::Derived(derived) = message {
-                provenance = provenance
-                    .checked_sub(
-                        derived
-                            .sources
-                            .len()
-                            .saturating_add(derived.checkpoint_sources.len()),
-                    )
-                    .ok_or("frozen input exceeds provenance budget")?;
-                serde_json::to_writer(&mut bytes, derived)
-                    .map_err(|_| "frozen Derived input exceeds byte budget")?;
-            }
-        }
-        self.input = request
-            .messages
-            .iter()
-            .map(|message| match message {
-                ModelInputMessage::Canonical(m) => {
-                    FrozenModelInput::Original(CanonicalMessageRef::of(conversation, m))
-                }
-                ModelInputMessage::Derived(m) => FrozenModelInput::Derived(m.clone()),
-                ModelInputMessage::RequestOnly(m) => FrozenModelInput::RequestOnly(m.clone()),
-            })
-            .collect();
+        self.input = selected.clone();
         self.images.clone_from(&request.images);
         self.continuation_source
             .clone_from(&request.continuation_source);
-        self.tool_associations = crate::model::occurrence::canonical_associations(
-            conversation,
-            &self.request_id,
-            request,
-        )
-        .unwrap_or_default();
-        self.semantic_input_fingerprint = request.semantic_input_fingerprint();
+        self.semantic_input_fingerprint = selected.semantic_digest().map_or_else(
+            || request.semantic_input_fingerprint(),
+            |messages| request.semantic_input_fingerprint_with_messages(&messages),
+        );
         Ok(())
     }
 
@@ -386,7 +411,7 @@ impl RequestSnapshot {
         let request = ModelRequest {
             images: self.images.clone(),
             invocation: self.invocation.clone(),
-            messages,
+            messages: messages.into(),
             tools: self.tool_definitions.clone(),
             effective_system_prompt: self.effective_system_prompt.clone(),
             continuation: self.continuation.clone(),
@@ -407,6 +432,24 @@ impl RequestSnapshot {
             .continuation_boundary()
             .map_err(RequestReconstructionError::Conversation)?;
         Ok(request)
+    }
+
+    /// Checks native scalar metadata against the certified unfinished flat SHA.
+    pub(crate) fn selected_fingerprint_matches(&self) -> bool {
+        use sha2::{Digest, Sha256};
+        let Some(messages) = self.input.semantic_digest() else {
+            return false;
+        };
+        let bytes = serde_json::to_vec(&(
+            messages,
+            &self.images,
+            &self.effective_system_prompt,
+            &self.tool_definitions,
+            &self.invocation,
+            &self.continuation,
+        ))
+        .expect("native request metadata serializes");
+        format!("{:x}", Sha256::digest(bytes)) == self.semantic_input_fingerprint
     }
 
     /// Reconstruct with an already retained finite set of immutable dependencies.

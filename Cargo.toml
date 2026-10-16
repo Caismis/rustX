@@ -81,6 +81,7 @@ serde_path_to_error = "0.1"
 toml = "0.8"
 url = "2"
 sha2 = "0.10"
+imbl = "7.0.0"
 base64 = "0.22"
 # Bounded validation of native managed PNG image outputs.
 png = "0.18.1"
@@ -105,7 +106,7 @@ schemars = { version = "1", features = ["chrono04"] }
 tempfile = "3.27.0"
 # The M8 durability backend (Issue #63 / #11). `bundled` compiles the SQLite
 # amalgamation so no system libsqlite3 is required on any CI platform.
-rusqlite = { version = "0.32", features = ["bundled", "hooks", "functions"] }
+rusqlite = { version = "0.32", features = ["bundled", "hooks", "functions", "preupdate_hook"] }
 # The parser-only document decode backend behind native Read (Issue #48).
 # rustX owns the supported-format whitelist (`.pdf`, `.docx`, `.xlsx`,
 # `.pptx`), the path contract, and all extraction policy; xberg only decodes.

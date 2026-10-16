@@ -302,7 +302,7 @@ fn reconstruct_at(host: &RuntimeClientHost, index: usize) -> (RequestSnapshot, M
 }
 
 /// Only provider-visible typed content, excluding immutable source provenance.
-fn request_wire(messages: &[rustx::model::ModelInputMessage]) -> String {
+fn request_wire(messages: &rustx::model::SelectedModelInput) -> String {
     serde_json::to_string(
         &messages
             .iter()
@@ -326,7 +326,7 @@ fn projection_count(store: &dyn rustx::durable::ConversationStore) -> usize {
 }
 
 /// The same assertion over the provider-neutral request representation.
-fn mixed_compaction_summaries(messages: &[rustx::model::ModelInputMessage]) -> usize {
+fn mixed_compaction_summaries(messages: &rustx::model::SelectedModelInput) -> usize {
     messages
         .iter()
         .filter(|message| {
@@ -352,7 +352,7 @@ fn is_agent_status(message: &MessageBlock) -> bool {
 
 /// Every tool call in one message list has its result, every result follows
 /// its call, and neither ever appears without the other.
-fn assert_tool_units_complete(messages: &[rustx::model::ModelInputMessage], context: &str) {
+fn assert_tool_units_complete(messages: &rustx::model::SelectedModelInput, context: &str) {
     let mut calls: Vec<String> = Vec::new();
     let mut results: Vec<String> = Vec::new();
     for message in messages {

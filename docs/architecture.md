@@ -216,7 +216,20 @@ There is no `ConversationRecord`, full transcript table, request-message
 copy, generic repository, or second durable history. Canonical message bodies
 are stored once in the Ledger. A historical request reconstructs its exact frozen input and immutable dependencies. Checkpoint items select context independently of canonical append bookkeeping.
 
-The current SQLite development schema is 60, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Older schemas are refused without migration.
+In memory, the canonical Surface shares immutable Ledger body allocations in an
+ordered persistent selection. Its status-generation and ordinary-message-count
+indexes advance with canonical append, or rebuild from the exact durable
+selection during bootstrap. A contributor captures that root and its revision;
+it does not hydrate all prior bodies on each turn. This canonical selection is
+separate from compiled Original/Derived model input. The compiled immutable input
+root passes through context preparation, exact observation-anchor comparison,
+measurement and request assembly. Explicit provider encoders may enumerate the
+actual request; observation and preparation do not flatten it merely to pass it
+to another owner. The default estimator caches exact model-visible JSON byte
+lengths and rounds the complete aggregate once. Arbitrary estimators retain their
+complete-input contract; additivity is never assumed.
+
+The current SQLite development schema is 65, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Older schemas are refused without migration.
 Version 51 (Issue #462) binds every Agent and Workflow to the shared Session
 workspace: ownership facts carry one absolute workspace path, and Agent
 worktree disposal, Workflow workspace ownership, Candidate invocation and
@@ -5210,12 +5223,19 @@ transcript or execution-history authority.
   capability state.
 - **Current-attempt coordination.** The conversation runtime owns the
   current-attempt slot and the exact `AgentCancellation` the attempt task
-  runs against; `cancel_current_attempt` requests cancellation through the
-  coordinator, which verifies under its own lock that the named attempt is
-  still the current one, so a settlement/admission race can never cancel a
-  newer attempt. The acceptance response is never terminal settlement (the
+  runs against. The Host asks `cancel_active_attempt` to select and cancel the
+  native current Attempt under one coordinator guard, including existing Goal
+  pause handling. It does not select a target from the published projection or
+  wait for observation preparation. Native identity-targeted cancellation still
+  rejects a superseded identity; no signal transfers to a successor. The acceptance response is never
+  terminal settlement (the
   Agent Loop owns settlement, observed asynchronously). Neither the
   coordinator nor the host owns a second attempt state machine.
+- **Manual compaction receipts.** The native maintenance operation returns its
+  exact generation, checkpoint, activation and before/after token measurements.
+  Runtime Client maps that outcome directly, without reading the published
+  context. A delayed receipt still describes its own operation after a valid
+  successor commits; observation unavailability never authorizes replay.
 - **ConversationState: one owner at a time.** Ownership transfers by move; it
   is never cloned or shared as a second mutable authority:
 

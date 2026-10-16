@@ -86,7 +86,7 @@ impl LedgerAccess {
 /// are paged from that authority rather than retained here after restart.
 #[derive(Debug, Default)]
 pub struct MessageLedger {
-    records: Vec<MessageBlock>,
+    records: Vec<Arc<MessageBlock>>,
     index: HashMap<MessageId, usize>,
     access: Arc<LedgerAccess>,
 }
@@ -150,7 +150,7 @@ impl MessageLedger {
         let id = message_id_of(&message);
         debug_assert!(!self.index.contains_key(&id));
         self.index.insert(id.clone(), self.records.len());
-        self.records.push(message);
+        self.records.push(Arc::new(message));
         id
     }
 
@@ -163,7 +163,15 @@ impl MessageLedger {
         self.access.keyed_reads.fetch_add(1, Ordering::Relaxed);
         self.index
             .get(message_id)
-            .map(|position| &self.records[*position])
+            .map(|position| self.records[*position].as_ref())
+    }
+
+    /// Share the immutable Ledger allocation with the canonical Surface.
+    pub(crate) fn shared(&self, id: &MessageId) -> Option<Arc<MessageBlock>> {
+        self.access.keyed_reads.fetch_add(1, Ordering::Relaxed);
+        self.index
+            .get(id)
+            .map(|position| Arc::clone(&self.records[*position]))
     }
 
     /// Whether an identity is committed. Counted as a keyed read.
@@ -183,9 +191,12 @@ impl MessageLedger {
     /// it, and it is counted as one full enumeration. The Context Engine's
     /// normal projection and compaction never call it.
     #[must_use]
-    pub fn audit_records(&self) -> &[MessageBlock] {
+    pub fn audit_records(&self) -> Vec<MessageBlock> {
         self.access.enumerations.fetch_add(1, Ordering::Relaxed);
-        &self.records
+        self.records
+            .iter()
+            .map(|message| message.as_ref().clone())
+            .collect()
     }
 }
 

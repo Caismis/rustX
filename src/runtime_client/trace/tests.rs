@@ -255,7 +255,7 @@ fn commit_request(
                 continuation_source: snapshot.continuation_source.clone(),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
-                messages,
+                messages: messages.into(),
                 tools: snapshot.tool_definitions.clone(),
                 effective_system_prompt: snapshot.effective_system_prompt.clone(),
                 continuation: snapshot.continuation.clone(),
@@ -327,7 +327,7 @@ fn request_with_private_continuation(store: &dyn ConversationStore) -> RequestSn
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             prior.request_id,
             store.conversation_id(),
-            &[],
+            &crate::model::SelectedModelInput::default(),
             &output,
         )
         .unwrap(),

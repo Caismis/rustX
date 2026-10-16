@@ -607,13 +607,13 @@ where
 /// The canonical tool results of an audited attempt, in canonical order.
 fn tool_results(
     audit: &common::DurableExecutionAudit,
-) -> Vec<&rustx::tools::types::ToolExecutionResult> {
+) -> Vec<rustx::tools::types::ToolExecutionResult> {
     audit
         .result
         .messages()
-        .iter()
+        .into_iter()
         .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(&tool.result),
+            MessageBlock::Tool(tool) => Some(tool.result),
             _ => None,
         })
         .collect()
@@ -622,7 +622,7 @@ fn tool_results(
 /// The single canonical tool result of an audited attempt.
 fn single_tool_result(
     audit: &common::DurableExecutionAudit,
-) -> &rustx::tools::types::ToolExecutionResult {
+) -> rustx::tools::types::ToolExecutionResult {
     let results = tool_results(audit);
     assert_eq!(
         results.len(),
@@ -630,7 +630,7 @@ fn single_tool_result(
         "an accepted ToolCall settles exactly once, canonically; outcome={:?}",
         audit.result.outcome
     );
-    results[0]
+    results.into_iter().next().unwrap()
 }
 
 /// Every per-call execution fact of the audited attempt, in durable order.

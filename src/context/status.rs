@@ -400,8 +400,7 @@ impl std::error::Error for AgentStatusSurfaceViewError {}
 pub struct AgentStatusSurfaceView {
     revision: crate::conversation::SurfaceRevision,
     compaction_generation: u64,
-    active_message_ids: Arc<[MessageId]>,
-    messages: Arc<[SurfaceMessageView]>,
+    selection: crate::conversation::selection::CanonicalSelection,
     latest_by_module: [Option<VisibleAgentStatus>; 3],
 }
 
@@ -420,62 +419,38 @@ impl AgentStatusSurfaceView {
     /// The snapshot has already established the Surface/Message Ledger read
     /// boundary. This constructor only derives the bounded semantic index.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the snapshot has a missing body or an identity/body
-    /// mismatch. Durable decoding and the Conversation Surface hydration path
-    /// therefore fail closed instead of materializing an inconsistent view.
-    pub fn from_snapshot(
-        snapshot: ConversationSurfaceSnapshot,
-    ) -> Result<Self, AgentStatusSurfaceViewError> {
-        if snapshot.active_message_ids.len() != snapshot.messages.len() {
-            return Err(AgentStatusSurfaceViewError::IdentityBodyCountMismatch {
-                active_message_ids: snapshot.active_message_ids.len(),
-                messages: snapshot.messages.len(),
-            });
+    /// Canonical selection construction validates unique identity/body ownership.
+    /// The captured immutable root already contains the exact status index.
+    #[must_use]
+    pub fn from_snapshot(snapshot: ConversationSurfaceSnapshot) -> Self {
+        let latest_by_module = [
+            AgentStatusModuleId::Time,
+            AgentStatusModuleId::Background,
+            AgentStatusModuleId::Todo,
+        ]
+        .map(|module| {
+            snapshot
+                .messages
+                .latest_status(module)
+                .map(|(message_id, generated_at)| VisibleAgentStatus {
+                    message_id: message_id.clone(),
+                    generated_at: *generated_at,
+                })
+        });
+        Self {
+            revision: snapshot.revision,
+            compaction_generation: snapshot.compaction_generation,
+            selection: snapshot.messages,
+            latest_by_module,
         }
-        let active_message_ids: Arc<[MessageId]> =
-            Arc::from(snapshot.active_message_ids.into_boxed_slice());
-        let messages = active_message_ids
-            .iter()
-            .cloned()
-            .zip(snapshot.messages)
-            .map(|(id, message)| SurfaceMessageView { id, message })
-            .collect::<Vec<_>>();
-        Self::from_parts(
-            snapshot.revision,
-            snapshot.compaction_generation,
-            active_message_ids,
-            Arc::from(messages.into_boxed_slice()),
-        )
     }
 
-    /// Builds a view from one captured ordered identity/body set.
-    ///
-    /// This internal constructor is also used by focused unit tests. It is
-    /// fallible for the same reason as [`Self::from_snapshot`], so tests cannot
-    /// construct a view whose derived indexes disagree with its identity/body
-    /// sequence.
     #[cfg(test)]
     pub(crate) fn for_test(
         revision: crate::conversation::SurfaceRevision,
         compaction_generation: u64,
-        active_message_ids: Arc<[MessageId]>,
-        messages: Arc<[SurfaceMessageView]>,
-    ) -> Result<Self, AgentStatusSurfaceViewError> {
-        Self::from_parts(
-            revision,
-            compaction_generation,
-            active_message_ids,
-            messages,
-        )
-    }
-
-    fn from_parts(
-        revision: crate::conversation::SurfaceRevision,
-        compaction_generation: u64,
-        active_message_ids: Arc<[MessageId]>,
-        messages: Arc<[SurfaceMessageView]>,
+        active_message_ids: &[MessageId],
+        messages: &[SurfaceMessageView],
     ) -> Result<Self, AgentStatusSurfaceViewError> {
         if active_message_ids.len() != messages.len() {
             return Err(AgentStatusSurfaceViewError::IdentityBodyCountMismatch {
@@ -483,37 +458,27 @@ impl AgentStatusSurfaceView {
                 messages: messages.len(),
             });
         }
-        let mut latest_by_module = std::array::from_fn(|_| None);
-        for (index, message) in messages.iter().enumerate() {
-            if active_message_ids[index] != message.id {
+        let mut selection = crate::conversation::selection::CanonicalSelection::default();
+        for (id, message) in active_message_ids.iter().zip(messages.iter()) {
+            if id != &message.id {
                 return Err(AgentStatusSurfaceViewError::IdentityBodyMismatch {
-                    expected: active_message_ids[index].clone(),
+                    expected: id.clone(),
                     actual: message.id.clone(),
                 });
             }
-            if message.id != *message.message.id() {
+            if id != message.message.id() {
                 return Err(AgentStatusSurfaceViewError::IdentityBodyMismatch {
-                    expected: message.id.clone(),
+                    expected: id.clone(),
                     actual: message.message.id().clone(),
                 });
             }
-            let Some(metadata) = message.message.agent_status_metadata() else {
-                continue;
-            };
-            for module in metadata.modules() {
-                latest_by_module[module_index(*module)] = Some(VisibleAgentStatus {
-                    message_id: message.id.clone(),
-                    generated_at: metadata.generated_at(),
-                });
-            }
+            selection.append(Arc::new(message.message.clone()));
         }
-        Ok(Self {
+        Ok(Self::from_snapshot(ConversationSurfaceSnapshot {
             revision,
             compaction_generation,
-            active_message_ids,
-            messages,
-            latest_by_module,
-        })
+            messages: selection,
+        }))
     }
 
     /// The exact Surface revision represented by this view.
@@ -528,16 +493,22 @@ impl AgentStatusSurfaceView {
         self.compaction_generation
     }
 
-    /// Active identities in model-visible order.
+    /// Canonical working-set identities in captured order.
     #[must_use]
-    pub fn active_message_ids(&self) -> &[MessageId] {
-        &self.active_message_ids
+    pub fn active_message_ids(&self) -> Vec<MessageId> {
+        self.selection.ids()
     }
 
     /// Keyed canonical bodies in the same order as [`Self::active_message_ids`].
     #[must_use]
-    pub fn messages(&self) -> &[SurfaceMessageView] {
-        &self.messages
+    pub fn messages(&self) -> Vec<SurfaceMessageView> {
+        self.selection
+            .iter()
+            .map(|message| SurfaceMessageView {
+                id: message.id().clone(),
+                message: message.clone(),
+            })
+            .collect()
     }
 
     /// The latest visible Agent Status generation containing `module`.
@@ -552,24 +523,14 @@ impl AgentStatusSurfaceView {
         self.latest_status(module).is_some()
     }
 
-    /// Counts active model-visible non-AgentStatus messages after `message_id`.
+    /// Counts canonical working-set non-AgentStatus messages after `message_id`.
     ///
     /// Agent Status messages are deliberately excluded so reminders cannot
     /// self-excite. `None` means the supplied identity is not active in this
     /// frozen Surface.
     #[must_use]
     pub fn non_status_messages_since(&self, message_id: &MessageId) -> Option<usize> {
-        let position = self
-            .active_message_ids
-            .iter()
-            .position(|active| active == message_id)?;
-        Some(
-            self.messages
-                .iter()
-                .skip(position.saturating_add(1))
-                .filter(|message| !message.message.is_agent_status())
-                .count(),
-        )
+        self.selection.non_status_since(message_id)
     }
 }
 
@@ -1175,8 +1136,7 @@ impl super::ContextContributor for StatusContextContributor {
         Result<Vec<super::ContextProposal>, super::ContextAssemblyError>,
     > {
         Box::pin(async move {
-            let surface = AgentStatusSurfaceView::from_snapshot(input.surface.clone())
-                .map_err(|error| super::ContextAssemblyError::InvalidProposal(error.to_string()))?;
+            let surface = AgentStatusSurfaceView::from_snapshot(input.surface.clone());
             let prepared = self
                 .engine
                 .lock()
@@ -1864,13 +1824,8 @@ mod tests {
         revision: crate::conversation::SurfaceRevision,
         compaction_generation: u64,
     ) -> AgentStatusSurfaceView {
-        AgentStatusSurfaceView::for_test(
-            revision,
-            compaction_generation,
-            Arc::from(Vec::<MessageId>::new().into_boxed_slice()),
-            Arc::from(Vec::<SurfaceMessageView>::new().into_boxed_slice()),
-        )
-        .expect("valid empty test Surface")
+        AgentStatusSurfaceView::for_test(revision, compaction_generation, &[], &[])
+            .expect("valid empty test Surface")
     }
 
     fn plain_surface_message(id: &str) -> SurfaceMessageView {
@@ -1912,7 +1867,7 @@ mod tests {
         }
     }
 
-    fn surface(messages: Vec<SurfaceMessageView>) -> AgentStatusSurfaceView {
+    fn surface(messages: &[SurfaceMessageView]) -> AgentStatusSurfaceView {
         let ids = messages
             .iter()
             .map(|message| message.id.clone())
@@ -1920,8 +1875,8 @@ mod tests {
         AgentStatusSurfaceView::for_test(
             crate::conversation::SurfaceRevision::new(ids.len() as u64),
             0,
-            Arc::from(ids.into_boxed_slice()),
-            Arc::from(messages.into_boxed_slice()),
+            &ids,
+            messages,
         )
         .expect("valid test Surface")
     }
@@ -2287,10 +2242,8 @@ mod tests {
         let now = DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp");
         let mut live = ConversationState::from_messages([plain_surface_message("inbound").message])
             .expect("conversation");
-        let frozen = live
-            .freeze_active_surface()
-            .expect("freeze the pre-status Surface");
-        let surface = AgentStatusSurfaceView::from_snapshot(frozen).expect("valid frozen Surface");
+        let frozen = live.freeze_active_surface();
+        let surface = AgentStatusSurfaceView::from_snapshot(frozen);
         assert!(!surface.contains_status(AgentStatusModuleId::Time));
 
         live.commit(
@@ -2447,12 +2400,7 @@ mod tests {
             head.compaction_generation,
         )
         .expect("rebuild conversation Surface");
-        let view = AgentStatusSurfaceView::from_snapshot(
-            conversation
-                .freeze_active_surface()
-                .expect("freeze rebuilt Surface"),
-        )
-        .expect("valid rebuilt Surface view");
+        let view = AgentStatusSurfaceView::from_snapshot(conversation.freeze_active_surface());
 
         assert_eq!(
             view.latest_status(AgentStatusModuleId::Time)
@@ -2471,7 +2419,7 @@ mod tests {
     #[test]
     fn surface_view_indexes_typed_status_metadata_and_ignores_rendered_text() {
         let generated_at = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
-        let view = surface(vec![
+        let view = surface(&[
             status_surface_message(
                 "status-time",
                 generated_at,
@@ -2501,7 +2449,7 @@ mod tests {
             Some(1)
         );
 
-        let renderer_only = surface(vec![plain_surface_message("renderer-only")]);
+        let renderer_only = surface(&[plain_surface_message("renderer-only")]);
         assert!(!renderer_only.contains_status(AgentStatusModuleId::Time));
         assert!(!renderer_only.contains_status(AgentStatusModuleId::Background));
     }
@@ -2512,15 +2460,15 @@ mod tests {
         let invalid = AgentStatusSurfaceView::for_test(
             crate::conversation::SurfaceRevision::INITIAL,
             0,
-            Arc::from(vec![MessageId::new("different")].into_boxed_slice()),
-            Arc::from(vec![message.clone()].into_boxed_slice()),
+            &[MessageId::new("different")],
+            std::slice::from_ref(&message),
         );
         assert!(matches!(
             invalid,
             Err(AgentStatusSurfaceViewError::IdentityBodyMismatch { .. })
         ));
 
-        let view = surface(vec![message]);
+        let view = surface(&[message]);
         assert_eq!(
             view.revision(),
             crate::conversation::SurfaceRevision::new(1)
@@ -2555,7 +2503,7 @@ mod tests {
         );
         assert!(!render_agent_status(&no_visible).contains("Inbound message time"));
 
-        let recent = surface(vec![status_surface_message(
+        let recent = surface(&[status_surface_message(
             "time-recent",
             now - ChronoDuration::minutes(29) - ChronoDuration::seconds(59),
             &[AgentStatusModuleId::Time],
@@ -2567,7 +2515,7 @@ mod tests {
                 .is_none()
         );
 
-        let exact = surface(vec![status_surface_message(
+        let exact = surface(&[status_surface_message(
             "time-exact",
             now - TIME_REFRESH_INTERVAL,
             &[AgentStatusModuleId::Time],
@@ -2596,19 +2544,19 @@ mod tests {
 
         assert!(evaluate(empty_surface()).is_some());
         let seven = surface(
-            std::iter::once(status_surface_message(
+            &std::iter::once(status_surface_message(
                 "background-1",
                 now,
                 &[AgentStatusModuleId::Background],
                 "old reminder",
             ))
             .chain((0..7).map(|index| plain_surface_message(&format!("message-{index}"))))
-            .collect(),
+            .collect::<Vec<_>>(),
         );
         assert!(evaluate(seven).is_none());
 
         let eight = surface(
-            std::iter::once(status_surface_message(
+            &std::iter::once(status_surface_message(
                 "background-2",
                 now,
                 &[AgentStatusModuleId::Background],
@@ -2622,7 +2570,7 @@ mod tests {
                 "status does not count",
             )))
             .chain((4..8).map(|index| plain_surface_message(&format!("message-{index}"))))
-            .collect(),
+            .collect::<Vec<_>>(),
         );
         assert!(
             evaluate(eight).is_some(),
@@ -2667,12 +2615,7 @@ mod tests {
         .expect("conversation with two status generations");
         let (_fixture, registry) = empty_background();
 
-        let before = AgentStatusSurfaceView::from_snapshot(
-            conversation
-                .freeze_active_surface()
-                .expect("freeze before compaction"),
-        )
-        .expect("valid pre-compaction Surface view");
+        let before = AgentStatusSurfaceView::from_snapshot(conversation.freeze_active_surface());
         let execution = background_snapshot(0, "still active");
         let background_snapshot_for = |view: &AgentStatusSurfaceView| BackgroundStatusSnapshot {
             executions: Arc::from(vec![execution.clone()].into_boxed_slice()),
@@ -2690,7 +2633,7 @@ mod tests {
             crate::runtime::identity::ConversationId::generate(),
         )
         .unwrap();
-        let original = conversation.ledger().audit_records().to_vec();
+        let original = conversation.ledger().audit_records();
         store.initialize(&original).unwrap();
         store
             .commit_projection(checkpoint_commit_fixture(
@@ -2707,9 +2650,7 @@ mod tests {
             .filter_map(|message| message.as_canonical().cloned())
             .collect::<Vec<_>>();
         conversation = ConversationState::from_messages(active).unwrap();
-        let after =
-            AgentStatusSurfaceView::from_snapshot(conversation.freeze_active_surface().unwrap())
-                .unwrap();
+        let after = AgentStatusSurfaceView::from_snapshot(conversation.freeze_active_surface());
         assert!(!after.contains_status(AgentStatusModuleId::Time));
         assert!(!after.contains_status(AgentStatusModuleId::Background));
         assert!(
@@ -2752,7 +2693,7 @@ mod tests {
         let now = DateTime::from_timestamp(1_754_000_000, 0).expect("timestamp");
         let execution = background_snapshot(0, "active");
         let view = surface(
-            std::iter::once(status_surface_message(
+            &std::iter::once(status_surface_message(
                 "background-old",
                 now,
                 &[AgentStatusModuleId::Background],
@@ -2766,7 +2707,7 @@ mod tests {
                 "latest reminder",
             )))
             .chain((0..7).map(|index| plain_surface_message(&format!("latest-{index}"))))
-            .collect(),
+            .collect::<Vec<_>>(),
         );
         assert_eq!(
             view.latest_status(AgentStatusModuleId::Background)

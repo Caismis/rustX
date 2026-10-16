@@ -69,7 +69,7 @@ async fn goal84_natural_intent_creates_from_human_with_stable_tools_and_current_
                 },
                 _ => None,
             })
-            .next_back()
+            .last()
     };
     assert_eq!(observed(&requests[0]), None);
     assert_eq!(observed(&requests[1]), Some(1));
@@ -2628,8 +2628,8 @@ fn goal_inspection_tools() -> ToolRegistry {
 }
 
 fn assert_goal_tool_result(result: &AgentExecutionResult, id: &str, error: Option<&str>) {
-    let tool = result
-        .messages()
+    let canonical_messages = result.messages();
+    let tool = canonical_messages
         .iter()
         .find_map(|message| match message {
             MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == id => Some(tool),

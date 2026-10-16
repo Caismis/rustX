@@ -7,7 +7,7 @@ import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/app-server';
 import { Server, snapshot, endpoint } from './fixture';
 let server: Server;
-beforeEach(() => { localStorage.clear(); server = new Server(); });
+beforeEach(() => { localStorage.clear(); server = new Server(); server.handlers.set('turn/cancel', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/cancel' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.useRealTimers(); });
 const running = (id = 'attempt-A'): RuntimeClientSnapshot => ({ ...snapshot(), attempt: { attempt_id: id, phase: { type: 'running' as const }, turn: 1 } });
 const cancels = () => server.requests.filter(row => row.request.method === 'turn/cancel').map(row => row.request);
@@ -73,11 +73,51 @@ it('lost cancellation response stays uncertain and reconnect repairs without rep
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('settled');
   expect(server.client.getSnapshot().views.A.cancellation).toBeUndefined(); expect(cancels()).toHaveLength(1); expect(input().value).toBe('preserved');
 });
-it('a stale expected Attempt or attachment is refused at the client owner', async () => {
+it('current-Attempt commands follow native authority while a retired attachment is refused', async () => {
   server.snapshots.set('A', running()); await server.attached('A'); const expected = server.client.cancellationTarget('A')!;
-  server.snapshots.set('A', running('attempt-B')); await server.client.refresh('A'); await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(0);
-  const before = server.client.cancellationTarget('A')!; await server.client.release('A'); await server.client.attach('A');
-  await server.client.cancelTurn(before); expect(cancels()).toHaveLength(0);
+  server.snapshots.set('A', running('attempt-B')); await server.client.refresh('A');
+  await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({attemptId:'attempt-B',status:'acknowledged'});
+  await server.client.release('A'); await server.client.attach('A');
+  await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
+});
+it('unavailable stale A forwards cancellation and retains native B receipt without a repair read', async () => {
+  server.snapshots.set('A', running()); await server.attached('A');
+  const expected = server.client.cancellationTarget('A')!;
+  const target = server.target('A'), registration = server.registrations.get(JSON.stringify(target))!;
+  server.socket.deliver({jsonrpc:'2.0',method:'session/observationUnavailable',params:{target,registration_id:registration,message:'held source'}});
+  const before = server.client.getSnapshot().views.A;
+  const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  server.handlers.set('turn/cancel', () => ({type:'cancellation_accepted',attempt_id:'native-B'}));
+  server.held.add('turn/cancel');
+  const cancelling = server.client.cancelTurn(expected);
+  expect(cancels()).toHaveLength(1);
+  server.reply(cancels()[0]); await cancelling;
+  const accepted = server.client.getSnapshot().views.A;
+  expect(accepted.cancellation).toEqual({attemptId:'native-B',status:'acknowledged'});
+  expect(accepted.snapshot).toBe(before.snapshot); expect(accepted.cursor).toBe(before.cursor);
+  expect(accepted.observationState).toBe('unavailable');
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
+});
+it('native B acknowledgement survives stale A folds and permits a genuine observed successor', async () => {
+  server.snapshots.set('A', running()); await server.attached('A');
+  const expected = server.client.cancellationTarget('A')!;
+  server.handlers.set('turn/cancel', () => ({type:'cancellation_accepted',attempt_id:'native-B'}));
+  await server.client.cancelTurn(expected);
+  await server.update('A', running());
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({attemptId:'native-B',status:'acknowledged'});
+  await server.update('A', running('native-B'));
+  expect(server.client.getSnapshot().views.A.cancellation?.attemptId).toBe('native-B');
+  const settled = running('native-B'); settled.attempt!.phase = {type:'settled',outcome:{type:'cancelled',reason:'user_requested'}};
+  await server.update('A', settled);
+  expect(server.client.getSnapshot().views.A.cancellation).toBeUndefined();
+  await server.update('A', running('native-C'));
+  const successor = server.client.cancellationTarget('A')!;
+  expect(successor).toBeDefined();
+  server.handlers.set('turn/cancel', () => ({type:'cancellation_accepted',attempt_id:'native-C'}));
+  await server.client.cancelTurn(successor);
+  expect(cancels()).toHaveLength(2);
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({attemptId:'native-C',status:'acknowledged'});
 });
 it('ordinary RPC saturation cannot block exact lifecycle cancellation or its acknowledgement', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
@@ -91,7 +131,7 @@ it('ordinary RPC saturation cannot block exact lifecycle cancellation or its ack
   expect(cancels()[0]).toMatchObject({ method: 'turn/cancel', params: { target: expected.target } });
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: expected.attemptId, status: 'in-flight' });
   await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
-  const repairRead = server.waitFor('session/checkpoint', server.requests.filter(row => row.request.method === 'session/checkpoint').length + 1);
+  const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
   const acknowledged = new Promise<void>(resolve => {
     const unsubscribe = server.client.subscribe(() => {
       if (server.client.getSnapshot().views.A.cancellation?.status === 'acknowledged') { unsubscribe(); resolve(); }
@@ -99,9 +139,11 @@ it('ordinary RPC saturation cannot block exact lifecycle cancellation or its ack
   });
   server.reply(cancels()[0]); await acknowledged;
   expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('acknowledged');
-  // Acknowledgement is published even though its observation refresh needs an RPC slot.
+  await cancellation;
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
+  // The receipt needs no ordinary RPC slot or observation refresh.
   for (const { request } of server.requests.filter(row => row.request.method === 'server/info')) server.reply(request);
-  await repairRead; await Promise.all([...occupied, cancellation]);
+  await Promise.all(occupied);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: expected.attemptId, status: 'acknowledged' });
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
   const settled = running(); settled.attempt!.phase = { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } };

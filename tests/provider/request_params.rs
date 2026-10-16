@@ -406,7 +406,8 @@ async fn unsupported_input_is_rejected_before_any_provider_request() {
                 kind: InboundKind::Message,
                 timestamp: None,
             }),
-        )];
+        )]
+        .into();
         let events =
             crate::common::collect_events(protocol.adapter(&server).as_ref(), request).await;
         assert_eq!(
@@ -490,7 +491,7 @@ fn the_invocation_configuration_is_credential_free_and_serializable() {
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation,
-        messages: Vec::new(),
+        messages: rustx::model::SelectedModelInput::default(),
         tools: Vec::new(),
         effective_system_prompt: String::new(),
         continuation: None,

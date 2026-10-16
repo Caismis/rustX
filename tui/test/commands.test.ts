@@ -1229,10 +1229,6 @@ describe("CommandDispatcher", () => {
         },
       };
     h.transport.respond(compact.id, compactReceipt(context));
-    const cut = await nextRequest(h,"session/checkpoint");
-    h.transport.respond(cut.id,{type:"checkpoint",checkpoint:checkpoint(snapshot({context}))});
-    const page = await nextRequest(h,"conversation/checkpointPage");
-    h.transport.respond(page.id,{type:"checkpoint_page",page:domainReceipt("context",[context]).page});
 
     const outcome = await compacting;
     assert.equal(outcome.kind, "transient");
@@ -1241,6 +1237,8 @@ describe("CommandDispatcher", () => {
       assert.match(outcome.text, /generation 1/);
       assert.match(outcome.text, /8400 → 1900 tokens/);
     }
+    assert.equal(h.transport.log.count('session/checkpoint'), 1);
+    assert.equal(h.transport.log.count('conversation/checkpointPage'), 0);
   });
 
   it("rejects /compact arguments without reaching the server", async () => {

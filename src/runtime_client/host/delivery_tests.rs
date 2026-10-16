@@ -68,6 +68,18 @@ fn assert_delivery_access(
         crate::tools::session_files::read_failure(&denied),
         SessionFileReadFailure::Unauthorized
     );
+    // Fixture admission resolves the native temporary root once, just as the
+    // Session owner does. Reads must still refuse a supplied symlink root.
+    let directory = directory.canonicalize().unwrap();
+    let alias = directory.join("original-root-alias");
+    std::os::unix::fs::symlink(root, &alias).unwrap();
+    assert_eq!(alias.canonicalize().unwrap(), root);
+    let aliased =
+        crate::tools::session_files::read_authorized(&alias, file, || Ok(())).unwrap_err();
+    assert_eq!(
+        crate::tools::session_files::read_failure(&aliased),
+        SessionFileReadFailure::Unauthorized
+    );
     let foreign = directory.join("foreign-root");
     std::fs::create_dir(&foreign).unwrap();
     std::fs::write(foreign.join("original 水 report.md"), b"foreign bytes").unwrap();

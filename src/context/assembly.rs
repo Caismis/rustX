@@ -141,8 +141,6 @@ pub struct ContributorInputSnapshot {
     pub turn: u32,
     /// The exact current Surface revision/reference.
     pub surface_revision: SurfaceRevision,
-    /// The finite active Surface identities at invocation time.
-    pub surface_ids: Vec<crate::runtime::identity::MessageId>,
     /// The claimed inbound batch, already committed by the host and copied
     /// into this immutable invocation value.
     pub claimed_inbound: Vec<MessageBlock>,
@@ -1254,7 +1252,6 @@ mod tests {
     use super::*;
     use crate::message::content::TextBlock;
     use crate::message::types::AgentStatusGenerationMetadata;
-    use crate::runtime::identity::MessageId;
 
     fn input() -> ContributorInputSnapshot {
         ContributorInputSnapshot {
@@ -1262,12 +1259,10 @@ mod tests {
             conversation_id: ConversationId::new("conv_413055e0-cb3a-7c6d-89b6-b446a98e0ad1"),
             turn: 1,
             surface_revision: SurfaceRevision::INITIAL,
-            surface_ids: vec![MessageId::new("inbound")],
             surface: crate::conversation::ConversationSurfaceSnapshot {
                 revision: SurfaceRevision::INITIAL,
                 compaction_generation: 0,
-                active_message_ids: vec![],
-                messages: vec![],
+                messages: crate::conversation::selection::CanonicalSelection::default(),
             },
             opportunities: ContributionOpportunities::default(),
             post_tool_batch_anchor: None,

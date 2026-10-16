@@ -188,7 +188,8 @@ fn request_messages(
     // user turn and the tool results that prompted the call are all there.
     let truncated = request.messages.len() > TRACE_DETAIL_MESSAGES;
     let start = request.messages.len().saturating_sub(TRACE_DETAIL_MESSAGES);
-    let messages = request.messages[start..]
+    let selected = request.messages.range(start..request.messages.len());
+    let messages = selected
         .iter()
         .enumerate()
         .map(|(index, message)| {

@@ -2,12 +2,46 @@ import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
 import { startWorkspaceHost } from './workspace-host.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, opendirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
+
+/** Kernel counters for this fixture's original native child, never process discovery. */
+function nativeIdentity(pid: number | undefined) {
+  if (process.platform !== 'linux' || pid === undefined) return undefined;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    return { pid, startToken: fields[19]!, state: fields[0]!, cpuTicks: Number(fields[11]) + Number(fields[12]) };
+  } catch { return undefined; }
+}
+function nativeDiagnostics(identity: ReturnType<typeof nativeIdentity>) {
+  if (!identity) return undefined;
+  const current = nativeIdentity(identity.pid);
+  if (!current || current.startToken !== identity.startToken) return { pid: identity.pid, unavailable: 'Original native process exited.' };
+  try {
+    const io = readFileSync(`/proc/${identity.pid}/io`, 'utf8').slice(0, 4096);
+    const tasks = opendirSync(`/proc/${identity.pid}/task`);
+    const waits: { tid: string; wait: string }[] = [];
+    let truncated = false;
+    try {
+      for (let count = 0; count < 64; count++) {
+        const task = tasks.readSync();
+        if (!task) break;
+        if (!/^\d+$/.test(task.name)) continue;
+        try { waits.push({ tid: task.name, wait: readFileSync(`/proc/${identity.pid}/task/${task.name}/wchan`, 'utf8').slice(0, 128) }); }
+        catch { /* A native worker may have exited during this diagnostic. */ }
+      }
+      truncated = tasks.readSync() !== null;
+    } finally { tasks.closeSync(); }
+    const after = nativeIdentity(identity.pid);
+    if (!after || after.startToken !== identity.startToken) return { pid: identity.pid, unavailable: 'Original native process exited during diagnostics.' };
+    return { ...current, io, waits, truncated };
+  } catch { return { pid: identity.pid, unavailable: 'Native process counters unavailable.' }; }
+}
 
 function readiness(child: ChildProcess, output: 'stdout' | 'stderr', match: (line: string) => string | undefined): Promise<string> {
   return new Promise((resolveReady, reject) => {
@@ -36,6 +70,7 @@ export async function startDogfood(scenario = 'web_console_dogfood') {
   const provider = spawn('uv', ['run', '--project', resolve(root, 'test-support/fake-provider'), '--frozen', 'fake-provider', '--scenario', scenario, '--port', '0'], { stdio: ['pipe', 'pipe', 'pipe'] });
   let providerErrors = ''; provider.stderr.on('data', chunk => { providerErrors = (providerErrors + String(chunk)).slice(-16_384); });
   let app: ChildProcess | undefined;
+  let appIdentity: ReturnType<typeof nativeIdentity>;
   try {
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
@@ -95,6 +130,7 @@ timezone = "UTC"
     let appErrors = '';
     const startApp = async (listen = 'ws://127.0.0.1:0') => {
       app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      appIdentity = nativeIdentity(app.pid);
       app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
       return readiness(app, 'stderr', appServerEndpoint);
     };
@@ -113,7 +149,7 @@ timezone = "UTC"
     return { hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
-      diagnostics: () => ({ providerErrors, appErrors }),
+      diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
       /** Public creation materializes defaults. Seed inherited intent only
        * before the browser connects, with the native owner physically stopped. */
       async seedInheritedSession(modelFields: string) {

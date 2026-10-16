@@ -851,12 +851,12 @@ async fn run_with_mailbox(
     common::durable_agent_result(result, store.as_ref())
 }
 
-fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
+fn tool_messages(result: &AgentExecutionResult) -> Vec<ToolMessageBlock> {
     result
         .messages()
         .iter()
         .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool),
+            MessageBlock::Tool(tool) => Some(tool.clone()),
             _ => None,
         })
         .collect()
@@ -1675,14 +1675,14 @@ fn background_status_accounting() {
     });
     let with_status = engine.build_projection_input(
         rustx::conversation::SurfaceRevision::INITIAL,
-        vec![],
+        vec![].into(),
         &[],
         None,
         &rendered,
     );
     let without_status = engine.build_projection_input(
         rustx::conversation::SurfaceRevision::INITIAL,
-        vec![],
+        vec![].into(),
         &[],
         None,
         "",
@@ -1695,11 +1695,11 @@ fn background_status_accounting() {
     let tools: Vec<rustx::tools::types::ModelToolDefinition> = Vec::new();
     let estimator = DefaultTokenEstimator;
     assert!(
-        estimator.estimate_input(
+        estimator.estimate_selected(
             &with_status.messages,
             &with_status.effective_system_prompt,
             &tools
-        ) > estimator.estimate_input(
+        ) > estimator.estimate_selected(
             &without_status.messages,
             &without_status.effective_system_prompt,
             &tools
@@ -1707,8 +1707,8 @@ fn background_status_accounting() {
         "the background section participates in the full request estimate"
     );
     assert_eq!(
-        estimator.estimate_input(&with_status.messages, "", &[]),
-        estimator.estimate_input(&without_status.messages, "", &[]),
+        estimator.estimate_selected(&with_status.messages, "", &[]),
+        estimator.estimate_selected(&without_status.messages, "", &[]),
         "keep_recent_tokens is unaffected by the status size"
     );
     // keep_recent_tokens is measured over conversation content only, and
@@ -1717,7 +1717,7 @@ fn background_status_accounting() {
     // regardless of the request-time prompt.
     assert_eq!(
         estimator.estimate_conversation_input(&[]),
-        estimator.estimate_input(&without_status.messages, "", &[]),
+        estimator.estimate_selected(&without_status.messages, "", &[]),
     );
 }
 

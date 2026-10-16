@@ -432,7 +432,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
             &crate::model::ModelRequest {
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: prior.invocation.clone(),
-                messages: crate::model::input::canonical_input(&history),
+                messages: crate::model::input::canonical_input(&history).into(),
                 tools: prior.tool_definitions.clone(),
                 effective_system_prompt: prior.effective_system_prompt.clone(),
                 continuation: None,
@@ -458,7 +458,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             prior.request_id,
             &conversation,
-            &crate::model::input::canonical_input(&history),
+            &crate::model::input::canonical_input(&history).into(),
             &output,
         )
         .unwrap();
@@ -475,7 +475,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
                 continuation_source: Some(source),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
-                messages: input,
+                messages: input.into(),
                 tools: snapshot.tool_definitions.clone(),
                 effective_system_prompt: snapshot.effective_system_prompt.clone(),
                 continuation: snapshot.continuation.clone(),

@@ -16,7 +16,7 @@ import { toolCard } from '../src/bindings/tools';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';
 let server: Server;
-beforeEach(() => { server = new Server(); });
+beforeEach(() => { server = new Server(); server.handlers.set('turn/cancel', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/cancel' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });
 afterEach(() => { cleanup(); server.client.disconnect(); act(() => localeController.setLocale('en')); });
 const count = (method: string) => server.requests.filter(row => row.request.method === method).length;
 it('keeps initial model loading inside the popup and cached refresh out of the trigger layout', () => {
@@ -259,11 +259,13 @@ it('reasoning and Tool rows remain at native canonical positions while live stat
  expect(ui.container.querySelectorAll('[data-tool-call-id]')).toHaveLength(1);
 });
 
-it('an acknowledged Stop remains fenced when its authoritative reread fails', async () => {
+it('an acknowledged Stop requires no observation reread', async () => {
  server.snapshots.set('A', running()); await server.attached('A');
  server.handlers.set('session/checkpoint', () => { throw new RpcFailure({ code: -32000, message: 'Read unavailable' }); });
  const expected = server.client.cancellationTarget('A')!;
- await expect(server.client.cancelTurn(expected)).rejects.toThrow('Read unavailable');
+ const reads = count('session/checkpoint');
+ await server.client.cancelTurn(expected);
+ expect(count('session/checkpoint')).toBe(reads);
  expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('acknowledged');
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
  server.handlers.delete('session/checkpoint'); await server.client.refresh('A');

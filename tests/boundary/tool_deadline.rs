@@ -245,9 +245,9 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     controller.await.expect("boundary deadline controller");
     let audit = common::durable_agent_result(result, fixture.store.as_ref());
 
-    let messages: Vec<_> = audit
-        .result
-        .messages()
+    let canonical_messages = audit.result.messages();
+
+    let messages: Vec<_> = canonical_messages
         .iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),

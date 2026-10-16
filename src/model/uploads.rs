@@ -60,13 +60,54 @@ impl UploadProjection {
     /// # Errors
     /// A typed file without a Session-resolved path is rejected.
     pub fn apply(&self, messages: &mut [ModelInputMessage]) -> Result<(), String> {
-        use std::fmt::Write;
+        self.apply_with_changes(messages, |_, _| {})
+    }
+
+    /// Validate the same references as rendering without allocating its text.
+    pub(crate) fn validate<'a>(
+        &self,
+        messages: impl IntoIterator<Item = &'a ModelInputMessage>,
+    ) -> Result<(), String> {
         let files: std::collections::BTreeMap<_, _> =
             self.files.iter().map(|file| (&file.file, file)).collect();
         if files.len() != self.files.len() {
             return Err("duplicate upload resolution".into());
         }
         for message in messages {
+            if let crate::model::projected::ModelMessageView::User(content) = message.view() {
+                for block in content {
+                    if let UserContentBlock::UploadedFile(reference) = block {
+                        let file = files.get(reference).ok_or("unresolved Session upload")?;
+                        if !std::path::Path::new(&file.path).is_absolute() {
+                            return Err("upload projection path must be absolute".into());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Observe only items the upload renderer actually replaces. The observer
+    /// borrows the original value before mutation; no history clone is needed.
+    pub(crate) fn apply_with_changes(
+        &self,
+        messages: &mut [ModelInputMessage],
+        mut changed: impl FnMut(usize, &ModelInputMessage),
+    ) -> Result<(), String> {
+        use std::fmt::Write;
+        let files: std::collections::BTreeMap<_, _> =
+            self.files.iter().map(|file| (&file.file, file)).collect();
+        if files.len() != self.files.len() {
+            return Err("duplicate upload resolution".into());
+        }
+        for (index, message) in messages.iter_mut().enumerate() {
+            if !matches!(message.view(), crate::model::projected::ModelMessageView::User(content)
+                if content.iter().any(|block| matches!(block, UserContentBlock::UploadedFile(_))))
+            {
+                continue;
+            }
+            changed(index, message);
             let user_content = match message {
                 ModelInputMessage::Canonical(MessageBlock::User(user)) => &mut user.content,
                 ModelInputMessage::Derived(derived) => match &mut derived.message {
@@ -75,12 +116,6 @@ impl UploadProjection {
                 },
                 _ => continue,
             };
-            if !user_content
-                .iter()
-                .any(|b| matches!(b, UserContentBlock::UploadedFile(_)))
-            {
-                continue;
-            }
             let mut prefix = String::from("<user_uploaded_files>\n");
             for content in user_content.iter() {
                 if let UserContentBlock::UploadedFile(reference) = content {

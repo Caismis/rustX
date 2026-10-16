@@ -154,6 +154,8 @@ pub struct PublicationAuditSummary {
 /// exact historical verification and must not replay its facts to observers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelTurnStartCommit {
+    /// Native admission evidence installed only after successful transaction commit.
+    pub(crate) verified_snapshot: Option<Box<RequestSnapshot>>,
     pub status_sources: Vec<StatusObservationSource>,
     /// Commit-owned canonical context descriptors; never reloaded at a later head.
     pub context_receipts: Vec<TranscriptCommitReceipt>,
@@ -167,6 +169,24 @@ pub struct ModelTurnStartCommit {
 }
 
 impl ModelTurnStartCommit {
+    /// Proves the immutable prepared values are precisely those validated at commit.
+    /// This proof does not reload mutable current history after the start frontier.
+    pub(crate) fn accepts_prepared(
+        &self,
+        snapshot: &RequestSnapshot,
+        request: &crate::model::ModelRequest,
+    ) -> bool {
+        self.verified_snapshot
+            .as_deref()
+            .is_some_and(|verified| verified == snapshot)
+            && snapshot.input.messages().same_input(&request.messages)
+            && snapshot.invocation == request.invocation
+            && snapshot.effective_system_prompt == request.effective_system_prompt
+            && snapshot.tool_definitions == request.tools
+            && snapshot.images == request.images
+            && snapshot.continuation == request.continuation
+            && snapshot.continuation_source == request.continuation_source
+    }
     /// Returns every start-owned event in exact durable sequence order.
     pub fn events(&self) -> impl Iterator<Item = &RuntimeEventEnvelope> {
         std::iter::once(&self.started).chain(self.contribution_emissions.iter())
@@ -2414,6 +2434,17 @@ pub trait ConversationStore: Send + Sync + 'static {
     ///
     /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
     fn has_accepted_inbound(&self) -> Result<bool, ConversationStoreError>;
+
+    /// Reads the native initialization marker paired with its immutable bootstrap identity.
+    /// An initialized empty or inherited lineage is initialized; this never infers
+    /// readiness from current Ledger/Surface emptiness or hydrates bootstrap payloads.
+    /// Existing native bootstrap operations retain their complete payload validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationStoreError::Storage`] for missing or inconsistent
+    /// marker/identity metadata, or a backend read failure.
+    fn is_initialized(&self) -> Result<bool, ConversationStoreError>;
 
     /// Initializes the durable Ledger and Surface from one immutable
     /// [`LineageSeed`] and establishes its exact immutable bootstrap

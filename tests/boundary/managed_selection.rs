@@ -293,8 +293,8 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         if admitted {
             assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
             assert_eq!(std::fs::read_to_string(&marker).unwrap(), "called\n");
-            let results = audit
-                .messages()
+            let canonical_messages = audit.messages();
+            let results = canonical_messages
                 .iter()
                 .filter_map(|message| match message {
                     MessageBlock::Tool(tool) => Some(tool),

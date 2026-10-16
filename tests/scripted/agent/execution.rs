@@ -2859,8 +2859,10 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
         "A then B in inbound sequence order, never a request containing only A"
     );
     assert_eq!(
-        requests[1].messages[3..]
+        requests[1]
+            .messages
             .iter()
+            .skip(3)
             .filter(|block| {
                 matches!(
                     block,

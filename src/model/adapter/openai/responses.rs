@@ -31,7 +31,7 @@ use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
-use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
+use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
@@ -1368,8 +1368,8 @@ fn translate_inputs(
         vec![request.effective_system_prompt.clone()]
     };
     let mut previous_response_id: Option<String> = None;
-    let blocks: &[ModelInputMessage] = match continuation_variant {
-        None => &request.messages,
+    let blocks = match continuation_variant {
+        None => request.messages.clone(),
         Some(OpenAiResponsesContinuation::Stored {
             previous_response_id: stored_id,
         }) => {
@@ -1401,7 +1401,7 @@ fn translate_inputs(
             tail_after_boundary(request)?
         }
     };
-    for block in blocks {
+    for block in &blocks {
         match block.view() {
             ModelMessageView::User(user) => {
                 input_items.push(translate_user_input(user, &request.images)?);
@@ -1434,12 +1434,14 @@ fn translate_inputs(
 }
 
 /// Input after the actual accepted output explicitly bound to native continuation.
-fn tail_after_boundary(request: &ModelRequest) -> Result<&[ModelInputMessage], ModelError> {
+fn tail_after_boundary(
+    request: &ModelRequest,
+) -> Result<crate::model::SelectedModelInput, ModelError> {
     let boundary = request
         .continuation_boundary()
         .map_err(|error| invalid_request(&error))?
         .ok_or_else(|| invalid_request("Responses continuation lacks accepted-output boundary"))?;
-    Ok(&request.messages[boundary + 1..])
+    Ok(request.messages.range(boundary + 1..request.messages.len()))
 }
 
 fn translate_user_input(
@@ -1868,8 +1870,8 @@ fn unsupported(message: impl Into<String>) -> ModelError {
 
 /// Native encrypted output units cannot inherit newly invented call labels.
 /// Generic older batches may be relabeled, while native units stay exact.
-fn native_correlations_preserved(
-    messages: &[ModelInputMessage],
+fn native_correlations_preserved<'a>(
+    messages: impl IntoIterator<Item = &'a crate::model::ModelInputMessage>,
     continuation: bool,
     wire_calls: &[String],
 ) -> bool {

@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use super::selection::CanonicalSelection;
+use crate::message::types::MessageBlock;
 use crate::runtime::identity::MessageId;
 
 /// The identity of one exact historical Conversation Surface state.
@@ -86,8 +88,8 @@ pub enum SurfaceOp {
 /// One immutable read of the current Conversation Surface head.
 ///
 /// The snapshot captures identity/order and head metadata together. Callers
-/// that need canonical bodies must resolve these identities through keyed
-/// Message Ledger reads; the Surface never owns bodies.
+/// that need canonical bodies can capture the shared immutable selection;
+/// the Ledger retains canonical ownership of those allocations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationSurfaceHead {
     /// The exact Surface revision represented by this head.
@@ -226,8 +228,8 @@ impl SurfaceAccess {
 /// historical inclusion, exclusion and occurrence order.
 #[derive(Debug, Default)]
 pub struct ConversationSurface {
-    /// The current active ordered message identities.
-    active: Vec<MessageId>,
+    /// The current canonical selection sharing Ledger allocations.
+    active: CanonicalSelection,
     /// The current revision, maintained as head metadata.
     revision: SurfaceRevision,
     /// The first revision represented by the bounded hot operation suffix.
@@ -256,20 +258,18 @@ impl PartialEq for ConversationSurface {
     }
 }
 
-impl Eq for ConversationSurface {}
-
 impl ConversationSurface {
     /// Hydrates the current durable head without materializing historical
     /// operations. The operation log remains a store concern; this value is
     /// only the bounded hot projection used by the runtime.
     #[must_use]
     pub fn from_current_head(
-        active: Vec<MessageId>,
+        active: CanonicalSelection,
         revision: SurfaceRevision,
         compaction_generation: u64,
     ) -> Self {
         Self {
-            history_base_active: active.clone(),
+            history_base_active: active.ids(),
             active,
             revision,
             history_base_revision: revision,
@@ -311,15 +311,22 @@ impl ConversationSurface {
         ConversationSurfaceHead {
             revision: self.revision,
             compaction_generation: self.compaction_generation,
-            active_message_ids: self.active.clone(),
+            active_message_ids: self.active.ids(),
         }
     }
 
     /// The current active ordered message identities.
     #[must_use]
-    pub fn active(&self) -> &[MessageId] {
+    pub fn active(&self) -> Vec<MessageId> {
         self.mark_current_head_read();
-        &self.active
+        self.active.ids()
+    }
+
+    /// Share the exact canonical selection without revisiting old bodies.
+    #[must_use]
+    pub fn selection(&self) -> CanonicalSelection {
+        self.mark_current_head_read();
+        self.active.clone()
     }
 
     /// The number of active messages.
@@ -338,7 +345,7 @@ impl ConversationSurface {
     #[must_use]
     pub fn position_of(&self, message_id: &MessageId) -> Option<usize> {
         self.mark_current_head_read();
-        self.active.iter().position(|id| id == message_id)
+        self.active.position(message_id)
     }
 
     /// Whether the identity is currently active.
@@ -361,19 +368,24 @@ impl ConversationSurface {
     ///
     /// Returns [`SurfaceError::AlreadyActive`] when the identity is already
     /// active; an identity is never active twice.
-    pub fn append(&mut self, message_id: MessageId) -> Result<SurfaceRevision, SurfaceError> {
+    pub fn append(&mut self, message: Arc<MessageBlock>) -> Result<SurfaceRevision, SurfaceError> {
+        let message_id = message.id().clone();
         if self.is_active(&message_id) {
             return Err(SurfaceError::AlreadyActive(message_id));
         }
-        Ok(self.append_after_validation(message_id))
+        Ok(self.append_after_validation(message))
     }
 
     /// Applies an append after the caller has validated the current Surface
     /// under exclusive ownership. This is infallible so an ordinary Ledger
     /// append cannot be followed by a recoverable Surface error.
-    pub(crate) fn append_after_validation(&mut self, message_id: MessageId) -> SurfaceRevision {
+    pub(crate) fn append_after_validation(
+        &mut self,
+        message: Arc<MessageBlock>,
+    ) -> SurfaceRevision {
+        let message_id = message.id().clone();
         debug_assert!(!self.is_active(&message_id));
-        self.active.push(message_id.clone());
+        self.active.append(message);
         self.ops.push(SurfaceOp::Append { message_id });
         self.revision = self.revision.next();
         self.revision
@@ -427,13 +439,28 @@ mod tests {
     fn id(s: &str) -> MessageId {
         MessageId::new(s)
     }
+    fn body(s: &str) -> Arc<MessageBlock> {
+        use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
+        Arc::new(MessageBlock::User(UserMessageBlock {
+            id: id(s),
+            content: Vec::new(),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        }))
+    }
+    fn selected(s: &str) -> CanonicalSelection {
+        let mut result = CanonicalSelection::default();
+        result.append(body(s));
+        result
+    }
     #[test]
     fn append_order_and_contiguous_revision_are_exact() {
         let mut cache = ConversationSurface::new();
         assert_eq!(cache.revision(), SurfaceRevision::INITIAL);
         for (i, s) in ["a", "b", "c"].into_iter().enumerate() {
             assert_eq!(
-                cache.append(id(s)).unwrap(),
+                cache.append(body(s)).unwrap(),
                 SurfaceRevision::new(i as u64 + 1)
             );
         }
@@ -451,10 +478,10 @@ mod tests {
     #[test]
     fn rejected_duplicate_never_advances_cache_or_history() {
         let mut cache = ConversationSurface::new();
-        cache.append(id("a")).unwrap();
+        cache.append(body("a")).unwrap();
         let head = cache.head();
         assert_eq!(
-            cache.append(id("a")),
+            cache.append(body("a")),
             Err(SurfaceError::AlreadyActive(id("a")))
         );
         assert_eq!(cache.head(), head);
@@ -463,9 +490,9 @@ mod tests {
     #[test]
     fn append_reconstruction_preserves_earlier_canonical_prefix() {
         let mut cache = ConversationSurface::new();
-        cache.append(id("a")).unwrap();
+        cache.append(body("a")).unwrap();
         let before = cache.revision();
-        cache.append(id("b")).unwrap();
+        cache.append(body("b")).unwrap();
         assert_eq!(cache.reconstruct(before).unwrap(), [id("a")]);
         assert_eq!(
             cache.reconstruct(SurfaceRevision::INITIAL).unwrap(),
@@ -476,11 +503,11 @@ mod tests {
     #[test]
     fn hydrated_cache_reads_only_retained_hot_append_suffix() {
         let mut cache = ConversationSurface::from_current_head(
-            vec![id("retained")],
+            selected("retained"),
             SurfaceRevision::new(100),
             7,
         );
-        cache.append(id("new")).unwrap();
+        cache.append(body("new")).unwrap();
         assert_eq!(
             cache.reconstruct(SurfaceRevision::new(100)).unwrap(),
             [id("retained")]

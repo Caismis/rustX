@@ -3,7 +3,7 @@ fn original_started_request(
     transaction: &Transaction<'_>,
     conversation: &ConversationId,
     request: &RequestId,
-) -> Result<(RequestSnapshot, u64), ConversationStoreError> {
+) -> Result<(StoredRequestMetadata, u64), ConversationStoreError> {
     let Some((snapshot, sequence, _)) = read_request_snapshot_tx(transaction, request)? else {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request snapshot {request} does not exist"
@@ -247,4 +247,252 @@ fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
             snapshot
         );
     }
+}
+
+fn selected_snapshot_fixture() -> (SqliteConversationStore, RequestSnapshot) {
+    let store = store();
+    let messages: Vec<_> = (0..8)
+        .map(|index| user_message(&format!("selected-{index}"), &"original 水".repeat(4096)))
+        .collect();
+    store.initialize(&messages).unwrap();
+    let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+    freeze_test_input(&store, &mut snapshot, &[]);
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    (store, snapshot)
+}
+
+fn deny_selected_input_bodies(
+    context: rusqlite::hooks::AuthContext<'_>,
+) -> rusqlite::hooks::Authorization {
+    use rusqlite::hooks::{AuthAction, Authorization};
+    match context.action {
+        AuthAction::Read {
+            table_name: "native_input_nodes",
+            column_name: "item_json",
+        } => Authorization::Deny,
+        _ => Authorization::Allow,
+    }
+}
+
+#[test]
+fn normalized_request_metadata_publication_never_hydrates_selected_input_bodies() {
+    let (store, snapshot) = selected_snapshot_fixture();
+    let encoded = encode_snapshot(&snapshot).unwrap();
+    let normalized: RequestSnapshot = decode(&encoded, "normalized test request").unwrap();
+    assert!(normalized.input.is_empty());
+    assert!(encoded.len() < serde_json::to_vec(&snapshot).unwrap().len());
+    {
+        let mut connection = store.lock().unwrap();
+        connection.authorizer(Some(deny_selected_input_bodies));
+        let transaction = connection.transaction().unwrap();
+        let (metadata, _, _) =
+            require_started_request_tx(&transaction, store.conversation_id(), &snapshot.request_id)
+                .unwrap();
+        assert!(metadata.input.is_empty());
+        assert_eq!(metadata.identity, snapshot.identity);
+        assert_eq!(
+            read_stored_snapshot_root(&transaction, &snapshot.request_id)
+                .unwrap()
+                .unwrap()
+                .count,
+            8
+        );
+    }
+    store
+        .open_publication_stream(&publication_start(&snapshot))
+        .unwrap();
+    assert!(store.load_request_snapshot(&snapshot.request_id).is_err());
+    store
+        .lock()
+        .unwrap()
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+    assert_eq!(
+        store.load_request_snapshot(&snapshot.request_id).unwrap(),
+        snapshot
+    );
+}
+
+#[test]
+fn normalized_request_resource_budget_charges_metadata_and_the_exact_flat_input_array() {
+    let (store, snapshot) = selected_snapshot_fixture();
+    let bytes = serde_json::to_vec(&snapshot).unwrap().len();
+    let normalized = encode_snapshot(&snapshot).unwrap();
+    assert_eq!(
+        bytes,
+        normalized.len() - 2 + serde_json::to_vec(&snapshot.input).unwrap().len()
+    );
+    let cut = store.compaction_resource_cut().unwrap();
+    let mut limits = crate::context::resources::ResourceLimits {
+        record_bytes: bytes - 1,
+        page_bytes: bytes - 1,
+        ..crate::context::resources::ResourceLimits::default()
+    };
+    assert!(
+        store
+            .compaction_request(&cut, &snapshot.request_id, limits)
+            .is_err()
+    );
+    limits.record_bytes = bytes;
+    limits.page_bytes = bytes;
+    assert_eq!(
+        store
+            .compaction_request(&cut, &snapshot.request_id, limits)
+            .unwrap(),
+        snapshot
+    );
+}
+
+#[test]
+fn normalized_request_metadata_budget_rejects_before_returning_any_owned_json() {
+    let (store, snapshot) = selected_snapshot_fixture();
+    let metadata_bytes = encode_snapshot(&snapshot).unwrap().len();
+    let full_bytes = serde_json::to_vec(&snapshot).unwrap().len();
+    let connection = store.lock().unwrap();
+    take_snapshot_work();
+    assert!(
+        load_request_snapshot_bounded(
+            &connection,
+            store.conversation_id(),
+            &snapshot.request_id,
+            metadata_bytes - 1,
+        )
+        .is_err()
+    );
+    assert_eq!(take_snapshot_work(), (1, 0));
+    // Admission at the exact metadata limit returns that String, then refuses
+    // hydration because the full original input cannot fit this smaller budget.
+    assert!(
+        load_request_snapshot_bounded(
+            &connection,
+            store.conversation_id(),
+            &snapshot.request_id,
+            metadata_bytes,
+        )
+        .is_err()
+    );
+    assert_eq!(take_snapshot_work(), (1, metadata_bytes));
+    assert_eq!(
+        load_request_snapshot_bounded(
+            &connection,
+            store.conversation_id(),
+            &snapshot.request_id,
+            full_bytes,
+        )
+        .unwrap(),
+        snapshot
+    );
+    assert_eq!(take_snapshot_work(), (1, metadata_bytes));
+}
+
+fn assert_manifest_digest_rejected<T>(result: &Result<T, ConversationStoreError>) {
+    assert!(matches!(
+        result,
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    assert_eq!(
+        MANIFEST_DIGEST_READ_WORK.with(|work| work.replace((0, 0))),
+        (1, 0)
+    );
+}
+
+#[test]
+fn normalized_request_digest_guards_every_reader_before_materializing_malformed_cells() {
+    use rusqlite::types::Value;
+    let (store, snapshot) = selected_snapshot_fixture();
+    let before = store.presentation_frontier().unwrap();
+    let (digest, started) = {
+        let mut connection = store.lock().unwrap();
+        let transaction = connection.transaction().unwrap();
+        (
+            stored_snapshot_digest(
+                &encode_snapshot(&snapshot).unwrap(),
+                read_stored_snapshot_root(&transaction, &snapshot.request_id).unwrap(),
+            ),
+            find_request_start_event(&transaction, &snapshot.request_id)
+                .unwrap()
+                .unwrap(),
+        )
+    };
+    for invalid in [
+        Value::Text("x".repeat(131_072)),
+        Value::Text("x".repeat(63)),
+        Value::Blob(vec![b'x'; 64]),
+    ] {
+        {
+            let mut connection = store.lock().unwrap();
+            // Model a corrupted persisted cell while keeping schema admission
+            // enabled for every actual native reader and retry below.
+            connection
+                .execute_batch("PRAGMA ignore_check_constraints=ON")
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE request_snapshots SET manifest_digest=?2 WHERE request_id=?1",
+                    params![snapshot.request_id.as_str(), invalid],
+                )
+                .unwrap();
+            connection
+                .execute_batch("PRAGMA ignore_check_constraints=OFF")
+                .unwrap();
+            MANIFEST_DIGEST_READ_WORK.with(|work| work.set((0, 0)));
+            let transaction = connection.transaction().unwrap();
+            assert_manifest_digest_rejected(&require_started_request_tx(
+                &transaction,
+                store.conversation_id(),
+                &snapshot.request_id,
+            ));
+            assert_manifest_digest_rejected(&reconstruct_request_start_reference(
+                &transaction,
+                &started,
+                None,
+            ));
+        }
+        assert_manifest_digest_rejected(&store.load_request_snapshot(&snapshot.request_id));
+        assert_manifest_digest_rejected(&store.commit_model_turn_start(&[], &snapshot, Utc::now()));
+        assert_eq!(store.presentation_frontier().unwrap(), before);
+    }
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE request_snapshots SET manifest_digest=?2 WHERE request_id=?1",
+            params![snapshot.request_id.as_str(), digest],
+        )
+        .unwrap();
+    assert_eq!(
+        store.load_request_snapshot(&snapshot.request_id).unwrap(),
+        snapshot
+    );
+    assert_eq!(
+        MANIFEST_DIGEST_READ_WORK.with(|work| work.replace((0, 0))),
+        (1, 64)
+    );
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    assert_eq!(store.presentation_frontier().unwrap(), before);
+}
+
+#[test]
+fn archived_normalized_request_preserves_the_exact_original_flat_snapshot() {
+    let (store, snapshot) = selected_snapshot_fixture();
+    store.archive_barrier().unwrap();
+    let through = store.archive_frontiers().unwrap().requests;
+    let (ordinal, json) = store
+        .archive_record(archive::Authority::Requests, 0, through)
+        .unwrap()
+        .unwrap();
+    assert_eq!(json, serde_json::to_string(&snapshot).unwrap());
+    let restored: RequestSnapshot = decode(&json, "archived original snapshot").unwrap();
+    assert_eq!(restored.input.len(), 8);
+    assert_eq!(restored, snapshot);
+    assert!(
+        store
+            .archive_record(archive::Authority::Requests, ordinal, through)
+            .unwrap()
+            .is_none()
+    );
+    store.archive_release().unwrap();
 }

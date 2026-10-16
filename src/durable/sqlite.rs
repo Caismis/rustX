@@ -17,9 +17,6 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::collections::VecDeque;
 
-#[cfg(test)]
-pub(crate) use observation_request::{RequestIndexProfile, SourceIndexProfile};
-
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -327,7 +324,7 @@ fn count_conversation_store_open() {
 /// Earlier development stores are rejected without migration.
 /// Immutable context projection plus finite bounded observation layouts.
 /// Version 62 gives request fields explicit inline-header or original-span storage.
-pub const SQLITE_SCHEMA_VERSION: i64 = 64;
+pub const SQLITE_SCHEMA_VERSION: i64 = 65;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -459,7 +456,7 @@ struct ConnectionOwner {
     available: Mutex<Option<Connection>>,
     wake: Condvar,
     poisoned: AtomicBool,
-    request_fragments: Mutex<observation_request::fragments::Cache>,
+    manifest: Arc<manifest::Owner>,
 }
 impl ConnectionOwner {
     #[cfg(test)]
@@ -793,13 +790,14 @@ impl SqliteConversationStore {
     }
 
     fn from_validated_connection(conversation_id: ConversationId, connection: Connection) -> Self {
+        let manifest = manifest::Owner::install(&connection);
         Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
                 available: Mutex::new(Some(connection)),
+                manifest,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
-                request_fragments: Mutex::new(observation_request::fragments::Cache::default()),
             }),
         )
     }
@@ -908,8 +906,8 @@ impl SqliteConversationStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn profile_request_index() -> observation_request::RequestIndexProfileGuard {
-        observation_request::RequestIndexProfileGuard::start()
+    pub(crate) fn request_source_read_work() -> observation_request::composed::Work {
+        observation_request::composed::take_work()
     }
 
     /// Fails the next `count` publication staging commits.
@@ -1112,7 +1110,8 @@ impl SqliteConversationStore {
         context: &[MessageBlock],
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
-        fragments: Option<&std::cell::RefCell<observation_request::fragments::Session<'_>>>,
+        selection: &manifest::Selection,
+        admission_epoch: u64,
     ) -> Result<crate::durable::ModelTurnStartCommit, ConversationStoreError> {
         #[cfg(test)]
         if self.consume_request_start_fault(RequestStartFaultOperation::BeforeContextAppend) {
@@ -1139,7 +1138,16 @@ impl SqliteConversationStore {
         }
         validate_canonical_frontier(transaction, snapshot.canonical_frontier)?;
         validate_accepted_continuation_source(transaction, &self.conversation_id, snapshot)?;
-        projection::validate_request_selection(transaction, &self.conversation_id, snapshot)?;
+        let warm = projection::validate_warm_selection(
+            transaction,
+            &self.conversation_id,
+            snapshot,
+            &self.conn.manifest,
+            admission_epoch,
+        )?;
+        if !warm {
+            projection::validate_request_selection(transaction, &self.conversation_id, snapshot)?;
+        }
         // Retry belongs to the Attempt's original adoption, independent of the
         // selected model context, media transformations or later steering.
         // next_event_sequence is the inclusive committed J frontier in this
@@ -1148,16 +1156,19 @@ impl SqliteConversationStore {
         let retry_message_id =
             reading::attempt_prompt(transaction, &snapshot.identity.attempt_id, through)?;
         let json = encode_snapshot(snapshot)?;
-        let manifest_digest = format!("{:x}", Sha256::digest(json.as_bytes()));
+        let manifest_digest = stored_snapshot_digest(&json, selection.root);
         transaction
             .execute(
-                "INSERT INTO request_snapshots(request_id,canonical_frontier,snapshot_json,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id) VALUES(?1,?2,?3,?4,NULL,?5,(SELECT position FROM message_ledger WHERE message_id=?5),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1))",
+                "INSERT INTO request_snapshots(request_id,canonical_frontier,snapshot_json,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,?4,NULL,?5,(SELECT position FROM message_ledger WHERE message_id=?5),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1),?6,?7,?8)",
                 params![
                     snapshot.request_id.as_str(),
                     seq_to_i64(snapshot.canonical_frontier.0)?,
                     json,
                     manifest_digest,
                     retry_message_id.as_ref().map(MessageId::as_str),
+                    selection.root.map(|r|r.id),
+                    selection.root.as_ref().map(|r|r.digest.as_slice()),
+                    selection.root.map_or(0,|r|r.count),
                 ],
             )
             .map_err(|error| storage(format!("insert request snapshot: {error}")))?;
@@ -1190,46 +1201,58 @@ impl SqliteConversationStore {
         }
         // Validate the original stored R and its immutable C dependencies once,
         // after insertion (including any native SQLite trigger effects).
-        let input = reconstruct_request_start_reference(transaction, &event, Some(&json))?;
-        for association in &snapshot.tool_associations {
-            let source = &association.source;
-            if source.assistant.conversation_id != self.conversation_id {
-                return Err(ConversationStoreError::InvalidReference(
-                    "foreign request Tool source".into(),
-                ));
-            }
-            let original = load_message(transaction, &source.assistant.message_id)?;
-            if !source.assistant.matches(&original) {
-                return Err(ConversationStoreError::InvalidReference(
-                    "changed request Tool source".into(),
-                ));
-            }
-            let MessageBlock::Assistant(assistant) = original else {
-                return Err(ConversationStoreError::InvalidReference(
-                    "request Tool source is not Assistant".into(),
-                ));
-            };
-            let Some(crate::message::types::AssistantContentBlock::ToolCall(physical)) =
-                assistant.content.get(source.block.get() as usize)
-            else {
-                return Err(ConversationStoreError::InvalidReference(
-                    "request Tool source occurrence is missing".into(),
-                ));
-            };
-            let crate::model::projected::ModelMessageView::Assistant(projected) =
-                input.messages[association.call.message.item_index as usize].view()
-            else {
-                unreachable!("frozen association validated");
-            };
-            let crate::message::types::AssistantContentBlock::ToolCall(call) =
-                &projected[association.call.block.0 as usize]
-            else {
-                unreachable!("frozen association validated");
-            };
-            if call.tool_id != physical.tool_id {
-                return Err(ConversationStoreError::InvalidReference(
-                    "request Tool source names a different physical Tool".into(),
-                ));
+        validate_fresh_input_binding(transaction, snapshot, &json, selection.root)?;
+        let input = if warm && self.conn.manifest.epoch.load(Ordering::Acquire) == admission_epoch {
+            None
+        } else {
+            Some(reconstruct_request_start_reference(
+                transaction,
+                &event,
+                Some(&json),
+            )?)
+        };
+        let validated_epoch = self.conn.manifest.epoch.load(Ordering::Acquire);
+        if let Some(input) = &input {
+            for association in &snapshot.tool_associations {
+                let source = &association.source;
+                if source.assistant.conversation_id != self.conversation_id {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "foreign request Tool source".into(),
+                    ));
+                }
+                let original = load_message(transaction, &source.assistant.message_id)?;
+                if !source.assistant.matches(&original) {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "changed request Tool source".into(),
+                    ));
+                }
+                let MessageBlock::Assistant(assistant) = original else {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "request Tool source is not Assistant".into(),
+                    ));
+                };
+                let Some(crate::message::types::AssistantContentBlock::ToolCall(physical)) =
+                    assistant.content.get(source.block.get() as usize)
+                else {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "request Tool source occurrence is missing".into(),
+                    ));
+                };
+                let crate::model::projected::ModelMessageView::Assistant(projected) =
+                    input.messages[association.call.message.item_index as usize].view()
+                else {
+                    unreachable!("frozen association validated");
+                };
+                let crate::message::types::AssistantContentBlock::ToolCall(call) =
+                    &projected[association.call.block.0 as usize]
+                else {
+                    unreachable!("frozen association validated");
+                };
+                if call.tool_id != physical.tool_id {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "request Tool source names a different physical Tool".into(),
+                    ));
+                }
             }
         }
         let persisted = persist_event_tx_internal(
@@ -1255,15 +1278,25 @@ impl SqliteConversationStore {
                 ],
             )
             .map_err(|error| storage(format!("bind request start sequence: {error}")))?;
+        let source_input = input.as_ref().map_or_else(
+            || snapshot.input.messages(),
+            |r| {
+                crate::model::SelectedInputManifest::from_messages(
+                    &self.conversation_id,
+                    &r.messages,
+                )
+                .messages()
+            },
+        );
         index_request_read_layouts(
             transaction,
             &self.conversation_id,
             snapshot,
-            &input.messages,
+            &source_input,
+            selection,
             retry_message_id.as_ref(),
             context,
             &persisted.event,
-            fragments,
         );
         // Todo progress is a conversation-owned semantic coordinate, not a
         // Surface append count. Advance it only for the first request of a
@@ -1283,14 +1316,19 @@ impl SqliteConversationStore {
             Vec::new()
         };
         consume_pending_carryover_tx(transaction, snapshot)?;
-        request_start_observation_tx(
+        let result = request_start_observation_tx(
             transaction,
             &self.conversation_id,
             context,
             snapshot,
             persisted.event,
             contribution_emissions,
-        )
+        )?;
+        validate_fresh_input_binding(transaction, snapshot, &json, selection.root)?;
+        if self.conn.manifest.epoch.load(Ordering::Acquire) != validated_epoch {
+            reconstruct_request_start_reference(transaction, &result.started, Some(&json))?;
+        }
+        Ok(result)
     }
 
     fn insert_contribution_emissions_tx(
@@ -3529,6 +3567,22 @@ impl ConversationStore for SqliteConversationStore {
         Ok(watermark > 0)
     }
 
+    fn is_initialized(&self) -> Result<bool, ConversationStoreError> {
+        let connection = self.lock()?;
+        let (initialized, identity): (i64, Option<i64>) = connection
+            .prepare_cached("SELECT s.bootstrap_initialized,b.id FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1")
+            .map_err(|error| storage(format!("bootstrap state: {error}")))?
+            .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| storage(format!("bootstrap state: {error}")))?;
+        match (initialized, identity) {
+            (0, None) => Ok(false),
+            (1, Some(1)) => Ok(true),
+            _ => Err(storage(
+                "missing or inconsistent immutable bootstrap identity",
+            )),
+        }
+    }
+
     fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError> {
         let bootstrap: Option<(u64, String)> = self
             .lock()?
@@ -3973,7 +4027,7 @@ impl ConversationStore for SqliteConversationStore {
         if Self::consume(&self.fail_projection_history_remaining) {
             return Err(storage("fault injected: post-commit hot projection read"));
         }
-        projection::history(&transaction, &self.conversation_id)
+        projection::selected_history(&transaction, &self.conversation_id, &self.conn.manifest)
     }
     fn observation_projection_provenance_read(
         &self,
@@ -4082,7 +4136,12 @@ impl ConversationStore for SqliteConversationStore {
                 "historical frozen request exceeds materialization bound",
             ));
         }
-        load_request_snapshot(&transaction, &self.conversation_id, request)
+        load_request_snapshot_bounded(
+            &transaction,
+            &self.conversation_id,
+            request,
+            limits.record_bytes.min(limits.page_bytes),
+        )
     }
 
     fn projection_head(
@@ -4615,6 +4674,10 @@ impl ConversationStore for SqliteConversationStore {
         timestamp: DateTime<Utc>,
     ) -> Result<ModelTurnStartCommit, ConversationStoreError> {
         validate_snapshot_identity(snapshot)?;
+        snapshot
+            .input
+            .validate_budget()
+            .map_err(ConversationStoreError::InvalidReference)?;
         // The one input validation rule shared by the fresh commit and the
         // idempotent retry (Issue #12, M9b): the exact ordered
         // request-scoped context the caller supplies must equal the frozen
@@ -4628,11 +4691,12 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("request start transaction: {error}")))?;
+        let admission_epoch = self.conn.manifest.capture(&transaction)?;
         let existing: Option<(Option<String>, Option<i64>, String)> = transaction
             .query_row(
-                "SELECT CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,manifest_digest FROM request_snapshots WHERE request_id = ?1",
+                "SELECT CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
                 [snapshot.request_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
             )
             .optional()
             .map_err(|error| storage(format!("request snapshot probe: {error}")))?;
@@ -4642,12 +4706,16 @@ impl ConversationStore for SqliteConversationStore {
                     "frozen request record exceeds byte budget".into(),
                 )
             })?;
-            if format!("{:x}", Sha256::digest(json.as_bytes())) != integrity {
+            if stored_snapshot_digest(
+                &json,
+                read_stored_snapshot_root(&transaction, &snapshot.request_id)?,
+            ) != integrity
+            {
                 return Err(ConversationStoreError::InvalidReference(
                     "corrupt frozen request manifest".into(),
                 ));
             }
-            let verified = verify_committed_start_tx(
+            let mut verified = verify_committed_start_tx(
                 &transaction,
                 &json,
                 started_sequence,
@@ -4657,12 +4725,11 @@ impl ConversationStore for SqliteConversationStore {
             transaction
                 .commit()
                 .map_err(|error| storage(format!("request start retry commit: {error}")))?;
+            verified.verified_snapshot = Some(Box::new(snapshot.clone()));
             return Ok(verified);
         }
-        let projection = projection::head(&transaction)?;
-        if projection.as_ref().map(|p| &p.candidate.checkpoint_id)
-            != snapshot.history_cut.checkpoint_id.as_ref()
-        {
+        let projection = projection::current_checkpoint_id(&transaction)?;
+        if projection.as_ref() != snapshot.history_cut.checkpoint_id.as_ref() {
             return Err(ConversationStoreError::InvalidReference(
                 "actual request would start from a stale Projection Head".into(),
             ));
@@ -4679,27 +4746,22 @@ impl ConversationStore for SqliteConversationStore {
         // same transaction as the snapshot and the start fact: a failure
         // anywhere below rolls all of it back, so request-scoped context
         // can never become canonical without its request starting.
-        // This private cache shares the native connection's write-owner lifetime.
-        // Poison/miss only disables reuse; native validation and capture still run.
-        let mut cache = self.conn.request_fragments.lock().ok();
-        let fragments = cache
-            .as_deref_mut()
-            .map(observation_request::fragments::Cache::session);
-        let persisted = self.insert_fresh_start_tx(
+        let selection = manifest::persist(&transaction, &snapshot.input, &self.conn.manifest)?;
+        let mut persisted = self.insert_fresh_start_tx(
             &transaction,
             context,
             snapshot,
             timestamp,
-            fragments.as_ref(),
+            &selection,
+            admission_epoch,
         )?;
         process_death::reach("before:commit_model_turn_start");
         transaction
             .commit()
             .map_err(|error| storage(format!("request start commit: {error}")))?;
         process_death::reach("after:commit_model_turn_start");
-        if let Some(fragments) = fragments {
-            fragments.into_inner().commit();
-        }
+        selection.commit(&self.conn.manifest);
+        persisted.verified_snapshot = Some(Box::new(snapshot.clone()));
         Ok(persisted)
     }
 
@@ -6004,6 +6066,7 @@ fn request_start_observation_tx(
         emission.observation.clone_from(&shared);
     }
     Ok(ModelTurnStartCommit {
+        verified_snapshot: None,
         status_sources,
         context_receipts,
         started,
@@ -6012,16 +6075,37 @@ fn request_start_observation_tx(
     })
 }
 
+fn validate_fresh_input_binding(
+    connection: &Connection,
+    snapshot: &RequestSnapshot,
+    json: &str,
+    root: Option<manifest::NodeRef>,
+) -> Result<(), ConversationStoreError> {
+    let actual: String = connection
+        .query_row(
+            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            [snapshot.request_id.as_str()],
+            |r| r.get(0),
+        )
+        .map_err(|e| storage(e.to_string()))?;
+    if actual != json || read_stored_snapshot_root(connection, &snapshot.request_id)? != root {
+        return Err(ConversationStoreError::InvalidReference(
+            "fresh request stored Snapshot/root differs from exact admitted values".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)] // Native start inputs plus its transaction-local optional fragment session.
 fn index_request_read_layouts(
     transaction: &Transaction<'_>,
     scope: &ConversationId,
     snapshot: &RequestSnapshot,
-    input: &[crate::model::ModelInputMessage],
+    input: &crate::model::SelectedModelInput,
+    selection: &manifest::Selection,
     retry_message_id: Option<&MessageId>,
     context: &[MessageBlock],
     event: &RuntimeEventEnvelope,
-    fragments: Option<&std::cell::RefCell<observation_request::fragments::Session<'_>>>,
 ) {
     let _ = optional_display_layout(transaction, || {
         if let Some(retry) = retry_message_id {
@@ -6038,7 +6122,7 @@ fn index_request_read_layouts(
     let _ = optional_display_layout(transaction, || {
         observation_trace::request_core(transaction, event, snapshot)
     });
-    let layout = optional_display_layout(transaction, || {
+    let _ = optional_display_layout(transaction, || {
         transaction
             .execute(
                 "UPDATE request_snapshots SET observation_source_id=?2 WHERE request_id=?1",
@@ -6046,20 +6130,15 @@ fn index_request_read_layouts(
             )
             .map_err(|error| storage(error.to_string()))?;
         observation_request_summary::index(transaction, snapshot)?;
-        observation_request::index_with_fragments(
+        observation_request::index_selection(
             transaction,
             event.sequence,
             scope,
             input,
             snapshot,
-            fragments,
+            selection,
         )
     });
-    if layout.is_none()
-        && let Some(fragments) = fragments
-    {
-        fragments.borrow_mut().abort_layout();
-    }
     let _ = optional_display_layout(transaction, || {
         observation_trace::index_context(transaction, event.sequence, snapshot, context)
     });
@@ -7678,7 +7757,16 @@ fn verify_committed_start_tx(
             snapshot.request_id
         )));
     };
-    let stored: RequestSnapshot = decode(json, "request snapshot")?;
+    let mut stored: RequestSnapshot = decode(json, "request snapshot")?;
+    if !stored.input.is_empty() {
+        return Err(ConversationStoreError::InvalidReference(
+            "normalized frozen request metadata contains selected input".into(),
+        ));
+    }
+    stored.input = manifest::load(
+        transaction,
+        read_stored_snapshot_root(transaction, &snapshot.request_id)?,
+    )?;
     if stored != *snapshot {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request {} was started with different frozen inputs",
@@ -7727,6 +7815,7 @@ fn verify_committed_start_tx(
     let contribution_emissions =
         verify_contribution_start_tx(transaction, context, &stored, &started)?;
     Ok(ModelTurnStartCommit {
+        verified_snapshot: None,
         status_sources: Vec::new(),
         context_receipts: Vec::new(),
         started,
@@ -8477,14 +8566,19 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 observation_terminal_sequence INTEGER,
                 observation_terminal_header BLOB CHECK(observation_terminal_header IS NULL OR length(observation_terminal_header)<=16384),
                 observation_source_id TEXT UNIQUE CHECK(observation_source_id IS NULL OR (length(observation_source_id)<=20 AND CAST(observation_source_id AS INTEGER)=started_sequence)),
-                previous_request_id TEXT,
-                request_id TEXT PRIMARY KEY,
                 canonical_frontier INTEGER NOT NULL,
-                manifest_digest TEXT NOT NULL,
+                input_root INTEGER REFERENCES native_input_nodes(id),
+                input_root_digest BLOB,
+                input_count INTEGER NOT NULL CHECK(input_count BETWEEN 0 AND 8192),
                 started_sequence INTEGER,
                 completed_sequence INTEGER,
+                manifest_digest TEXT NOT NULL CHECK(typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64),
+                previous_request_id TEXT,
+                request_id TEXT PRIMARY KEY,
                 retry_message_id TEXT,
-                snapshot_json TEXT NOT NULL
+                snapshot_json TEXT NOT NULL,
+                CHECK((input_root IS NULL AND input_root_digest IS NULL AND input_count=0) OR
+                    (input_root IS NOT NULL AND typeof(input_root_digest)='blob' AND length(input_root_digest)=32 AND input_count>0))
             );
             CREATE UNIQUE INDEX IF NOT EXISTS request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS request_snapshots_started_idx ON request_snapshots(started_sequence) WHERE started_sequence IS NOT NULL;
@@ -8505,17 +8599,16 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             ) WITHOUT ROWID;
             CREATE UNIQUE INDEX IF NOT EXISTS state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal);
             CREATE TABLE IF NOT EXISTS request_observation_fields (
-                source_id TEXT NOT NULL REFERENCES request_snapshots(observation_source_id),
-                path_json TEXT NOT NULL,parent_path TEXT,ordinal INTEGER,
-                key_path TEXT,key_header BLOB CHECK(key_header IS NULL OR length(key_header)<=4096),
-                start INTEGER NOT NULL CHECK(start>=0),end INTEGER NOT NULL CHECK(end>=start),
-                children INTEGER NOT NULL CHECK(children>=0),
-                header_kind TEXT NOT NULL,header_nodes INTEGER,shape_witness BLOB CHECK(shape_witness IS NULL OR (typeof(shape_witness)='blob' AND length(shape_witness)=32)),header_json BLOB,
-                CHECK((header_kind='inline' AND typeof(header_json)='blob' AND length(header_json)<=16384 AND header_nodes IS NULL)
-                    OR (header_kind='original_span' AND header_json IS NULL AND typeof(header_nodes)='integer' AND header_nodes BETWEEN 1 AND 32 AND end>start AND end-start<=16384)),
-                PRIMARY KEY(source_id,path_json)
+                source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),
+                path_json TEXT NOT NULL CHECK(path_json='[]'),
+                parent_path TEXT CHECK(parent_path IS NULL),ordinal INTEGER CHECK(ordinal IS NULL),
+                start INTEGER NOT NULL CHECK(start=0),
+                end INTEGER NOT NULL CHECK(end BETWEEN 0 AND 9007199254740991),
+                children INTEGER NOT NULL CHECK(children=0),
+                header_kind TEXT NOT NULL CHECK(header_kind='inline'),
+                header_json BLOB NOT NULL CHECK(header_json=x'6e756c6c'),
+                shape_witness BLOB NOT NULL CHECK(typeof(shape_witness)='blob' AND length(shape_witness)=32)
             ) WITHOUT ROWID;
-            CREATE UNIQUE INDEX IF NOT EXISTS request_observation_children_idx ON request_observation_fields(source_id,parent_path,ordinal);
 
             CREATE TABLE IF NOT EXISTS request_trace_catalogs (
                 source_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
@@ -8688,7 +8781,8 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS publication_streams_message_settlement_idx ON publication_streams(message_id,settlement);",
         )
         .map_err(|error| storage(format!("create schema: {error}")))?;
-    observation_request::shape::create_schema(connection)?;
+    manifest::create_schema(connection)?;
+    observation_request::composed::create_schema(connection)?;
     connection
         .execute_batch(&projection::completion_index_sql())
         .map_err(|error| storage(error.to_string()))?;
@@ -9145,6 +9239,9 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "request_id",
                 "canonical_frontier",
                 "manifest_digest",
+                "input_root",
+                "input_root_digest",
+                "input_count",
                 "started_sequence",
                 "completed_sequence",
                 "snapshot_json",
@@ -9258,7 +9355,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "parent_path",
                 "ordinal",
                 "header_kind",
-                "header_nodes",
+                "shape_witness",
                 "header_json",
             ],
         ),
@@ -9380,6 +9477,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         "contribution_emission_heads",
         &["producer", "semantic_key"],
     )?;
+    manifest::verify_schema(connection)?;
     content::verify_schema(connection)?;
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
@@ -10143,7 +10241,7 @@ thread_local! {
     static REQUEST_INPUT_RECONSTRUCTIONS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 #[cfg(test)]
-fn take_request_input_reconstructions() -> (usize, usize) {
+pub(crate) fn take_request_input_reconstructions() -> (usize, usize) {
     REQUEST_INPUT_RECONSTRUCTIONS.with(|count| count.replace((0, 0)))
 }
 
@@ -10229,17 +10327,54 @@ fn load_request_snapshot(
     conversation: &ConversationId,
     request_id: &RequestId,
 ) -> Result<RequestSnapshot, ConversationStoreError> {
-    // Reject a corrupt/oversized single record before decoding or allocating its body.
-    let (stored_canonical_frontier, json, started_sequence, digest): (i64, Option<String>, Option<i64>, String) = connection
-        .query_row("SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json ELSE NULL END,started_sequence,manifest_digest FROM request_snapshots WHERE request_id=?1", [request_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+    load_request_snapshot_bounded(connection, conversation, request_id, 64 * 1024 * 1024)
+}
+
+fn load_request_snapshot_bounded(
+    connection: &Connection,
+    conversation: &ConversationId,
+    request_id: &RequestId,
+    max_bytes: usize,
+) -> Result<RequestSnapshot, ConversationStoreError> {
+    // The normalized [] cannot exceed the eventual flat input array. Enforce
+    // both metadata budgets in SQL before rusqlite allocates its String.
+    let metadata_limit = max_bytes.min(64 * 1024 * 1024);
+    #[cfg(test)]
+    REQUEST_SNAPSHOT_READ_WORK.with(|work| {
+        let (queries, bytes) = work.get();
+        work.set((queries + 1, bytes));
+    });
+    let (stored_canonical_frontier, json, started_sequence, digest, native_oversized): (i64, Option<String>, Option<i64>, String, bool) = connection
+        .query_row("SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,octet_length(snapshot_json)>67108864 FROM request_snapshots WHERE request_id=?1", params![request_id.as_str(),metadata_limit], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, read_manifest_digest(row, 3)?,row.get(4)?)))
         .optional().map_err(|error| storage(format!("request snapshot lookup: {error}")))?
         .ok_or_else(|| ConversationStoreError::RequestNotFound(request_id.clone()))?;
     let json = json.ok_or_else(|| {
-        ConversationStoreError::InvalidReference(
-            "frozen request record exceeds the byte budget".into(),
-        )
+        if native_oversized {
+            ConversationStoreError::InvalidReference(
+                "frozen request record exceeds the byte budget".into(),
+            )
+        } else {
+            crate::context::resources::bound(
+                "historical frozen request exceeds materialization bound",
+            )
+        }
     })?;
-    if format!("{:x}", Sha256::digest(json.as_bytes())) != digest {
+    #[cfg(test)]
+    REQUEST_SNAPSHOT_READ_WORK.with(|work| {
+        let (queries, bytes) = work.get();
+        work.set((queries, bytes + json.len()));
+    });
+    // Normalization retained the two-byte empty input array. Charge the
+    // actual flat sequence in its place before hydrating any selected leaf.
+    let input_budget = max_bytes
+        .checked_sub(json.len().saturating_sub(2))
+        .ok_or_else(|| {
+            crate::context::resources::bound(
+                "historical frozen request exceeds materialization bound",
+            )
+        })?;
+    let root = read_stored_snapshot_root(connection, request_id)?;
+    if stored_snapshot_digest(&json, root) != digest {
         return Err(ConversationStoreError::InvalidReference(
             "frozen request manifest integrity mismatch".into(),
         ));
@@ -10263,7 +10398,7 @@ fn load_request_snapshot(
                 "request snapshot {request_id} start event is unavailable"
             ))
         })?;
-    let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
+    let mut snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
     validate_snapshot_identity(&snapshot)?;
     if stored_canonical_frontier != seq_to_i64(snapshot.canonical_frontier.0)? {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -10287,6 +10422,12 @@ fn load_request_snapshot(
         )));
     }
     validate_request_start_metadata(&snapshot, &event)?;
+    if !snapshot.input.is_empty() {
+        return Err(ConversationStoreError::InvalidReference(
+            "normalized frozen request metadata contains selected input".into(),
+        ));
+    }
+    snapshot.input = manifest::load_bounded(connection, root, input_budget)?;
     Ok(snapshot)
 }
 
@@ -11108,15 +11249,11 @@ fn persist_event_tx_internal(
     let _ = optional_display_layout(transaction, || {
         observation_readiness::insert(transaction, &event)
     });
-    #[cfg(test)]
-    let statistics_started = std::time::Instant::now();
     let statistics_available = optional_display_layout(transaction, || {
         observation_statistics::event(transaction, &event)?;
         observation_members::member_event(transaction, &event)
     })
     .is_some();
-    #[cfg(test)]
-    observation_request::profile_statistics(statistics_started.elapsed());
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
         transaction.execute("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
     }
@@ -11429,13 +11566,39 @@ fn find_request_start_event(
 /// request history. The row's denormalized Surface and sequence columns are
 /// checked against the frozen JSON so publication cannot trust a mismatched
 /// tuple assembled by a caller.
-type RequestSnapshotRow = (RequestSnapshot, Option<u64>, Option<u64>);
-type StartedRequestRow = (RequestSnapshot, u64, Option<u64>);
+/// Scalar request identity and configuration, with no selected-input hydration.
+/// Full request disclosure must explicitly load the separately bound native root.
+#[derive(Debug)]
+struct StoredRequestMetadata(RequestSnapshot);
+impl std::ops::Deref for StoredRequestMetadata {
+    type Target = RequestSnapshot;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+type RequestSnapshotRow = (StoredRequestMetadata, Option<u64>, Option<u64>);
+type StartedRequestRow = (StoredRequestMetadata, u64, Option<u64>);
 type StoredSnapshotRow = (i64, Option<String>, Option<i64>, Option<i64>, String);
 
 #[cfg(test)]
 thread_local! {
     static REQUEST_SNAPSHOT_READ_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static MANIFEST_DIGEST_READ_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+// Every caller selects a fixed-size text digest or an empty rejection value.
+fn read_manifest_digest(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
+    let digest: String = row.get(index)?;
+    #[cfg(test)]
+    MANIFEST_DIGEST_READ_WORK.with(|work| {
+        let (rows, bytes) = work.get();
+        work.set((rows + 1, bytes + digest.len()));
+    });
+    Ok(digest)
 }
 
 fn read_request_snapshot_tx(
@@ -11449,10 +11612,10 @@ fn read_request_snapshot_tx(
     });
     let row: Option<StoredSnapshotRow> = transaction
         .query_row(
-            "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,completed_sequence,manifest_digest
+            "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,completed_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END
              FROM request_snapshots WHERE request_id=?1",
             [request_id.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, read_manifest_digest(row, 4)?)),
         )
         .optional()
         .map_err(|error| storage(format!("request snapshot transaction lookup: {error}")))?;
@@ -11470,13 +11633,19 @@ fn read_request_snapshot_tx(
         let (queries, bytes) = work.get();
         work.set((queries, bytes + json.len()));
     });
-    if format!("{:x}", Sha256::digest(json.as_bytes())) != digest {
+    let root = read_stored_snapshot_root(transaction, request_id)?;
+    if stored_snapshot_digest(&json, root) != digest {
         return Err(ConversationStoreError::InvalidReference(
             "frozen request manifest integrity mismatch".into(),
         ));
     }
     let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
     validate_snapshot_identity(&snapshot)?;
+    if !snapshot.input.is_empty() {
+        return Err(ConversationStoreError::InvalidReference(
+            "normalized frozen request metadata contains selected input".into(),
+        ));
+    }
     if snapshot.request_id != *request_id {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request snapshot row {request_id} contains a different RequestId"
@@ -11488,7 +11657,7 @@ fn read_request_snapshot_tx(
         )));
     }
     Ok(Some((
-        snapshot,
+        StoredRequestMetadata(snapshot),
         started_sequence.map(sequence_from_i64).transpose()?,
         completed_sequence.map(sequence_from_i64).transpose()?,
     )))
@@ -12187,6 +12356,21 @@ fn reconstruct_request_start_reference(
         )));
     }
     validate_request_start_metadata(&snapshot, envelope)?;
+    let root = read_stored_snapshot_root(transaction, request_id)?;
+    let digest: String = transaction
+        .query_row(
+            "SELECT CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id=?1",
+            [request_id.as_str()],
+            |row| read_manifest_digest(row, 0),
+        )
+        .map_err(|error| storage(format!("request reference integrity: {error}")))?;
+    if stored_snapshot_digest(&json, root) != digest || !snapshot.input.is_empty() {
+        return Err(ConversationStoreError::InvalidReference(
+            "frozen request manifest integrity mismatch".into(),
+        ));
+    }
+    let mut snapshot = snapshot;
+    snapshot.input = manifest::load(transaction, root)?;
     reconstruct_snapshot_input(transaction, &envelope.conversation_id, &snapshot)
 }
 
@@ -13434,6 +13618,66 @@ fn initial_history_digest(messages: &[MessageBlock]) -> Result<String, Conversat
     Ok(digest)
 }
 
+/// Binds normalized metadata to the exact immutable selected-input root.
+/// This is an internal storage integrity digest, not a replacement for the
+/// original flat provider-semantic or canonical-body SHA identities.
+fn stored_snapshot_digest(json: &str, root: Option<manifest::NodeRef>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"rustx-normalized-request-v1\0");
+    digest.update((json.len() as u64).to_le_bytes());
+    digest.update(json.as_bytes());
+    if let Some(root) = root {
+        digest.update([1]);
+        digest.update(root.id.to_le_bytes());
+        digest.update(root.digest);
+        digest.update(root.count.to_le_bytes());
+        digest.update([root.height]);
+    } else {
+        digest.update([0]);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn read_stored_snapshot_root(
+    connection: &Connection,
+    request: &RequestId,
+) -> Result<Option<manifest::NodeRef>, ConversationStoreError> {
+    type RootRow = (Option<u64>, Option<Vec<u8>>, u64, Option<u8>, bool);
+    let row: Option<RootRow> = connection.prepare_cached(
+        "SELECT r.input_root,CASE WHEN length(r.input_root_digest)=32 THEN r.input_root_digest END,r.input_count,n.height,r.input_root_digest IS NULL
+         FROM request_snapshots r LEFT JOIN native_input_nodes n ON n.id=r.input_root WHERE r.request_id=?1",
+    ).map_err(|error| storage(format!("request input root lookup: {error}")))?
+        .query_row([request.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
+        .optional().map_err(|error| storage(format!("request input root row: {error}")))?;
+    let row = row.ok_or_else(|| ConversationStoreError::RequestNotFound(request.clone()))?;
+    match row {
+        (None, None, 0, None, true) => Ok(None),
+        (Some(id), Some(digest), count, Some(height), false)
+            if id > 0
+                && (1..=manifest::MAX_ITEMS).contains(&count)
+                && (1..=manifest::MAX_HEIGHT).contains(&height) =>
+        {
+            let root = manifest::NodeRef {
+                id,
+                digest: digest.try_into().map_err(|_| {
+                    ConversationStoreError::InvalidReference(
+                        "native request input root digest".into(),
+                    )
+                })?,
+                count,
+                height,
+            };
+            // One root and its direct children establish the finite native
+            // geometry. No selected leaf body is needed for scalar callers.
+            manifest::node(connection, &root)?;
+            Ok(Some(root))
+        }
+        _ => Err(ConversationStoreError::InvalidReference(
+            "native request input root has an invalid closed shape".into(),
+        )),
+    }
+}
+
 fn encode_snapshot(snapshot: &RequestSnapshot) -> Result<String, ConversationStoreError> {
     struct SnapshotBytes(Vec<u8>);
     impl std::io::Write for SnapshotBytes {
@@ -13455,8 +13699,12 @@ fn encode_snapshot(snapshot: &RequestSnapshot) -> Result<String, ConversationSto
             Ok(())
         }
     }
+    // The selected sequence has its own immutable native root. Cloning this
+    // handle is O(1); metadata never serializes or copies historical leaves.
+    let mut metadata = snapshot.clone();
+    metadata.input.clear();
     let mut writer = SnapshotBytes(Vec::new());
-    serde_json::to_writer(&mut writer, snapshot)
+    serde_json::to_writer(&mut writer, &metadata)
         .map_err(|error| storage(format!("request snapshot encoding: {error}")))?;
     String::from_utf8(writer.0).map_err(|error| storage(error.to_string()))
 }
@@ -13507,7 +13755,30 @@ fn map_insert_error(error: &rusqlite::Error, message_id: &MessageId) -> Conversa
 }
 
 fn verify_witness_field_order(connection: &Connection) -> Result<(), ConversationStoreError> {
+    const REQUEST_WITNESS: &[&str] = &[
+        "input_root",
+        "input_root_digest",
+        "input_count",
+        "canonical_frontier",
+        "manifest_digest",
+        "started_sequence",
+        "completed_sequence",
+    ];
     for (table, original, fields) in [
+        (
+            "request_snapshots",
+            "manifest_digest",
+            &[
+                "input_root",
+                "input_root_digest",
+                "input_count",
+                "started_sequence",
+                "completed_sequence",
+            ] as &[&str],
+        ),
+        ("request_snapshots", "previous_request_id", REQUEST_WITNESS),
+        ("request_snapshots", "request_id", REQUEST_WITNESS),
+        ("request_snapshots", "snapshot_json", REQUEST_WITNESS),
         (
             "request_trace_catalogs",
             "provisional_message_id",
@@ -13605,6 +13876,16 @@ mod tests {
         use super::*;
         include!("sqlite/observation_event_probe_tests.rs");
     }
+    mod initialization_state_tests {
+        use super::*;
+        include!("sqlite/initialization_state_tests.rs");
+    }
+
+    mod manifest_store_tests {
+        use super::*;
+        include!("sqlite/manifest_store_tests.rs");
+    }
+
     mod request_fragment_tests {
         use super::*;
         include!("sqlite/request_fragment_tests.rs");
@@ -14818,7 +15099,7 @@ mod tests {
         context: &[MessageBlock],
     ) {
         let history = store.projected_history().unwrap();
-        let mut messages = history.messages;
+        let mut messages = history.messages.to_vec();
         messages.extend(crate::model::input::canonical_input(context));
         snapshot.history_cut = history.cut;
         snapshot
@@ -14828,7 +15109,7 @@ mod tests {
                     continuation_source: None,
                     images: crate::model::images::ResolvedImages::new(),
                     invocation: snapshot.invocation.clone(),
-                    messages,
+                    messages: messages.into(),
                     tools: snapshot.tool_definitions.clone(),
                     effective_system_prompt: snapshot.effective_system_prompt.clone(),
                     continuation: snapshot.continuation.clone(),
@@ -14975,8 +15256,9 @@ mod tests {
                     continuation: None,
                     continuation_source: None,
                 };
-                crate::model::images::omit_images(&mut request.messages);
-                for (before, after) in history.messages.iter().zip(&mut request.messages) {
+                let mut projected = request.messages.to_vec();
+                crate::model::images::omit_images(&mut projected);
+                for (before, after) in history.messages.iter().zip(&mut projected) {
                     if before != after
                         && let Some(source) = before.as_canonical()
                     {
@@ -14987,6 +15269,7 @@ mod tests {
                         );
                     }
                 }
+                request.messages = projected.into();
                 assert!(
                     request.messages[1].canonical_id().is_none(),
                     "media changes acquire request-local Derived identity"
@@ -15274,7 +15557,7 @@ mod tests {
             continuation_source: None,
             images: crate::model::images::ResolvedImages::new(),
             invocation: invocation.clone(),
-            messages: crate::model::input::canonical_input(&[a.clone(), b.clone()]),
+            messages: crate::model::input::canonical_input(&[a.clone(), b.clone()]).into(),
             tools: vec![],
             effective_system_prompt: snapshot.effective_system_prompt.clone(),
             continuation: None,
@@ -16122,63 +16405,6 @@ mod tests {
     /// and the `ModelRequestStarted` fact commit in one transaction; the
     /// snapshot's Surface revision is the head the context appends created.
     #[test]
-    #[ignore = "explicit native request-index measurement; no timing correctness assertion"]
-    fn measure_native_request_index_complete_300_turn_source() {
-        let store = store();
-        let messages = (0..600)
-            .map(|index| {
-                user_message(
-                    &format!("profile-{index}"),
-                    "\u{feff}🙂水 native retained request history",
-                )
-            })
-            .collect::<Vec<_>>();
-        store.initialize(&messages).unwrap();
-        let snapshot = progress_request_snapshot(
-            "index-profile",
-            "1",
-            0,
-            store.load_head().unwrap().revision,
-            Vec::new(),
-        );
-        let before = std::time::Instant::now();
-        crate::runtime::read_layout::SeekableObservationSource::profile_unbuffered(|| {
-            store.commit_model_turn_start(&[], &snapshot, Utc::now())
-        })
-        .unwrap();
-        let before_total = before.elapsed();
-        let baseline = observation_request::LAST_INDEX_PROFILE.with(std::cell::Cell::get);
-        let snapshot = progress_request_snapshot(
-            "index-profile-buffered",
-            "1",
-            0,
-            store.load_head().unwrap().revision,
-            Vec::new(),
-        );
-        let began = std::time::Instant::now();
-        let committed = store
-            .commit_model_turn_start(&[], &snapshot, Utc::now())
-            .unwrap();
-        let total = began.elapsed();
-        let (layout, bytes, fields, count) =
-            observation_request::LAST_INDEX_PROFILE.with(std::cell::Cell::get);
-        assert!(count > 6000);
-        assert_eq!(count, baseline.3);
-        let header = store
-            .request_summary_header(&snapshot.request_id, committed.started.sequence)
-            .unwrap();
-        assert_eq!(header.collections[0].total, 600);
-        assert!(header.encoded_bytes > 100_000);
-        eprintln!(
-            "actual native600-message RequestStart baseline: layout={:?}, native_bytes={:?}, fields={:?}, field_count={}, total_commit={before_total:?}",
-            baseline.0, baseline.1, baseline.2, baseline.3
-        );
-        eprintln!(
-            "actual native600-message RequestStart buffered index: layout={layout:?}, native_bytes={bytes:?}, fields={fields:?}, field_count={count}, total_commit={total:?}"
-        );
-    }
-
-    #[test]
     fn model_turn_start_commits_context_snapshot_and_event_atomically() {
         let store = store();
         let a = user_message("a", "A");
@@ -16194,7 +16420,8 @@ mod tests {
                     continuation_source: None,
                     images: crate::model::images::ResolvedImages::new(),
                     invocation: snapshot.invocation.clone(),
-                    messages: crate::model::input::canonical_input(&[a.clone(), context.clone()]),
+                    messages: crate::model::input::canonical_input(&[a.clone(), context.clone()])
+                        .into(),
                     tools: snapshot.tool_definitions.clone(),
                     effective_system_prompt: snapshot.effective_system_prompt.clone(),
                     continuation: snapshot.continuation.clone(),
@@ -16217,7 +16444,7 @@ mod tests {
             .reconstruct_model_request(&snapshot.request_id)
             .expect("reconstruct");
         assert_eq!(
-            reconstructed.messages,
+            reconstructed.messages.to_vec(),
             crate::model::input::canonical_input(&[a.clone(), context.clone()])
         );
         // An exact retry is idempotent and returns the original start fact.
@@ -18706,7 +18933,8 @@ mod tests {
                     invocation: missing_snapshot.invocation.clone(),
                     messages: crate::model::input::canonical_input(std::slice::from_ref(
                         &missing_message,
-                    )),
+                    ))
+                    .into(),
                     tools: vec![],
                     effective_system_prompt: missing_snapshot.effective_system_prompt.clone(),
                     continuation: None,
@@ -18864,7 +19092,7 @@ mod tests {
             continuation_source: None,
             images: crate::model::images::ResolvedImages::new(),
             invocation: snapshot.invocation.clone(),
-            messages: crate::model::input::canonical_input(&[seed]),
+            messages: crate::model::input::canonical_input(&[seed]).into(),
             tools: vec![],
             effective_system_prompt: snapshot.effective_system_prompt.clone(),
             continuation: None,
@@ -19052,7 +19280,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 64);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 65);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19121,7 +19349,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 64);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 65);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -20948,11 +21176,12 @@ mod presentation_cancellation_tests {
 
     #[test]
     fn presentation_cancellation_interrupts_running_sql_and_restores_writer_policy() {
+        let manifest = manifest::Owner::uninstalled();
         let owner = Arc::new(ConnectionOwner {
+            manifest,
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
-            request_fragments: Mutex::new(observation_request::fragments::Cache::default()),
         });
         let mut reader = SqliteConversationStore::from_connection_owner(
             ConversationId::new("conv_8307904d-d256-77de-8e8a-63789f0ed1a5"),
@@ -20988,11 +21217,12 @@ mod presentation_cancellation_tests {
 
     #[test]
     fn presentation_cancellation_ends_connection_wait_without_releasing_writer() {
+        let manifest = manifest::Owner::uninstalled();
         let owner = Arc::new(ConnectionOwner {
+            manifest,
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
-            request_fragments: Mutex::new(observation_request::fragments::Cache::default()),
         });
         let writer = owner.lock().unwrap();
         let mut reader = SqliteConversationStore::from_connection_owner(
@@ -21056,6 +21286,7 @@ fn optional_display_layout<T>(
         }
     }
 }
+mod manifest;
 mod projection;
 
 mod observation_projection;

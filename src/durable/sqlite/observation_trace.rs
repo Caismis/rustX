@@ -385,7 +385,6 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         "CREATE INDEX events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL",
         "CREATE INDEX events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL",
         "CREATE UNIQUE INDEX request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL",
-        "CREATE UNIQUE INDEX request_observation_children_idx ON request_observation_fields(source_id,parent_path,ordinal)",
         "CREATE UNIQUE INDEX state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal)",
         "CREATE INDEX request_trace_catalog_identity_idx ON request_trace_catalogs(provisional_message_id,source_sequence)",
         "CREATE INDEX request_trace_definition_identity_idx ON request_trace_definitions(source_sequence,tool_id,ordinal)",

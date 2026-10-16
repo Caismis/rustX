@@ -106,11 +106,11 @@ fn tool_turn(calls: &[ScriptedCall]) -> Vec<Vec<FakeStep>> {
 
 fn tool_messages(
     audit: &common::DurableExecutionAudit,
-) -> Vec<&rustx::message::types::ToolMessageBlock> {
+) -> Vec<rustx::message::types::ToolMessageBlock> {
     audit
         .result
         .messages()
-        .iter()
+        .into_iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
             _ => None,

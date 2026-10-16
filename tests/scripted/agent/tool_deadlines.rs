@@ -838,11 +838,11 @@ fn diagnose_deadline_journal(store: &dyn rustx::durable::ConversationStore) {
     eprintln!("Issue #204 original Journal: frontier={frontier:?} tail={tail:?}");
 }
 
-fn tool_messages(audit: &common::DurableExecutionAudit) -> Vec<&ToolMessageBlock> {
+fn tool_messages(audit: &common::DurableExecutionAudit) -> Vec<ToolMessageBlock> {
     audit
         .result
         .messages()
-        .iter()
+        .into_iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
             _ => None,

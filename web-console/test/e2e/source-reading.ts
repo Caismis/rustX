@@ -50,6 +50,7 @@ export async function followRoot(remote: AppServerHost, target: AttachmentTarget
   observation.installCheckpoint(checkpoint.cursor);
   observation.beginSubscription(checkpoint.cursor);
   let waiting: { attempt?: string; resolve: () => void; reject: (error: Error) => void } | undefined;
+  let received: { registrationId: string; method: string; cursor?: string; result?: string } | undefined;
   const fold = (event: RuntimeClientEvent) => {
     snapshot = foldRuntimeEvent(snapshot, event);
     const attempt = snapshot.attempt;
@@ -65,10 +66,12 @@ export async function followRoot(remote: AppServerHost, target: AttachmentTarget
   };
   const stop = remote.client.onNotification(note => {
     if ((note.method !== 'session/event' && note.method !== 'session/resyncRequired' && note.method !== 'session/observationUnavailable') || JSON.stringify(note.params.target) !== JSON.stringify(target)) return;
+    received = { registrationId: note.params.registration_id, method: note.method, cursor: note.method === 'session/event' ? note.params.cursor : undefined };
     const result = observation.deliver(note.method === 'session/event'
       ? { registrationId: note.params.registration_id, cursor: note.params.cursor, event: note.params.event }
       : note.method === 'session/observationUnavailable' ? {registrationId:note.params.registration_id,unavailable:true}
       : { registrationId: note.params.registration_id, resync: true }, fold);
+    received.result = result;
     if (result === 'unavailable') { waiting?.reject(new Error('Native preparation source is unavailable.')); waiting = undefined; }
     if (result === 'recovery') { waiting?.reject(new Error('Native preparation observation requires recovery.')); waiting = undefined; }
   });
@@ -77,6 +80,18 @@ export async function followRoot(remote: AppServerHost, target: AttachmentTarget
     if (!observation.acceptReceipt(receipt.registration_id, receipt.after_cursor)) throw new Error('Native subscription receipt does not match its checkpoint.');
   } catch (error) { stop(); throw error; }
   return {
+    /** Existing local observation state only; never query native execution to diagnose a wait. */
+    diagnostics() {
+      const attempt = snapshot.attempt;
+      return {
+        phase: observation.phase, registrationId: observation.registrationId, applied: observation.applied, received,
+        waitingAfterAttempt: waiting?.attempt?.slice(0, 256),
+        projectedAttempt: attempt ? {
+          id: typeof attempt.attempt_id === 'string' ? attempt.attempt_id.slice(0, 256) : 'deferred',
+          phase: attempt.phase.type, outcome: attempt.phase.type === 'settled' ? attempt.phase.outcome.type : undefined,
+        } : undefined,
+      };
+    },
     nextSettlement() {
       if (waiting || observation.phase !== 'following') throw new Error('Native preparation observation is not ready for an Attempt.');
       const previous = snapshot.attempt;

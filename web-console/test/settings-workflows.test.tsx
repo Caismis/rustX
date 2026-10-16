@@ -284,8 +284,9 @@ it('S2-05 an identity native published no preparation or admission for is unobse
   expect(await facts('refused')).toContain('Not admitted');
   // No observation: unknown, and no status native did not publish.
   for (const [name, label] of [['unseen-mcp', 'Preparation not observed'], ['unseen-python', 'Preparation not observed'], ['unseen-workflow', 'Admission not observed']]) {
-    expect(await facts(name)).toContain(label);
-    for (const status of negative) expect(await facts(name)).not.toContain(status);
+    const observed = await facts(name);
+    expect(observed).toContain(label);
+    for (const status of negative) expect(observed).not.toContain(status);
   }
   // The detail names the same fact under the same title.
   fireEvent.click(screen.getByRole('tab', { name: 'Workflows' }));

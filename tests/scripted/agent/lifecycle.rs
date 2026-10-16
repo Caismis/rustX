@@ -1057,10 +1057,10 @@ fn ledger_shape(result: &AgentExecutionResult) -> Vec<String> {
 
 use support::audit::assert_single_terminal;
 
-fn tool_messages(result: &AgentExecutionResult) -> Vec<&rustx::message::types::ToolMessageBlock> {
+fn tool_messages(result: &AgentExecutionResult) -> Vec<rustx::message::types::ToolMessageBlock> {
     result
         .messages()
-        .iter()
+        .into_iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
             _ => None,

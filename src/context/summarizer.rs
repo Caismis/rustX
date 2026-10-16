@@ -489,7 +489,7 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 // boundary. Request-only execution-recovery context cannot
                 // be represented by `SummaryModelInput`, so it cannot be
                 // forwarded into a summary request accidentally.
-                messages: input.messages.clone(),
+                messages: input.messages.clone().into(),
                 tools: Vec::new(),
                 // Summary generation is not an inbound Assistant turn: it never
                 // carries primary-step dynamic context. Agent Status is a

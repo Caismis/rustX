@@ -169,10 +169,10 @@ fn scripted(id: &str, tool_id: &str, name: &str, arguments: serde_json::Value) -
 }
 
 /// Tool messages committed to canonical history in order.
-fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
+fn tool_messages(result: &AgentExecutionResult) -> Vec<ToolMessageBlock> {
     result
         .messages()
-        .iter()
+        .into_iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
             _ => None,

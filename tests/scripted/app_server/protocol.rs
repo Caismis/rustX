@@ -10118,7 +10118,7 @@ async fn projection_history_and_activation_fork_cross_native_app_server_boundary
                 source.active_conversation_id
             );
             assert!(
-                serde_json::to_string(&child.projected_history().unwrap().messages)
+                serde_json::to_string(&child.projected_history().unwrap().messages.to_vec())
                     .unwrap()
                     .contains(expected)
             );

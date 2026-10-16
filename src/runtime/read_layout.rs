@@ -1,12 +1,6 @@
 //! Seekable immutable observation bytes derived from existing native authority.
 pub(crate) mod canonical;
-mod fragments;
-#[cfg(test)]
-pub(crate) use fragments::take_fragment_work;
-pub(crate) use fragments::{FragmentCapture, TrustedFragment};
 mod key_order;
-mod message_shapes;
-pub(crate) use message_shapes::{CertifiedMessageShape, MessageShapeReader};
 use rusqlite::OptionalExtension as _;
 use serde_json::Value;
 use std::sync::Arc;
@@ -18,12 +12,6 @@ thread_local! { pub(crate) static READ_WORK: std::cell::Cell<(usize,usize)> = co
 thread_local! {pub(crate) static INDEX_OPENS:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
 #[cfg(test)]
 thread_local! {static NODE_LOOKUPS:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
-#[cfg(test)]
-thread_local! {static CHILD_LOOKUPS:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
-#[cfg(test)]
-thread_local! {static UNIQUE_KEY_LOOKUPS:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
-#[cfg(test)]
-thread_local! {static NODE_SELECTIONS:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
 #[cfg(test)]
 thread_local! {static NODE_WRITES:std::cell::Cell<(usize,usize)>=const {std::cell::Cell::new((0,0))};}
 #[cfg(test)]
@@ -39,16 +27,13 @@ pub(crate) fn take_field_preview_work() -> (usize, usize) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FieldPreviewPolicy {
     Inline,
-    OriginalSpanIfSmall,
     Skip,
 }
 
-/// An original span is admitted only from the parser's actual node/byte counts.
-/// It carries no replacement bytes or independently captured source authority.
+/// A preview is computed only when the current bounded consumer requests it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum FieldPreview<'a> {
     Inline(&'a Value),
-    OriginalSpan { recursive_nodes: u64 },
     Skipped,
 }
 
@@ -74,7 +59,6 @@ impl std::error::Error for ObservationReadError {}
 #[cfg(test)]
 thread_local! {
     static FILE_WORK: std::cell::Cell<(usize,usize)> = const {std::cell::Cell::new((0,0))};
-    static UNBUFFERED_CONSTRUCTION: std::cell::Cell<bool> = const {std::cell::Cell::new(false)};
 }
 
 #[derive(Debug, Clone)]
@@ -114,8 +98,6 @@ struct Layout {
     written: u64,
     next_node: u64,
     deadline: Option<std::time::Instant>,
-    fragments: Vec<fragments::FragmentSeat>,
-    pending_fragments: std::collections::VecDeque<fragments::Emission>,
 }
 
 enum LayoutConnection<'a> {
@@ -222,24 +204,11 @@ impl Layout {
             written: 0,
             next_node: 0,
             deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(5)),
-            fragments: Vec::new(),
-            pending_fragments: std::collections::VecDeque::new(),
         })
     }
     fn node(&self, id: u64) -> Result<Node, &'static str> {
-        if let Some(record) = self.fragment_record(id) {
-            return Ok(record.node);
-        }
         let connection = self.reader_connection()?;
         Self::node_at(&connection, id)
-    }
-    fn indexed_node(
-        &self,
-        connection: &rusqlite::Connection,
-        id: u64,
-    ) -> Result<Node, &'static str> {
-        self.fragment_record(id)
-            .map_or_else(|| Self::node_at(connection, id), |record| Ok(record.node))
     }
     fn node_at(connection: &rusqlite::Connection, id: u64) -> Result<Node, &'static str> {
         #[cfg(test)]
@@ -252,24 +221,15 @@ impl Layout {
         ordinal: Option<u64>,
         key: &str,
     ) -> Result<u64, ObservationReadError> {
-        if let Some(result) = self.fragment_select(parent, ordinal, key) {
-            return result;
-        }
         let connection = self.reader_connection()?;
-        self.indexed_select(&connection, parent, ordinal, key)
+        Self::indexed_select(&connection, parent, ordinal, key)
     }
     fn indexed_select(
-        &self,
         connection: &rusqlite::Connection,
         parent: u64,
         ordinal: Option<u64>,
         key: &str,
     ) -> Result<u64, ObservationReadError> {
-        if let Some(result) = self.fragment_select(parent, ordinal, key) {
-            return result;
-        }
-        #[cfg(test)]
-        NODE_SELECTIONS.with(|work| work.set(work.get() + 1));
         if let Some(ordinal) = ordinal {
             connection
                 .prepare_cached("SELECT id FROM nodes WHERE parent=?1 AND ordinal=?2")
@@ -291,70 +251,14 @@ impl Layout {
             "invalid pending source path",
         ))
     }
-    fn indexed_unique_key(
-        &self,
-        connection: &rusqlite::Connection,
-        parent: u64,
-        key: &str,
-    ) -> Result<Option<(u64, Node, u64)>, &'static str> {
-        match self.fragment_unique_key(parent, key) {
-            fragments::FragmentField::NotImported => {}
-            fragments::FragmentField::Missing => return Ok(None),
-            fragments::FragmentField::Unique(id, node, ordinal) => {
-                return Ok(Some((id, node, ordinal)));
-            }
-        }
-        #[cfg(test)]
-        UNIQUE_KEY_LOOKUPS.with(|work| work.set(work.get() + 1));
-        let mut statement = connection.prepare_cached(
-            "SELECT id,start,end,children,recursive_nodes,container,object,key,key_start,key_end,key_complete,ordinal FROM nodes WHERE parent=?1 AND key=?2 AND key_complete=1 LIMIT 2"
-        ).map_err(|_| "native unique field lookup unavailable")?;
-        let mut rows = statement
-            .query(rusqlite::params![parent, key])
-            .map_err(|_| "native unique field lookup unavailable")?;
-        let Some(row) = rows
-            .next()
-            .map_err(|_| "native unique field lookup unavailable")?
-        else {
-            return Ok(None);
-        };
-        let selected = (
-            row.get(0)
-                .map_err(|_| "native unique field identity unavailable")?,
-            Node::from_row(row, 1).map_err(|_| "native unique field facts unavailable")?,
-            row.get(11)
-                .map_err(|_| "native unique field ordinal unavailable")?,
-        );
-        if rows
-            .next()
-            .map_err(|_| "native unique field lookup unavailable")?
-            .is_some()
-        {
-            return Ok(None);
-        }
-        Ok(Some(selected))
-    }
     fn children(
         &self,
         parent: u64,
         offset: u64,
         limit: usize,
     ) -> Result<Vec<(u64, u64)>, &'static str> {
-        if let Some(children) = self.fragment_children(parent, offset, limit) {
-            return Ok(children);
-        }
         let connection = self.reader_connection()?;
         Self::children_at(&connection, parent, offset, limit)
-    }
-    fn indexed_children(
-        &self,
-        connection: &rusqlite::Connection,
-        parent: u64,
-        offset: u64,
-        limit: usize,
-    ) -> Result<Vec<(u64, u64)>, &'static str> {
-        self.fragment_children(parent, offset, limit)
-            .map_or_else(|| Self::children_at(connection, parent, offset, limit), Ok)
     }
     fn children_at(
         connection: &rusqlite::Connection,
@@ -362,8 +266,6 @@ impl Layout {
         offset: u64,
         limit: usize,
     ) -> Result<Vec<(u64, u64)>, &'static str> {
-        #[cfg(test)]
-        CHILD_LOOKUPS.with(|work| work.set(work.get() + 1));
         let mut statement=connection.prepare_cached("SELECT id,ordinal FROM nodes WHERE parent=?1 AND ordinal>=?2 ORDER BY ordinal LIMIT ?3").map_err(|_|"pending source page unavailable")?;
         statement
             .query_map(rusqlite::params![parent, offset, limit], |row| {
@@ -441,32 +343,15 @@ impl SeekableObservationSource {
     pub(crate) fn new<T: serde::Serialize + schemars::JsonSchema>(
         value: &T,
     ) -> Result<Self, &'static str> {
-        Self::build(value, None)
-    }
-    pub(crate) fn new_with_fragments<T: serde::Serialize + schemars::JsonSchema>(
-        value: &T,
-        capture: &FragmentCapture,
-    ) -> Result<Self, &'static str> {
-        Self::build(value, Some(capture))
-    }
-    fn build<T: serde::Serialize + schemars::JsonSchema>(
-        value: &T,
-        capture: Option<&FragmentCapture>,
-    ) -> Result<Self, &'static str> {
         let mut layout = Layout::new()?;
-        #[cfg(test)]
-        let buffered = !UNBUFFERED_CONSTRUCTION.with(std::cell::Cell::get);
-        #[cfg(not(test))]
-        let buffered = true;
-        if buffered {
+        {
             use std::io::Write as _;
             let mut writer = std::io::BufWriter::with_capacity(65_536, &mut layout);
-            fragments::encode(&mut writer, value, capture)?;
+            crate::runtime_client::structural_json::to_writer(&mut writer, value)
+                .map_err(|_| "native observation source encoding unavailable")?;
             writer
                 .flush()
                 .map_err(|_| "native observation source flush unavailable")?;
-        } else {
-            fragments::encode(&mut layout, value, capture)?;
         }
         let reader = layout
             .file
@@ -476,29 +361,15 @@ impl SeekableObservationSource {
             .map_err(|_| "native source reader unavailable")?;
         let mut reader = std::io::BufReader::with_capacity(65536, reader);
         std::io::Seek::rewind(&mut reader).map_err(|_| "native source seek unavailable")?;
-        {
-            let mut parser = LayoutParser {
-                reader,
-                position: 0,
-                layout: &mut layout,
-            };
-            fragments::parse(&mut parser, capture)?;
+        LayoutParser {
+            reader,
+            position: 0,
+            layout: &mut layout,
         }
+        .value(None, 0, None, 0)?;
         layout.seal()?;
         Ok(Self { layout })
     }
-    #[cfg(test)]
-    pub(crate) fn profile_unbuffered<R>(read: impl FnOnce() -> R) -> R {
-        struct Reset(bool);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                UNBUFFERED_CONSTRUCTION.with(|flag| flag.set(self.0));
-            }
-        }
-        let _reset = Reset(UNBUFFERED_CONSTRUCTION.with(|flag| flag.replace(true)));
-        read()
-    }
-
     /// Copies this completed source's exact original extent into its native owner.
     /// The borrow pins the source directory until the synchronous copy finishes;
     /// each window is bounded and does not reopen or query the field index.
@@ -618,7 +489,7 @@ impl SeekableObservationSource {
         ) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
         let reader = self.field_reader()?;
-        self.visit_selected_fields_in(&reader, first, last, include, preview_policy, visit)
+        Self::visit_selected_fields_in(&reader, first, last, include, preview_policy, visit)
     }
     fn field_reader(&self) -> Result<FieldReader<'_>, &'static str> {
         #[cfg(test)]
@@ -633,7 +504,6 @@ impl SeekableObservationSource {
         })
     }
     fn visit_selected_fields_in(
-        &self,
         reader: &FieldReader<'_>,
         first: u64,
         last: u64,
@@ -653,8 +523,8 @@ impl SeekableObservationSource {
         let mut stack: Vec<(u64, usize, String, bool)> = Vec::new();
         let mut path = Vec::new();
         let (connection, bytes) = (&reader.connection, &reader.bytes);
-        let mut process = |record: fragments::NodeRecord| -> Result<(), &'static str> {
-            let fragments::NodeRecord {
+        let mut process = |record: NodeRecord| -> Result<(), &'static str> {
+            let NodeRecord {
                 id,
                 mut parent,
                 ordinal,
@@ -690,14 +560,7 @@ impl SeekableObservationSource {
                 "[]".to_owned()
             };
             let policy = preview_policy(&path);
-            let original_span = policy == FieldPreviewPolicy::OriginalSpanIfSmall
-                && (1..=32).contains(&node.recursive_nodes)
-                && node
-                    .end
-                    .checked_sub(node.start)
-                    .is_some_and(|bytes| bytes > 0 && bytes <= 16_384);
-            let requested = policy == FieldPreviewPolicy::Inline
-                || (policy == FieldPreviewPolicy::OriginalSpanIfSmall && !original_span);
+            let requested = policy == FieldPreviewPolicy::Inline;
             #[cfg(test)]
             FIELD_PREVIEWS.with(|work| {
                 let (computed, skipped) = work.get();
@@ -707,22 +570,10 @@ impl SeekableObservationSource {
                 ));
             });
             let value = requested
-                .then(|| {
-                    self.layout.fragment_preview(id).map_or_else(
-                        || {
-                            self.preview_node(connection, bytes, id, &node, &mut 32)
-                                .map(std::borrow::Cow::Owned)
-                        },
-                        |value| Ok(std::borrow::Cow::Borrowed(value)),
-                    )
-                })
+                .then(|| Self::preview_node(connection, bytes, id, &node, &mut 32))
                 .transpose()?;
             let preview = if let Some(value) = &value {
-                FieldPreview::Inline(value.as_ref())
-            } else if original_span {
-                FieldPreview::OriginalSpan {
-                    recursive_nodes: node.recursive_nodes,
-                }
+                FieldPreview::Inline(value)
             } else {
                 FieldPreview::Skipped
             };
@@ -739,12 +590,10 @@ impl SeekableObservationSource {
             stack.push((id, path.len(), path_json, node.object));
             Ok(())
         };
-        self.layout
-            .visit_selected_records(connection, first, last, &mut include, &mut process)?;
+        Layout::visit_selected_records(connection, first, last, &mut include, &mut process)?;
         Ok(())
     }
     fn preview_node(
-        &self,
         connection: &rusqlite::Connection,
         bytes: &std::fs::File,
         id: u64,
@@ -781,16 +630,16 @@ impl SeekableObservationSource {
                 Ok(Value::Null)
             };
         }
-        let children = self.layout.indexed_children(connection, id, 0, 32)?;
+        let children = Layout::children_at(connection, id, 0, 32)?;
         if node.object {
             let mut values = serde_json::Map::new();
             for (child, _) in children {
                 if *budget == 0 {
                     break;
                 }
-                let child_node = self.layout.indexed_node(connection, child)?;
+                let child_node = Layout::node_at(connection, child)?;
                 if child_node.key_complete && child_node.key.is_some() {
-                    let value = self.preview_node(connection, bytes, child, &child_node, budget)?;
+                    let value = Self::preview_node(connection, bytes, child, &child_node, budget)?;
                     values.insert(
                         child_node.key.ok_or("native preview key unavailable")?,
                         value,
@@ -804,8 +653,14 @@ impl SeekableObservationSource {
                 if *budget == 0 {
                     break;
                 }
-                let child_node = self.layout.indexed_node(connection, child)?;
-                values.push(self.preview_node(connection, bytes, child, &child_node, budget)?);
+                let child_node = Layout::node_at(connection, child)?;
+                values.push(Self::preview_node(
+                    connection,
+                    bytes,
+                    child,
+                    &child_node,
+                    budget,
+                )?);
             }
             Ok(Value::Array(values))
         }
@@ -1231,9 +1086,6 @@ impl LayoutParser<'_> {
         if depth > 256 || self.layout.expired() {
             return Err("native source index limit reached");
         }
-        if let Some(imported) = self.try_fragment(parent, ordinal, key.as_ref(), depth)? {
-            return Ok(imported);
-        }
         let id = self.layout.next_node;
         self.layout.next_node = self
             .layout
@@ -1357,6 +1209,46 @@ mod path_tests;
 
 #[cfg(test)]
 mod source_copy_tests;
+
+struct NodeRecord {
+    id: u64,
+    parent: Option<u64>,
+    ordinal: u64,
+    node: Node,
+}
+impl Layout {
+    fn visit_selected_records(
+        connection: &rusqlite::Connection,
+        first: u64,
+        last: u64,
+        mut include: impl FnMut(u64) -> bool,
+        mut visit: impl FnMut(NodeRecord) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        let mut statement=connection.prepare_cached("SELECT id,parent,ordinal,start,end,children,recursive_nodes,container,object,key,key_start,key_end,key_complete FROM nodes WHERE id>=?1 AND id<=?2 ORDER BY id").map_err(|_|"native layout traversal unavailable")?;
+        let mut rows = statement
+            .query(rusqlite::params![first, last])
+            .map_err(|_| "native layout traversal unavailable")?;
+        while let Some(row) = rows
+            .next()
+            .map_err(|_| "native layout traversal unavailable")?
+        {
+            let id = row
+                .get(0)
+                .map_err(|_| "native layout identity unavailable")?;
+            if include(id) {
+                visit(NodeRecord {
+                    id,
+                    parent: row.get(1).map_err(|_| "native layout parent unavailable")?,
+                    ordinal: row
+                        .get(2)
+                        .map_err(|_| "native layout ordinal unavailable")?,
+                    node: Node::from_row(row, 3).map_err(|_| "pending source node unavailable")?,
+                })?;
+            }
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1528,9 +1420,6 @@ mod tests {
                     let preview = match preview {
                         FieldPreview::Inline(value) => Some(value.clone()),
                         FieldPreview::Skipped => None,
-                        FieldPreview::OriginalSpan { .. } => {
-                            panic!("inline policy cannot select a span")
-                        }
                     };
                     actual.push((
                         path.to_vec(),
@@ -1565,122 +1454,6 @@ mod tests {
                 .all(|field| field.7.is_some())
         );
         assert_eq!(original_layout_bytes(&source), expected_bytes);
-    }
-
-    fn original_span_policy_fixture() -> (SeekableObservationSource, Vec<u8>) {
-        let opaque = serde_json::json!({
-            "escaped/~": ["水🙂\\\"\n", {"@0": u64::MAX}],
-            "float": -0.0, "raw": " {\"n\":1e0,\"escaped\":\"\\u6c34\"} ",
-            "exact": "x".repeat(ITEM_BYTES - 2),
-            "over": "x".repeat(ITEM_BYTES - 1),
-            "thirty_two_nodes": (0..31).collect::<Vec<u32>>(),
-            "thirty_three_nodes": (0..32).collect::<Vec<u32>>(),
-            "k".repeat(300): "original deferred key"
-        });
-        let value = RequestProducerFixture {
-            messages: (0..3)
-                .map(|_| NativeSource {
-                    title: "original",
-                    revision: u64::MAX,
-                    opaque: &opaque,
-                })
-                .collect(),
-        };
-        let source = SeekableObservationSource::new(&value).unwrap();
-        let mut original = Vec::new();
-        crate::runtime_client::structural_json::to_writer(&mut original, &value).unwrap();
-        assert_eq!(original_layout_bytes(&source), original);
-        (source, original)
-    }
-
-    #[test]
-    fn t08_t15_t19_original_span_policy_preserves_every_legacy_field_and_actual_bound() {
-        fn recursive(value: &Value) -> u64 {
-            1 + match value {
-                Value::Array(values) => values.iter().map(recursive).sum(),
-                Value::Object(values) => values.values().map(recursive).sum(),
-                _ => 0,
-            }
-        }
-        let (source, original) = original_span_policy_fixture();
-        let mut expected = Vec::new();
-        source
-            .visit_fields_legacy(
-                |path, encoded, parent, start, end, children, key, preview| {
-                    expected.push((
-                        path.to_vec(),
-                        encoded.to_owned(),
-                        parent.map(|(path, ordinal)| (path.to_owned(), ordinal)),
-                        start,
-                        end,
-                        children,
-                        key,
-                        preview.clone(),
-                    ));
-                    Ok(())
-                },
-            )
-            .unwrap();
-        let mut actual = Vec::new();
-        let mut spans = Vec::new();
-        take_field_preview_work();
-        source
-            .visit_fields_selecting_previews(
-                |_| FieldPreviewPolicy::OriginalSpanIfSmall,
-                |path, encoded, parent, start, end, children, key, preview| {
-                    let preview = match preview {
-                        FieldPreview::OriginalSpan { recursive_nodes } => {
-                            assert!((1..=32).contains(&recursive_nodes));
-                            assert!((1..=16_384).contains(&(end - start)));
-                            let bytes = source.indexed_span(start, end, 16_384).unwrap();
-                            assert_eq!(
-                                bytes,
-                                original[usize::try_from(start).unwrap()
-                                    ..usize::try_from(end).unwrap()]
-                            );
-                            let value: Value = serde_json::from_slice(&bytes).unwrap();
-                            assert_eq!(recursive_nodes, recursive(&value));
-                            spans.push(path.to_vec());
-                            value
-                        }
-                        FieldPreview::Inline(value) => value.clone(),
-                        FieldPreview::Skipped => panic!("no captured headers were skipped"),
-                    };
-                    actual.push((
-                        path.to_vec(),
-                        encoded.to_owned(),
-                        parent.map(|(path, ordinal)| (path.to_owned(), ordinal)),
-                        start,
-                        end,
-                        children,
-                        key,
-                        preview,
-                    ));
-                    Ok(())
-                },
-            )
-            .unwrap();
-        assert_eq!(actual, expected);
-        assert!(spans.len() > actual.len() / 2);
-        assert_eq!(
-            take_field_preview_work(),
-            (actual.len() - spans.len(), spans.len())
-        );
-        for key in ["exact", "thirty_two_nodes"] {
-            assert!(
-                spans
-                    .iter()
-                    .any(|path| path.last().is_some_and(|last| last == key))
-            );
-        }
-        for key in ["over", "thirty_three_nodes"] {
-            assert!(
-                !spans
-                    .iter()
-                    .any(|path| path.last().is_some_and(|last| last == key))
-            );
-        }
-        assert_eq!(original_layout_bytes(&source), original);
     }
 
     #[test]

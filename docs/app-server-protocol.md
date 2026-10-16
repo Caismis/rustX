@@ -664,6 +664,17 @@ decides whether it starts a fresh attempt or joins the inbound queue of the
 current attempt. Neither method creates a separate execution state machine.
 Callers learn accepted message identity and inbound sequence from the result.
 
+`turn/cancel` asks the native coordinator to select and cancel its current
+Attempt under one coordinator guard. A stale or unavailable presentation view
+cannot choose the target or refuse cancellation. The receipt identifies that
+exact accepted cancellation, independently of later settlement or replacement.
+
+`context/compact` returns the five fields of that invocation's successful native
+compaction outcome in `context_compacted.compaction`. It never substitutes
+`latest_compaction` from observation, and does not await observation catch-up.
+A later operation cannot replace an earlier receipt. Transport loss preserves
+existing explicit reconciliation and never triggers automatic compaction replay.
+
 `session/setModel` validates a complete authored selection. `session/selectModel`
 selects catalog defaults through `{ binding_revision, model_position,
 profile_position? }`. Positions are native catalog ordinals from the bounded
@@ -2130,7 +2141,7 @@ the synchronization.
 
 The internal Runtime Client vocabulary is v71. Only App Server v50 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
-decoder. The current storage/control formats are Event envelope 1, SQLite 58, Session
+decoder. The current storage/control formats are Event envelope 1, SQLite 65, Session
 catalog 16 and subagent IPC v33. Child file and artifact reads use the registered
 child Conversation and the parent attachment's native delivery authority.
 

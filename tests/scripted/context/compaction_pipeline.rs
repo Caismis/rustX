@@ -231,7 +231,7 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         text.contains("<retired-conversation>"),
         "the retired span must be delimited for the summary model"
     );
-    assert_eq!(requests[0].messages, request.model_input().messages);
+    assert_eq!(requests[0].messages, request.model_input().messages.into());
 }
 
 /// A refusal, a tool request, and a model failure are compaction failures,

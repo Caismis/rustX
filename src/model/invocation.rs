@@ -1481,8 +1481,8 @@ fn protocol_name(protocol: ModelProtocol) -> String {
 /// # Errors
 ///
 /// Returns [`ModelErrorKind::Unsupported`] naming the unsupported modality.
-pub fn validate_content_modalities(
-    messages: &[crate::model::input::ModelInputMessage],
+pub fn validate_content_modalities<'a>(
+    messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
     capabilities: &ModelCapabilities,
 ) -> Result<(), ModelError> {
     use crate::message::types::{AssistantContentBlock, UserContentBlock};

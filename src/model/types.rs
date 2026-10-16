@@ -60,7 +60,7 @@ pub struct ModelRequest {
     /// The already ordered provider-neutral input items to send. Canonical
     /// items retain their Ledger identity; request-only items are explicitly
     /// noncanonical and have no `MessageId`.
-    pub messages: Vec<ModelInputMessage>,
+    pub messages: super::SelectedModelInput,
     /// Compiled model-facing tool definitions the model may call. Runtime
     /// execution, replay, and origin policy never reach provider adapters.
     #[serde(default)]
@@ -83,7 +83,7 @@ impl ModelRequest {
         let Some((boundary, source)) = self.accepted_output_boundary()? else {
             return Ok(None);
         };
-        if semantic_messages_fingerprint(&self.messages[..boundary])
+        if semantic_messages_fingerprint(&self.messages.range(0..boundary))
             != source.covered_input_fingerprint
         {
             return Err("continuation does not cover the compiled historical input".into());
@@ -97,7 +97,7 @@ impl ModelRequest {
         let Some((boundary, source)) = self.accepted_output_boundary()? else {
             return Ok(false);
         };
-        if semantic_messages_fingerprint(&self.messages[..boundary])
+        if semantic_messages_fingerprint(&self.messages.range(0..boundary))
             == source.covered_input_fingerprint
         {
             return Ok(false);
@@ -212,9 +212,13 @@ impl ModelRequest {
     /// Panics only if the runtime-owned semantic fields cannot serialize.
     #[must_use]
     pub fn semantic_input_fingerprint(&self) -> String {
+        self.semantic_input_fingerprint_with_messages(&self.messages.semantic_fingerprint())
+    }
+
+    pub(crate) fn semantic_input_fingerprint_with_messages(&self, messages: &str) -> String {
         use sha2::{Digest, Sha256};
         let bytes = serde_json::to_vec(&(
-            semantic_messages_fingerprint(&self.messages),
+            messages,
             &self.images,
             &self.effective_system_prompt,
             &self.tools,
@@ -230,41 +234,59 @@ impl ModelRequest {
 /// # Panics
 /// Runtime-owned semantic content must serialize.
 #[must_use]
-pub fn semantic_messages_fingerprint(messages: &[ModelInputMessage]) -> String {
+pub fn semantic_messages_fingerprint<'a>(
+    messages: impl IntoIterator<Item = &'a ModelInputMessage>,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     for message in messages {
-        let value = match message.view() {
-            crate::model::projected::ModelMessageView::User(content) => {
-                serde_json::json!({"role":"user", "content":content})
-            }
-            crate::model::projected::ModelMessageView::Assistant(content) => {
-                serde_json::json!({"role":"assistant", "content":content})
-            }
-            crate::model::projected::ModelMessageView::Tool(call_id, result) => {
-                match result.model_visible_content() {
-                    Ok(crate::tools::types::ModelToolResultContent::Parts(parts)) => {
-                        serde_json::json!({"role":"tool", "call_id":call_id, "parts":parts})
-                    }
-                    Ok(crate::tools::types::ModelToolResultContent::Text(text)) => {
-                        // Text-only identities remain unchanged; both consumers
-                        // use the same normalized bounded Tool semantic content.
-                        serde_json::json!({"role":"tool", "call_id":call_id, "text":text, "media":[]})
-                    }
-                    Err(_) => {
-                        serde_json::json!({"role":"tool", "call_id":call_id, "unsupported_content":true})
-                    }
-                }
-            }
-            crate::model::projected::ModelMessageView::RequestOnly(context) => {
-                serde_json::json!({"role":"user", "text":context.render()})
-            }
-        };
-        serde_json::to_writer(crate::model::projected::DigestWriter(&mut digest), &value)
-            .expect("semantic input serializes");
-        digest.update([0]);
+        append_semantic_message(&mut digest, message);
     }
     format!("{:x}", digest.finalize())
+}
+
+pub(crate) fn append_semantic_message(digest: &mut sha2::Sha256, message: &ModelInputMessage) {
+    use sha2::Digest;
+    struct SemanticWriter<'a>(&'a mut sha2::Sha256);
+    impl std::io::Write for SemanticWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            #[cfg(test)]
+            super::selected_input::record_hash_work(0, bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let value = match message.view() {
+        crate::model::projected::ModelMessageView::User(content) => {
+            serde_json::json!({"role":"user", "content":content})
+        }
+        crate::model::projected::ModelMessageView::Assistant(content) => {
+            serde_json::json!({"role":"assistant", "content":content})
+        }
+        crate::model::projected::ModelMessageView::Tool(call_id, result) => {
+            match result.model_visible_content() {
+                Ok(crate::tools::types::ModelToolResultContent::Parts(parts)) => {
+                    serde_json::json!({"role":"tool", "call_id":call_id, "parts":parts})
+                }
+                Ok(crate::tools::types::ModelToolResultContent::Text(text)) => {
+                    // Text-only identities remain unchanged; both consumers
+                    // use the same normalized bounded Tool semantic content.
+                    serde_json::json!({"role":"tool", "call_id":call_id, "text":text, "media":[]})
+                }
+                Err(_) => {
+                    serde_json::json!({"role":"tool", "call_id":call_id, "unsupported_content":true})
+                }
+            }
+        }
+        crate::model::projected::ModelMessageView::RequestOnly(context) => {
+            serde_json::json!({"role":"user", "text":context.render()})
+        }
+    };
+    serde_json::to_writer(SemanticWriter(&mut *digest), &value).expect("semantic input serializes");
+    digest.update([0]);
 }
 
 #[cfg(test)]

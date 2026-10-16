@@ -80,7 +80,7 @@ fn uploaded_retry_fixture(id: &str) -> (SqliteConversationStore, RequestSnapshot
                 continuation_source: None,
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
-                messages,
+                messages: messages.into(),
                 tools: snapshot.tool_definitions.clone(),
                 effective_system_prompt: snapshot.effective_system_prompt.clone(),
                 continuation: snapshot.continuation.clone(),
@@ -127,7 +127,7 @@ fn uploaded_frozen_request_retains_the_exact_original_retry_boundary() {
         .reconstruct_model_request(&snapshot.request_id)
         .unwrap();
     assert_eq!(
-        reconstructed.messages,
+        reconstructed.messages.to_vec(),
         [crate::model::ModelInputMessage::Derived(derived.clone())]
     );
     assert_eq!(store.load_canonical().unwrap(), [original]);
