@@ -34,8 +34,7 @@
     const neighbors = new Set(compact ? [] : selectedRelations().flatMap((relation) => [relation.from, relation.to]));
     const markers = ['call', 'data', 'dependency'].map((kind) => `<marker id="arrow-${kind}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 8 4 L 0 8 z"/></marker>`).join('');
     return `<div class="architecture-map ${compact ? 'compact' : state.view !== 'overview' ? 'detail-graph' : ''}" data-map>${compact ? '' : `<svg class="map-lines" aria-hidden="true"><defs>${markers}</defs><g data-lines></g></svg>`}${groups.map((layer, index) => `<section class="map-layer"><h3><span>${String(index + 1).padStart(2, '0')}</span>${rich(layer)}</h3><div class="layer-nodes">${current.nodes.filter((node) => node.layer === layer).map((node) => {
-      const target = !compact && targetOf(node);
-      return `<button type="button" data-node="${escape(node.id)}" class="map-node ${!compact && node.id === state.node ? 'selected' : ''} ${compact && active.includes(node.id) ? 'active' : ''} ${!compact && neighbors.has(node.id) && node.id !== state.node ? 'neighbor' : ''} ${node.external ? 'external-node' : ''}" aria-label="${escape(plain(node.label))}，${compact || target ? '进入内部图' : '查看实现与 source'}"><span class="node-name">${rich(node.label)}</span>${!compact ? `<span class="node-summary">${rich(node.summary)}</span><span class="node-action">${node.external ? rich('外部 {{owner}} · 跨模块 ↗') : target ? '进入内部图 →' : rich('实现末端 · 查看 {{source-code}}')}</span>` : ''}${compact && active.includes(node.id) ? '<span class="active-dot" aria-hidden="true"></span>' : ''}</button>`;
+      return `<button type="button" data-node="${escape(node.id)}" class="map-node ${!compact && node.id === state.node ? 'selected' : ''} ${compact && active.includes(node.id) ? 'active' : ''} ${!compact && neighbors.has(node.id) && node.id !== state.node ? 'neighbor' : ''} ${node.external ? 'external-node' : ''}" aria-label="${escape(plain(node.label))}，${compact ? '在架构总览中查看' : '选择并查看右侧说明'}" ${!compact ? `aria-pressed="${node.id === state.node}"` : ''}><span class="node-name">${rich(node.label)}</span>${!compact ? `<span class="node-summary">${rich(node.summary)}</span><span class="node-action">${rich(node.external ? '选择以查看右侧说明 · 外部 {{owner}}' : '选择以查看右侧说明')}</span>` : ''}${compact && active.includes(node.id) ? '<span class="active-dot" aria-hidden="true"></span>' : ''}</button>`;
     }).join('')}</div></section>`).join('')}</div>`;
   }
   function relationsMarkup(node) {
@@ -72,7 +71,7 @@
     const current = graph();
     const node = current.nodes.find((item) => item.id === state.node);
     const groupCount = new Set(current.nodes.map((item) => item.layer)).size;
-    const caption = '卡片箭头进入下一层；实现末端打开右侧说明和 {{source-code}}。虚线外框表示其他 {{owner}}，进入后可返回原处。' + (state.view === 'overview' ? '总览显示选中节点的关系。' : '内部图显示当前过滤下的所有关系，粗线突出选中节点的关系。') + '右侧清单解释选中节点的关系。';
+    const caption = '选择卡片查看右侧说明；需要进入下一层时，使用说明栏中的进入按钮。实现末端可展开 {{source-code}}。虚线外框表示其他 {{owner}}。' + (state.view === 'overview' ? '总览显示选中节点的关系。' : '内部图显示当前过滤下的所有关系，粗线突出选中节点的关系。') + '右侧清单解释选中节点的关系。';
     workspace.innerHTML = `${breadcrumbs()}
       <div class="section-heading">
         <div><p class="eyebrow">01 / ${rich(state.view === 'overview' ? '{{ownership}} 总览' : '{{owner}} 内部图')}</p>
@@ -181,7 +180,7 @@
     render(); workspace.scrollIntoView({ block: 'start' });
     workspace.querySelector('[data-graph-heading]').focus({ preventScroll: true });
   }
-  function navigateNode(id) { openView(data.architecture.entries[id]); }
+  function navigateNode(id) { openView('overview'); selectNode(id); }
   function selectNode(id) {
     state.node = id; render();
     workspace.querySelector(`.map-node[data-node="${id}"]`).focus({ preventScroll: true });
@@ -289,9 +288,7 @@
     if (button.dataset.select) { selectNode(button.dataset.select); return; }
     if (button.dataset.node) {
       if (state.mode !== 'map') { navigateNode(button.dataset.node); return; }
-      const node = graph().nodes.find((item) => item.id === button.dataset.node);
-      const target = targetOf(node);
-      if (target) { state.node = node.id; openView(target); } else selectNode(node.id);
+      selectNode(button.dataset.node);
       return;
     }
     if (button.dataset.relation) {
