@@ -1655,7 +1655,7 @@ fn t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable
     let crate::message::types::UserContentBlock::File(file) = &mut user.content[0] else {
         panic!("native File source")
     };
-    file.artifact_id = child_artifact;
+    file.artifact_id = child_artifact.clone();
     let seed = crate::durable::LineageSeed::replayed(captured.canonical, captured.surface_history)
         .unwrap()
         .with_projections(captured.projections)
@@ -1692,6 +1692,19 @@ fn t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable
         offset = next;
     }
     assert_eq!(inherited, bytes);
+    // Rebinding into the Child captures its own durable integrity evidence;
+    // even a same-length filesystem replacement after reopen cannot change it.
+    let binary_path = child_dir
+        .path()
+        .join(format!("{}.bin", child_artifact.as_str()));
+    let mut external = std::fs::OpenOptions::new()
+        .write(true)
+        .open(binary_path)
+        .unwrap();
+    external.write_all(b"other").unwrap();
+    external.sync_all().unwrap();
+    assert_eq!(external.metadata().unwrap().len(), child_ref.readable_end);
+    assert!(child.content_read(&child_ref, 0, 5).is_err());
 }
 
 #[test]

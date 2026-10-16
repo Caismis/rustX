@@ -24,7 +24,7 @@ import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = !disabled, cancellationScope }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
@@ -32,6 +32,8 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string; conversationIdentity?: ComposerConversation; submissionTarget?: AttachmentTarget;
   firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[], submission?: ComposerSubmission) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
+  /** Exact live Root attachment permits cancellation while observation is unavailable. */
+  cancellationOnly?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: (acceptance?: InputAcceptance, conversation?: ComposerConversation) => void) => Promise<boolean>;
   onUpload: (files: readonly File[], operation?: string) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; commandAvailable?: (id: CommandId) => boolean; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
@@ -52,6 +54,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const editor = state?.key === editorIdentity ? state : undefined;
   const restoreSupported = editor?.supported ?? editableContent(initialContent);
   disabled = disabled || !restoreSupported;
+  const cancellationEditor = cancellationOnly && cancellationAvailable && !!cancellationScope;
   const [localIntake] = useState(() => new AttachmentIntake());
   const intake = intakeOwner ?? localIntake;
   const selections = useSyncExternalStore(intake.subscribe, intake.snapshot);
@@ -180,7 +183,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
       <div className={css.editor}>
         <textarea ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholder ?? (onDraftSend ? tx('agent:agent-composer.describe-what-you-want-to-do') : tx('agent:agent-composer.give-this-session-a-task'))}
           aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
-          value={draft} disabled={disabled} readOnly={busy} rows={1} onChange={event => { setDraft(event.target.value); trigger.track(event.target.value); setError(''); }}
+          value={draft} disabled={disabled && !cancellationEditor} readOnly={busy || cancellationEditor} rows={1} onChange={event => { if (cancellationEditor) return; setDraft(event.target.value); trigger.track(event.target.value); setError(''); }}
           onPaste={event => {
             if (disabled || busy) return;
             const pasted = transferInputs(event.clipboardData);
@@ -207,7 +210,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
               if (event.defaultPrevented || composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
                 || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) { stopSequence.reset(); return; }
               if (menu) { stopSequence.reset(); event.preventDefault(); trigger.dismiss(); return; }
-              if (!active || !cancellationAvailable || !cancellationScope || document.activeElement !== event.currentTarget) { stopSequence.reset(); return; }
+              if (!cancellationAvailable || !cancellationScope || document.activeElement !== event.currentTarget) { stopSequence.reset(); return; }
               event.preventDefault(); if (press?.event === event.nativeEvent) press.accept(cancellationScope, onCancel); return;
             }
             if (event.defaultPrevented || composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;

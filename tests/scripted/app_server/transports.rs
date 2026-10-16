@@ -16,6 +16,8 @@ mod oversized_notification;
 use app_server_conformance::AppServerConformanceDriver;
 #[path = "bounded_delivery.rs"]
 mod bounded_delivery;
+#[path = "outbound_backpressure.rs"]
+mod outbound_backpressure;
 
 pub(super) async fn connected(
     f: &Fixture,
@@ -2859,17 +2861,17 @@ async fn t17_partial_os_pipe_record_finishes_after_registration_replacement() {
     .await;
 }
 
-/// Overflow retires all queued records, but the real OS pipe still owns its
-/// accepted prefix and must finish that exact record before returning failure.
+/// A sustained saturation deadline retires queued records, but the real OS
+/// pipe still owns its accepted prefix and must finish that exact record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn t17_t20_stdio_queue_overflow_finishes_the_physically_accepted_record() {
+async fn t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_record() {
     use tokio::io::AsyncWriteExt;
     bounded(async {
-        eprintln!("T17 overflow: fixture");
+        eprintln!("T17 saturation deadline: fixture");
         let fixture = Fixture::new().await;
         let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
         super::protocol::initialize(&connection).await;
-        eprintln!("T17 overflow: initialized");
+        eprintln!("T17 saturation deadline: initialized");
         let (reader, mut input) = tokio::io::duplex(65_536);
         // The malformed record produces a bounded native error immediately,
         // before the initial source notification can become the writer head.
@@ -2884,14 +2886,34 @@ async fn t17_t20_stdio_queue_overflow_finishes_the_physically_accepted_record() 
             accepted: false,
             released: false,
         };
-        let serving = tokio::spawn(stdio::serve(
+        let incoming = futures_util::stream::try_unfold(
+            tokio::io::BufReader::new(reader),
+            |mut reader| async move {
+                use tokio::io::AsyncBufReadExt;
+                let mut line = String::new();
+                Ok((reader.read_line(&mut line).await? != 0)
+                    .then(|| (line.trim_end_matches('\n').to_owned(), reader)))
+            },
+        );
+        // Hold the physical writer by a channel, independently of its normal
+        // deadline, to prove that the queue deadline still joins this record.
+        let (closed, close_watch) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(transport::serve_for_test(
             connection.clone(),
-            reader,
-            writer,
+            incoming,
+            move |mut outgoing| async move {
+                assert!(closed.send(outgoing.retirement_watch()).is_ok());
+                let mut writer = writer;
+                while let Some(mut outbound) = outgoing.next().await {
+                    stdio::write_outbound(&mut writer, &mut outbound).await?;
+                }
+                Ok(())
+            },
             CancellationToken::new(),
         ));
+        let mut retirement = close_watch.await.unwrap();
         entered_rx.await.unwrap();
-        eprintln!("T17 overflow: positive prefix accepted");
+        eprintln!("T17 saturation deadline: positive prefix accepted");
         let reader = std::fs::File::from(read);
         let (reader, prefix) = tokio::task::spawn_blocking(move || {
             use std::io::Read;
@@ -2903,26 +2925,26 @@ async fn t17_t20_stdio_queue_overflow_finishes_the_physically_accepted_record() 
         .await
         .unwrap();
         assert!(serde_json::from_slice::<Response>(&prefix).is_err());
-        eprintln!("T17 overflow: incomplete prefix read");
+        eprintln!("T17 saturation deadline: incomplete prefix read");
         // All 32 queue slots fill while the real accepted remainder is gated.
-        // One further reply must fail insertion, without any EOF or shutdown.
+        // One further reply waits on the same fixed queue deadline, without
+        // any EOF or shutdown. It never adds an encoded buffer.
         input
             .write_all("{\n".repeat(transport::OUTBOUND_MESSAGES + 1).as_bytes())
             .await
             .unwrap();
-        eprintln!("T17 overflow: 33 replies fed");
-        while !connection.closed_for_test() {
-            tokio::task::yield_now().await;
-        }
+        eprintln!("T17 saturation deadline: 33 replies fed");
+        retirement.retired().await;
+        assert!(connection.closed_for_test());
         assert!(
             !serving.is_finished(),
             "overflow must retain the accepted writer"
         );
-        eprintln!("T17 overflow: retired before writer completion");
+        eprintln!("T17 saturation deadline: retired before writer completion");
         release.send(()).unwrap();
         let error = serving.await.unwrap().unwrap_err();
-        eprintln!("T17 overflow: writer joined: {error}");
-        assert_eq!(error.to_string(), "outbound capacity exhausted");
+        eprintln!("T17 saturation deadline: writer joined: {error}");
+        assert_eq!(error.to_string(), "outbound capacity deadline exceeded");
         let remainder = tokio::task::spawn_blocking(move || {
             use std::io::Read;
             let mut reader = reader;
@@ -2932,7 +2954,7 @@ async fn t17_t20_stdio_queue_overflow_finishes_the_physically_accepted_record() 
         })
         .await
         .unwrap();
-        eprintln!("T17 overflow: physical pipe EOF");
+        eprintln!("T17 saturation deadline: physical pipe EOF");
         let bytes = [prefix.to_vec(), remainder].concat();
         assert_eq!(bytes.last(), Some(&b'\n'));
         assert!(!bytes[..bytes.len() - 1].contains(&b'\n'));
@@ -2944,7 +2966,7 @@ async fn t17_t20_stdio_queue_overflow_finishes_the_physically_accepted_record() 
         assert_eq!(response.error.code, -32700);
         assert!(fixture.provider.request_bodies().is_empty());
         fixture.close().await;
-        eprintln!("T17 overflow: cleanup complete");
+        eprintln!("T17 saturation deadline: cleanup complete");
     })
     .await;
 }

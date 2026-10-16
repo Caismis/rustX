@@ -264,6 +264,8 @@ impl Outbound {
 pub(super) struct Outgoing {
     receiver: mpsc::Receiver<Outbound>,
     retirement: Arc<Mutex<bool>>,
+    #[cfg(test)]
+    enqueued: tokio::sync::watch::Receiver<bool>,
 }
 impl Outgoing {
     pub(super) async fn next(&mut self) -> Option<Outbound> {
@@ -292,20 +294,83 @@ fn enqueue(sender: &mpsc::Sender<Outbound>, value: &impl Serialize) -> io::Resul
     )
 }
 
-fn enqueue_notification(
-    sender: &mpsc::Sender<Outbound>,
-    candidate: (
-        super::protocol::Notification,
-        Option<super::registration::Publication>,
-    ),
+#[derive(Clone)]
+struct Outbox {
+    sender: mpsc::Sender<Outbound>,
+    #[cfg(test)]
+    enqueued: tokio::sync::watch::Sender<bool>,
+}
+impl Outbox {
+    fn new(sender: mpsc::Sender<Outbound>) -> Self {
+        Self {
+            sender,
+            #[cfg(test)]
+            enqueued: tokio::sync::watch::channel(false).0,
+        }
+    }
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the queue owner carries the test-only exact enqueue watch"
+        )
+    )]
+    fn send(&self, permit: mpsc::Permit<'_, Outbound>, outbound: Outbound) {
+        permit.send(outbound);
+        #[cfg(test)]
+        self.enqueued.send_modify(|_| {});
+    }
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the queue owner signals its test-only post-close watch"
+        )
+    )]
+    fn retire(&self, retirement: &Mutex<bool>, close: impl FnOnce()) {
+        *retirement.lock().expect("carrier retirement") = true;
+        close();
+        #[cfg(test)]
+        self.enqueued.send_replace(true);
+    }
+}
+
+// Reserve before reading a native candidate. Losing a select turn drops this
+// permit; no queue slot remains held while unrelated protocol work proceeds.
+async fn enqueue_notification(sender: &Outbox, connection: &AppServerConnection) -> io::Result<()> {
+    let permit = sender
+        .sender
+        .reserve()
+        .await
+        .map_err(|_| failure("outbound writer closed"))?;
+    let candidate = connection.next_notification_candidate().await;
+    sender.send(permit, Outbound::notification(candidate)?);
+    Ok(())
+}
+
+// The admitted request keeps its original association and publication leases
+// while waiting. It holds no encoded buffer or lock. This one absolute queue
+// wait budget is separate from the writer's subsequent physical-write budget.
+async fn enqueue_reply(sender: &Outbox, reply: Reply) -> io::Result<()> {
+    let permit = tokio::time::timeout(WRITE_TIMEOUT, sender.sender.reserve())
+        .await
+        .map_err(|_| failure("outbound capacity deadline exceeded"))?
+        .map_err(|_| failure("outbound writer closed"))?;
+    sender.send(permit, Outbound::reply(reply)?);
+    Ok(())
+}
+
+async fn resolve_and_enqueue(
+    sender: Outbox,
+    work: BoxFuture<'static, Option<Reply>>,
 ) -> io::Result<()> {
-    send(sender, Outbound::notification(candidate)?)
+    if let Some(reply) = work.await {
+        enqueue_reply(&sender, reply).await?;
+    }
+    Ok(())
 }
 
-fn enqueue_reply(sender: &mpsc::Sender<Outbound>, reply: Reply) -> io::Result<()> {
-    send(sender, Outbound::reply(reply)?)
-}
-
+#[cfg(test)]
 fn send(sender: &mpsc::Sender<Outbound>, outbound: Outbound) -> io::Result<()> {
     sender
         .try_send(outbound)
@@ -470,14 +535,21 @@ where
     F: Future<Output = io::Result<()>>,
 {
     let _detach = Detach(connection.clone());
-    let (outgoing, receiver) = mpsc::channel(OUTBOUND_MESSAGES);
+    let (sender, receiver) = mpsc::channel(OUTBOUND_MESSAGES);
+    let outgoing = Outbox::new(sender);
     let retirement = Arc::new(Mutex::new(false));
     let write = writer(Outgoing {
         receiver,
         retirement: Arc::clone(&retirement),
+        #[cfg(test)]
+        enqueued: outgoing.enqueued.subscribe(),
     });
     tokio::pin!(incoming, write);
-    let mut requests: FuturesUnordered<BoxFuture<'_, _>> = FuturesUnordered::new();
+    let mut requests: FuturesUnordered<BoxFuture<'static, io::Result<()>>> =
+        FuturesUnordered::new();
+    // Invalid/unadmitted input may produce one reply outside the sixteen
+    // admitted requests. Retain only that reply, then backpressure input.
+    let mut immediate: Option<BoxFuture<'static, io::Result<()>>> = None;
     // Alternate ready observations with protocol progress. Completion priority
     // drains at most IN_FLIGHT_REQUESTS before input; new requests cannot appear
     // without input admission. Neither direction can starve the other.
@@ -486,39 +558,44 @@ where
         tokio::select! {
             biased;
             () = shutdown.cancelled() => {
-                *retirement.lock().expect("carrier retirement") = true;
-                if connection.server_draining() {
-                    // Semantic owners are supervised separately. Only a
-                    // physically accepted record survives carrier retirement.
-                    // Process shutdown also revokes delivery authority.
-                    connection.revoke_delivery_access();
-                    drop(requests);
-                    drop(outgoing);
-                    return write.await;
-                }
-                connection.close();
+                outgoing.retire(&retirement, || {
+                    if connection.server_draining() {
+                        // Semantic owners are supervised separately. Only a
+                        // physically accepted record survives carrier retirement.
+                        connection.revoke_delivery_access();
+                    } else {
+                        connection.close();
+                    }
+                });
                 drop(requests);
+                drop(immediate);
                 drop(outgoing);
                 return write.await;
             },
             result = &mut write => return result,
-            notification = connection.next_notification_candidate(), if observation_turn => {
-                if let Err(error) = enqueue_notification(&outgoing, notification) { break error; }
+            // Ready protocol replies formerly enqueued in the input arm.
+            // Preserve that ordering before considering the next observation.
+            result = async { immediate.as_mut().expect("pending immediate reply").await }, if immediate.is_some() => {
+                immediate = None;
+                if let Err(error) = result { break error; }
+                observation_turn = true;
+            }
+            result = enqueue_notification(&outgoing, &connection), if observation_turn => {
+                if let Err(error) = result { break error; }
                 observation_turn = false;
             }
             response = requests.next(), if !requests.is_empty() => {
-                if let Some(Some(reply)) = response
-                    && let Err(error) = enqueue_reply(&outgoing, reply) { break error; }
+                if let Some(Err(error)) = response { break error; }
                 observation_turn = true;
             }
-            record = incoming.next() => {
+            record = incoming.next(), if immediate.is_none() => {
                 let Some(record) = record else {
                     // Input EOF is not an output I/O failure. A Stdio record
                     // whose first bytes were accepted must still finish its
                     // bytes and delimiter; retire unaccepted observations now.
-                    *retirement.lock().expect("carrier retirement") = true;
-                    connection.close();
+                    outgoing.retire(&retirement, || connection.close());
                     drop(requests);
+                    drop(immediate);
                     drop(outgoing);
                     return write.await;
                 };
@@ -526,9 +603,9 @@ where
                     Ok(record) if record.len() <= MAX_MESSAGE_BYTES => record,
                     other => {
                         let error = other.err().unwrap_or_else(|| failure("inbound message exceeds limit"));
-                        *retirement.lock().expect("carrier retirement") = true;
-                        connection.close();
+                        outgoing.retire(&retirement, || connection.close());
                         drop(requests);
+                        drop(immediate);
                         drop(outgoing);
                         write.await?;
                         return Err(error);
@@ -536,32 +613,100 @@ where
                 };
                 match connection.prepare_json(&record) {
                     super::connection::Prepared::Ready(Some(reply)) => {
-                        if let Err(error) = enqueue_reply(&outgoing, *reply) { break error; }
+                        let sender = outgoing.clone();
+                        immediate = Some(Box::pin(async move { enqueue_reply(&sender, *reply).await }));
                     },
                     super::connection::Prepared::Ready(None) => {},
-                    super::connection::Prepared::Pending(work) => requests.push(work),
+                    super::connection::Prepared::Pending(work) => {
+                        requests.push(Box::pin(resolve_and_enqueue(outgoing.clone(), work)));
+                    },
                 }
                 observation_turn = true;
             }
-            notification = connection.next_notification_candidate(), if !observation_turn => {
-                if let Err(error) = enqueue_notification(&outgoing, notification) { break error; }
+            result = enqueue_notification(&outgoing, &connection), if !observation_turn => {
+                if let Err(error) = result { break error; }
                 observation_turn = false;
             }
         }
     };
-    // Encoding/queue failure retires the carrier just like input EOF. It is
+    // Encoding/queue deadline failure retires the carrier just like input EOF. It is
     // not proof of a physical output failure: an already accepted record still
     // owns its exact remainder and delimiter, within the writer's deadline.
-    *retirement.lock().expect("carrier retirement") = true;
-    if connection.server_draining() {
-        connection.revoke_delivery_access();
-    } else {
-        connection.close();
-    }
+    outgoing.retire(&retirement, || {
+        if connection.server_draining() {
+            connection.revoke_delivery_access();
+        } else {
+            connection.close();
+        }
+    });
     drop(requests);
+    drop(immediate);
     drop(outgoing);
     write.await?;
     Err(error)
+}
+
+/// Test-only view of the existing queue, used to establish exact saturation.
+#[cfg(test)]
+pub(crate) struct ControlledOutgoing(Outgoing);
+#[cfg(test)]
+impl ControlledOutgoing {
+    pub(crate) fn retirement_watch(&self) -> RetirementWatch {
+        RetirementWatch {
+            changed: self.0.enqueued.clone(),
+        }
+    }
+    pub(crate) async fn wait_full(&mut self) {
+        loop {
+            self.0.enqueued.borrow_and_update();
+            if self.0.receiver.len() == OUTBOUND_MESSAGES {
+                return;
+            }
+            self.0
+                .enqueued
+                .changed()
+                .await
+                .expect("live outbound queue");
+        }
+    }
+    pub(crate) async fn next(&mut self) -> Option<Outbound> {
+        self.0.next().await
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct RetirementWatch {
+    changed: tokio::sync::watch::Receiver<bool>,
+}
+#[cfg(test)]
+impl RetirementWatch {
+    pub(crate) async fn retired(&mut self) {
+        self.changed
+            .wait_for(|closed| *closed)
+            .await
+            .expect("live retirement owner");
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn serve_for_test<S, W, F>(
+    connection: Arc<AppServerConnection>,
+    incoming: S,
+    writer: W,
+    shutdown: CancellationToken,
+) -> io::Result<()>
+where
+    S: Stream<Item = io::Result<String>> + Send,
+    W: FnOnce(ControlledOutgoing) -> F,
+    F: Future<Output = io::Result<()>>,
+{
+    serve(
+        connection,
+        incoming,
+        |outgoing| writer(ControlledOutgoing(outgoing)),
+        shutdown,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -710,6 +855,62 @@ mod tests {
             "refused bytes allocate nothing"
         );
         assert_eq!(record.0.len(), MAX_MESSAGE_BYTES);
+    }
+
+    fn pending_reply() -> Reply {
+        Reply {
+            response: response("bounded".into()),
+            publication: None,
+            association: None,
+            may_have_committed: false,
+            registration: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_outbound_saturation_waits_for_capacity_without_encoding_another_record() {
+        let (sender, mut receiver) = mpsc::channel(OUTBOUND_MESSAGES);
+        for _ in 0..OUTBOUND_MESSAGES {
+            enqueue(&sender, &0).unwrap();
+        }
+        let outgoing = Outbox::new(sender.clone());
+        let pending = enqueue_reply(&outgoing, pending_reply());
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        assert_eq!(receiver.len(), OUTBOUND_MESSAGES);
+        receiver.recv().await.unwrap();
+        pending.await.unwrap();
+        assert_eq!(receiver.len(), OUTBOUND_MESSAGES);
+        for _ in 1..OUTBOUND_MESSAGES {
+            assert_eq!(receiver.recv().await.unwrap().record, "0");
+        }
+        let record = receiver.recv().await.unwrap().record;
+        let Response::Success(reply) = serde_json::from_str(&record).unwrap() else {
+            panic!("the original correlated response must survive saturation");
+        };
+        assert_eq!(reply.id, RequestId::String("correlation".into()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sustained_outbound_saturation_keeps_one_absolute_wait_deadline() {
+        let (sender, receiver) = mpsc::channel(OUTBOUND_MESSAGES);
+        for _ in 0..OUTBOUND_MESSAGES {
+            enqueue(&sender, &0).unwrap();
+        }
+        let outgoing = Outbox::new(sender.clone());
+        let pending = enqueue_reply(&outgoing, pending_reply());
+        tokio::pin!(pending);
+        assert!(futures_util::poll!(&mut pending).is_pending());
+        for _ in 0..9 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            assert!(futures_util::poll!(&mut pending).is_pending());
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            pending.await.unwrap_err().to_string(),
+            "outbound capacity deadline exceeded"
+        );
+        assert_eq!(receiver.len(), OUTBOUND_MESSAGES);
     }
 
     #[test]

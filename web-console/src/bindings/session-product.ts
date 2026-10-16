@@ -47,7 +47,7 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   if (!view?.snapshot) return { status: 'idle', severity: 'quiet' };
   const snapshot = view.snapshot;
   if (snapshot.shutting_down) return { status: 'stopping', label: tx('common:session-product.session-is-closing'), severity: 'warning' };
-  if (view.cancellation && view.cancellation.attemptId === view.snapshot?.attempt?.attempt_id) return { status: 'stopping', label: tx('common:session-product.stopping'), severity: 'quiet' };
+  if (view.cancellation?.attemptId !== undefined && view.cancellation.attemptId === view.snapshot?.attempt?.attempt_id) return { status: 'stopping', label: tx('common:session-product.stopping'), severity: 'quiet' };
   if (view.modelMutation) return { status: 'waiting', severity: 'quiet' };
   if (snapshot.pending_interactions?.length) return { status: 'waiting', label: tx('common:session-product.waiting-for-your-response'), severity: 'quiet' };
   if (snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type)) return { status: 'working', severity: 'quiet' };

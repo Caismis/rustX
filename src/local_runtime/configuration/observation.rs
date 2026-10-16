@@ -131,8 +131,12 @@ pub(crate) fn revision(source: &SourceSettings) -> Result<String, String> {
     digest(source)
 }
 pub(crate) fn digest(source: &impl Serialize) -> Result<String, String> {
-    let mut hash = Hash(Sha256::new());
+    // JSON escaping can emit one or two bytes per write. Hash the same exact
+    // stream in finite blocks instead of invoking SHA-256 for each escape on
+    // every revision validation. This neither caches nor omits source evidence.
+    let mut hash = io::BufWriter::with_capacity(8_192, Hash(Sha256::new()));
     serde_json::to_writer(&mut hash, source).map_err(|e| e.to_string())?;
+    let hash = hash.into_inner().map_err(|e| e.to_string())?;
     Ok(format!("{:x}", hash.0.finalize()))
 }
 struct Range {
@@ -174,8 +178,13 @@ pub(crate) fn encode(
         total: 0,
         bytes: Vec::with_capacity(limit),
     };
-    crate::runtime_client::structural_json::to_writer(&mut range, value)
+    // The range keeps only requested bytes, but still counts the complete exact
+    // encoding. Batch tiny escaped-string writes with the same finite scratch
+    // bound used by revision hashing; do not allocate the full field.
+    let mut writer = io::BufWriter::with_capacity(8_192, &mut range);
+    crate::runtime_client::structural_json::to_writer(&mut writer, value)
         .map_err(|e| e.to_string())?;
+    writer.into_inner().map_err(|e| e.to_string())?;
     Ok((range.bytes, range.total))
 }
 fn field(
@@ -729,6 +738,46 @@ mod application_tests {
     use crate::local_runtime::configuration::application::{
         ApplicationIdentity, ApplyUnit, ConfigurationApplication, UnitApplication,
     };
+    #[test]
+    fn configuration_revision_preserves_exact_json_bytes_across_buffer_boundaries() {
+        for count in [0, 1, 8_191, 8_192, 8_193, 300_000] {
+            let source = serde_json::json!({
+                "escaped": "é\n\"\\".repeat(count),
+                "integer": u64::MAX,
+                "nested": [true, null, {"revision": 1}],
+            });
+            let original = serde_json::to_vec(&source).unwrap();
+            assert_eq!(
+                digest(&source).unwrap(),
+                format!("{:x}", Sha256::digest(&original))
+            );
+            let mut changed = source;
+            changed["nested"][2]["revision"] = 2.into();
+            assert_ne!(
+                digest(&changed).unwrap(),
+                format!("{:x}", Sha256::digest(&original))
+            );
+        }
+    }
+
+    #[test]
+    fn configuration_ranges_preserve_exact_structural_bytes_across_buffer_boundaries() {
+        let source = serde_json::json!({"escaped": "é\n\"\\".repeat(30_000), "native": u64::MAX});
+        let mut original = Vec::new();
+        crate::runtime_client::structural_json::to_writer(&mut original, &source).unwrap();
+        for offset in [0, 8_191, 8_192, 8_193, original.len() - 1, original.len()] {
+            for limit in [1, 17, 65_536] {
+                let (bytes, total) = encode(&source, offset as u64, limit).unwrap();
+                assert_eq!(total, original.len() as u64);
+                assert_eq!(
+                    bytes,
+                    original[offset..(offset + limit).min(original.len())]
+                );
+                assert!(bytes.len() <= limit);
+            }
+        }
+    }
+
     #[test]
     fn t15_application_diagnostics_are_bounded_recoverable_and_version_fenced() {
         let mut source = ConfigurationApplication {

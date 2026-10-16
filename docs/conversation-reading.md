@@ -428,11 +428,11 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 67 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 68 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 67 stores frozen Request metadata separately from the native
+SQLite schema 68 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -477,3 +477,23 @@ optional Source creation remains inside its existing savepoint; failure leaves
 native Request, canonical and Journal commitment intact. Source metadata remains
 under the Store's retention and read-cut ownership, and never grants client
 access by itself.
+
+
+### Frozen binary artifact ranges
+
+Canonical binary content remains in the settled managed artifact. Its original
+canonical indexing transaction streams the artifact once, holding its native
+reader reservation, and freezes SHA-256 evidence for each 65,536-byte segment.
+Schema 68 retains those finite digests under the canonical source and block; it
+does not duplicate the artifact bytes. Optional-index failure rolls back that
+observation index without undoing canonical commitment.
+
+Each `BinaryBytes` read validates source authority and frozen length, then reads
+and verifies only the one or two intersecting segments. The maximum physical read
+and hash work is 131,072 bytes for a response of at most 65,536 decoded bytes.
+Returned bytes are sliced from the verified buffers, never reread after checking.
+Missing integrity evidence or changed bytes makes the source unavailable, including
+a same-length external overwrite. Native one-shot writers and their reservation
+locks still own settlement; those advisory locks do not prevent external filesystem
+writers. No whole-file rehash occurs during a range read, and no modified content
+is silently recaptured under an existing reference.

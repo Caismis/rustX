@@ -873,7 +873,7 @@ export class RustxTuiApp {
           const acted = this.#overlay !== undefined || (
             this.#subagentListFocused ||
             !this.#switching &&
-            (state.pendingInteractions.length > 0 ||
+            ((this.#session?.cancellationReady && this.#session.observationPhase !== 'following') || state.pendingInteractions.length > 0 ||
               (attempt !== undefined && ['admitted','running'].includes(attempt.phase.type)))
           );
           void this.#onEscape();
@@ -1150,14 +1150,16 @@ export class RustxTuiApp {
 
   async #onEscape(): Promise<void> {
     this.#acknowledgeTransient();
-    if (this.#hitlOverlay !== undefined) {
+    // A stale interaction cannot consume the gesture as an interaction response.
+    // Cancellation still selects its owner through the live native attachment.
+    if (this.#hitlOverlay !== undefined && this.#session?.observationPhase === 'following') {
       // Escape behavior is defined per interaction kind by the surface
       // itself: a questionnaire gets its explicit typed decline; an approval
       // is dismissed without any answer. The app never answers here.
       this.#hitlOverlay.escape();
       return;
     }
-    if (this.#overlay !== undefined) {
+    if (this.#overlay !== undefined && this.#hitlOverlay === undefined) {
       this.#closeOverlay();
       return;
     }
@@ -1172,8 +1174,8 @@ export class RustxTuiApp {
     const state = this.#session?.state;
     if (state === undefined) return;
     const attempt = state.attempt;
-    if (state.pendingInteractions.length > 0 ||
-      (attempt !== undefined && ['admitted','running'].includes(attempt.phase.type))) {
+    if (this.#session?.cancellationReady && (this.#session.observationPhase !== 'following' || state.pendingInteractions.length > 0 ||
+      (attempt !== undefined && ['admitted','running'].includes(attempt.phase.type)))) {
       const lease = this.#presentationLease();
       try {
         const outcome = await this.#dispatcher.submit("/cancel");
@@ -1193,8 +1195,8 @@ export class RustxTuiApp {
     if (this.#switching) return;
     const state = this.#session?.state;
     if (state === undefined) { await this.quit(); return; }
-    if (state.pendingInteractions.length > 0 ||
-      (state.attempt !== undefined && ['admitted','running'].includes(state.attempt.phase.type))) {
+    if (this.#session?.cancellationReady && (this.#session.observationPhase !== 'following' || state.pendingInteractions.length > 0 ||
+      (state.attempt !== undefined && ['admitted','running'].includes(state.attempt.phase.type)))) {
       const lease = this.#presentationLease();
       try {
         const outcome = await this.#dispatcher.submit("/cancel");

@@ -5,7 +5,7 @@ import type { RuntimeClientSnapshot } from '../../protocol/app-server/v50';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/app-server';
-import { Server, snapshot, endpoint } from './fixture';
+import { Server, snapshot, endpoint, interaction } from './fixture';
 let server: Server;
 beforeEach(() => { localStorage.clear(); server = new Server(); server.handlers.set('turn/cancel', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/cancel' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.useRealTimers(); });
@@ -13,11 +13,13 @@ const running = (id = 'attempt-A'): RuntimeClientSnapshot => ({ ...snapshot(), a
 const cancels = () => server.requests.filter(row => row.request.method === 'turn/cancel').map(row => row.request);
 const input = () => screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
 const escape = () => fireEvent.keyDown(input(), { key: 'Escape' });
-async function mount() {
-  server.snapshots.set('A', running()); await server.attached('A');
+async function mount(initial = running()) {
+  server.snapshots.set('A', initial); await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
-  act(() => input().focus()); vi.useFakeTimers();
+  const editor = screen.queryByRole('textbox', { name: 'Message' });
+  if (editor) act(() => editor.focus());
+  vi.useFakeTimers();
 }
 it('eligible double Escape sends exactly one native target; a gated reply and settlement preserve drafts/receipts', async () => {
   await mount(); const receipt = { session_id: 'A', batch_id: 'batch', token: 'token' };
@@ -99,6 +101,130 @@ it('unavailable stale A forwards cancellation and retains native B receipt witho
   expect(accepted.observationState).toBe('unavailable');
   expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
 });
+it.each(['button', 'Escape'] as const)('%s captures cancellation authority after Source becomes unavailable without enabling Send or draft edits', async gesture => {
+  await mount();
+  fireEvent.change(input(), { target: { value: 'retained draft' } });
+  const target = server.target('A'), registration_id = server.registrations.get(JSON.stringify(target))!;
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } }));
+  const before = server.client.getSnapshot().views.A;
+  expect(before.observationState).toBe('unavailable');
+  expect(server.client.isAttachmentControlCurrent('A', before.attachmentObservation)).toBe(false);
+  // Capture happens after failure, as the rendered gesture does, not before it.
+  expect(server.client.cancellationTarget('A')?.target).toEqual(target);
+  expect(input().disabled).toBe(false); expect(input().readOnly).toBe(true);
+  act(() => input().focus()); expect(document.activeElement).toBe(input());
+  fireEvent.change(input(), { target: { value: 'must not replace draft' } });
+  fireEvent.keyDown(input(), { key: 'Enter' });
+  expect(input().value).toBe('retained draft');
+  expect(server.requests.filter(row => ['turn/start', 'turn/steer'].includes(row.request.method))).toHaveLength(0);
+  const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-current-B' }));
+  server.held.add('turn/cancel');
+  if (gesture === 'button') {
+    const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false); await act(async () => fireEvent.click(button));
+  } else await act(async () => { escape(); escape(); });
+  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target });
+  await act(async () => server.reply(cancels()[0]));
+  const after = server.client.getSnapshot().views.A;
+  expect(after.cancellation).toEqual({ attemptId: 'native-current-B', status: 'acknowledged' });
+  expect(after.snapshot).toBe(before.snapshot); expect(after.cursor).toBe(before.cursor);
+  expect(after.observationState).toBe('unavailable'); expect(input().value).toBe('retained draft');
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
+});
+
+const unavailableSnapshots: readonly (readonly [string, RuntimeClientSnapshot])[] = [
+  ['settled', { ...running(), attempt: { ...running().attempt!, phase: { type: 'settled' as const, outcome: { type: 'cancelled' as const, reason: 'user_requested' } } } }],
+  ['absent Attempt', snapshot()],
+  ['shutdown and durability failure', { ...snapshot(), shutting_down: true, durability_failure: { operation: 'retained', diagnostic: 'retained failure' } }],
+  ['pending interaction', { ...snapshot(), pending_interactions: [interaction('questionnaire')] }],
+];
+it.each(unavailableSnapshots.flatMap(([name, initial]) => (['button', 'Escape'] as const).map(gesture => ({ name, initial, gesture }))))('$gesture cancels with unavailable retained $name using the native receipt', async ({ initial, gesture }) => {
+  await mount(initial);
+  const target = server.target('A'), registration_id = server.registrations.get(JSON.stringify(target))!;
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } }));
+  const before = server.client.getSnapshot().views.A;
+  const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  expect(server.client.cancellationTarget('A')).toBeDefined();
+  expect(input().readOnly).toBe(true); act(() => input().focus());
+  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-current-B' }));
+  server.held.add('turn/cancel');
+  if (gesture === 'button') await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Stop' })));
+  else await act(async () => { escape(); escape(); });
+  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target });
+  expect(server.client.getSnapshot().views.A.cancellation?.attemptId).toBe(initial.attempt?.attempt_id ?? undefined);
+  await act(async () => server.reply(cancels()[0]));
+  const after = server.client.getSnapshot().views.A;
+  expect(after.cancellation).toEqual({ attemptId: 'native-current-B', status: 'acknowledged' });
+  expect(after.snapshot).toBe(before.snapshot); expect(after.cursor).toBe(before.cursor);
+  expect(after.observationState).toBe('unavailable');
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
+});
+it('an acknowledged native A under unavailable A permits an explicit successor cancellation without replay', async () => {
+  await mount();
+  const target = server.target('A'), registration_id = server.registrations.get(JSON.stringify(target))!;
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } }));
+  const before = server.client.getSnapshot().views.A;
+  await act(async () => { escape(); escape(); });
+  expect(cancels()).toHaveLength(1);
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'acknowledged' });
+  expect(server.client.cancellationTarget('A')).toBeDefined(); expect(cancels()).toHaveLength(1);
+  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-successor-B' }));
+  await act(async () => { escape(); escape(); });
+  expect(cancels()).toHaveLength(2);
+  const after = server.client.getSnapshot().views.A;
+  expect(after.cancellation).toEqual({ attemptId: 'native-successor-B', status: 'acknowledged' });
+  expect(after.snapshot).toBe(before.snapshot); expect(after.cursor).toBe(before.cursor);
+});
+it('Escape cancels through the exact attachment while explicit observation recovery is held', async () => {
+  await mount(snapshot());
+  const target = server.target('A');
+  server.held.add('session/checkpoint');
+  const repairing = server.client.refresh('A');
+  const read = server.requests.filter(row => row.request.method === 'session/checkpoint').at(-1)!.request;
+  await act(async () => {});
+  expect(server.client.getSnapshot().views.A.observationState).toBe('checkpointLoading');
+  expect(server.client.cancellationTarget('A')).toBeDefined();
+  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-current-B' }));
+  act(() => input().focus()); await act(async () => { escape(); escape(); });
+  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target });
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'native-current-B', status: 'acknowledged' });
+  await act(async () => { server.reply(read); await repairing; });
+  expect(cancels()).toHaveLength(1);
+});
+it('unavailable cancellation rejection clears only its operation and never replays', async () => {
+  await mount(snapshot());
+  const target = server.target('A'), registration_id = server.registrations.get(JSON.stringify(target))!;
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } }));
+  server.held.add('turn/cancel');
+  await act(async () => { escape(); escape(); });
+  const request = cancels()[0]; expect(request).toBeDefined();
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'No active Attempt' } }));
+  expect(server.client.getSnapshot().views.A.cancellation).toBeUndefined();
+  expect(server.client.cancellationTarget('A')).toBeDefined(); expect(cancels()).toHaveLength(1);
+});
+
+it.each(['attachment', 'connection'] as const)('an unavailable Escape arm cannot cross a replaced %s', async replacement => {
+  await mount();
+  const target = server.target('A'), registration_id = server.registrations.get(JSON.stringify(target))!;
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } }));
+  const retired = server.client.cancellationTarget('A')!; expect(retired).toBeDefined();
+  act(() => input().focus()); escape();
+  vi.useRealTimers();
+  if (replacement === 'attachment') {
+    await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
+  } else {
+    await act(async () => server.socket.close());
+    await server.client.cancelTurn(retired); expect(cancels()).toHaveLength(0);
+    await act(async () => server.connect());
+  }
+  await server.client.cancelTurn(retired); expect(cancels()).toHaveLength(0);
+  const next = server.client.cancellationTarget('A')!;
+  expect(next).toBeDefined(); expect(next.target).not.toEqual(target);
+  act(() => input().focus()); await act(async () => escape()); expect(cancels()).toHaveLength(0);
+  await act(async () => escape()); expect(cancels()).toHaveLength(1);
+  expect(cancels()[0].params).toEqual({ target: next.target });
+});
 it('native B acknowledgement survives stale A folds and permits a genuine observed successor', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
   const expected = server.client.cancellationTarget('A')!;
@@ -119,6 +245,43 @@ it('native B acknowledgement survives stale A folds and permits a genuine observ
   expect(cancels()).toHaveLength(2);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({attemptId:'native-C',status:'acknowledged'});
 });
+const unrelatedCancellationSnapshots = [
+  ['absent Attempt', snapshot()],
+  ['different Attempt', running('unrelated-C')],
+  ['display Attempt settled', { ...running(), attempt: { ...running().attempt!, phase: { type: 'settled' as const, outcome: { type: 'cancelled' as const, reason: 'user_requested' } } } }],
+] as const;
+it.each(unrelatedCancellationSnapshots)('an in-flight cancellation survives a checkpoint with %s', async (_name, next) => {
+  server.snapshots.set('A', running()); await server.attached('A');
+  const expected = server.client.cancellationTarget('A')!;
+  server.held.add('turn/cancel');
+  const cancelling = server.client.cancelTurn(expected), request = cancels()[0];
+  const operation = server.client.getSnapshot().views.A.cancellation;
+  server.snapshots.set('A', next); await server.client.refresh('A');
+  expect(server.client.getSnapshot().views.A.cancellation).toBe(operation);
+  expect(server.client.cancellationTarget('A')).toBeUndefined();
+  await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
+  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'actual-native-B' }));
+  server.reply(request); await cancelling;
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'actual-native-B', status: 'acknowledged' });
+});
+it.each(unrelatedCancellationSnapshots)('uncertain cancellation survives same-attachment repair with %s without replay', async (_name, next) => {
+  server.snapshots.set('A', running()); await server.attached('A');
+  const expected = server.client.cancellationTarget('A')!;
+  server.held.add('turn/cancel');
+  const cancelling = server.client.cancelTurn(expected).catch(error => error), request = cancels()[0];
+  server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Native outcome unknown', data: { kind: 'outcome_unknown' } } });
+  expect(isOutcomeUncertain(await cancelling)).toBe(true);
+  const operation = server.client.getSnapshot().views.A.cancellation;
+  expect(operation).toEqual({ attemptId: 'attempt-A', status: 'uncertain' });
+  const target = server.target('A'), registration_id = server.registrations.get(JSON.stringify(target))!;
+  server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } });
+  server.snapshots.set('A', next); await server.client.refresh('A');
+  expect(server.client.getSnapshot().views.A.target).toEqual(target);
+  expect(server.client.getSnapshot().views.A.cancellation).toBe(operation);
+  expect(server.client.cancellationTarget('A')).toBeUndefined();
+  await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
+});
+
 it('ordinary RPC saturation cannot block exact lifecycle cancellation or its acknowledgement', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
   const expected = server.client.cancellationTarget('A')!;
@@ -182,27 +345,27 @@ it('full bounded control capacity refuses cancellation locally and releases only
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'acknowledged' });
 });
 
-it('a locally refused control continuation cannot clear a successor cancellation operation', async () => {
+it('a retired attachment response cannot clear a successor cancellation operation', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
-  const occupied = occupyControls(); await server.waitFor('delivery/cancel', 2);
   server.held.add('turn/cancel');
-  const older = server.client.cancelTurn(server.client.cancellationTarget('A')!).catch(error => error);
+  const expectedA = server.client.cancellationTarget('A')!;
+  const older = server.client.cancelTurn(expectedA);
+  const requestA = cancels()[0];
+  server.commit(requestA); // Commit A's receipt before retiring its attachment; hold only delivery.
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
-  expect(cancels()).toHaveLength(0);
-  // Replace A and admit B before the already-refused A's async cleanup resumes.
-  server.snapshots.set('A', running('attempt-B'));
-  server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event: { type: 'attempt_started', attempt_id: 'attempt-B' } } });
-  releaseControls();
+  await server.client.release('A');
+  expect(server.client.getSnapshot().views.A.cancellation).toBeUndefined();
+  server.snapshots.set('A', running('attempt-B')); await server.client.attach('A');
   const expectedB = server.client.cancellationTarget('A')!;
-  const successor = server.client.cancelTurn(expectedB);
+  const successor = server.client.cancelTurn(expectedB), requestB = cancels()[1];
   const operationB = server.client.getSnapshot().views.A.cancellation;
+  expect(expectedB.target).not.toEqual(expectedA.target);
   expect(operationB).toEqual({ attemptId: 'attempt-B', status: 'in-flight' });
-  const failure = await older;
-  expect(failure.message).toContain('control capacity'); expect(isOutcomeUncertain(failure)).toBe(false);
+  server.reply(requestA); await older;
   expect(server.client.getSnapshot().views.A.cancellation).toBe(operationB);
   expect(server.client.getSnapshot().uncertain).toEqual([]);
-  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target: expectedB.target });
-  await Promise.all(occupied); server.reply(cancels()[0]); await successor;
+  expect(cancels()).toHaveLength(2); expect(requestB.params).toEqual({ target: expectedB.target });
+  server.reply(requestB); await successor;
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-B', status: 'acknowledged' });
 });
 

@@ -48,7 +48,7 @@ interface OutlineRead {
 export interface CancellationTarget {
   readonly generation: number;
   readonly target: AttachmentTarget;
-  readonly attemptId: string;
+  readonly attemptId?: string;
   readonly attachment: SessionView['attachmentObservation'];
 }
 export type InboundControlOutcome =
@@ -100,7 +100,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   inboundRequests?: number;
   modelIntent?: { config: import('../../../protocol/app-server/v50').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
-  cancellation?: { attemptId: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
+  cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
 }
 /** Exists only after `inbound_accepted` names the server MessageId, which is its
@@ -477,8 +477,8 @@ export class AppServerClient {
         turnNavigation: view.turnNavigation && { intent: view.turnNavigation.intent },
       } : {}),
       ...(changedNode ? { snapshot: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
-      ...(opening ? { modelIntent: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
-      ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined } : {}),
+      ...(opening ? { modelIntent: undefined, cancellation: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
+      ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined, cancellation: undefined } : {}),
       ...(attached && result ? { snapshot: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
@@ -2095,9 +2095,12 @@ export class AppServerClient {
     const mutation = this.state.views[id].modelMutation;
     if (mutation && mutation.generation !== this.state.generation) this.setSession(id, { modelMutation: undefined });
     const cancellation = this.state.views[id].cancellation;
-    if (cancellation && (snapshot.attempt?.attempt_id === cancellation.attemptId
-      ? snapshot.attempt.phase.type === 'settled'
-      : cancellation.status !== 'acknowledged')) this.setSession(id, { cancellation: undefined });
+    // Until acknowledgement the retained display Attempt is not the operation's
+    // native target, so even its observed settlement cannot resolve this request.
+    if (cancellation?.status === 'acknowledged' && cancellation.attemptId !== undefined
+      && snapshot.attempt?.attempt_id === cancellation.attemptId && snapshot.attempt.phase.type === 'settled') {
+      this.setSession(id, { cancellation: undefined });
+    }
     const frontier=observationCheckpoint(snapshot,this.state.views[id].cursor??'0')?.collections.find(value=>value.domain==='pending_interactions');
     // A bounded head cannot establish absence from the complete native set.
     if(frontier&&BigInt(frontier.total)>BigInt(snapshot.pending_interactions?.length??0))return;
@@ -2431,15 +2434,20 @@ export class AppServerClient {
   }
   cancellationTarget(id: string): CancellationTarget | undefined {
     const view = this.state.views[id], attempt = view?.snapshot?.attempt;
-    if (!this.isAttachmentControlCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted' || view.attachment !== 'attached'
-      || !view.target || view.deleting || this.cancellationPending(id) || !attempt || attempt.attempt_id == null || !['admitted','running'].includes(attempt.phase.type)
-      || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length) return;
-    return { generation: this.state.generation, target: view.target, attemptId: attempt.attempt_id, attachment: view.attachmentObservation };
+    // This proof owns the live attachment even when its observation source is
+    // unavailable. The coordinator selects the current Attempt at dispatch.
+    if (!this.isAttachmentObservationCurrent(id, view?.attachmentObservation) || !this.initialized || this.state.connection !== 'connected' || view?.attachmentIntent !== 'wanted'
+      || !view.target || view.deleting || this.cancellationPending(id)) return;
+    if (this.observationChains.get(id)?.phase === 'following' && (!attempt || attempt.attempt_id == null || !['admitted','running'].includes(attempt.phase.type)
+      || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length)) return;
+    return { generation: this.state.generation, target: view.target, attemptId: attempt?.attempt_id ?? undefined, attachment: view.attachmentObservation };
   }
   private cancellationPending(id: string): boolean {
     const view = this.state.views[id], cancellation = view?.cancellation;
+    // An acknowledgement cannot establish that its Attempt is still current
+    // while observation is unavailable. A later explicit gesture selects anew.
     return !!cancellation && (cancellation.status !== 'acknowledged'
-      || cancellation.attemptId === view.snapshot?.attempt?.attempt_id);
+      || this.observationChains.get(id)?.phase === 'following' && cancellation.attemptId === view.snapshot?.attempt?.attempt_id);
   }
   async cancelTurn(expected: CancellationTarget) {
     const { target, generation, attemptId, attachment } = expected, id = target.session_id;

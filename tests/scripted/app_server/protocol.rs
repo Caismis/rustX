@@ -9725,8 +9725,12 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
     use crate::local_runtime::configuration::effective_observation as source;
     use base64::Engine;
     bounded(async {
+        let mut phases = FixturePhase::new("effective-configuration-pages");
+        phases.enter("fixture");
         let f = Fixture::new().await;
+        phases.enter("load");
         f.manager.load(&f.sessions[0].id, None).await.unwrap();
+        phases.enter("native effective configuration");
         let mut native = f
             .manager
             .effective_configuration_observation(&f.sessions[0].id)
@@ -9741,10 +9745,12 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
                 "revision".repeat(8),
             );
         }
+        phases.enter("bounded projection");
         let projection = source::bounded(&native).unwrap();
         assert!(projection.inline.is_none());
         assert_eq!(projection.fields.len(), 18);
         assert!(serde_json::to_vec(&projection).unwrap().len() < 786_432);
+        phases.enter("field reconstruction");
         let mut reconstructed = serde_json::Map::new();
         for field in &projection.fields {
             let value = if let Some(value) = &field.value {
@@ -9779,6 +9785,7 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
             ))
             .unwrap();
         assert_eq!(reconstructed, native);
+        phases.enter("source revisions pages");
         let mut offset = 0;
         let mut seen = 0;
         loop {
@@ -9800,6 +9807,7 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
             offset = next;
         }
         assert_eq!(seen, native.source_revisions.len());
+        phases.enter("expired and small collection evidence");
         let reference = projection
             .fields
             .iter()
@@ -9840,7 +9848,9 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
         .unwrap();
         assert_eq!(page.items.len(), 32);
         assert_eq!(page.next_offset, Some(32));
+        phases.enter("close");
         f.close().await;
+        phases.finish();
     })
     .await;
 }

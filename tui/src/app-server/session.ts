@@ -205,7 +205,9 @@ export class AppServerSession {
   }
 
   get observationPhase() { return this.#observation.phase; }
-  get controlReady() { return !this.#released && !this.#serverClosed && this.#observation.phase === 'following'; }
+  /** Cancellation needs the live attachment, not an observed execution baseline. */
+  get cancellationReady() { return !this.#released && !this.#serverClosed; }
+  get controlReady() { return this.cancellationReady && this.#observation.phase === 'following'; }
   get checkpoint() { return this.#checkpoint; }
 
   #assertControlReady(): void {
@@ -615,7 +617,7 @@ export class AppServerSession {
 
   /** Requests cancellation of the current attempt. Acceptance, not settlement. */
   async cancelCurrentAttempt(): Promise<string> {
-    if (this.#released || this.#serverClosed) throw new Error('Session attachment is unavailable.');
+    if (!this.cancellationReady) throw new Error('Session attachment is unavailable.');
     // The native coordinator selects its current Attempt under its admission
     // lock. A retained observation cannot establish that owner's absence.
     const accepted = await this.#client.call(

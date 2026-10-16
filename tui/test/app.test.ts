@@ -93,7 +93,9 @@ function fakeSession(
     target: targetFor(sessionId),
     released: false,
     serverClosed: false,
-    controlReady: true,
+    observationPhase: 'following' as const,
+    get cancellationReady(): boolean { return !session.released && !session.serverClosed; },
+    get controlReady(): boolean { return session.cancellationReady && session.observationPhase === 'following'; },
     resyncCount: 0,
     onState: (listener: (nextState: unknown) => void) => {
       stateListeners.add(listener);
@@ -836,32 +838,35 @@ describe("RustxTuiApp lifecycle", () => {
     );
     const running = app.run();
 
-    // Inspection overlay: Esc closes it and must not reach /cancel, even
-    // though the authoritative presentation says an attempt is unsettled.
-    process.stdin.emit("data", "/help\r");
-    await waitForApplicationContinuation();
-    process.stdin.emit("data", "\u001b");
-    await waitForPiEscapeDisambiguation();
-    assert.equal(cancelled, 0);
+    try {
+      // Inspection overlay: Esc closes it and must not reach /cancel, even
+      // though the authoritative presentation says an attempt is unsettled.
+      process.stdin.emit("data", "/help\r");
+      await waitForApplicationContinuation();
+      process.stdin.emit("data", "\u001b");
+      await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 0);
 
-    // Overlay open: Esc closes it and must not reach /cancel, even though
-    // the authoritative presentation says an attempt is unsettled.
-    process.stdin.emit("data", "/resume\r");
-    await sessionsListedObserved;
-    // The list response is observed above; this microtask lets the awaiting
-    // dispatcher install the overlay before the next input event.
-    await Promise.resolve();
-    process.stdin.emit("data", "\u001b");
-    await waitForPiEscapeDisambiguation();
-    assert.equal(cancelled, 0);
+      // Overlay open: Esc closes it and must not reach /cancel, even though
+      // the authoritative presentation says an attempt is unsettled.
+      process.stdin.emit("data", "/resume\r");
+      await sessionsListedObserved;
+      // The list response is observed above; this microtask lets the awaiting
+      // dispatcher install the overlay before the next input event.
+      await Promise.resolve();
+      process.stdin.emit("data", "\u001b");
+      await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 0);
 
-    // No overlay: the same Esc input reaches the existing /cancel route once.
-    process.stdin.emit("data", "\u001b");
-    await waitForPiEscapeDisambiguation();
-    assert.equal(cancelled, 1);
+      // No overlay: the same Esc input reaches the existing /cancel route once.
+      process.stdin.emit("data", "\u001b");
+      await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 1);
 
-    await app.quit();
-    await running;
+    } finally {
+      await app.quit();
+      await running;
+    }
   });
 
   it("Session deletion overlay preserves editor, attachment and active projection and owns Esc", async () => {

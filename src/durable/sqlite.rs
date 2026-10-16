@@ -325,7 +325,8 @@ fn count_conversation_store_open() {
 /// Immutable context projection plus finite bounded observation layouts.
 /// Version 62 gives request fields explicit inline-header or original-span storage.
 /// Version 67 stores child lookup paths rather than duplicate Source Fact payloads.
-pub const SQLITE_SCHEMA_VERSION: i64 = 67;
+/// Version 68 binds canonical binary `ContentRefs` to frozen fixed-chunk digests.
+pub const SQLITE_SCHEMA_VERSION: i64 = 68;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8374,11 +8375,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
                 stream_id TEXT NOT NULL, revision INTEGER NOT NULL, total INTEGER NOT NULL,tool_total INTEGER NOT NULL,
                 PRIMARY KEY(stream_id,revision)
             ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS canonical_binary_sources (
-                source_id TEXT NOT NULL, block_index INTEGER NOT NULL, artifact_id TEXT NOT NULL,
-                readable_end INTEGER NOT NULL CHECK(readable_end>=0),
-                PRIMARY KEY(source_id,block_index)
-            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS goal_state (
                 observation_header BLOB CHECK(observation_header IS NULL OR length(observation_header)<=16384),
                 singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -8782,6 +8778,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS publication_streams_message_settlement_idx ON publication_streams(message_id,settlement);",
         )
         .map_err(|error| storage(format!("create schema: {error}")))?;
+    content::create_binary_schema(connection)?;
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
     connection
@@ -8819,6 +8816,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
+    content::verify_binary_schema(connection)?;
     provenance::verify_turn_header_shape(connection)?;
     projection::verify_completion_index(connection)?;
     // Bootstrap metadata stays compact; provenance payloads have their own rows.
@@ -19281,7 +19279,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 67);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 68);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19350,7 +19348,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 67);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 68);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

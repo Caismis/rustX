@@ -11,6 +11,191 @@ The normative contract is in [invariants](invariants.md), the public methods and
 lock order in [App Server protocol](app-server-protocol.md), and source/read-cut
 semantics in [conversation reading](conversation-reading.md).
 
+## Second-stage review corrections (after `915f6a57`)
+
+The second-stage review was checked against actual source, rather than assumed
+correct. `origin/main` remains `8cb41624eb2dc2ca87e4409961f42553ceb029cf`, already
+an ancestor. This correction retains the existing PR/worktree and the approved
+45-minute Linux contracts job budget; no individual guard or workload is raised.
+
+- **Cancellation gestures:** Web's fresh gesture really was blocked by both
+  `following` and a disabled/hidden composer. TUI's direct cancellation method
+  already bypassed `#call`/`#assertControlReady`, contrary to that part of the
+  review, but its stale idle/HITL gesture routing still used presentation to
+  decide whether to cancel. Current connection and exact attachment authority
+  now permit cancellation during unavailable/recovering observation, including
+  absent or settled displayed Attempts. The native coordinator remains the only
+  current-Attempt selector. Ordinary Send/edit readiness remains strict; unknown
+  execution is not relabeled Running. Connection/attachment replacement fences
+  retained gestures, and recovery performs no semantic replay.
+- **Binary integrity:** the new real-artifact regression first failed against
+  the length-only reader after a same-length external overwrite and Store reopen.
+  Schema 68 freezes a SHA-256 digest for each 64 KiB canonical binary segment
+  during the original optional indexing transaction. Each read verifies at most
+  two segments and returns slices from those same buffers: at most 128 KiB actual
+  file input/hash work, two 32-byte digest rows and a 64 KiB response. Missing or
+  modified evidence fails closed. Native writer settlement, source authorization,
+  canonical commitment and optional-index rollback retain their original owners.
+  Empty EOF reads do no file/hash work. Older schema 67 stores are refused without
+  migration. This is the canonical ContentRef read contract; it does not claim
+  that advisory artifact locks prevent external writers or authenticate every
+  independent archive/export API.
+- **Backpressure:** immediate closure on one full `try_send` was documented and
+  was not itself established as an RFC prohibition. The refined finite policy
+  reserves capacity before native notification consumption or reply encoding.
+  Original admitted request futures keep their response ownership while awaiting
+  the existing 32-slot queue; at most one immediate protocol reply backpressures
+  further input. Writer, shutdown and admitted controls remain polled. A reply
+  has one absolute ten-second capacity deadline, distinct from the unchanged
+  physical-write deadline. There is no extra encoded queue, silent drop, or
+  semantic retry. Accepted Stdio bytes retain their exact remainder/delimiter.
+
+### Previous-head CI failure retained
+
+[Run 38921167776](https://github.com/Caismis/rustX/actions/runs/38921167776), for
+`915f6a57`, passed Linux boundaries (237 in-crate and 451 external tests) but
+failed Linux contracts: 3,916 passed, one failed, four existing ignores and
+237 boundary filters. The sole failure was
+`local_runtime::session_runtime_manager::tests::protocol::t15_effective_configuration_preserves_all_fields_and_advancing_pages`
+at its unchanged 30-second liveness guard. Binary build finished at 15:10:54Z;
+test-harness compilation ended at 15:17:21.852Z, and library execution ran from
+15:17:22.645Z through 15:34:11.892Z (1,009.25s). This was an actual test failure,
+not exhaustion of the 45-minute job budget and not a proven infrastructure fault.
+
+The exact selector passed in isolation before correction in 9.39s (9.32s CPU).
+Configuration revision hashing invoked SHA-256 separately for tiny JSON escape
+writes on every page/read. Fixed 8 KiB standard buffered writers now feed hashing
+and range accounting with the same complete serialized stream, without caching
+or omitting evidence. Regressions compare digests and ranged bytes against the
+original JSON/structural encoding across buffer boundaries, large escaped text,
+nested values, changed revisions and EOF. The exact selector measured 8.52s after
+hash buffering and 8.11s after range buffering (8.04s CPU), versus 9.39s before.
+This is a modest isolated improvement, not proof of the remote failure's cause.
+Debugger breakpoints at actual phase boundaries measured about 1.96s field
+reconstruction and 5.41s collection paging. A separate page-boundary measurement
+at 95 calls attributed 5.266s to full revision validation and 0.194s to page item
+construction. Revision validation is preserved; no broader configuration caching
+or performance refactor is claimed. These are wall durations between debugger
+breakpoints, not a CPU sampling profile. Failure-only phase diagnostics
+retain fixture/load/projection/reconstruction/page/cleanup stages. The original
+3,000-entry/large-field reconstruction and pagination assertions remain intact.
+`perf record` was unavailable locally (`perf_event_paranoid=4`); no CPU sampling
+claim is made from that rejected command.
+
+### Added synchronization and integrity evidence
+
+| Selector / owner | Controlled boundary and assertion |
+| --- | --- |
+| `web-console/test/composer-cancellation.test.tsx` unavailable/stale/held-recovery cases | Real composer gestures over a controlled connection, held reply and explicit checkpoint repair. Exact attachment/generation gates dispatch; failed observation neither clears an uncertain operation nor invents the native cancellation target. Send and editing remain unavailable. |
+| `tui/test/composer-app.test.ts` unavailable Escape/Ctrl+C cases | Actual key routing with retained idle, absent or pending-interaction display state. The exact live session dispatches cancellation; retired session authority cannot cross to its replacement. |
+| `durable::sqlite::content::binary_tests::binary_content_reference_rejects_same_length_external_modification_after_reopen` | Commit, close, overwrite the real artifact with equal-length bytes, reopen and read the original reference; the read fails closed against the original digest. |
+| `durable::sqlite::content::binary_tests::binary_integrity_checks_open_read_races_and_returns_only_verified_buffers` | Narrow hooks modify the actual file before chunk read and after verification. Pre-read corruption fails; post-verification mutation cannot change bytes already verified and returned. |
+| `durable::sqlite::content::binary_tests::binary_ranges_verify_only_intersecting_fixed_chunks_with_exact_eof` | Exact unaligned chunk reconstruction, physical read/hash counters and EOF prove the two-segment bound independent of artifact size. |
+| `durable::sqlite::content::binary_tests::binary_digest_index_failure_is_optional_and_rolls_back_its_frontier` | Injected index failure retains canonical commitment while rolling back binary digest/frontier publication. Missing evidence cannot fall back to mutable bytes. |
+| `app_server::transport::tests::transient_outbound_saturation_waits_for_capacity_without_encoding_another_record` | Fill exactly 32 slots, poll the reply pending, release one slot and recover the original correlated response. |
+| `app_server::transport::tests::sustained_outbound_saturation_keeps_one_absolute_wait_deadline` | Paused clock and explicit polling prove that repeated polls do not reset the ten-second capacity deadline. |
+| `local_runtime::session_runtime_manager::tests::transports::outbound_backpressure::transient_full_queue_preserves_admitted_control_and_other_conversation_execution` | Exact queue-full watch and held writer on one carrier with two native attachments. The other conversation completes and the first accepts native cancellation before output resumes; both original receipts then arrive exactly once, with two model calls total. This is the shared serving boundary with a controlled writer, not an OS pipe. |
+| `local_runtime::session_runtime_manager::tests::transports::t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_record` | Actual OS pipe, gated first positive write, full queue and post-retirement watch. Capacity deadline retires unaccepted work; the accepted record still finishes its exact bytes and delimiter. |
+| `local_runtime::configuration::observation::application_tests::configuration_revision_preserves_exact_json_bytes_across_buffer_boundaries` and `configuration_ranges_preserve_exact_structural_bytes_across_buffer_boundaries` | Exact digest/byte equivalence at 8 KiB buffer edges, escaped text and EOF, preserving complete revision evidence and bounded retained output. |
+
+### Second-stage validation
+
+The first complete local four-worker attempt reached the library result with
+4,159 passed, seven failed and four existing ignores (809.69s); Cargo then
+stopped before external targets. Five file-read boundaries and one Child model
+selection boundary reached their unchanged 30-second cumulative guard. Three
+failed during fixture construction itself, before the tested read/control
+operation; retained phase timings include roughly 9–10s launch analysis and
+15–16s native Session creation. The seventh was
+`scripted_suites::agent::tool_deadlines::issue206_executor_panic_cannot_orphan_parallel_siblings`:
+its expected scripted panics occurred, but settlement exceeded its existing
+five-second guard with one model request and the original Journal at
+`turn_started`. This is a failed run, not waived correctness coverage.
+
+Contemporaneous `/proc` samples showed I/O pressure around 75–80%, no CPU
+pressure, and native test threads in `jbd2_log_wait_commit` and
+`folio_wait_bit_common` on ext4. These directly observed kernel waits help
+localize resource contention but do not by themselves prove the cause of every
+timeout. No filesystem durability setting, test assertion, individual guard or
+workload was changed. The five file-read tests subsequently passed together
+(6.66s), the model-selection boundary passed (6.87s), the exact Tool-panic test
+passed, and its entire 19-test Tool-deadline suite passed (5.24s), using one
+libtest worker. The complete serial `cargo test --all-targets --all-features` run then passed
+4,847 tests with zero failures and nine existing ignores across 20 targets
+(2,649.54s), including all seven selectors. The separate four-worker in-crate boundary lane then passed all 237 tests
+(105.47s), and the 19-test Tool-deadline suite passed with four workers too. The
+initial complete-run failures remain part of the evidence.
+
+The full TUI run initially exposed an incomplete test fixture: the healthy
+`app.test.ts` Session fake still provided only `controlReady`, omitting the new
+live cancellation readiness and observation phase. Its overlay-free Escape
+assertion failed and the old test skipped UI cleanup on assertion failure. The
+fake now models the actual healthy/following authority and the test joins its UI
+in `finally`; production has no fallback for missing authority. The exact test
+passed, the affected routing group passed 135 tests, and full TUI passed 1,180
+with zero failures/cancellations and one existing macOS-only skip. Type checking
+passed. The stopped failed process tree was physically reaped before continuing.
+
+Full Web validation initially reported 13 failures across four files: the
+shared composer default inferred cancellation availability without a native
+session, and the generalized focusable/read-only exception altered Child
+Stopping/Admitting, unsupported-restoration and pending-model draft behavior.
+The correction gives only the resident Root's unavailable-observation path an
+explicit cancellation-only mode with exact attachment proof. Other disabled,
+editing and Send rules retain their previous behavior. All 13 existing assertions
+pass unchanged; two additional tests reject a Stop action without native
+cancellation authority. Full Web then passed 2,853 tests with zero failures and
+four existing skips (180 passing files, one skipped), with TypeScript passing.
+No protocol DTO, mutation replay or execution-state fallback was added.
+
+Focused client checks passed: 117 Web tests across five files, 47 TUI tests across
+two files, and both TypeScript checks. These are actual component/app gesture
+checks with controlled client responses; native coordinator identity and physical
+transport boundaries retain their separate Rust tests. Seven binary owner tests,
+the existing binary restart/lineage boundary, the exact-digest test, two queue
+capacity unit tests and the shared-connection transient-saturation test passed.
+The first real-pipe deadline run caught a genuine ordering regression: a ready
+notification overtook the deferred immediate parse-error reply. Immediate reply
+polling was moved ahead of notification selection to preserve the original order;
+its accepted-prefix/delimiter assertions were not weakened. The corrected pipe
+case and all 36 transport tests passed. Integrated Rust and full client checks
+have now passed as recorded above. The first build correctly refused stale
+reviewed local hashes for the two changed Harness-derived sources; their hashes
+and treatment notes were explicitly updated without changing upstream pins,
+imports or attribution. The rebuilt artifact, i18n and provenance checks passed.
+The two original reading cases passed independently on the default filesystem
+(2.6m and 2.5m), retaining 300 Attempts and the 240-second setup limit. The complete browser suite then passed all 317 cases in 21.2 minutes with
+one worker, including both original reading scenarios. The next pushed-head CI
+remains pending; earlier-head results do not establish that outcome.
+
+| Exact command | Current local result |
+| --- | --- |
+| `git diff --check` | Passed. |
+| `cargo fmt --all -- --check` | Passed. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed after correcting new lint findings; initial output retained. |
+| `cargo build --bins` | Passed. |
+| `cargo test --all-targets --all-features` | 4,847 passed / 0 failed / 9 existing ignores / 20 targets with one libtest worker; initial four-worker failure is detailed above. |
+| `cargo test --lib --all-features -- boundary_suites:: --test-threads=4` | 237 passed / 0 failed. |
+| `cargo test --lib --all-features scripted_suites::agent::tool_deadlines:: -- --test-threads=4` | 19 passed / 0 failed. |
+| `cargo run --all-features --example check_test_lanes` | Linux discovery and coverage passed. |
+| `pnpm --dir protocol/app-server check` and `pnpm --dir protocol/app-server typecheck` | Generation/drift and TypeScript passed. |
+| `pnpm --dir dev typecheck` and `pnpm --dir dev test` | Passed; 41 tests. |
+| `pnpm --dir tui typecheck` and `pnpm --dir tui test` | Passed; 1,180 passed / 1 existing macOS-only skip. |
+| `pnpm --dir web-console typecheck` and `pnpm --dir web-console test` | Passed; 2,853 passed / 4 existing skips. |
+| `pnpm --dir web-console build` | Passed, including artifact provenance. |
+| `pnpm --dir web-console check:i18n` and `pnpm --dir web-console check:provenance` | Passed. |
+| `cargo test --test subagent --all-features definitions::skill_version_identity_is_frozen_across_the_boundary -- --exact` | Passed alone and in the complete 47-test Subagent target. |
+| `uv run --project test-support/fake-provider --frozen pytest test-support/fake-provider/tests` | 55 passed. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'native distant reading rail, detached/latest follow and measured width in both locales'` | Passed. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'Fork source exact Message landing and cancellation by scrolling, newer navigation and attachment replacement'` | Passed. |
+| `pnpm --dir web-console test:e2e` | 317 passed / 0 failed (21.2m), original workload and limits unchanged. |
+
+Native validation used `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4` and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`; the final complete run used
+`RUST_TEST_THREADS=1`, with the explicit additional four-worker commands above.
+Only local fake/scripted providers ran; opt-in live tests remained ignored.
+
+
 ## PR #478 repair and latest-main integration
 
 Historical validation at `b0928347`: the repaired source passed **4,784 Rust tests** (zero failures,
@@ -1693,7 +1878,7 @@ are liveness guards, never race evidence.
 | T14 | `web-console/test/incremental-equivalence.test.ts`, `runtime_client::host::tests::incremental_projection_independent_snapshot_capture`, `runtime_client::projection::tests::t14_native_canonical_boundary_independent_checkpoint_capture`, `runtime_client::projection::tests::t14_t20_retained_cut_lookup_uses_exact_metadata_and_bounded_cursor_index`, `runtime_client::projection::tests::t14_native_admission_publishes_frozen_model_before_execution_starts`, `runtime_client::projection::tests::t14_t19_worker_read_fence_keeps_one_native_cut_before_publication`, `boundary_suites::durable::content::t08_t14_t19_response_decoration_keeps_one_frozen_native_journal_cut`, `runtime_client::projection::tests::t14_t19_complete_canonical_head_survives_an_earlier_delayed_callback` | 05, 06, 08, 10, 11, 12 | Strict structural fold equivalence at real native cuts; held C1/C2, empty block frontier, C-before-J and Audit/terminal facts remain distinct. |
 | T15 | `boundary_suites::durable::content::t15_t20_message_and_transcript_headers_advance_without_source_body_reads`, `boundary_suites::durable::content::t08_t15_t20_missing_middle_descriptor_never_skips_native_history`, `runtime_client::host::tests::owner_tests::t08_t12_t14_t19_cold_giant_turn_page_navigates_by_native_ordinal`, Source/block/journal/settings/model/editor/page suites, `runtime_client::projection::tests::t15_many_small_message_pages_advance_under_both_native_budgets`, `runtime_client::projection::tests::t14_t15_workflow_subdomain_page_and_value_use_the_same_native_owner_cut`, collection page clients | 02, 06, 10, 14, 16 | Indexed native ordinals and exact cut/revision continuation; item count and aggregate encoded bytes both bound pages; giant items advance through finite descriptors. The [epoch-107 directory](#epoch-107-finite-inspection-proof-directory) adds 19-member User/Context inspection paging beyond eight and Source selected-member validation, with original order and advancing continuation; all 14 directory proofs passed at 108. |
 | T16 | `local_runtime::session_runtime_manager::tests::transports::t16_pending_receipt_supersession_and_stale_queue_progression`, `local_runtime::session_runtime_manager::tests::transports::t16_physical_acceptance_wins_before_replacement_no_lock_cycle`, `local_runtime::session_runtime_manager::tests::transports::t16_pending_physical_pipe_replacement_advances_without_readiness`, `runtime_client::host::tests::resubscription_is_superseded_before_local_handle_publication` (Host); transport proofs in `tests/scripted/app_server/transports.rs` | 01, 07, 14 | Real full OS pipe and tungstenite Frame handoff; hooks gate before/inside acceptance with valid winners, Pending revalidation, RecoveryRequired and Discarded progression. |
-| T17 | `local_runtime::session_runtime_manager::tests::transports::t17_partial_event_disconnect_replays_from_locally_applied_cursor`, `local_runtime::session_runtime_manager::tests::transports::t17_partial_os_pipe_record_finishes_after_registration_replacement`, `local_runtime::session_runtime_manager::tests::transports::t17_stdio_input_eof_finishes_the_physically_accepted_output_record`, `local_runtime::session_runtime_manager::tests::transports::t17_stdio_teardown_retires_unaccepted_record_without_write_readiness`, `local_runtime::session_runtime_manager::tests::transports::t17_t20_stdio_queue_overflow_finishes_the_physically_accepted_record`, late TUI Subscribe receipt release tests, `local_runtime::session_runtime_manager::tests::transports::t16_t17_websocket_frame_handoff_precedes_physical_write_failure` (same transport suite) | 07, 08, 17 | Actual partial OS-pipe writes and EOF; incomplete parse never advances Applied, first positive write finishes its record, later Flush is not acceptance. EOF/shutdown discards a zero-acceptance queued record even when physical write readiness remains blocked. |
+| T17 | `local_runtime::session_runtime_manager::tests::transports::t17_partial_event_disconnect_replays_from_locally_applied_cursor`, `local_runtime::session_runtime_manager::tests::transports::t17_partial_os_pipe_record_finishes_after_registration_replacement`, `local_runtime::session_runtime_manager::tests::transports::t17_stdio_input_eof_finishes_the_physically_accepted_output_record`, `local_runtime::session_runtime_manager::tests::transports::t17_stdio_teardown_retires_unaccepted_record_without_write_readiness`, `local_runtime::session_runtime_manager::tests::transports::t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_record`, late TUI Subscribe receipt release tests, `local_runtime::session_runtime_manager::tests::transports::t16_t17_websocket_frame_handoff_precedes_physical_write_failure` (same transport suite) | 07, 08, 17 | Actual partial OS-pipe writes and EOF; incomplete parse never advances Applied, first positive write finishes its record, later Flush is not acceptance. EOF/shutdown discards a zero-acceptance queued record even when physical write readiness remains blocked. |
 | T18 | `boundary_suites::subagent::conformance::observation::t18_live_durable_only_and_reactivation_preserve_source_and_execution_identity`, actual Unix old-activation initialization, closed inspection listener tests | 01, 10, 13, 17 | Live → DurableOnly → new Activation; retained content remains readable and observation absence never fabricates execution completion. |
 | T19 | `scripted_suites::agent::publication::no_frame_is_released_before_its_staging_commit`, `runtime_client::host::tests::t19_staged_frame_is_projected_before_observer_returns_to_release`, `runtime_client::projection::tests::t14_t19_prepared_started_witness_preserves_exact_live_progress_and_terminal_facts`, `publication::t19_staging_receipts_pin_each_committed_frame_without_later_source_reads`, `publication::t19_raw_tool_json_retains_original_bytes_after_canonical_commit`, full durable Publication suite, binary/UTF-8 split proofs; separate original-source expiry and native event-fold proofs (combined expired-ref/Replay proof at 105 below) | 09, 10, 11, 12, 15 | Frame staging commit and release-authorized evidence before observation; parked Audit sink and failed staging cannot expose new bytes or be repaired by reads. The [epoch-107 directory](#epoch-107-finite-inspection-proof-directory) adds C-without-J frozen inspection, original giant schema/payload ranges, independent optional-layout failures and native J identity distinct from safe byte coordinates; all 14 directory proofs passed at 108. |
 | T20 | `local_runtime::session_runtime_manager::tests::protocol::child_delivery::control_intent::t14_t20_two_execution_intents_bypass_six_waits_and_eight_unpolled_observations`, `local_runtime::session_runtime_manager::tests::protocol::child_delivery::control_intent::reconnect::t14_t20_reaped_websockets_preserve_global_control_reserves_over_native_waits`, `app_server::admission::tests::t20_admission_cancellation_deduplication_and_exact_cleanup`, `local_runtime::session_runtime_manager::tests::protocol::t20_observation_cancel_after_admission_before_first_poll_never_dispatches`, `runtime_client::agent_observation::tests::t20_real_unix_initialize_and_checkpoint_share_one_absolute_deadline`, `runtime_client::agent_observation::tests::t20_cancelled_physical_sql_worker_retains_inspection_capacity_until_exit`, `boundary_suites::durable::content::t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8`, `durable::sqlite::tests::t14_t19_t20_transcript_source_prefix_recovers_after_4097_later_owner_releases`, `app_server::transport::tests::t20_complete_record_candidate_capacity_obeys_the_physical_byte_budget`, checkpoint encoder capacity and fragmented Stdio input reservation proofs, `boundary_suites::subagent::conformance::observation::t20_real_unix_listener_bounds_and_reaps_its_physical_workset`, `runtime_client::projection::tests::t20_replay_byte_budget_covers_every_event_and_evicts_in_cursor_order`, predecode client guards | 01, 03, 04, 07, 08, 14, 17 | Actual reaped TCP WebSocket connections leave twelve physical waits resident; two fresh waits fill the ordinary ceiling14, while two original-owner control intent receipts are physically received before terminal release. One shared Host counter preserves14/16 reserves. Manual clock conserves one 15-second deadline; blocked physical SQL retains permits; actual listeners reap JoinSet tasks; finite encoded/decoded worksets and exact token fencing. |

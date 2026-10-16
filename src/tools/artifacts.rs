@@ -271,7 +271,8 @@ impl ArtifactStore {
                 return Err(std::io::Error::other("artifact identity capacity exceeded"));
             }
             // Successful shared admission proves the native one-shot writer has
-            // ended. Create-new semantics make these bytes immutable thereafter.
+            // ended. Native create-new writers cannot replace them thereafter;
+            // callers freezing external-file bytes must also retain integrity evidence.
             let len = Self::open_archive_reader(root, &id)
                 .ok()
                 .map(|reader| reader.len);
@@ -282,6 +283,8 @@ impl ArtifactStore {
 
     /// Open existing durable bytes without a presentation-size limit.
     /// The caller reads bounded chunks and retains the Conversation allocation.
+    /// Shared admission excludes native writers; it does not authenticate bytes
+    /// against external filesystem writes. Frozen readers own that evidence.
     /// # Errors
     /// Invalid identities, symlinks, missing bytes and non-files fail explicitly.
     pub(crate) fn open_archive_reader(

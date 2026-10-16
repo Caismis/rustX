@@ -45,14 +45,14 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
   const disabled = !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
-    <div hidden={!!view?.snapshot?.pending_interactions?.length}>
+    <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length}>
       <ConversationComposer draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
         context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
         active={view ? {
           initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,
           submissionTarget: view.target, submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
-          consumed, cancellationAvailable: !!cancellation,
+          consumed, cancellationAvailable: !!cancellation, cancellationOnly: !attached && !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
           onCancel: () => { setFailure(undefined); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure({ owner, message: String(cause) })); },
           onUpload: (files, operation) => {
@@ -86,7 +86,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
 function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views'][string] | undefined) {
   if (!view) return undefined;
   return { id: view.id, target: view.target, attachmentObservation: view.attachmentObservation, attachment: view.attachment, attachmentIntent: view.attachmentIntent, deleting: view.deleting,
-    modelMutation: view.modelMutation, modelIntent: view.modelIntent, cancellation: view.cancellation, active: activeAttempt(view.snapshot), attemptId: view.snapshot?.attempt?.attempt_id,
+    modelMutation: view.modelMutation, modelIntent: view.modelIntent, cancellation: view.cancellation, observationState: view.observationState, active: activeAttempt(view.snapshot), attemptId: view.snapshot?.attempt?.attempt_id,
     resources: view.snapshot?.resources?.revision, attemptModel: view.snapshot?.attempt?.model,
     lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model, modelStatus: view.snapshot?.model_status, settings: view.settings,
     conversation: view.snapshot?.conversation_id, shuttingDown: view.snapshot?.shutting_down, durability: view.snapshot?.durability_failure,

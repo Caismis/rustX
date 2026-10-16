@@ -113,6 +113,64 @@ for (const boundary of ['prepared subscription', 'repair checkpoint'] as const) 
   assert.equal(h.transport.log.count('turn/start'), 1);
 });
 
+const unavailableStates = [
+  ['running', snapshot({ attempt: attemptView({ attempt_id: 'retained-A', phase: { type: 'running' } }) })],
+  ['settled', snapshot({ attempt: attemptView({ phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } }) })],
+  ['absent Attempt', snapshot()],
+  ['shutdown and durability failure', snapshot({ shutting_down: true, durability_failure: { operation: 'retained', diagnostic: 'retained failure' } })],
+  ['pending interaction', snapshot({ pending_interactions: [questionnaireInteraction()] })],
+] as const;
+for (const [stateName, initial] of unavailableStates) for (const gesture of (stateName === 'pending interaction' ? ['Escape', 'Ctrl+C'] as const : ['Escape', 'Ctrl+C', '/cancel'] as const)) test(`actual ${gesture} cancels after Source becomes unavailable with retained ${stateName} without enabling Send`, async t => {
+  const h = await appHarness(t, initial);
+  h.editor.setText('retained draft 中');
+  const before = h.session.state, reads = h.transport.log.count('session/checkpoint');
+  h.transport.notify({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target: h.target, registration_id: 'harness-registration-1', message: 'held source' } });
+  assert.equal(h.session.observationPhase, 'unavailable'); assert.equal(h.session.controlReady, false);
+  if (stateName !== 'pending interaction') h.input('\r');
+  assert.equal(h.editor.getExpandedText(), 'retained draft 中');
+  assert.equal(h.transport.log.count('turn/start'), 0); assert.equal(h.transport.log.count('turn/steer'), 0);
+  if (gesture === '/cancel') { h.editor.setText('/cancel'); h.input('\r'); }
+  else h.input(gesture === 'Escape' ? '\x1b' : '\x03');
+  const request = await nextRequest(h, 'turn/cancel');
+  assert.equal(request.method, 'turn/cancel'); if (request.method !== 'turn/cancel') assert.fail('native cancellation');
+  assert.deepEqual(request.params.target, h.target);
+  h.transport.respond(request.id, { type: 'cancellation_accepted', attempt_id: 'native-current-B' });
+  await continuation();
+  assert.equal(h.session.state, before); assert.equal(h.session.observationPhase, 'unavailable');
+  assert.match(h.notices.at(-1)!, /native-current-B/);
+  if (gesture !== '/cancel') assert.equal(h.editor.getExpandedText(), 'retained draft 中');
+  assert.equal(h.transport.log.count('turn/cancel'), 1); assert.equal(h.transport.log.count('session/checkpoint'), reads);
+});
+
+test('actual Escape cancels stale idle while an explicit observation repair is held', async t => {
+  const h = await appHarness(t);
+  const before = h.session.state;
+  const repairing = h.session.resync(), read = await nextRequest(h, 'session/checkpoint');
+  assert.equal(h.session.controlReady, false); assert.equal(h.session.cancellationReady, true);
+  h.input('\x1b');
+  const request = await nextRequest(h, 'turn/cancel');
+  assert.deepEqual(request.params, { target: h.target });
+  h.transport.respond(request.id, { type: 'cancellation_accepted', attempt_id: 'native-current-B' });
+  await continuation();
+  assert.equal(h.session.state, before); assert.match(h.notices.at(-1)!, /native-current-B/);
+  h.transport.respond(read.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot(), '2') });
+  const subscribe = await nextRequest(h, 'session/subscribe');
+  h.transport.respond(subscribe.id, { type: 'subscribed', target: h.target, registration_id: 'explicit-repair', after_cursor: '2' });
+  await repairing; assert.equal(h.transport.log.count('turn/cancel'), 1);
+});
+
+for (const retirement of ['attachment', 'connection'] as const) test(`unavailable TUI gestures cannot dispatch through a retired ${retirement}`, async t => {
+  const h = await appHarness(t, snapshot({ attempt: attemptView({ phase: { type: 'running' } }) }));
+  h.transport.notify({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target: h.target, registration_id: 'harness-registration-1', message: 'held source' } });
+  if (retirement === 'attachment') {
+    const detaching = h.session.detach(), request = await nextRequest(h, 'session/detach');
+    h.transport.respond(request.id, { type: 'detached' }); await detaching;
+  } else h.client.close();
+  h.input('\x1b'); await continuation();
+  assert.equal(h.transport.log.count('turn/cancel'), 0);
+  assert.equal(h.session.released, true);
+});
+
 test("actual app uses Send/Steer/Queue and never clears a newly typed draft after admission", async t => {
   const h = await appHarness(t);
   h.editor.setText("idle"); h.input("\r");

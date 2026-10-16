@@ -522,7 +522,7 @@ nor remote attachment grants Product Host Workspace filesystem authority.
 | Complete JSON-RPC record | 1,048,576 encoded UTF-8 bytes | Reject oversized input before dispatch; substitute a bounded correlated response error or exact-registration Resync for oversized output |
 | Stdio read buffer | 8 KiB | Incremental bounded record assembly |
 | In-flight request-ID associations per connection | 16 | Bounded request-capacity refusal; eight Child observations, six ordinary RPCs and two reserved controls |
-| Outbound queue per connection | 32 messages | `try_send` failure closes immediately |
+| Outbound queue per connection | 32 messages | Pause candidate production; a completed reply waits at most 10 seconds for capacity |
 | One outbound write including flush | 10 seconds | Drop writer future and close |
 | WebSocket frame and assembled text message | 1,048,576 bytes each | Library rejects excess before dispatch |
 | WebSocket read buffer | 128 KiB | Fixed library buffer |
@@ -547,9 +547,19 @@ sleep, queue expansion, or semantic bypass is needed.
 
 Each physical connection has one serialized writer. Requests can overlap across
 Sessions, and responses may finish out of order; clients correlate by JSON-RPC ID.
-The common serving layer never waits for queue capacity while retaining semantic
-leases. A non-reading peer triggers queue overflow or the write deadline. Teardown
-drops read/write/request-waiter futures and explicitly closes the semantic connection.
+Transient saturation pauses native notification consumption before candidate
+materialization. Each admitted request may wait for a queue slot under its existing
+request association; it acquires the slot before encoding the reply. At most one
+immediate, unadmitted-input reply may wait separately, after which input is
+backpressured. The serving loop still polls the writer, shutdown and already
+admitted requests and controls. No extra encoded queue or semaphore is introduced.
+A completed reply has one absolute ten-second capacity deadline; the subsequent
+physical write has its own unchanged ten-second deadline. Polling does not reset
+either budget. Sustained inability to accept output retires the physical connection;
+all attachments share that transport, but their native execution continues.
+Teardown drops input/request-waiter futures and explicitly closes the attachment
+connection. It retires unaccepted records and joins the physical writer; an accepted
+Stdio record retains its remainder and delimiter within the write deadline.
 Already admitted runtime operations continue under their existing server owners.
 A mutation whose response is lost has an **unknown outcome**: no transport retries it.
 Reconnect with initialize/attach/checkpoint/subscribe and inspect authoritative state.
@@ -604,7 +614,7 @@ real-process stdio and real-process WebSocket drivers. Boundary tests additional
 cover handshake admission, fragmented messages, exact size limits, JSON error recovery,
 process bootstrap/readiness, correlation, listener survival and process ownership.
 Native provider/interaction gates establish disconnect behavior. Controlled byte pipes
-exercise actual queue overflow, request admission saturation and a paused-clock write
+exercise transient and sustained queue saturation, request admission saturation and a paused-clock write
 deadline; timeouts elsewhere are only outer liveness guards.
 
 ## JSON-RPC and initialization
@@ -668,6 +678,14 @@ Callers learn accepted message identity and inbound sequence from the result.
 Attempt under one coordinator guard. A stale or unavailable presentation view
 cannot choose the target or refuse cancellation. The receipt identifies that
 exact accepted cancellation, independently of later settlement or replacement.
+Web and TUI cancellation gestures use current connection and exact attachment
+control authority, independently of observation readiness. An unavailable or
+resynchronizing display must not disable a fresh cancellation gesture. A retained
+gesture still carries its original attachment generation: reconnect, replacement,
+detach or loss of control permission fences it before dispatch. Send, edit and
+other commands that require an exact display baseline retain their stricter
+observation guards. No client guesses a replacement Attempt or retries cancellation
+because its response was lost.
 
 `context/compact` returns the five fields of that invocation's successful native
 compaction outcome in `context_compacted.compaction`. It never substitutes
@@ -2141,7 +2159,7 @@ the synchronization.
 
 The internal Runtime Client vocabulary is v71. Only App Server v50 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
-decoder. The current storage/control formats are Event envelope 1, SQLite 67, Session
+decoder. The current storage/control formats are Event envelope 1, SQLite 68, Session
 catalog 16 and subagent IPC v33. Child file and artifact reads use the registered
 child Conversation and the parent attachment's native delivery authority.
 

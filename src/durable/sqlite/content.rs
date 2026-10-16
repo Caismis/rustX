@@ -1,5 +1,6 @@
 //! Transaction-owned byte indexes. Each row holds at most 64 KiB; a range
 //! read touches at most two rows, never a message/audit JSON body or frame scan.
+//! Binary artifacts instead authenticate at most two complete 64 KiB file chunks.
 use super::content_metadata::{
     AssistantMetadata, AuditMetadata, MessageMetadata, PublicationMetadata,
 };
@@ -16,6 +17,14 @@ use crate::runtime_client::content::{
 use base64::Engine;
 const SEGMENT: u64 = 65_536;
 const SEGMENT_BYTES: usize = 65_536;
+#[path = "content_binary.rs"]
+mod binary;
+pub(super) use binary::{
+    create_schema as create_binary_schema, verify_schema as verify_binary_schema,
+};
+#[cfg(test)]
+#[path = "content_binary_tests.rs"]
+mod binary_tests;
 #[cfg(test)]
 thread_local! { static LAST_READ_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) }; }
 #[cfg(test)]
@@ -305,7 +314,7 @@ pub(super) fn read(
         if kind != "canonical" {
             return Err(invalid());
         }
-        binary_range(
+        binary::range(
             connection,
             id.as_ref(),
             block,
@@ -524,71 +533,6 @@ fn index_metadata(
     )
     .map(|_| ())
 }
-fn index_binary_artifact(
-    connection: &Connection,
-    id: &str,
-    block: u32,
-    artifact: &crate::runtime::identity::ArtifactId,
-) -> Result<(), ConversationStoreError> {
-    let Some(root) = connection
-        .path()
-        .filter(|path| !path.is_empty())
-        .and_then(|path| std::path::Path::new(path).parent())
-    else {
-        return Ok(());
-    };
-    let Ok(reader) = crate::tools::artifacts::ArtifactStore::open_archive_reader(root, artifact)
-    else {
-        return Ok(());
-    };
-    if reader.len > CONTENT_SAFE_INTEGER_MAX {
-        return Err(invalid());
-    }
-    connection.execute("INSERT INTO canonical_binary_sources(source_id,block_index,artifact_id,readable_end) VALUES(?1,?2,?3,?4)",params![id,block,artifact.as_str(),reader.len]).map_err(|error|storage(error.to_string()))?;
-    connection
-        .execute(
-            "INSERT INTO content_frontiers VALUES('canonical',?1,?2,'binary_bytes',1,?3)",
-            params![id, block, reader.len],
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(())
-}
-fn binary_range(
-    connection: &Connection,
-    key: &str,
-    block: u32,
-    offset: u64,
-    end: u64,
-    frontier: u64,
-) -> Result<Vec<u8>, ConversationStoreError> {
-    use std::io::{Read as _, Seek as _};
-    let (artifact,length):(String,u64)=connection.query_row("SELECT artifact_id,readable_end FROM canonical_binary_sources WHERE source_id=?1 AND block_index=?2",params![key,block],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(invalid)?;
-    if length != frontier || artifact.len() > 256 {
-        return Err(invalid());
-    }
-    let root = connection
-        .path()
-        .filter(|path| !path.is_empty())
-        .and_then(|path| std::path::Path::new(path).parent())
-        .ok_or_else(invalid)?;
-    let mut reader = crate::tools::artifacts::ArtifactStore::open_archive_reader(
-        root,
-        &crate::runtime::identity::ArtifactId::new(artifact),
-    )
-    .map_err(|_| invalid())?;
-    if reader.len != frontier {
-        return Err(invalid());
-    }
-    reader
-        .seek(std::io::SeekFrom::Start(offset))
-        .map_err(|_| invalid())?;
-    let count = usize::try_from(end - offset).map_err(|_| invalid())?;
-    let mut bytes = vec![0; count];
-    reader.read_exact(&mut bytes).map_err(|_| invalid())?;
-    #[cfg(test)]
-    LAST_READ_WORK.with(|work| work.set((usize::from(count > 0), count)));
-    Ok(bytes)
-}
 fn index_user_blocks(
     connection: &Connection,
     user: &crate::message::types::UserMessageBlock,
@@ -605,13 +549,13 @@ fn index_user_blocks(
         };
         index_metadata(connection, id, index, &serde_json::json!({"type":kind}))?;
         match block {
-            crate::message::types::UserContentBlock::Image(image) => index_binary_artifact(
+            crate::message::types::UserContentBlock::Image(image) => binary::index(
                 connection,
                 id,
                 u32::try_from(index).map_err(|_| invalid())?,
                 &image.artifact_id,
             )?,
-            crate::message::types::UserContentBlock::File(file) => index_binary_artifact(
+            crate::message::types::UserContentBlock::File(file) => binary::index(
                 connection,
                 id,
                 u32::try_from(index).map_err(|_| invalid())?,
@@ -652,7 +596,7 @@ fn index_assistant_blocks(
     for (index, block) in assistant.content.iter().enumerate() {
         index_metadata(connection, id, index, &AssistantMetadata(block))?;
         if let AssistantContentBlock::Image(image) = block {
-            index_binary_artifact(
+            binary::index(
                 connection,
                 id,
                 u32::try_from(index).map_err(|_| invalid())?,
@@ -721,13 +665,13 @@ fn index_tool_blocks(
         };
         index_metadata(connection, id, index, &serde_json::json!({"type":kind}))?;
         match block {
-            crate::tools::types::ToolResultContent::Image(image) => index_binary_artifact(
+            crate::tools::types::ToolResultContent::Image(image) => binary::index(
                 connection,
                 id,
                 u32::try_from(index).map_err(|_| invalid())?,
                 &image.artifact_id,
             )?,
-            crate::tools::types::ToolResultContent::File(file) => index_binary_artifact(
+            crate::tools::types::ToolResultContent::File(file) => binary::index(
                 connection,
                 id,
                 u32::try_from(index).map_err(|_| invalid())?,
