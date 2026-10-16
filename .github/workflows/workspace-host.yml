@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/workspace-host.yml'
+      - '.github/actions/libclang/**'
       - 'web-console/host/**'
       - 'src/runtime/interactive_supervisor.rs'
       - 'src/runtime/supervised_unit.rs'
