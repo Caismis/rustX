@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="离线、基于源码的 rustX 架构导览。">
+  <meta name="description" content="离线、基于 source 的 rustX 架构导览。">
   <title>rustX · 架构导览</title>
   <style>/* EXPLORER_STYLES */</style>
 </head>
@@ -13,22 +13,22 @@
   <div class="page-shell">
     <header class="masthead">
       <a class="wordmark" href="#" aria-label="rustX 架构导览首页">rust<span>X</span><span class="wordmark-note">工程架构图 / 01</span></a>
-      <span class="offline-label"><span aria-hidden="true">●</span> 离线 · 源码摘录已内嵌</span>
+      <span class="offline-label"><span aria-hidden="true">●</span> 离线 · {{source-code}} 摘录已内嵌</span>
     </header>
     <section class="introduction" aria-labelledby="page-title">
-      <div><p class="eyebrow">理解系统，梳理职责边界</p><h1 id="page-title">一次请求，<br>多个职责。</h1></div>
-      <div class="intro-copy"><p id="intro"></p><p class="reading-note">先看架构图，再追踪一次请求，最后探索边界。约需 10 分钟。</p></div>
+      <div><p class="eyebrow">理解系统，梳理 {{responsibility}} {{boundary}}</p><h1 id="page-title">一次请求，<br>多个 {{responsibility}}。</h1></div>
+      <div class="intro-copy"><p id="intro"></p><p class="reading-note">从总览进入模块内部，再沿机制进入实现；也可追踪一次请求，探索 {{boundary}}。</p></div>
     </section>
     <div class="baseline-bar" id="baseline"></div>
     <nav class="mode-nav" aria-label="探索模式">
       <button type="button" data-mode="map" aria-current="page"><span>01</span> 架构地图</button>
       <button type="button" data-mode="request"><span>02</span> 请求讲解</button>
-      <button type="button" data-mode="scenarios"><span>03</span> 边界场景</button>
+      <button type="button" data-mode="scenarios"><span>03</span> {{boundary}} 场景</button>
       <button type="button" data-mode="topics"><span>04</span> 深入专题</button>
     </nav>
     <main id="workspace" tabindex="-1"></main>
-    <noscript><p class="notice">请启用 JavaScript 以使用交互式架构导览。所有代码和源码摘录都已嵌入此文件，无需网络连接。</p></noscript>
-    <footer><span>rustX / 架构导览</span><span>教学模拟 · 固定源码快照 · 不执行运行时请求</span></footer>
+    <noscript><p class="notice">请启用 JavaScript 以使用交互式架构导览。所有代码和 source 摘录都已嵌入此文件，无需网络连接。</p></noscript>
+    <footer><span>rustX / 架构导览</span><span>教学模拟 · 固定 {{source-code}} {{snapshot-source}} · 不执行运行时请求</span></footer>
   </div>
   <script id="explorer-data" type="application/json">/* EXPLORER_DATA */</script>
   <script>/* EXPLORER_APP */</script>

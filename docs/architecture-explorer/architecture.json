@@ -1,0 +1,3425 @@
+{
+  "entries": {
+    "clients": "module-clients",
+    "app-server": "module-app-server",
+    "projection": "module-projection",
+    "sessions": "module-sessions",
+    "config": "module-config",
+    "runtime": "module-runtime",
+    "agent": "module-agent",
+    "extensions": "module-extensions",
+    "context": "module-context",
+    "model": "module-model",
+    "tools": "module-tools",
+    "subagents": "module-subagents",
+    "workflows": "module-workflows",
+    "durable": "module-durable",
+    "publication": "module-publication"
+  },
+  "views": [
+    {
+      "id": "module-clients",
+      "parent": "overview",
+      "owner": "clients",
+      "title": "Clients · TUI / Web Console",
+      "summary": "客户端保留交互状态，通过同一 App Server {{contract}} 读取 {{projection}} 并提交显式目标操作。",
+      "nodes": [
+        {
+          "id": "module-clients-tui",
+          "label": "AppServerClient",
+          "layer": "Client protocol",
+          "summary": "TUI 统一处理 JSON-RPC request ID、响应关联和 {{dispatch}}。",
+          "owns": [
+            "initialize、pending-request map 与 transport terminal {{map-client-settlement}}。"
+          ],
+          "boundaries": [
+            "丢失写响应会返回 uncertain outcome；不会自动重发操作。"
+          ],
+          "evidence": [
+            "map-tui-client"
+          ]
+        },
+        {
+          "id": "module-clients-session",
+          "label": "Session",
+          "layer": "Client state",
+          "summary": "一次 attach 取得 {{snapshot}}、{{cursor}} 与订阅；后续事件通过身份 {{map-fencing}}。",
+          "owns": [
+            "单个 Session 的 {{projection}} 安装与 resync 修复。"
+          ],
+          "boundaries": [
+            "本地状态不提供 Agent execution {{authority-runtime}}。"
+          ],
+          "evidence": [
+            "map-tui-session"
+          ]
+        },
+        {
+          "id": "module-clients-web",
+          "label": "Web Console client",
+          "layer": "Client state",
+          "summary": "Web Console 复用生成的 App Server 类型和 foldRuntimeEvent。",
+          "owns": [
+            "SessionLifecycles、输入请求关联与页面交互状态。"
+          ],
+          "boundaries": [
+            "只读历史 preview 不能作为活跃 runtime 控制凭据。"
+          ],
+          "evidence": [
+            "map-web-client"
+          ]
+        },
+        {
+          "id": "module-clients-transport",
+          "label": "Stdio JSONL / WebSocket",
+          "layer": "Transport",
+          "summary": "本地自有子进程或外部服务器连接进入同一协议。",
+          "owns": [
+            "字节传输与连接关闭通知。"
+          ],
+          "boundaries": [
+            "disconnect 不等于取消、unload 或 {{quiescence}}。"
+          ],
+          "evidence": [
+            "topology",
+            "connection-detach"
+          ]
+        },
+        {
+          "id": "module-clients-server",
+          "label": "AppServerConnection",
+          "layer": "{{native}} peer",
+          "summary": "所有显式目标操作进入 App Server 的协议入口。",
+          "owns": [
+            "由服务端验证目标身份并路由到 {{native}} {{map-semantic-owner}}。"
+          ],
+          "boundaries": [
+            "客户端 focus 不能选择进程全局的活跃 Session。"
+          ],
+          "evidence": [
+            "app-boundary",
+            "session-residency"
+          ],
+          "target": "module-app-server",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-clients-tui",
+          "to": "module-clients-transport",
+          "kind": "call",
+          "label": "send request / receive response"
+        },
+        {
+          "from": "module-clients-transport",
+          "to": "module-clients-server",
+          "kind": "call",
+          "label": "JSON-RPC"
+        },
+        {
+          "from": "module-clients-tui",
+          "to": "module-clients-session",
+          "kind": "data",
+          "label": "targeted notifications"
+        },
+        {
+          "from": "module-clients-server",
+          "to": "module-clients-web",
+          "kind": "data",
+          "label": "typed responses + events"
+        },
+        {
+          "from": "module-clients-session",
+          "to": "module-clients-tui",
+          "kind": "call",
+          "label": "typed operations"
+        }
+      ]
+    },
+    {
+      "id": "module-app-server",
+      "parent": "overview",
+      "owner": "app-server",
+      "title": "App Server · Protocol routing",
+      "summary": "连接层处理协议与资源额度，Session 控制与 Conversation 执行仍由各自 {{native}} {{map-semantic-owner}} 决定。",
+      "nodes": [
+        {
+          "id": "module-app-server-connection",
+          "label": "AppServerConnection",
+          "layer": "Protocol",
+          "summary": "处理版本化请求并按显式 Session/runtime 目标路由。",
+          "owns": [
+            "连接身份、请求响应和目标 route。"
+          ],
+          "boundaries": [
+            "传输 {{framing}} 不参与 Attempt {{admission}}。"
+          ],
+          "evidence": [
+            "map-app-dispatch",
+            "app-boundary"
+          ]
+        },
+        {
+          "id": "module-app-server-host",
+          "label": "AppServerHost",
+          "layer": "Process resources",
+          "summary": "一个进程级 host 汇总 manager、连接资源和文件操作额度。",
+          "owns": [
+            "Host lifecycle、requests、attachments、uploads 与 archives。"
+          ],
+          "boundaries": [
+            "Host capacity reservation 与 runtime {{residency}} pin 是不同对象。"
+          ],
+          "evidence": [
+            "map-app-host"
+          ]
+        },
+        {
+          "id": "module-app-server-transport",
+          "label": "transport::stdio / websocket",
+          "layer": "Transport",
+          "summary": "JSONL 与 WebSocket 将字节连接到同一协议 {{contract}}。",
+          "owns": [
+            "传输认证与 {{framing}}。"
+          ],
+          "boundaries": [
+            "更上层宿主仍负责用户路由和工作区隔离。"
+          ],
+          "evidence": [
+            "transport-security",
+            "app-boundary"
+          ]
+        },
+        {
+          "id": "module-app-server-manager",
+          "label": "SessionRuntimeManager",
+          "layer": "{{native}} routing target",
+          "summary": "load/unload 请求转交 {{residency}} {{map-semantic-owner}}。",
+          "owns": [
+            "在显式 Conversation 和 incarnation 上执行 manager 操作。"
+          ],
+          "boundaries": [
+            "客户端断开不授权释放 runtime。"
+          ],
+          "evidence": [
+            "map-app-host",
+            "session-residency"
+          ],
+          "target": "module-sessions",
+          "external": true
+        },
+        {
+          "id": "module-app-server-projection",
+          "label": "RuntimeClientHost",
+          "layer": "{{native}} routing target",
+          "summary": "runtime 操作与观察进入目标 host。",
+          "owns": [
+            "提供控制 attachment 与只读 {{projection}}。"
+          ],
+          "boundaries": [
+            "不是 Conversation 的第二个调度器。"
+          ],
+          "evidence": [
+            "client-owners"
+          ],
+          "target": "module-projection",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-app-server-transport",
+          "to": "module-app-server-connection",
+          "kind": "call",
+          "label": "{{framing}} requests"
+        },
+        {
+          "from": "module-app-server-connection",
+          "to": "module-app-server-host",
+          "kind": "call",
+          "label": "resource {{map-host-admission}}"
+        },
+        {
+          "from": "module-app-server-connection",
+          "to": "module-app-server-manager",
+          "kind": "call",
+          "label": "Session / {{residency}} control"
+        },
+        {
+          "from": "module-app-server-connection",
+          "to": "module-app-server-projection",
+          "kind": "call",
+          "label": "runtime-targeted operations"
+        }
+      ]
+    },
+    {
+      "id": "module-projection",
+      "parent": "overview",
+      "owner": "projection",
+      "title": "Runtime Client · {{projection}} / control",
+      "summary": "一个 {{projection}} {{map-semantic-owner}} 将已提交事实 {{fold}} 为 {{snapshot}}、{{cursor}} 和 {{bounded}} {{replay}}。",
+      "nodes": [
+        {
+          "id": "module-projection-host",
+          "label": "RuntimeClientHost",
+          "layer": "Control adapter",
+          "summary": "在 ConversationRuntime 之上绑定控制和 {{map-attachment}}。",
+          "owns": [
+            "一个 control attachment、只读观察 attachments 与协议适配。"
+          ],
+          "boundaries": [
+            "零 attachment 时仍使用同一执行路径。"
+          ],
+          "evidence": [
+            "client-owners",
+            "client-authority"
+          ]
+        },
+        {
+          "id": "module-projection-fold",
+          "label": "RuntimeClientProjection",
+          "layer": "Read model",
+          "summary": "{{fold}}、{{cursor}} 分配和事件 {{map-projection-publish}} 共享一个同步点。",
+          "owns": [
+            "当前 {{snapshot}} 与 RuntimeClientEvent 顺序。"
+          ],
+          "boundaries": [
+            "输入必须来自 {{native}} {{authority-runtime}}；不猜测执行结果。"
+          ],
+          "evidence": [
+            "map-projection-fold"
+          ]
+        },
+        {
+          "id": "module-projection-ring",
+          "label": "{{bounded}} {{replay-cursor}} ring",
+          "layer": "Delivery",
+          "summary": "订阅者只保存一个 {{cursor}}，共同读取同一个 {{bounded}} ring。",
+          "owns": [
+            "保留窗口、订阅位置与显式 resync_required。"
+          ],
+          "boundaries": [
+            "超出窗口必须重新取 {{snapshot}}；ring 不是 {{recovery}} 输入。"
+          ],
+          "evidence": [
+            "map-projection-ring"
+          ]
+        },
+        {
+          "id": "module-projection-runtime",
+          "label": "ConversationRuntime",
+          "layer": "{{authority-runtime}} peer",
+          "summary": "执行与 {{admission}} 的事实从 coordinator 向外流动。",
+          "owns": [
+            "Agent control 请求转交真正的执行 {{map-semantic-owner}}。"
+          ],
+          "boundaries": [
+            "Trace 与 UI {{projection}} 不能改变语义事实。"
+          ],
+          "evidence": [
+            "runtime-ownership",
+            "trace-owner"
+          ],
+          "target": "module-runtime",
+          "external": true
+        },
+        {
+          "id": "module-projection-durable",
+          "label": "ConversationStore",
+          "layer": "{{durable}} read peer",
+          "summary": "历史和当前 Surface bootstrap 由持久 {{authority-ledger}} 提供。",
+          "owns": [
+            "{{bounded}} 历史读取。"
+          ],
+          "boundaries": [
+            "client {{cursor}} 不是 Ledger 或 Journal 位置。"
+          ],
+          "evidence": [
+            "map-projection-ring"
+          ],
+          "target": "module-durable",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-projection-runtime",
+          "to": "module-projection-host",
+          "kind": "data",
+          "label": "{{map-semantic}} {{observation}} facts"
+        },
+        {
+          "from": "module-projection-host",
+          "to": "module-projection-fold",
+          "kind": "call",
+          "label": "apply {{observation}}"
+        },
+        {
+          "from": "module-projection-fold",
+          "to": "module-projection-ring",
+          "kind": "data",
+          "label": "{{cursor}} + event"
+        },
+        {
+          "from": "module-projection-host",
+          "to": "module-projection-runtime",
+          "kind": "call",
+          "label": "control"
+        },
+        {
+          "from": "module-projection-durable",
+          "to": "module-projection-host",
+          "kind": "data",
+          "label": "{{durable}} bootstrap"
+        }
+      ]
+    },
+    {
+      "id": "module-sessions",
+      "parent": "overview",
+      "owner": "sessions",
+      "title": "Session · Identity / {{residency}}",
+      "summary": "持久 Session 目录与进程内 {{residency}} 分开管理；{{map-single-flight}} 操作最终依靠 runtime 的真实结束证明。",
+      "nodes": [
+        {
+          "id": "module-sessions-controller",
+          "label": "SessionController",
+          "layer": "{{durable}} identity",
+          "summary": "管理 Session → SessionNode → Conversation 目录图和显式设置。",
+          "owns": [
+            "持久身份、目录事务与配置输入。"
+          ],
+          "boundaries": [
+            "controller 不保存活跃 runtime registry。"
+          ],
+          "evidence": [
+            "session-identity",
+            "map-residency-flight"
+          ]
+        },
+        {
+          "id": "module-sessions-manager",
+          "label": "SessionRuntimeManager",
+          "layer": "{{residency}}",
+          "summary": "clone 共享 registry，load/unload 在同一 {{map-single-flight}} transition 汇合。",
+          "owns": [
+            "Loading / Loaded / Unloading 及分配保留。"
+          ],
+          "boundaries": [
+            "等待者 drop 不拥有取消 transition 的权限。"
+          ],
+          "evidence": [
+            "map-residency-flight",
+            "map-residency-id"
+          ]
+        },
+        {
+          "id": "module-sessions-incarnation",
+          "label": "RuntimeIncarnationId",
+          "layer": "{{residency}} identity",
+          "summary": "每次活跃 {{composition}} 具有独立 {{map-incarnation}}。",
+          "owns": [
+            "过期控制句柄的身份隔离。"
+          ],
+          "boundaries": [
+            "不是持久 Session ID，也不是客户端 {{cursor}}。"
+          ],
+          "evidence": [
+            "map-residency-id"
+          ]
+        },
+        {
+          "id": "module-sessions-compose",
+          "label": "LocalConversationCore",
+          "layer": "{{composition}} peer",
+          "summary": "冷 load 解析配置并走统一 {{composition}} 入口。",
+          "owns": [
+            "先绑定 {{projection}} 再 activate。"
+          ],
+          "boundaries": [
+            "v1 每个 Session 最多一个 {{residency}} 节点。"
+          ],
+          "evidence": [
+            "residency-load",
+            "session-residency"
+          ],
+          "target": "module-config",
+          "external": true
+        },
+        {
+          "id": "module-sessions-retire",
+          "label": "unload / shutdown",
+          "layer": "Writer retirement",
+          "summary": "卸载先等待 shutdown 的 {{map-quiescence-proof}}，再释放旧 allocation。",
+          "owns": [
+            "失败时保留 Unloading 与旧 {{composition}}。"
+          ],
+          "boundaries": [
+            "不能用 disconnect 或 cancellation signal 证明写入者消失。"
+          ],
+          "evidence": [
+            "map-residency-retire",
+            "residency-unload"
+          ],
+          "target": "module-runtime",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-sessions-controller",
+          "to": "module-sessions-manager",
+          "kind": "data",
+          "label": "{{durable}} identity + settings"
+        },
+        {
+          "from": "module-sessions-manager",
+          "to": "module-sessions-compose",
+          "kind": "call",
+          "label": "cold load"
+        },
+        {
+          "from": "module-sessions-manager",
+          "to": "module-sessions-incarnation",
+          "kind": "data",
+          "label": "{{publish}} live identity"
+        },
+        {
+          "from": "module-sessions-manager",
+          "to": "module-sessions-retire",
+          "kind": "call",
+          "label": "unload"
+        },
+        {
+          "from": "module-sessions-retire",
+          "to": "module-sessions-manager",
+          "kind": "data",
+          "label": "proven writer retirement"
+        }
+      ]
+    },
+    {
+      "id": "module-config",
+      "parent": "overview",
+      "owner": "config",
+      "title": "Configuration · Resolution / {{composition}}",
+      "summary": "当前 {{source}} 与 Session 显式输入形成 {{native}} {{composition}}；只有被选中的 {{finite}} 能力才进入准备。",
+      "nodes": [
+        {
+          "id": "module-config-inputs",
+          "label": "SessionConfigInput",
+          "layer": "Intent",
+          "summary": "Session 保存 cwd 与可选 model 选择，省略值仍保持省略。",
+          "owns": [
+            "用户明确选择。"
+          ],
+          "boundaries": [
+            "cwd 是执行与配置上下文，不是 sandbox。"
+          ],
+          "evidence": [
+            "map-config-input",
+            "session-config"
+          ]
+        },
+        {
+          "id": "module-config-manager",
+          "label": "UserConfigManager",
+          "layer": "Resolution",
+          "summary": "每次解析重读当前文件，并保留完整资源定义的 {{shadowing}} 规则。",
+          "owns": [
+            "配置 {{source}}、精确 profile 解析与诊断。"
+          ],
+          "boundaries": [
+            "持久 Session 输入不包含有效凭据和执行状态。"
+          ],
+          "evidence": [
+            "map-config-manager",
+            "resources"
+          ]
+        },
+        {
+          "id": "module-config-capability",
+          "label": "CapabilityCoordinator",
+          "layer": "Capability generation",
+          "summary": "准备候选后，在零 AttemptCapabilityLease 时原子切换有效 {{map-capability-revision}}。",
+          "owns": [
+            "active CapabilitySnapshot 和租约同步点。"
+          ],
+          "boundaries": [
+            "发现 MCP 配置不代表连接；诊断变化本身不推进有效 executable {{map-capability-revision}}。"
+          ],
+          "evidence": [
+            "map-capability-commit",
+            "source-demand"
+          ]
+        },
+        {
+          "id": "module-config-core",
+          "label": "LocalConversationCore",
+          "layer": "{{composition}}",
+          "summary": "统一{{composition}} ConversationRuntime、Tool runtime 与 CapabilityCoordinator。",
+          "owns": [
+            "先生成 Inactive runtime，再由具体产品入口完成绑定和 activate。"
+          ],
+          "boundaries": [
+            "不再建立第二条 TUI、headless 或 child 专用语义路径。"
+          ],
+          "evidence": [
+            "map-core-compose"
+          ]
+        },
+        {
+          "id": "module-config-runtime",
+          "label": "ConversationRuntime",
+          "layer": "Execution peer",
+          "summary": "激活后的 Conversation 执行移交 coordinator。",
+          "owns": [
+            "新 Attempt {{frozen}}本次 model/capability 视图。"
+          ],
+          "boundaries": [
+            "配置切换不会追溯改写已 {{admission}} 的工作。"
+          ],
+          "evidence": [
+            "runtime-ownership",
+            "map-capability-commit"
+          ],
+          "target": "module-runtime",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-config-inputs",
+          "to": "module-config-manager",
+          "kind": "data",
+          "label": "explicit intent"
+        },
+        {
+          "from": "module-config-manager",
+          "to": "module-config-core",
+          "kind": "data",
+          "label": "resolved inputs"
+        },
+        {
+          "from": "module-config-core",
+          "to": "module-config-capability",
+          "kind": "call",
+          "label": "{{composition}} of {{finite}} capabilities"
+        },
+        {
+          "from": "module-config-core",
+          "to": "module-config-runtime",
+          "kind": "data",
+          "label": "inactive runtime → activate"
+        },
+        {
+          "from": "module-config-capability",
+          "to": "module-config-runtime",
+          "kind": "data",
+          "label": "immutable active {{snapshot-model}}"
+        }
+      ]
+    },
+    {
+      "id": "module-runtime",
+      "parent": "overview",
+      "owner": "runtime",
+      "title": "ConversationRuntime · {{admission}} / lifecycle",
+      "summary": "单个 coordinator 通过一个 lock 决定输入 {{adoption}}、Attempt {{admission}} 和 Running → Draining 的先后。",
+      "nodes": [
+        {
+          "id": "module-runtime-inbound",
+          "label": "ConversationInboundMailbox",
+          "layer": "Inbound coordination",
+          "summary": "生产者{{acceptance-inbound}}普通输入并唤醒 worker。",
+          "owns": [
+            "进程内 wake 与 {{map-watermark}} 协调。"
+          ],
+          "boundaries": [
+            "Pending Inbound 的持久 {{acceptance-inbound}} 仍由 store 提供。"
+          ],
+          "evidence": [
+            "runtime-ownership",
+            "durable-inbound"
+          ]
+        },
+        {
+          "id": "module-runtime-admit",
+          "label": "admit_next_attempt",
+          "layer": "{{admission}}",
+          "summary": "在同一 lock 内选择 {{finite}} 输入、提交 {{adoption}}、{{frozen}} model 并占用当前 Attempt {{map-attempt-slot}}。",
+          "owns": [
+            "每个 Conversation 最多一个活跃 AgentExecution。"
+          ],
+          "boundaries": [
+            "生产者不能直接启动 Attempt。"
+          ],
+          "evidence": [
+            "runtime-admission"
+          ]
+        },
+        {
+          "id": "module-runtime-state",
+          "label": "ConversationState / SessionModelState",
+          "layer": "Between attempts",
+          "summary": "coordinator 持有 Attempt 之间的热状态及可变 Session model。",
+          "owns": [
+            "下一次 Attempt 的状态移交与 {{snapshot-model}}。"
+          ],
+          "boundaries": [
+            "模型更新只影响在线性顺序之后的 {{admission}}。"
+          ],
+          "evidence": [
+            "runtime-ownership",
+            "runtime-admission",
+            "map-conversation-hot"
+          ]
+        },
+        {
+          "id": "module-runtime-execution",
+          "label": "AgentExecution",
+          "layer": "Execution peer",
+          "summary": "被 {{admission}} 的 Attempt 接管热状态并运行到 {{settlement}}。",
+          "owns": [
+            "一个 Attempt 的 model/Tool 循环。"
+          ],
+          "boundaries": [
+            "coordinator 始终保留 lifecycle {{authority-runtime}}。"
+          ],
+          "evidence": [
+            "agent-owns",
+            "map-conversation-hot"
+          ],
+          "target": "module-agent",
+          "external": true
+        },
+        {
+          "id": "module-runtime-drain",
+          "label": "shutdown / begin_drain",
+          "layer": "Lifecycle",
+          "summary": "Running → Draining 关闭新工作，等待所有具体 {{owner}} 到达结束点。",
+          "owns": [
+            "{{drain}} supervision 和 {{quiescence}} 结论。"
+          ],
+          "boundaries": [
+            "cancel、operation {{settlement}} 和 runtime {{quiescence}} 是不同事实。"
+          ],
+          "evidence": [
+            "runtime-drain"
+          ],
+          "target": "runtime-drain"
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-runtime-inbound",
+          "to": "module-runtime-admit",
+          "kind": "call",
+          "label": "Notify worker"
+        },
+        {
+          "from": "module-runtime-admit",
+          "to": "module-runtime-state",
+          "kind": "call",
+          "label": "{{frozen}} input + transfer"
+        },
+        {
+          "from": "module-runtime-admit",
+          "to": "module-runtime-execution",
+          "kind": "call",
+          "label": "{{admission}} of Attempt"
+        },
+        {
+          "from": "module-runtime-execution",
+          "to": "module-runtime-state",
+          "kind": "data",
+          "label": "{{settlement}} handoff"
+        },
+        {
+          "from": "module-runtime-drain",
+          "to": "module-runtime-admit",
+          "kind": "data",
+          "label": "closed {{admission}} gate"
+        },
+        {
+          "from": "module-runtime-drain",
+          "to": "module-runtime-execution",
+          "kind": "call",
+          "label": "request cancellation + await task"
+        }
+      ]
+    },
+    {
+      "id": "module-agent",
+      "parent": "overview",
+      "owner": "agent",
+      "title": "Agent kernel · One Attempt",
+      "summary": "AgentExecution 用与提供方无关的 {{contract}} 执行 model → Tool → {{map-continuation}}，并提出一个 {{terminal}} {{settlement}} 候选。",
+      "nodes": [
+        {
+          "id": "module-agent-machine",
+          "label": "ExecutionStateMachine",
+          "layer": "Attempt lifecycle",
+          "summary": "显式跟踪 RunningModel、WaitingForTool 与完成/失败/取消。",
+          "owns": [
+            "一个 Attempt 的状态转换。"
+          ],
+          "boundaries": [
+            "唯一 {{terminal}} 候选追加失败必须保持显式。"
+          ],
+          "evidence": [
+            "map-agent-kernel",
+            "attempt-terminal"
+          ]
+        },
+        {
+          "id": "module-agent-request",
+          "label": "prepare_model_turn / start_model_turn",
+          "layer": "Model turn",
+          "summary": "先{{frozen}}逻辑输入，再执行真实 request-start 事务与重建校验。",
+          "owns": [
+            "请求 {{snapshot-request}}、重试预算和 {{map-continuation}}。"
+          ],
+          "boundaries": [
+            "Started 不证明提供方已经执行，不能在 {{recovery}} 中重发旧请求。"
+          ],
+          "evidence": [
+            "context-start",
+            "start-meaning"
+          ],
+          "target": "agent-request-start"
+        },
+        {
+          "id": "module-agent-cancel",
+          "label": "AgentCancellation",
+          "layer": "Attempt cancellation",
+          "summary": "同一 ModelTurnStartGate 对取消与实际 request-start 进行 {{arbitration}}。",
+          "owns": [
+            "首个语义取消原因与子信号。"
+          ],
+          "boundaries": [
+            "取消不能撤销已经成功的持久启动。"
+          ],
+          "evidence": [
+            "cancel-cause",
+            "cancel-gate"
+          ],
+          "target": "agent-cancellation"
+        },
+        {
+          "id": "module-agent-lifecycle",
+          "label": "AttemptLifecycle",
+          "layer": "Typed policy seams",
+          "summary": "PreStepPolicy、PreToolPolicy 和 ToolResultObserver 通过固定类型参与执行。",
+          "owns": [
+            "不可变的每 Attempt policy/observer {{composition}}。"
+          ],
+          "boundaries": [
+            "扩展拿不到 canonical、Tool identity、取消 trigger 或 {{terminal}} {{map-agent-authority}}。"
+          ],
+          "evidence": [
+            "map-agent-kernel"
+          ]
+        },
+        {
+          "id": "module-agent-batch",
+          "label": "{{canonical}} Assistant / ToolResult batch",
+          "layer": "{{canonical}} {{acceptance-assistant}}",
+          "summary": "先{{acceptance-assistant}} Assistant 的同批 Tool {{slot}}，执行后按顺序原子提交整批结果。",
+          "owns": [
+            "Tool 批次身份、顺序和 canonical {{acceptance-tool}}。"
+          ],
+          "boundaries": [
+            "{{physical}} 执行由 executor 决定；canonical commit 不保证外部 {{map-exactly-once}}。"
+          ],
+          "evidence": [
+            "tool-acceptance",
+            "tool-batch"
+          ]
+        },
+        {
+          "id": "module-agent-tools",
+          "label": "Tool Plane",
+          "layer": "Execution peer",
+          "summary": "执行已{{acceptance-tool}}的调用并返回类型化执行事实。",
+          "owns": [
+            "{{physical}} {{effect}} 与取消 {{settlement}}。"
+          ],
+          "boundaries": [
+            "Tool-call {{publication}} 帧本身没有执行权限。"
+          ],
+          "evidence": [
+            "tool-evidence",
+            "map-publication-proposals"
+          ],
+          "target": "module-tools",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-agent-machine",
+          "to": "module-agent-request",
+          "kind": "call",
+          "label": "enter model turn"
+        },
+        {
+          "from": "module-agent-request",
+          "to": "module-agent-cancel",
+          "kind": "call",
+          "label": "{{arbitration}} of actual start"
+        },
+        {
+          "from": "module-agent-machine",
+          "to": "module-agent-lifecycle",
+          "kind": "call",
+          "label": "phase-specific seam"
+        },
+        {
+          "from": "module-agent-request",
+          "to": "module-agent-batch",
+          "kind": "data",
+          "label": "assembled Assistant proposal"
+        },
+        {
+          "from": "module-agent-batch",
+          "to": "module-agent-tools",
+          "kind": "call",
+          "label": "{{acceptance-tool}} of {{canonical}} invocation"
+        },
+        {
+          "from": "module-agent-tools",
+          "to": "module-agent-batch",
+          "kind": "data",
+          "label": "ordered results"
+        },
+        {
+          "from": "module-agent-batch",
+          "to": "module-agent-machine",
+          "kind": "data",
+          "label": "continuation or {{terminal}}"
+        }
+      ]
+    },
+    {
+      "id": "module-extensions",
+      "parent": "overview",
+      "owner": "extensions",
+      "title": "{{native}} Agent Extensions · Closed {{composition}}",
+      "summary": "封闭 Rust 扩展接入现有 Context、Tool 和 Conversation {{map-semantic-owner}}；领域状态随 Conversation 保留。",
+      "nodes": [
+        {
+          "id": "module-extensions-composition",
+          "label": "NativeAgentExtensions",
+          "layer": "Configuration generation",
+          "summary": "Root/named profiles 显式启用 Agent Status、Todo 和 Goal。",
+          "owns": [
+            "按配置 generation {{frozen}}封闭扩展集合。"
+          ],
+          "boundaries": [
+            "默认关闭，不提供动态 loader 或第三方 lifecycle API。"
+          ],
+          "evidence": [
+            "extensions-code"
+          ]
+        },
+        {
+          "id": "module-extensions-status",
+          "label": "NativeContextComposition / AgentStatusEngine",
+          "layer": "Context contribution",
+          "summary": "在 ContextAssembly 注册 Agent Status contributor，读取 background 与 Todo 状态。",
+          "owns": [
+            "每次请求准备的一份状态 {{observation}}。"
+          ],
+          "boundaries": [
+            "模型与客户端共享同一次 composed {{observation}}。"
+          ],
+          "evidence": [
+            "map-extensions-bind",
+            "client-owners"
+          ]
+        },
+        {
+          "id": "module-extensions-goal",
+          "label": "GoalDomain / GoalPhase",
+          "layer": "Domain {{authority-goal}}",
+          "summary": "GoalPhase::Active 持久授权在安全 idle 点继续。",
+          "owns": [
+            "GoalRef {{revision}} 与 GoalSnapshot 的预算、阶段和计数。"
+          ],
+          "boundaries": [
+            "Paused/Blocked 不授权继续；历史事件不是 Goal 当前状态 {{authority-goal}}。"
+          ],
+          "evidence": [
+            "map-goal-state",
+            "map-goal-types"
+          ]
+        },
+        {
+          "id": "module-extensions-driver",
+          "label": "GoalRoundDriver",
+          "layer": "{{admission-goal}} participation",
+          "summary": "在 runtime 已满足安全 idle 条件时，原子消耗一轮并{{acceptance-inbound}}普通 Pending Inbound。",
+          "owns": [
+            "参与既有 {{admission-goal}} 流程。"
+          ],
+          "boundaries": [
+            "不拥有第二条队列、模型请求组装或 Tool 执行器。"
+          ],
+          "evidence": [
+            "map-goal-driver",
+            "goal-runtime",
+            "extensions-owner"
+          ]
+        },
+        {
+          "id": "module-extensions-runtime",
+          "label": "ConversationRuntime",
+          "layer": "{{native}} peer",
+          "summary": "是否可以开始下一轮仍由 Conversation coordinator 决定。",
+          "owns": [
+            "同一 Attempt {{admission}} 和 lifecycle。"
+          ],
+          "boundaries": [
+            "Goal Active 与 runtime 当前可用不是同一事实。"
+          ],
+          "evidence": [
+            "goal-runtime"
+          ],
+          "target": "module-runtime",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-extensions-composition",
+          "to": "module-extensions-status",
+          "kind": "call",
+          "label": "bind contributor"
+        },
+        {
+          "from": "module-extensions-composition",
+          "to": "module-extensions-goal",
+          "kind": "dependency",
+          "label": "{{native}} domain {{composition}}"
+        },
+        {
+          "from": "module-extensions-goal",
+          "to": "module-extensions-driver",
+          "kind": "data",
+          "label": "active authorization + budget"
+        },
+        {
+          "from": "module-extensions-runtime",
+          "to": "module-extensions-driver",
+          "kind": "call",
+          "label": "eligible idle opportunity"
+        },
+        {
+          "from": "module-extensions-driver",
+          "to": "module-extensions-runtime",
+          "kind": "data",
+          "label": "ordinary Pending Inbound"
+        }
+      ]
+    },
+    {
+      "id": "module-context",
+      "parent": "overview",
+      "owner": "context",
+      "title": "Context Engine · History / request assembly",
+      "summary": "历史选择、动态 Context 提案和当前 Agent 输入分别有明确 {{map-semantic-owner}}，最后形成精确的 provider-neutral 请求。",
+      "nodes": [
+        {
+          "id": "module-context-history",
+          "label": "{{map-checkpoint}} + eligible {{map-tail}}",
+          "layer": "Historical compiler",
+          "summary": "用 {{map-read-cut}} 选择当前 {{map-checkpoint}} 并接上严格符合条件的 {{map-tail}}。",
+          "owns": [
+            "Original/Derived 验证、{{provenance-derived}} 与 Tool 配对。"
+          ],
+          "boundaries": [
+            "历史 {{projection-context}} 坐标不是实际执行身份。"
+          ],
+          "evidence": [
+            "context-cuts",
+            "context-typed",
+            "map-checkpoint-compiler"
+          ],
+          "target": "context-checkpoint"
+        },
+        {
+          "id": "module-context-engine",
+          "label": "ContextEngine",
+          "layer": "Fit / planning",
+          "summary": "编译历史、估算 token、规划 {{compaction}} 并校验 fit/progress。",
+          "owns": [
+            "{{bounded}} 历史输入与模型窗口下的预算计算。"
+          ],
+          "boundaries": [
+            "不修改 canonical Ledger，也不决定提供方 wire 规则。"
+          ],
+          "evidence": [
+            "map-context-engine",
+            "context-owners"
+          ]
+        },
+        {
+          "id": "module-context-assembly",
+          "label": "ContextAssembly",
+          "layer": "Dynamic input",
+          "summary": "Contributor 返回类型化提案，经过 {{admission-context}} 才成为本次 Context。",
+          "owns": [
+            "动态提案、兼容性和 request-only system sections。"
+          ],
+          "boundaries": [
+            "提案不自动获得 canonical 消息身份。"
+          ],
+          "evidence": [
+            "map-context-contributor",
+            "map-context-accepted",
+            "context-start"
+          ]
+        },
+        {
+          "id": "module-context-projection",
+          "label": "ContextProjection",
+          "layer": "Measured input",
+          "summary": "包含有序类型化消息、有效 System Prompt 和本次 token 计量。",
+          "owns": [
+            "确定性 fingerprint 的测量对象。"
+          ],
+          "boundaries": [
+            "不是 UI RuntimeClientProjection。"
+          ],
+          "evidence": [
+            "map-context-projection"
+          ]
+        },
+        {
+          "id": "module-context-agent",
+          "label": "AgentExecution",
+          "layer": "Current-input peer",
+          "summary": "{{frozen}}当前 core 输入与贡献，负责实际 request-start。",
+          "owns": [
+            "{{frozen}} generation 和最终请求输入。"
+          ],
+          "boundaries": [
+            "历史 compiler 不持有取消或实际启动 {{map-agent-authority}}。"
+          ],
+          "evidence": [
+            "frozen-input",
+            "map-context-engine"
+          ],
+          "target": "module-agent",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-context-history",
+          "to": "module-context-engine",
+          "kind": "data",
+          "label": "compiled historical messages"
+        },
+        {
+          "from": "module-context-engine",
+          "to": "module-context-projection",
+          "kind": "data",
+          "label": "typed input + measurement"
+        },
+        {
+          "from": "module-context-assembly",
+          "to": "module-context-agent",
+          "kind": "data",
+          "label": "{{admission-context}} of contributions"
+        },
+        {
+          "from": "module-context-projection",
+          "to": "module-context-agent",
+          "kind": "data",
+          "label": "historical input"
+        },
+        {
+          "from": "module-context-engine",
+          "to": "module-context-history",
+          "kind": "call",
+          "label": "{{compaction}} candidate validation"
+        }
+      ]
+    },
+    {
+      "id": "module-model",
+      "parent": "overview",
+      "owner": "model",
+      "title": "Model · Provider-neutral {{contract-model}} / adapters",
+      "summary": "Agent 只看 ModelRequest 与 ModelStreamItem；三个协议 adapter 各完成一次 {{physical}} provider attempt。",
+      "nodes": [
+        {
+          "id": "module-model-binding",
+          "label": "ResolvedModelInvocation / FrozenModelSpec",
+          "layer": "Model {{map-subagent-authority}}",
+          "summary": "父进程先解析模型语义，child 只按已{{frozen}} binding {{map-model-materialization}}。",
+          "owns": [
+            "协议、endpoint、预算与明确 credential binding。"
+          ],
+          "boundaries": [
+            "child 不重读可变配置来重新选择模型。"
+          ],
+          "evidence": [
+            "map-model-frozen"
+          ]
+        },
+        {
+          "id": "module-model-request",
+          "label": "ModelRequest",
+          "layer": "Neutral input",
+          "summary": "接收精确{{frozen}}后的 typed messages、Tool definitions 与 prompt。",
+          "owns": [
+            "提供方无关的请求输入。"
+          ],
+          "boundaries": [
+            "请求必须先完成 durable start 与重建相等校验。"
+          ],
+          "evidence": [
+            "model-contract",
+            "map-start-reconstruct"
+          ]
+        },
+        {
+          "id": "module-model-adapter",
+          "label": "ModelAdapter::stream",
+          "layer": "Adapter {{contract-model}}",
+          "summary": "一次 stream 只对应一次 provider attempt。",
+          "owns": [
+            "协议编码、{{normalization-events}} 事件与不透明 {{map-continuation}}。"
+          ],
+          "boundaries": [
+            "没有隐藏重试、重连或 failover。"
+          ],
+          "evidence": [
+            "model-contract",
+            "model-protocols"
+          ]
+        },
+        {
+          "id": "module-model-protocols",
+          "label": "OpenAI / Anthropic adapters",
+          "layer": "Protocol implementation",
+          "summary": "Chat Completions、Responses、Messages 各自完成 wire translation。",
+          "owns": [
+            "provider 原始事件到 ModelStreamItem 的转换。"
+          ],
+          "boundaries": [
+            "provider SDK 与 HTTP 框架类型不进入 Agent kernel {{contract}}。"
+          ],
+          "evidence": [
+            "model-protocols",
+            "inward-contracts"
+          ]
+        },
+        {
+          "id": "module-model-stream",
+          "label": "ModelStreamItem",
+          "layer": "{{normalization-events}} output",
+          "summary": "区分语义 ModelEvent 与 execution-only progress。",
+          "owns": [
+            "将规范事件送回 Agent assembler。"
+          ],
+          "boundaries": [
+            "progress 不是 canonical 对话内容。"
+          ],
+          "evidence": [
+            "model-items"
+          ]
+        },
+        {
+          "id": "module-model-agent",
+          "label": "AgentExecution",
+          "layer": "Retry {{owner}}",
+          "summary": "失败重试与下一轮调用仍由 Agent 显式启动。",
+          "owns": [
+            "共享逻辑步骤预算和请求序号。"
+          ],
+          "boundaries": [
+            "adapter 不代替 durable-start {{arbitration}}。"
+          ],
+          "evidence": [
+            "agent-owns",
+            "model-dispatch"
+          ],
+          "target": "module-agent",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-model-binding",
+          "to": "module-model-adapter",
+          "kind": "data",
+          "label": "resolved provider binding"
+        },
+        {
+          "from": "module-model-request",
+          "to": "module-model-adapter",
+          "kind": "call",
+          "label": "one stream invocation"
+        },
+        {
+          "from": "module-model-protocols",
+          "to": "module-model-adapter",
+          "kind": "dependency",
+          "label": "implement ModelAdapter"
+        },
+        {
+          "from": "module-model-adapter",
+          "to": "module-model-stream",
+          "kind": "data",
+          "label": "{{normalization-events}} of items"
+        },
+        {
+          "from": "module-model-stream",
+          "to": "module-model-agent",
+          "kind": "data",
+          "label": "{{canonical}} assembly input"
+        },
+        {
+          "from": "module-model-agent",
+          "to": "module-model-request",
+          "kind": "data",
+          "label": "durably started input"
+        }
+      ]
+    },
+    {
+      "id": "module-tools",
+      "parent": "overview",
+      "owner": "tools",
+      "title": "Tool Plane · {{preflight}} / {{physical}} execution",
+      "summary": "{{native}} Tool、MCP 与 Managed Python 共享执行 {{contract}}；canonical {{acceptance}} 与 {{physical}} {{settlement}} 分开。",
+      "nodes": [
+        {
+          "id": "module-tools-registry",
+          "label": "ToolRegistry / PreparedInvocation",
+          "layer": "{{preflight}}",
+          "summary": "解析精确定义、校验 schema 和{{frozen}}执行 policy。",
+          "owns": [
+            "{{preflight}} 与完整调用输入。"
+          ],
+          "boundaries": [
+            "{{preflight}} 不代表已执行；canonical 批次顺序仍由 Agent 决定。"
+          ],
+          "evidence": [
+            "map-tool-preflight",
+            "map-tool-prepared",
+            "tool-acceptance"
+          ]
+        },
+        {
+          "id": "module-tools-invocation",
+          "label": "ForegroundInvocation",
+          "layer": "Execution lifecycle",
+          "summary": "以同一调用状态机驱动 completion、deadline、取消与 {{settlement}}。",
+          "owns": [
+            "调用级 {{map-invocation-arbitration}} 和类型化 InvocationFact。"
+          ],
+          "boundaries": [
+            "调用者负责身份、{{map-caller-admission}} 和 {{map-caller-publication}}。"
+          ],
+          "evidence": [
+            "map-invocation-owner",
+            "map-invocation-run"
+          ],
+          "target": "tools-invocation"
+        },
+        {
+          "id": "module-tools-executor",
+          "label": "ToolExecutor / ToolExecutionHandle",
+          "layer": "{{physical}} {{owner}}",
+          "summary": "start 构造 handle，实际 {{dispatch}} 和清理保留在 handle 内。",
+          "owns": [
+            "本地执行、取消清理及两条结果通道。"
+          ],
+          "boundaries": [
+            "取消请求不能代替 {{physical}} {{map-physical-terminal}} 证明。"
+          ],
+          "evidence": [
+            "map-executor-handle",
+            "map-executor-settlement"
+          ]
+        },
+        {
+          "id": "module-tools-adapters",
+          "label": "{{native}} / MCP / Managed Python",
+          "layer": "Adapters",
+          "summary": "Bash/文件 Tool、远程 MCP 与 Python package 使用同一 Tool Plane。",
+          "owns": [
+            "各自真实 {{effect}} {{boundary}} 和确定性证据。"
+          ],
+          "boundaries": [
+            "远程 MCP 允许显式 OutcomeUnknown；不保证外部 {{map-exactly-once}}。"
+          ],
+          "evidence": [
+            "python-mcp",
+            "tool-adapters",
+            "tool-evidence"
+          ]
+        },
+        {
+          "id": "module-tools-runtime",
+          "label": "ConversationToolRuntime",
+          "layer": "Conversation resources",
+          "summary": "稳定绑定 workspace、artifact store、mailbox 和 background registry。",
+          "owns": [
+            "每个 Conversation 的资源 {{ownership}}。"
+          ],
+          "boundaries": [
+            "配置更改不能替换 registry 来遗忘已有执行。"
+          ],
+          "evidence": [
+            "map-tool-runtime"
+          ]
+        },
+        {
+          "id": "module-tools-agent",
+          "label": "AgentExecution",
+          "layer": "{{canonical}} peer",
+          "summary": "接收执行结果，并原子提交已{{acceptance-tool}} Tool {{slot}} 的有序批次。",
+          "owns": [
+            "canonical ToolResult {{settlement}}。"
+          ],
+          "boundaries": [
+            "不能把模型 proposal 或 timeout 当作已执行成功。"
+          ],
+          "evidence": [
+            "tool-acceptance",
+            "tool-batch"
+          ],
+          "target": "module-agent",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-tools-registry",
+          "to": "module-tools-invocation",
+          "kind": "data",
+          "label": "prepared invocation + {{frozen}} policy"
+        },
+        {
+          "from": "module-tools-invocation",
+          "to": "module-tools-executor",
+          "kind": "call",
+          "label": "construct + drive handle"
+        },
+        {
+          "from": "module-tools-adapters",
+          "to": "module-tools-executor",
+          "kind": "dependency",
+          "label": "implement ToolExecutor"
+        },
+        {
+          "from": "module-tools-runtime",
+          "to": "module-tools-executor",
+          "kind": "data",
+          "label": "bound resources"
+        },
+        {
+          "from": "module-tools-invocation",
+          "to": "module-tools-agent",
+          "kind": "data",
+          "label": "result + execution evidence"
+        }
+      ]
+    },
+    {
+      "id": "module-subagents",
+      "parent": "overview",
+      "owner": "subagents",
+      "title": "Subagents · {{durable}} Agent / {{finite}} activation",
+      "summary": "稳定 Agent 身份与 {{finite}} activation 分开；子 Conversation 使用相同{{native}} runtime 栈与 Session 共享目录。",
+      "nodes": [
+        {
+          "id": "module-subagents-catalog",
+          "label": "AgentCatalog / resolver",
+          "layer": "Creation {{map-subagent-authority}}",
+          "summary": "{{frozen}} named Agent 的能力、模型和 Session execution binding。",
+          "owns": [
+            "创建时 admitted {{map-subagent-authority}}。"
+          ],
+          "boundaries": [
+            "后续 send_message 复用既有权限，不能重新扩大 profile。"
+          ],
+          "evidence": [
+            "agents-authority",
+            "map-native-child"
+          ]
+        },
+        {
+          "id": "module-subagents-registry",
+          "label": "SubagentRegistry",
+          "layer": "Logical lifecycle",
+          "summary": "管理 AgentId、ConversationId 和零或一个当前 SubagentId activation。",
+          "owns": [
+            "输入 {{admission-subagent}}、sealing 与精确 activation 控制。"
+          ],
+          "boundaries": [
+            "停止中或证明不足时不能静默重新激活。"
+          ],
+          "evidence": [
+            "map-native-child",
+            "agent-controls"
+          ]
+        },
+        {
+          "id": "module-subagents-driver",
+          "label": "process driver",
+          "layer": "{{physical}} lifecycle",
+          "summary": "唯一 driver 持有 process group、控制 IPC、升级取消和 reap。",
+          "owns": [
+            "{{physical}} containment 与进程结束证据。"
+          ],
+          "boundaries": [
+            "Activity channel 丢失只是诊断，不证明 child 停止。"
+          ],
+          "evidence": [
+            "map-child-process"
+          ]
+        },
+        {
+          "id": "module-subagents-history",
+          "label": "child Conversation / final report",
+          "layer": "{{durable}} content",
+          "summary": "子 canonical 历史保存内容，final report 进入父普通 inbound。",
+          "owns": [
+            "独立对话内容与 activation 关联。"
+          ],
+          "boundaries": [
+            "Event Journal 不是第二份 child transcript。"
+          ],
+          "evidence": [
+            "map-native-child"
+          ]
+        },
+        {
+          "id": "module-subagents-runtime",
+          "label": "LocalConversationCore",
+          "layer": "Shared runtime peer",
+          "summary": "child 复用{{native}} {{composition}} 和执行 {{contract}}。",
+          "owns": [
+            "按{{frozen}}输入构造自己的 Conversation runtime。"
+          ],
+          "boundaries": [
+            "child 与 parent 共享 Session 工作区，失败没有 {{map-rollback}}。"
+          ],
+          "evidence": [
+            "agents-workspace",
+            "composition"
+          ],
+          "target": "module-config",
+          "external": true
+        },
+        {
+          "id": "module-subagents-workflow",
+          "label": "Workflow-owned {{finite}} child",
+          "layer": "{{scope}} peer",
+          "summary": "Workflow child 复用监督 primitive，但由节点管理其 {{finite}} {{scope}}。",
+          "owns": [
+            "节点级 {{settlement}}。"
+          ],
+          "boundaries": [
+            "不能通过持久 Agent 控制重新启动。"
+          ],
+          "evidence": [
+            "agents-authority",
+            "map-native-child"
+          ],
+          "target": "module-workflows",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-subagents-catalog",
+          "to": "module-subagents-registry",
+          "kind": "data",
+          "label": "{{frozen}} creation {{map-subagent-authority}}"
+        },
+        {
+          "from": "module-subagents-registry",
+          "to": "module-subagents-driver",
+          "kind": "call",
+          "label": "commit staged child {{ownership}}"
+        },
+        {
+          "from": "module-subagents-driver",
+          "to": "module-subagents-runtime",
+          "kind": "call",
+          "label": "spawn child runtime"
+        },
+        {
+          "from": "module-subagents-runtime",
+          "to": "module-subagents-history",
+          "kind": "data",
+          "label": "{{canonical}} child content"
+        },
+        {
+          "from": "module-subagents-history",
+          "to": "module-subagents-registry",
+          "kind": "data",
+          "label": "final report + {{acceptance-inbound}}"
+        },
+        {
+          "from": "module-subagents-workflow",
+          "to": "module-subagents-registry",
+          "kind": "dependency",
+          "label": "reuse SubagentRegistry supervision"
+        }
+      ]
+    },
+    {
+      "id": "module-workflows",
+      "parent": "overview",
+      "owner": "workflows",
+      "title": "WorkflowRuntime · Fixed {{scope}} program",
+      "summary": "选定 Workflow 是一个前台 Tool；固定程序决定节点和局部值，执行复用 {{native}} 调用 {{boundary}}。",
+      "nodes": [
+        {
+          "id": "module-workflows-program",
+          "label": "WorkflowProgram::compile",
+          "layer": "Program {{admission-workflow}}",
+          "summary": "编译 block/node、typed bindings 和执行上界。",
+          "owns": [
+            "固定程序及递归展开预算。"
+          ],
+          "boundaries": [
+            "不是由模型临时生成的开放执行队列。"
+          ],
+          "evidence": [
+            "workflow-program",
+            "map-workflow-bound"
+          ]
+        },
+        {
+          "id": "module-workflows-runtime",
+          "label": "WorkflowRuntime",
+          "layer": "{{scope}} execution",
+          "summary": "执行 Root、Parallel、Loop block，管理局部值和确定性 join。",
+          "owns": [
+            "WorkflowBlockInstance、WorkflowNodeInstance 与 {{scope}} {{settlement}}。"
+          ],
+          "boundaries": [
+            "失败/取消不撤销 Session 目录中已完成写入。"
+          ],
+          "evidence": [
+            "map-workflow-runtime",
+            "workflow-owner",
+            "workflow-workspace"
+          ]
+        },
+        {
+          "id": "module-workflows-tool",
+          "label": "invoke_tool",
+          "layer": "{{native}} Tool node",
+          "summary": "为 node 创建真实 ToolInvocationId::Workflow，做精确选择与 {{preflight}}。",
+          "owns": [
+            "已 {{admission-workflow}} registration 和 native invocation。"
+          ],
+          "boundaries": [
+            "不伪造模型 ToolCall；不直接获得 canonical 历史写权限。"
+          ],
+          "evidence": [
+            "map-workflow-tool"
+          ]
+        },
+        {
+          "id": "module-workflows-agent",
+          "label": "{{finite}} Agent node",
+          "layer": "Child supervision peer",
+          "summary": "节点以 {{finite}} 子任务获得独立 Conversation 和受控 execution binding。",
+          "owns": [
+            "子任务监督与节点结果。"
+          ],
+          "boundaries": [
+            "不能通过持久 Agent 控制 {{recovery}}。"
+          ],
+          "evidence": [
+            "agents-authority",
+            "workflow-owner"
+          ],
+          "target": "module-subagents",
+          "external": true
+        },
+        {
+          "id": "module-workflows-invocation",
+          "label": "ForegroundInvocation",
+          "layer": "{{physical}} execution peer",
+          "summary": "Tool 节点执行共享前台 {{map-invocation-arbitration}} 与 {{settlement}} 机制。",
+          "owns": [
+            "实际 Tool {{effect}} 的生命周期。"
+          ],
+          "boundaries": [
+            "Workflow 的图推进仍由 WorkflowRuntime 决定。"
+          ],
+          "evidence": [
+            "map-invocation-owner",
+            "map-workflow-tool"
+          ],
+          "target": "module-tools",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-workflows-program",
+          "to": "module-workflows-runtime",
+          "kind": "data",
+          "label": "compiled {{scope}} program"
+        },
+        {
+          "from": "module-workflows-runtime",
+          "to": "module-workflows-tool",
+          "kind": "call",
+          "label": "Tool node"
+        },
+        {
+          "from": "module-workflows-runtime",
+          "to": "module-workflows-agent",
+          "kind": "call",
+          "label": "Agent node"
+        },
+        {
+          "from": "module-workflows-tool",
+          "to": "module-workflows-invocation",
+          "kind": "call",
+          "label": "{{native}} prepared invocation"
+        },
+        {
+          "from": "module-workflows-invocation",
+          "to": "module-workflows-runtime",
+          "kind": "data",
+          "label": "typed result for graph progression"
+        },
+        {
+          "from": "module-workflows-agent",
+          "to": "module-workflows-runtime",
+          "kind": "data",
+          "label": "settled node value"
+        }
+      ]
+    },
+    {
+      "id": "module-durable",
+      "parent": "overview",
+      "owner": "durable",
+      "title": "{{durable}} {{authority-ledger}} · {{map-semantic}} transactions",
+      "summary": "ConversationStore 暴露 rustX 领域事务；SQLite backend 实现持久性，kernel 不依赖数据库框架。",
+      "nodes": [
+        {
+          "id": "module-durable-inbox",
+          "label": "Pending Inbound Inbox",
+          "layer": "{{acceptance-inbound}} input",
+          "summary": "accept_inbound 原子分配 sequence 并保存待 {{adoption}} 输入。",
+          "owns": [
+            "{{acceptance-inbound}} 和 edit/remove 对 {{adoption}} 的事务顺序。"
+          ],
+          "boundaries": [
+            "不是 Message Ledger、第二个 scheduler 或通用 queue。"
+          ],
+          "evidence": [
+            "durable-inbound",
+            "inbound-commit"
+          ]
+        },
+        {
+          "id": "module-durable-ledger",
+          "label": "{{map-ledger}} / Surface",
+          "layer": "{{canonical}} facts",
+          "summary": "adopt_pending_batch 原子追加 canonical 消息并移除 pending。",
+          "owns": [
+            "不可变消息事实、普通追加和精确 answer obligation。"
+          ],
+          "boundaries": [
+            "Surface 普通追加记录不决定压缩历史的选择。"
+          ],
+          "evidence": [
+            "inbound-commit",
+            "map-conversation-hot"
+          ]
+        },
+        {
+          "id": "module-durable-journal",
+          "label": "{{map-journal}} / RequestSnapshot",
+          "layer": "Execution evidence",
+          "summary": "保存执行事实、精确请求和原子 request-start {{receipt}}。",
+          "owns": [
+            "请求重建与 {{recovery}} 判断需要的事实。"
+          ],
+          "boundaries": [
+            "Started 只禁止旧请求重发，不证明 provider 执行。"
+          ],
+          "evidence": [
+            "map-start-transaction",
+            "start-meaning"
+          ]
+        },
+        {
+          "id": "module-durable-checkpoint",
+          "label": "ProjectionCheckpoint / activation",
+          "layer": "Historical inclusion",
+          "summary": "Checkpoint 内容、head、activation、completion 与 {{receipt}} 在语义事务中提交。",
+          "owns": [
+            "历史包含/排除与独立 activation 顺序。"
+          ],
+          "boundaries": [
+            "不改写 Ledger，不生成 canonical summary 消息。"
+          ],
+          "evidence": [
+            "compaction-commit",
+            "map-projection-receipt"
+          ],
+          "target": "module-context",
+          "external": true
+        },
+        {
+          "id": "module-durable-publication",
+          "label": "{{publication}} plane",
+          "layer": "{{durable}} {{release-output}} peer",
+          "summary": "用独立记录证明哪些输出已经 commit for release。",
+          "owns": [
+            "P、U、C 的持久约束与三类 {{settlement-publication}}。"
+          ],
+          "boundaries": [
+            "不能把审计内容当作 canonical Assistant。"
+          ],
+          "evidence": [
+            "publication-contract",
+            "publication-outcomes"
+          ],
+          "target": "module-publication",
+          "external": true
+        },
+        {
+          "id": "module-durable-sqlite",
+          "label": "SqliteConversationStore",
+          "layer": "Backend implementation",
+          "summary": "实现 ConversationStore 的{{native}}语义事务。",
+          "owns": [
+            "后端具体存储与事务原子性。"
+          ],
+          "boundaries": [
+            "不把 SQLite/SQL 类型推入 Agent kernel {{contract}}。"
+          ],
+          "evidence": [
+            "durable-inbound",
+            "layering"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-durable-inbox",
+          "to": "module-durable-ledger",
+          "kind": "call",
+          "label": "atomic {{adoption}}"
+        },
+        {
+          "from": "module-durable-sqlite",
+          "to": "module-durable-journal",
+          "kind": "dependency",
+          "label": "implement {{map-semantic}} transactions"
+        },
+        {
+          "from": "module-durable-sqlite",
+          "to": "module-durable-ledger",
+          "kind": "dependency",
+          "label": "implement {{map-semantic}} transactions"
+        },
+        {
+          "from": "module-durable-sqlite",
+          "to": "module-durable-checkpoint",
+          "kind": "dependency",
+          "label": "implement {{map-semantic}} transactions"
+        },
+        {
+          "from": "module-durable-sqlite",
+          "to": "module-durable-publication",
+          "kind": "dependency",
+          "label": "implement {{map-semantic}} transactions"
+        }
+      ]
+    },
+    {
+      "id": "module-publication",
+      "parent": "overview",
+      "owner": "publication",
+      "title": "{{publication}} · {{durable}} {{release-output}}",
+      "summary": "输出先 {{staging-publication}} 再 {{release-output}}；provider 结果、用户输出 {{terminal-publication}} 与 canonical {{acceptance-assistant}} 采用 {{map-puc}}。",
+      "nodes": [
+        {
+          "id": "module-publication-coalescer",
+          "label": "PublicationCoalescer",
+          "layer": "Flush policy",
+          "summary": "按字节、最老 payload 的绝对 deadline、结构或 {{terminal-publication}} 合并帧。",
+          "owns": [
+            "{{bounded}} buffer 与确定性 flush 策略。"
+          ],
+          "boundaries": [
+            "provider chunk size 不决定 {{publication}} 单位。"
+          ],
+          "evidence": [
+            "publication-contract"
+          ]
+        },
+        {
+          "id": "module-publication-frames",
+          "label": "PublicationFrame / {{staging-publication}}",
+          "layer": "{{durable}} {{release-output}}",
+          "summary": "每个帧先持久提交，随后才送到 user-facing Runtime Client。",
+          "owns": [
+            "可释放输出的持久上界。"
+          ],
+          "boundaries": [
+            "commit for release 不是用户已经看到的 ACK。"
+          ],
+          "evidence": [
+            "publication-flush",
+            "publication-outcomes"
+          ]
+        },
+        {
+          "id": "module-publication-terminal",
+          "label": "P / U / C",
+          "layer": "{{settlement-publication}} mechanism",
+          "summary": "完成 P、再完成 U、最后才允许 C；store 也校验蕴含关系。",
+          "owns": [
+            "三种互斥 {{settlement-publication}} 和崩溃可区分点。"
+          ],
+          "boundaries": [
+            "P 与 U 不合成同一个事务。"
+          ],
+          "evidence": [
+            "publication-contract",
+            "publication-terminal"
+          ],
+          "target": "publication-settlement"
+        },
+        {
+          "id": "module-publication-proposals",
+          "label": "ProposedToolCall frames",
+          "layer": "{{map-proposal}} {{boundary}}",
+          "summary": "模型 Tool-call 帧显式标为 proposal。",
+          "owns": [
+            "对模型建议的流式呈现。"
+          ],
+          "boundaries": [
+            "Incomplete / Unaccepted proposal 不能授权执行或 ToolResult。"
+          ],
+          "evidence": [
+            "map-publication-proposals"
+          ]
+        },
+        {
+          "id": "module-publication-client",
+          "label": "RuntimeClientProjection",
+          "layer": "{{release-output}} peer",
+          "summary": "接收已 commit 的帧并进入用户观察面。",
+          "owns": [
+            "输出 {{projection}} 与订阅{{dispatch}}。"
+          ],
+          "boundaries": [
+            "attachment 断开不能改变 durable {{settlement-publication}}。"
+          ],
+          "evidence": [
+            "publication-contract",
+            "client-owners"
+          ],
+          "target": "module-projection",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "module-publication-coalescer",
+          "to": "module-publication-frames",
+          "kind": "data",
+          "label": "typed flush frame"
+        },
+        {
+          "from": "module-publication-frames",
+          "to": "module-publication-client",
+          "kind": "data",
+          "label": "commit before {{release-output}}"
+        },
+        {
+          "from": "module-publication-frames",
+          "to": "module-publication-terminal",
+          "kind": "data",
+          "label": "final frame + {{terminal-publication}} marker"
+        },
+        {
+          "from": "module-publication-proposals",
+          "to": "module-publication-frames",
+          "kind": "data",
+          "label": "{{map-proposal}} payload"
+        }
+      ]
+    },
+    {
+      "id": "agent-cancellation",
+      "parent": "module-agent",
+      "owner": "agent",
+      "title": "Mechanism · Cancellation vs request start",
+      "summary": "ModelTurnStartGate 把取消与实际 durable request-start 放进同一个 {{arbitration}} 区间。",
+      "nodes": [
+        {
+          "id": "agent-cancellation-cancel",
+          "label": "request_cancel(reason)",
+          "layer": "Competing transition",
+          "summary": "取得 start gate 后提交 signal 与首个语义 cause。",
+          "owns": [
+            "首个获胜原因不可重写，例如 RuntimeShutdown。"
+          ],
+          "boundaries": [
+            "signal 只提出停止要求，不证明 Tool 已 {{physical}} {{settlement}}。"
+          ],
+          "evidence": [
+            "cancel-cause"
+          ]
+        },
+        {
+          "id": "agent-cancellation-start",
+          "label": "arbitrate_model_turn_start(commit)",
+          "layer": "Competing transition",
+          "summary": "同样取得 gate，先看 signal，再在持锁期间运行 commit closure。",
+          "owns": [
+            "每次实际请求的唯一取消/启动 {{arbitration}}。"
+          ],
+          "boundaries": [
+            "每个 retry 和 {{map-continuation}} 都必须重新经过这里。"
+          ],
+          "evidence": [
+            "cancel-gate"
+          ]
+        },
+        {
+          "id": "agent-cancellation-gate",
+          "label": "ModelTurnStartGate::critical",
+          "layer": "Shared synchronization",
+          "summary": "同一个 mutex 决定 cancellation 与 durable commit 谁先进入。",
+          "owns": [
+            "check 与 commit 之间没有未同步窗口。"
+          ],
+          "boundaries": [
+            "这是 Agent start gate；不是 {{compaction}} grant gate。"
+          ],
+          "evidence": [
+            "map-gate-structure"
+          ]
+        },
+        {
+          "id": "agent-cancellation-before",
+          "label": "CancelledBeforeStart",
+          "layer": "No {{durable}} start",
+          "summary": "取消先赢则 closure 不执行，没有请求 {{snapshot-request}} 或 request-scoped Context commit。",
+          "owns": [
+            "精确的 never-started 结果。"
+          ],
+          "boundaries": [
+            "不能存在 provider invocation。"
+          ],
+          "evidence": [
+            "cancel-gate"
+          ]
+        },
+        {
+          "id": "agent-cancellation-started",
+          "label": "Started({{receipt}})",
+          "layer": "{{durable}} start",
+          "summary": "commit 成功后返回 Started；后到取消属于已启动请求。",
+          "owns": [
+            "durable start 的 {{receipt}}。"
+          ],
+          "boundaries": [
+            "commit Err 会传播，不留下 start claim。"
+          ],
+          "evidence": [
+            "cancel-gate",
+            "start-code"
+          ]
+        },
+        {
+          "id": "agent-cancellation-child",
+          "label": "model_cancellation / execution_cancellation",
+          "layer": "Signal propagation",
+          "summary": "model 使用 child signal；Tool 使用只读执行取消 view 和 cause {{map-cancellation-authority}}。",
+          "owns": [
+            "让已经在执行的 owner 观察同一取消原因。"
+          ],
+          "boundaries": [
+            "executor 不获得 Attempt trigger；也不提供 cleanup 证明。"
+          ],
+          "evidence": [
+            "cancel-child"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "from": "agent-cancellation-cancel",
+          "to": "agent-cancellation-gate",
+          "kind": "call",
+          "label": "lock before signal transition"
+        },
+        {
+          "from": "agent-cancellation-start",
+          "to": "agent-cancellation-gate",
+          "kind": "call",
+          "label": "lock across check + commit"
+        },
+        {
+          "from": "agent-cancellation-gate",
+          "to": "agent-cancellation-before",
+          "kind": "data",
+          "label": "cancelled signal observed"
+        },
+        {
+          "from": "agent-cancellation-gate",
+          "to": "agent-cancellation-started",
+          "kind": "data",
+          "label": "commit succeeded"
+        },
+        {
+          "from": "agent-cancellation-cancel",
+          "to": "agent-cancellation-child",
+          "kind": "data",
+          "label": "shared signal + cause"
+        }
+      ]
+    },
+    {
+      "id": "agent-request-start",
+      "parent": "module-agent",
+      "owner": "agent",
+      "title": "Mechanism · Actual request-start transaction",
+      "summary": "先形成精确请求，再在取消 gate 内原子 commit；重建相等通过后才允许 ModelAdapter::stream。",
+      "nodes": [
+        {
+          "id": "agent-request-start-prepare",
+          "label": "PreparedModelTurn",
+          "layer": "Pre-start preparation",
+          "summary": "{{staging-context}} Context、{{frozen}} generation 与请求参数，构造精确 RequestSnapshot。",
+          "owns": [
+            "可失败的准备检查和 provider-neutral request。"
+          ],
+          "boundaries": [
+            "此时还没有 request-start 事实，不能 {{dispatch}} provider。"
+          ],
+          "evidence": [
+            "context-start",
+            "frozen-input"
+          ]
+        },
+        {
+          "id": "agent-request-start-gate",
+          "label": "AgentCancellation start gate",
+          "layer": "Start {{arbitration}} peer",
+          "summary": "为这一个实际请求线性化取消与 commit。",
+          "owns": [
+            "覆盖初始请求、retry 和 {{map-continuation}}。"
+          ],
+          "boundaries": [
+            "不同于先检查取消再单独写数据库。"
+          ],
+          "evidence": [
+            "cancel-gate"
+          ]
+        },
+        {
+          "id": "agent-request-start-commit",
+          "label": "ConversationStore::commit_model_turn_start",
+          "layer": "Atomic {{durable}} transition",
+          "summary": "一次事务提交 request Context、RequestSnapshot 与 ModelRequestStarted；Agent Status 也在同一事务中。",
+          "owns": [
+            "失败时所有输入都不提交；精确重试返回带 disposition 的 {{receipt}}。"
+          ],
+          "boundaries": [
+            "store 只负责结构与持久性，不决定取消 policy。"
+          ],
+          "evidence": [
+            "map-start-transaction"
+          ]
+        },
+        {
+          "id": "agent-request-start-install",
+          "label": "install_prepared / {{publish}} start events",
+          "layer": "Post-commit handoff",
+          "summary": "安装事先验证的 Context，在线事件仅来自 fresh durable {{receipt}}。",
+          "owns": [
+            "内存热状态与已提交启动事实对齐。"
+          ],
+          "boundaries": [
+            "IdempotentReplay 不向在线 observer 再 {{map-start-event-replay}} 历史事件。"
+          ],
+          "evidence": [
+            "map-start-install"
+          ]
+        },
+        {
+          "id": "agent-request-start-verify",
+          "label": "reconstruct_model_request",
+          "layer": "Post-start verification",
+          "summary": "从 durable RequestSnapshot 重建并与 live provider-neutral request 比较。",
+          "owns": [
+            "精确请求完整性校验。"
+          ],
+          "boundaries": [
+            "读取失败或不相等都阻止 provider {{dispatch}}，但不能抹掉已 commit 的 Started。"
+          ],
+          "evidence": [
+            "map-start-reconstruct"
+          ]
+        },
+        {
+          "id": "agent-request-start-dispatch",
+          "label": "ModelAdapter::stream",
+          "layer": "Provider peer",
+          "summary": "只有 start 与重建校验完成后，传入 Attempt child cancellation signal。",
+          "owns": [
+            "一次 provider attempt。"
+          ],
+          "boundaries": [
+            "崩溃在 commit 与 {{dispatch}} 间仍属于 Started；{{recovery}} 不重发旧请求。"
+          ],
+          "evidence": [
+            "model-dispatch",
+            "start-meaning"
+          ],
+          "target": "module-model",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "agent-request-start-prepare",
+          "to": "agent-request-start-gate",
+          "kind": "call",
+          "label": "one actual request"
+        },
+        {
+          "from": "agent-request-start-gate",
+          "to": "agent-request-start-commit",
+          "kind": "call",
+          "label": "commit closure under gate"
+        },
+        {
+          "from": "agent-request-start-commit",
+          "to": "agent-request-start-install",
+          "kind": "data",
+          "label": "fresh / {{map-idempotent}} {{receipt}}"
+        },
+        {
+          "from": "agent-request-start-install",
+          "to": "agent-request-start-verify",
+          "kind": "call",
+          "label": "{{durable}} reconstruction"
+        },
+        {
+          "from": "agent-request-start-verify",
+          "to": "agent-request-start-dispatch",
+          "kind": "data",
+          "label": "equal request permits invocation"
+        }
+      ]
+    },
+    {
+      "id": "context-checkpoint",
+      "parent": "module-context",
+      "owner": "context",
+      "title": "Mechanism · {{map-checkpoint}} compilation / {{map-activation}} / {{map-tail}}",
+      "summary": "不可变内容、activation、Ledger frontier 和 Journal frontier 各用自己的坐标；编译历史不产生执行身份。",
+      "nodes": [
+        {
+          "id": "context-checkpoint-cut",
+          "label": "ResourceReadCut / RequestHistoryCut",
+          "layer": "Read {{authority-checkpoint}}",
+          "summary": "先固定 {{map-read-cut}}、已选 {{map-activation}} 与 base frontier。",
+          "owns": [
+            "{{finite}} 历史读取范围。"
+          ],
+          "boundaries": [
+            "Pending Inbound 不属于 {{compaction}} 依赖；之后追加不混入这次读取。"
+          ],
+          "evidence": [
+            "map-read-cut",
+            "context-cuts"
+          ]
+        },
+        {
+          "id": "context-checkpoint-candidate",
+          "label": "CheckpointCandidate",
+          "layer": "Immutable content",
+          "summary": "以 Original 引用或 Derived 值完整决定 base 之前的历史包含与排除。",
+          "owns": [
+            "{{provenance-derived}}、Tool call/result 配对坐标和结构预算。"
+          ],
+          "boundaries": [
+            "Derived 不获得 canonical MessageId，也不授权 {{physical}} Tool 执行。"
+          ],
+          "evidence": [
+            "map-checkpoint-types",
+            "context-typed"
+          ]
+        },
+        {
+          "id": "context-checkpoint-compile",
+          "label": "compile_checkpoint",
+          "layer": "Structural compiler",
+          "summary": "解析不可变依赖，拒绝伪造 {{provenance-derived}}、孤立结果、拆分批次和不合法顺序。",
+          "owns": [
+            "输出 CompiledCheckpoint 的 typed messages 与 Tool associations。"
+          ],
+          "boundaries": [
+            "历史关联 wire ID 不能替换实际 invocation identity。"
+          ],
+          "evidence": [
+            "map-checkpoint-compiler"
+          ]
+        },
+        {
+          "id": "context-checkpoint-grant",
+          "label": "authorize_compaction_commit",
+          "layer": "Cancellation authorization",
+          "summary": "fit/progress 校验通过后申请单 operation 的 {{map-grant}}。",
+          "owns": [
+            "取消与本次 Checkpoint 授权先后。"
+          ],
+          "boundaries": [
+            "授权后到达的取消不能撤销该次 commit；不是 ModelTurnStartGate。"
+          ],
+          "evidence": [
+            "map-compaction-progress",
+            "map-compaction-grant"
+          ]
+        },
+        {
+          "id": "context-checkpoint-activate",
+          "label": "commit_projection / {{receipt}}",
+          "layer": "{{durable}} {{map-activation}}",
+          "summary": "原子提交内容、head/activation、completion fact 和稳定 {{receipt}}。",
+          "owns": [
+            "历史切换和精确重试验证。"
+          ],
+          "boundaries": [
+            "不会改写 Ledger 或生成 canonical summary；store 不制造 grant。"
+          ],
+          "evidence": [
+            "compaction-commit",
+            "map-projection-receipt",
+            "map-activation"
+          ]
+        },
+        {
+          "id": "context-checkpoint-tail",
+          "label": "compiled {{map-checkpoint}} + eligible {{map-tail}}",
+          "layer": "Historical model input",
+          "summary": "按当前 {{map-activation}} 选择内容，再接上严格晚于 base 的符合条件消息。",
+          "owns": [
+            "历史输入顺序和纳入范围。"
+          ],
+          "boundaries": [
+            "Agent 当前 staged Context 在 pre-start cut 之外，之后单独{{frozen}}。"
+          ],
+          "evidence": [
+            "context-cuts",
+            "frozen-input"
+          ]
+        },
+        {
+          "id": "context-checkpoint-agent",
+          "label": "AgentExecution",
+          "layer": "Current-input peer",
+          "summary": "Agent 将历史结果与本次 core input 合成最终请求。",
+          "owns": [
+            "当前请求 generation 与实际启动。"
+          ],
+          "boundaries": [
+            "{{compaction}} 没有替 Agent 启动 model request。"
+          ],
+          "evidence": [
+            "map-context-engine",
+            "frozen-input"
+          ],
+          "target": "module-agent",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "context-checkpoint-cut",
+          "to": "context-checkpoint-candidate",
+          "kind": "data",
+          "label": "{{bounded}} immutable dependencies"
+        },
+        {
+          "from": "context-checkpoint-candidate",
+          "to": "context-checkpoint-compile",
+          "kind": "call",
+          "label": "validate + materialize"
+        },
+        {
+          "from": "context-checkpoint-compile",
+          "to": "context-checkpoint-grant",
+          "kind": "data",
+          "label": "validated candidate + fit/progress"
+        },
+        {
+          "from": "context-checkpoint-grant",
+          "to": "context-checkpoint-activate",
+          "kind": "data",
+          "label": "operation-bound grant"
+        },
+        {
+          "from": "context-checkpoint-activate",
+          "to": "context-checkpoint-tail",
+          "kind": "data",
+          "label": "selected {{map-checkpoint}} + {{map-activation}}"
+        },
+        {
+          "from": "context-checkpoint-cut",
+          "to": "context-checkpoint-tail",
+          "kind": "data",
+          "label": "eligible {{canonical}} {{map-tail}}"
+        },
+        {
+          "from": "context-checkpoint-tail",
+          "to": "context-checkpoint-agent",
+          "kind": "data",
+          "label": "typed historical input"
+        }
+      ]
+    },
+    {
+      "id": "tools-invocation",
+      "parent": "module-tools",
+      "owner": "tools",
+      "title": "Mechanism · Foreground invocation / {{effect}} / {{settlement}}",
+      "summary": "调用者提交自己的 start frontier；ForegroundInvocation 随后驱动真实 executor，并保留外部 {{effect}} 的不确定性。",
+      "nodes": [
+        {
+          "id": "tools-invocation-prepared",
+          "label": "PreparedInvocation / authorize",
+          "layer": "Prepared facts",
+          "summary": "schema/selector 检查与 policy 只看已经{{frozen}}的事实；Approval 无法替换参数。",
+          "owns": [
+            "{{preflight}} 输入与一次权限 gate。"
+          ],
+          "boundaries": [
+            "observer 只是看见事实；只有 policy gate 能允许/拒绝调用。"
+          ],
+          "evidence": [
+            "tool-acceptance",
+            "map-invocation-approval",
+            "native-invocation"
+          ]
+        },
+        {
+          "id": "tools-invocation-handle",
+          "label": "ToolExecutor::start",
+          "layer": "Before {{physical}} {{dispatch-tool}}",
+          "summary": "构造 completion / {{map-settlement-plane}} handle 时禁止 {{dispatch}} 工作。",
+          "owns": [
+            "真正执行及 cleanup 的 handle {{ownership}}。"
+          ],
+          "boundaries": [
+            "取消先于第一次 operation poll 可以证明未发生 {{effect}}。"
+          ],
+          "evidence": [
+            "map-executor-handle"
+          ]
+        },
+        {
+          "id": "tools-invocation-winner",
+          "label": "ForegroundInvocation::execute",
+          "layer": "Execution {{map-invocation-arbitration}}",
+          "summary": "{{frozen}} deadline/progress capability，选择 {{physical}} completion、取消或 deadline。",
+          "owns": [
+            "单一 {{map-invocation-terminal}} winner 与类型化 InvocationFact。"
+          ],
+          "boundaries": [
+            "进度必须是真实 executor 证据；不能伪造 heartbeat 延命。"
+          ],
+          "evidence": [
+            "map-invocation-run",
+            "map-invocation-winner",
+            "tool-evidence"
+          ]
+        },
+        {
+          "id": "tools-invocation-settle",
+          "label": "ToolExecutionHandle::settlement",
+          "layer": "Cleanup {{authority}}",
+          "summary": "取消/deadline 赢后触发 child cancellation，此后只等 {{map-settlement-plane}}。",
+          "owns": [
+            "kill、wait、reap、join 的本地资源生命周期。"
+          ],
+          "boundaries": [
+            "control guard 超时产生 SettlementControlFailed 与 OutcomeUnknown；这不是 executor 的 Unconfirmed 证据，既不证明本地 cleanup 完成，也不证明 {{physical}} 操作停止。"
+          ],
+          "evidence": [
+            "map-invocation-settlement",
+            "map-executor-settlement"
+          ]
+        },
+        {
+          "id": "tools-invocation-certainty",
+          "label": "Confirmed / Unconfirmed",
+          "layer": "{{physical}} evidence",
+          "summary": "Confirmed 证明 {{physical}} {{map-physical-terminal}}；Unconfirmed 要求本地已清理、外部结果仍不明。",
+          "owns": [
+            "{{map-result-certainty}} 和 OutcomeUnknown。"
+          ],
+          "boundaries": [
+            "取消没有 {{map-rollback}}；远程结果不明不能盲目 {{replay-effect}}。"
+          ],
+          "evidence": [
+            "map-executor-settlement",
+            "tool-recovery"
+          ]
+        },
+        {
+          "id": "tools-invocation-caller",
+          "label": "Caller result / InvocationFact",
+          "layer": "Caller {{authority}}",
+          "summary": "调用者接收结果，分别负责 canonical batch 或 Workflow graph progression。",
+          "owns": [
+            "自己的身份、{{map-caller-admission}} 和结果 {{map-caller-publication}}。"
+          ],
+          "boundaries": [
+            "ForegroundInvocation 不直接提交 history，也不推进 graph。"
+          ],
+          "evidence": [
+            "map-invocation-owner"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "from": "tools-invocation-prepared",
+          "to": "tools-invocation-handle",
+          "kind": "call",
+          "label": "authorized prepared invocation"
+        },
+        {
+          "from": "tools-invocation-handle",
+          "to": "tools-invocation-winner",
+          "kind": "data",
+          "label": "completion + {{settlement}} futures"
+        },
+        {
+          "from": "tools-invocation-winner",
+          "to": "tools-invocation-settle",
+          "kind": "call",
+          "label": "cancel / deadline wins"
+        },
+        {
+          "from": "tools-invocation-settle",
+          "to": "tools-invocation-certainty",
+          "kind": "data",
+          "label": "{{native}} {{map-physical-terminal}} evidence"
+        },
+        {
+          "from": "tools-invocation-winner",
+          "to": "tools-invocation-caller",
+          "kind": "data",
+          "label": "{{physical}} completion wins"
+        },
+        {
+          "from": "tools-invocation-certainty",
+          "to": "tools-invocation-caller",
+          "kind": "data",
+          "label": "typed result + facts"
+        }
+      ]
+    },
+    {
+      "id": "runtime-drain",
+      "parent": "module-runtime",
+      "owner": "runtime",
+      "title": "Mechanism · Runtime {{drain}} / {{residency}} {{release-residency}}",
+      "summary": "关闭 {{admission}} 后必须监督所有具体 {{owner}}；只有完整 {{map-quiescence-proof}} 才允许释放旧 writer allocation。",
+      "nodes": [
+        {
+          "id": "runtime-drain-close",
+          "label": "Running → Draining",
+          "layer": "Lifecycle {{map-linearization}}",
+          "summary": "在 coordinator lock 下关闭新输入、model 更新和 Attempt {{admission}}。",
+          "owns": [
+            "精确 {{drain}} {{map-linearization}}。"
+          ],
+          "boundaries": [
+            "已有工作仍有类型化 {{settlement}} 路径，不能直接丢弃。"
+          ],
+          "evidence": [
+            "runtime-drain"
+          ]
+        },
+        {
+          "id": "runtime-drain-attempt",
+          "label": "current Attempt + task",
+          "layer": "Attempt participant",
+          "summary": "请求 AgentCancellation 并等待 AgentExecution 和其 task 都到达结束点。",
+          "owns": [
+            "当前 Attempt 的 {{settlement}} 与 join。"
+          ],
+          "boundaries": [
+            "取消 signal 不是 task 已退出的证据。"
+          ],
+          "evidence": [
+            "runtime-drain",
+            "cancel-cause"
+          ]
+        },
+        {
+          "id": "runtime-drain-execution",
+          "label": "foreground / background / processes",
+          "layer": "Execution participants",
+          "summary": "取消或关闭 foreground Tool、background terminal {{map-background-publication}} 与所有已拥有进程。",
+          "owns": [
+            "每个执行 {{owner}} 的{{native}} {{map-physical-terminal}} {{boundary}}。"
+          ],
+          "boundaries": [
+            "一个 participant 失败不授权放弃仍可能行动的 sibling。"
+          ],
+          "evidence": [
+            "runtime-drain",
+            "map-executor-settlement"
+          ]
+        },
+        {
+          "id": "runtime-drain-resources",
+          "label": "capability preparation / MCP / worker",
+          "layer": "Resource participants",
+          "summary": "等待计数中的准备、in-flight MCP connection owner、retained MCP process 及 admission worker 退出。",
+          "owns": [
+            "执行之外仍可能持有资源或开始动作的具体 {{owner}}。"
+          ],
+          "boundaries": [
+            "空 registry 和 OS signal 都不构成 {{quiescence}}。"
+          ],
+          "evidence": [
+            "runtime-drain"
+          ]
+        },
+        {
+          "id": "runtime-drain-proof",
+          "label": "Quiescent / {{settlement}} failure",
+          "layer": "Runtime conclusion",
+          "summary": "全部 owner 到达各自{{boundary}}后，才决定 Quiescent 或聚合 {{settlement}} failure。",
+          "owns": [
+            "runtime 的完整 writer-retirement 结论。"
+          ],
+          "boundaries": [
+            "失败保持显式且不能重新开放健康 {{admission}}。"
+          ],
+          "evidence": [
+            "runtime-drain"
+          ]
+        },
+        {
+          "id": "runtime-drain-release",
+          "label": "SessionRuntimeManager unload",
+          "layer": "{{residency}} peer",
+          "summary": "shutdown 成功后释放 allocation 和 {{composition}}，保留持久 Session。",
+          "owns": [
+            "Unloaded 的提交与下一次 writer 创建资格。"
+          ],
+          "boundaries": [
+            "证明不足时保留旧 Unloading {{map-residency-slot}}；不会创建替代 writer。"
+          ],
+          "evidence": [
+            "map-residency-retire",
+            "residency-unload"
+          ],
+          "target": "module-sessions",
+          "external": true
+        }
+      ],
+      "relations": [
+        {
+          "from": "runtime-drain-close",
+          "to": "runtime-drain-attempt",
+          "kind": "call",
+          "label": "cancel + await"
+        },
+        {
+          "from": "runtime-drain-close",
+          "to": "runtime-drain-execution",
+          "kind": "call",
+          "label": "close + supervise"
+        },
+        {
+          "from": "runtime-drain-close",
+          "to": "runtime-drain-resources",
+          "kind": "call",
+          "label": "close + supervise"
+        },
+        {
+          "from": "runtime-drain-attempt",
+          "to": "runtime-drain-proof",
+          "kind": "data",
+          "label": "attempt and task {{terminal}}"
+        },
+        {
+          "from": "runtime-drain-execution",
+          "to": "runtime-drain-proof",
+          "kind": "data",
+          "label": "{{native}} {{settlement}} evidence"
+        },
+        {
+          "from": "runtime-drain-resources",
+          "to": "runtime-drain-proof",
+          "kind": "data",
+          "label": "resource and worker closure"
+        },
+        {
+          "from": "runtime-drain-proof",
+          "to": "runtime-drain-release",
+          "kind": "data",
+          "label": "successful shutdown proof"
+        }
+      ]
+    },
+    {
+      "id": "publication-settlement",
+      "parent": "module-publication",
+      "owner": "publication",
+      "title": "Mechanism · {{map-puc}} / three {{settlement-publication}} outcomes",
+      "summary": "提供方完成、输出 {{terminal-publication}} 和 canonical Assistant {{acceptance-assistant}} 分开提交，因此崩溃后的审计仍能精确说明到达哪一层。",
+      "nodes": [
+        {
+          "id": "publication-settlement-p",
+          "label": "P · ModelRequestCompleted",
+          "layer": "Provider outcome",
+          "summary": "Agent 取得合法 provider outcome 后，先提交 Event Journal 的 P。",
+          "owns": [
+            "提供方结果的持久执行事实。"
+          ],
+          "boundaries": [
+            "P 不证明 user-facing {{publication}} 达到 {{terminal-publication}}。"
+          ],
+          "evidence": [
+            "publication-contract",
+            "publication-outcomes"
+          ]
+        },
+        {
+          "id": "publication-settlement-u",
+          "label": "U · commit_publication_terminal",
+          "layer": "{{publication}} outcome",
+          "summary": "最终帧与 terminal marker 持久提交，再允许最终 {{release-output}}。",
+          "owns": [
+            "{{publication}} 自己的 durable {{terminal-publication}}。"
+          ],
+          "boundaries": [
+            "P 与 U 不合成同一个事务；commit 不等于用户 perception。"
+          ],
+          "evidence": [
+            "publication-terminal",
+            "publication-contract"
+          ]
+        },
+        {
+          "id": "publication-settlement-c",
+          "label": "C · commit_canonical_publication",
+          "layer": "{{canonical}} {{acceptance-assistant}}",
+          "summary": "U 之后原子{{acceptance-assistant}} canonical Assistant；store 强制 C ⇒ U ⇒ P。",
+          "owns": [
+            "Message Ledger 的 canonical {{authority-ledger}}。"
+          ],
+          "boundaries": [
+            "Tool proposal 只有经 canonical {{acceptance-assistant}} 才可能进入执行检查。"
+          ],
+          "evidence": [
+            "assistant-commit",
+            "publication-contract",
+            "map-publication-proposals"
+          ]
+        },
+        {
+          "id": "publication-settlement-canonical",
+          "label": "Canonical",
+          "layer": "{{settlement-publication}} classification",
+          "summary": "U 和 C 都已到达；对话内容以 Ledger 为准。",
+          "owns": [
+            "单一 stream 的 canonical {{settlement-publication}}。"
+          ],
+          "boundaries": [
+            "审计不是第二份 canonical 历史。"
+          ],
+          "evidence": [
+            "publication-outcomes"
+          ]
+        },
+        {
+          "id": "publication-settlement-unaccepted",
+          "label": "UnacceptedPublicationAudit",
+          "layer": "{{settlement-publication}} classification",
+          "summary": "U 已到达、C 永远未到达：完整输出仍未被对话{{acceptance-assistant}}。",
+          "owns": [
+            "已经 commit for release 的输出审计。"
+          ],
+          "boundaries": [
+            "不能凭完整 Tool proposal 授权执行。"
+          ],
+          "evidence": [
+            "publication-outcomes",
+            "map-publication-proposals"
+          ]
+        },
+        {
+          "id": "publication-settlement-incomplete",
+          "label": "IncompletePublicationAudit",
+          "layer": "{{settlement-publication}} classification",
+          "summary": "U 未到达；即使 P 已完成也属于 incomplete {{publication}}。",
+          "owns": [
+            "没有 durable {{terminal-publication}} 的输出审计。"
+          ],
+          "boundaries": [
+            "不声称 provider transport 一定没有结束。"
+          ],
+          "evidence": [
+            "publication-outcomes"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "from": "publication-settlement-p",
+          "to": "publication-settlement-u",
+          "kind": "call",
+          "label": "commit ordering P < U"
+        },
+        {
+          "from": "publication-settlement-u",
+          "to": "publication-settlement-c",
+          "kind": "call",
+          "label": "commit ordering U < C"
+        },
+        {
+          "from": "publication-settlement-c",
+          "to": "publication-settlement-canonical",
+          "kind": "data",
+          "label": "U reached + C reached"
+        },
+        {
+          "from": "publication-settlement-u",
+          "to": "publication-settlement-unaccepted",
+          "kind": "data",
+          "label": "U reached + C never"
+        },
+        {
+          "from": "publication-settlement-p",
+          "to": "publication-settlement-incomplete",
+          "kind": "data",
+          "label": "U never reached, even if P reached"
+        }
+      ]
+    }
+  ],
+  "terms": [
+    {
+      "id": "map-read-cut",
+      "label": "read cut",
+      "explanation": "Context 读取历史时先固定 Ledger、Journal 与 activation 的位置；之后追加的 ToolResult 不能混进同一次 compaction 输入。"
+    },
+    {
+      "id": "map-checkpoint",
+      "label": "Checkpoint",
+      "explanation": "当旧历史需要缩短时，rustX 保存 Original 引用与 Derived 内容的完整选择；它改变下次模型看到的历史，不会改写已经提交的 Message Ledger。"
+    },
+    {
+      "id": "map-tail",
+      "label": "Tail",
+      "explanation": "激活某个 Checkpoint 后，Context 只接上其 base frontier 之后仍符合条件的 canonical 消息，避免把已经由 Checkpoint 决定的旧消息再拼一次。"
+    },
+    {
+      "id": "map-activation",
+      "label": "activation",
+      "explanation": "同一份 Checkpoint 内容可以带有独立的安装顺序；读取历史时选择生效的 activation，而不是拿 Journal 序号冒充它。"
+    },
+    {
+      "id": "map-gate",
+      "label": "start gate",
+      "explanation": "AgentCancellation 的同一个 mutex 包住 request_cancel 和实际 request-start commit；取消先进入就没有请求快照，commit 先成功则后到取消只能按已启动处理。"
+    },
+    {
+      "id": "map-grant",
+      "label": "compaction grant",
+      "explanation": "compaction 完成校验后向 CancellationSignal 取得一个带 operation_id 的授权；之后到达的取消不能撤销该次已授权的 Checkpoint commit。"
+    },
+    {
+      "id": "map-single-flight",
+      "label": "single-flight",
+      "explanation": "两个客户端同时 load 同一个 Conversation 时加入同一次 manager transition；某个等待者断开不会丢弃仍在组合或卸载的任务。"
+    },
+    {
+      "id": "map-incarnation",
+      "label": "runtime incarnation",
+      "explanation": "同一 Conversation 卸载再加载会得到新的 RuntimeIncarnationId；旧 attachment 不能借相同 Session 身份控制新 runtime。"
+    },
+    {
+      "id": "map-watermark",
+      "label": "watermark",
+      "explanation": "ConversationRuntime 在一次安全输入点只取到固定的 Pending Inbound 位置；随后到达的消息留给后面的采纳机会，不让当前批次无限增长。"
+    },
+    {
+      "id": "map-continuation",
+      "label": "continuation",
+      "explanation": "模型完成一次 Tool 批次后，AgentExecution 用已接受的结果继续逻辑步骤；adapter 不得在一次 stream 内偷偷再发一个提供方请求。"
+    },
+    {
+      "id": "map-preparation",
+      "label": "preparation",
+      "explanation": "配置发现某个 MCP server 后仍未连接；只有选定的能力需求进入原生准备步骤，成功对象才有资格进入有效 CapabilitySnapshot。"
+    },
+    {
+      "id": "map-semantic",
+      "label": "semantic",
+      "explanation": "Session load 先组合 Conversation 的身份、历史和执行规则，再激活 runtime；这些规则由原生 owner 决定，传输只携带类型化请求。"
+    },
+    {
+      "id": "map-idempotent",
+      "label": "idempotent",
+      "explanation": "同一 request-start 的精确重试返回历史 receipt；Agent 看到 IdempotentReplay 后不再向在线 observer 重发那些已经提交的启动事件。"
+    },
+    {
+      "id": "map-linearization",
+      "label": "linearization point",
+      "explanation": "Running 转 Draining 与新 Attempt admission 争用同一个 coordinator lock；谁先成功决定这次新工作能否开始，而不是根据客户端看到状态的先后猜测。"
+    },
+    {
+      "id": "map-rollback",
+      "label": "rollback",
+      "explanation": "Workflow 的几个并行节点共享 Session 目录；一个节点失败时已经写入的文件仍保留，结果失败不包含文件系统撤销承诺。"
+    },
+    {
+      "id": "map-exactly-once",
+      "label": "exactly-once",
+      "explanation": "rustX 可以原子提交一次 ToolResult 批次，但远程 MCP 超时后可能无法知道外部服务是否完成；历史里只有一个结果不保证外部操作只发生一次。"
+    },
+    {
+      "id": "map-proposal",
+      "label": "Tool proposal",
+      "explanation": "Publication 帧里的 ToolCall 只是模型建议；只有 Agent 接受 canonical Assistant 并完成 Tool Plane 的检查后，才可能获得真实执行身份。"
+    },
+    {
+      "id": "map-pending",
+      "label": "Pending Inbound",
+      "explanation": "用户输入接受成功后先在 Inbox 持久保存；ConversationRuntime 到安全点提交 adoption 后，它才进入不可变 canonical 对话历史。"
+    },
+    {
+      "id": "map-coalescer",
+      "label": "publication coalescer",
+      "explanation": "提供方连续发来很多细碎 delta 时，Publication 按字节、结构和首个 payload 的绝对 deadline 合帧；后来的 delta 不延后最老内容的释放期限。"
+    },
+    {
+      "id": "map-attachment",
+      "label": "attachment",
+      "explanation": "客户端 attach 得到目标身份、snapshot 与 cursor 的同一切面；detach 只移除连接观察关系，不取消 Attempt，也不证明 runtime 已卸载。"
+    },
+    {
+      "id": "map-settlement-plane",
+      "label": "settlement plane",
+      "explanation": "ForegroundInvocation 判定取消胜出后只等待 executor 的清理通道；该通道必须保有本地任务和进程直到 join/reap，不能把停止等待当作清理完成。"
+    },
+    {
+      "id": "map-ledger",
+      "label": "Message Ledger",
+      "explanation": "adopt_pending_batch 与 canonical Assistant 接受把消息写入不可变 Ledger；Context 压缩、客户端重连和 Trace 读取都不能改写这些事实。"
+    },
+    {
+      "id": "map-journal",
+      "label": "Event Journal",
+      "explanation": "ModelRequestStarted、ToolExecutionStarted 等执行事实按自己的序号提交；这个序号不能用作 Checkpoint activation 或客户端 cursor。"
+    },
+    {
+      "id": "map-fencing",
+      "label": "fencing",
+      "explanation": "旧 runtime 的通知即使晚到，客户端仍要同时匹配 Session、Conversation、incarnation 和 attachment；任何一项过期都不能覆盖当前 projection。"
+    },
+    {
+      "id": "map-quiescence-proof",
+      "label": "quiescence proof",
+      "explanation": "runtime shutdown 必须等 Attempt task、Tool、本地后台任务、能力准备、MCP 进程及 admission worker 都到达各自结束点；仅 cancel 返回或 registry 为空都不够。"
+    },
+    {
+      "id": "map-result-certainty",
+      "label": "result certainty",
+      "explanation": "Tool executor 已清理本地执行但远程 MCP 结果无法确认时，返回 Unconfirmed 并形成 OutcomeUnknown；调用者看到显式不确定，不能据此盲目重试。"
+    },
+    {
+      "id": "map-puc",
+      "label": "P < U < C",
+      "explanation": "提供方完成先提交 P，准备向用户释放的最终帧提交 U，canonical Assistant 接受提交 C；进程在任意两点间崩溃时，恢复仍能分辨输出到达哪一层。"
+    },
+    {
+      "id": "map-model-materialization",
+      "label": "materialization",
+      "explanation": "父进程把已经选定的模型协议、endpoint、预算和 credential binding 装入 FrozenModelSpec；child 只据此构造 adapter 和 ResolvedModelInvocation，不再读取可变 rustx.toml 重新选模型。"
+    },
+    {
+      "id": "map-projection-publish",
+      "label": "publish",
+      "explanation": "RuntimeClientProjection 在同一个同步点更新 snapshot、分配 cursor 并交付 RuntimeClientEvent；这里更新的是客户端事件流，不提交模型输出的 Publication 帧，也不接受 canonical Assistant。"
+    },
+    {
+      "id": "map-caller-admission",
+      "label": "admission",
+      "explanation": "ForegroundInvocation 接手之前，AgentExecution 已决定 canonical Tool 批次中的调用资格，WorkflowRuntime 已决定固定程序节点的调用资格；共享执行器不会代替任一调用方放行新工作。"
+    },
+    {
+      "id": "map-caller-publication",
+      "label": "publication",
+      "explanation": "ForegroundInvocation 返回执行结果和 InvocationFact 后，由调用方决定如何记录并呈现：AgentExecution 提交 canonical ToolResult 批次，WorkflowRuntime 推进节点并报告节点事实；这不是模型文本的 Publication 输出平面。"
+    },
+    {
+      "id": "map-cancellation-authority",
+      "label": "authority",
+      "explanation": "AgentCancellation 保留第一次成功进入 start gate 的语义取消原因；已经启动的 Tool 通过 execution_cancellation 读取这个 owner 当前保存的原因，后来的取消不能改写它。"
+    },
+    {
+      "id": "map-attempt-slot",
+      "label": "slot",
+      "explanation": "ConversationRuntime 在 coordinator lock 内登记唯一 current Attempt；前一个 Attempt 和其 task 没有完成移交前，新的 Attempt 不能占用这个位置。"
+    },
+    {
+      "id": "map-residency-slot",
+      "label": "slot",
+      "explanation": "unload 尚不能证明旧 runtime 已无写入者时，SessionRuntimeManager 保留原来的 Unloading 条目和分配，阻止同一 Conversation 产生替代 writer。"
+    },
+    {
+      "id": "map-physical-terminal",
+      "label": "terminal state",
+      "explanation": "执行器必须证明自己管理的进程、worker 或 operation 已到结束点；Unconfirmed 仍要求本地清理完成，但保留远端服务可能已经发生修改的不确定性。"
+    },
+    {
+      "id": "map-invocation-terminal",
+      "label": "terminal state",
+      "explanation": "ForegroundInvocation 在自然完成、取消和 deadline 中只选一个 winner；取消或 deadline 获胜后，它仍须等待独立 settlement 通道，不能把 winner 当作外部操作已经停止的证明。"
+    },
+    {
+      "id": "map-background-publication",
+      "label": "publication",
+      "explanation": "background runner 的结果先通过 ConversationInboundMailbox 持久接受为 runtime 输入，再把 registry 记录推进到结束状态；runtime shutdown 要等待这条结果通知路径收束，它不走模型输出的 Publication 帧。"
+    },
+    {
+      "id": "map-start-event-replay",
+      "label": "replay",
+      "explanation": "commit_model_turn_start 的精确重试可能返回 IdempotentReplay 和旧 receipt；AgentExecution 只向在线 observer 报告新提交的启动事件，不把 receipt 里的历史事实再次发送。"
+    },
+    {
+      "id": "map-capability-revision",
+      "label": "revision",
+      "explanation": "CapabilityCoordinator 只在有效可执行能力集合变化时推进 CapabilityRevision；MCP 不可用原因等诊断文字变化不会生成新执行版本，已有 Attempt 仍保留取得的旧能力集合。"
+    },
+    {
+      "id": "map-semantic-owner",
+      "label": "owner",
+      "explanation": "SessionController 决定持久 Session 身份，ConversationRuntime 决定 Attempt admission 和 lifecycle，RuntimeClientProjection 决定客户端视图的 fold/cursor；同一操作要交给对应组件，连接层不能代替它作领域决定。"
+    },
+    {
+      "id": "map-agent-authority",
+      "label": "authority",
+      "explanation": "AgentExecution 负责本次 Attempt 的实际 model-request start、canonical Assistant/Tool 批次和唯一 terminal 候选；Context contributor 与 Tool executor 只能交回提案或执行事实，不能自行推进这些决定。"
+    },
+    {
+      "id": "map-client-settlement",
+      "label": "settlement",
+      "explanation": "AppServerClient 在 transport 结束时逐个结束仍在等待的 JSON-RPC 请求；可能改变服务端状态的请求会留下 UncertainOutcomeError，这只结束客户端等待，不证明 runtime 执行已经停止。"
+    },
+    {
+      "id": "map-subagent-authority",
+      "label": "authority",
+      "explanation": "创建持久 Agent 时，catalog/resolver 冻结它的能力、模型和 Session execution binding；后续 send_message 只能复用该权限，不能靠改变当前 profile 或父调用配置扩大子 Agent 能力。"
+    },
+    {
+      "id": "map-host-admission",
+      "label": "admission",
+      "explanation": "AppServerHost 在处理请求前检查进程是否仍 Accepting，并为 request、attachment 或文件操作保留容量；额度不足或 server drain 会拒绝新操作，这不是 ConversationRuntime 的 Attempt gate。"
+    },
+    {
+      "id": "map-invocation-arbitration",
+      "label": "arbitration",
+      "explanation": "ForegroundInvocation 同时观察自然完成、Attempt 取消与 deadline，只确定一个 winner；取消或 deadline 获胜后不再轮询 completion，改由独立 settlement 通道证明清理结果。"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "map-model-frozen",
+      "path": "src/model/frozen.rs",
+      "start": 17,
+      "end": 43,
+      "label": "FrozenModelSpec: child {{map-model-materialization}} of admitted semantics without re-resolution"
+    },
+    {
+      "id": "map-start-install",
+      "path": "src/agent/execution.rs",
+      "start": 3050,
+      "end": 3087,
+      "label": "Install prepared context and emit only fresh {{durable}} {{receipt}} events"
+    },
+    {
+      "id": "map-app-dispatch",
+      "path": "src/app_server/connection.rs",
+      "start": 671,
+      "end": 708,
+      "label": "AppServerConnection::dispatch negotiates one initialized protocol"
+    },
+    {
+      "id": "map-tool-preflight",
+      "path": "src/tools/executor.rs",
+      "start": 1127,
+      "end": 1163,
+      "label": "ToolRegistry::preflight resolves identity and validates invocation metadata"
+    },
+    {
+      "id": "map-tool-prepared",
+      "path": "src/tools/executor.rs",
+      "start": 697,
+      "end": 735,
+      "label": "PreparedInvocation and immutable ToolRegistry"
+    },
+    {
+      "id": "map-context-contributor",
+      "path": "src/context/assembly.rs",
+      "start": 328,
+      "end": 346,
+      "label": "ContextContributor receives {{finite}} immutable input and proposes typed context"
+    },
+    {
+      "id": "map-context-accepted",
+      "path": "src/context/assembly.rs",
+      "start": 422,
+      "end": 433,
+      "label": "AcceptedContext separates {{canonical}} user context and request-only system sections"
+    },
+    {
+      "id": "map-goal-driver",
+      "path": "src/goal.rs",
+      "start": 609,
+      "end": 621,
+      "label": "GoalRoundDriver forwards ordinary mailbox {{acceptance-inbound}} without its own task"
+    },
+    {
+      "id": "map-workflow-runtime",
+      "path": "src/runtime/workflow.rs",
+      "start": 2233,
+      "end": 2250,
+      "label": "WorkflowRuntime owns read model and reuses {{native}} SubagentRegistry"
+    },
+    {
+      "id": "map-tui-client",
+      "path": "tui/src/app-server/client.ts",
+      "start": 2,
+      "end": 39,
+      "label": "AppServerClient: correlation and uncertain outcomes"
+    },
+    {
+      "id": "map-tui-session",
+      "path": "tui/src/app-server/session.ts",
+      "start": 2,
+      "end": 39,
+      "label": "Session: attach cut, {{projection}} and identity {{map-fencing}}"
+    },
+    {
+      "id": "map-web-client",
+      "path": "web-console/src/client/app-server.ts",
+      "start": 1,
+      "end": 19,
+      "label": "Web Console: shared generated protocol and {{projection}} {{fold}}"
+    },
+    {
+      "id": "map-app-host",
+      "path": "src/app_server/host.rs",
+      "start": 44,
+      "end": 68,
+      "label": "AppServerHost: manager, transport and {{bounded}} file operations"
+    },
+    {
+      "id": "map-projection-fold",
+      "path": "src/runtime_client/projection.rs",
+      "start": 1,
+      "end": 35,
+      "label": "RuntimeClientProjection: atomic {{fold}}, {{cursor}} and subscription cut"
+    },
+    {
+      "id": "map-projection-ring",
+      "path": "src/runtime_client/projection.rs",
+      "start": 37,
+      "end": 66,
+      "label": "One {{bounded}} {{replay-cursor}} ring and explicit resync"
+    },
+    {
+      "id": "map-residency-flight",
+      "path": "src/local_runtime/session_runtime_manager.rs",
+      "start": 1,
+      "end": 8,
+      "label": "{{map-single-flight}} transition {{ownership}} survives dropped callers"
+    },
+    {
+      "id": "map-residency-id",
+      "path": "src/local_runtime/session_runtime_manager.rs",
+      "start": 26,
+      "end": 46,
+      "label": "RuntimeIncarnationId and ResidencyState"
+    },
+    {
+      "id": "map-residency-retire",
+      "path": "src/local_runtime/session_runtime_manager.rs",
+      "start": 1773,
+      "end": 1808,
+      "label": "Unload retains writer {{allocation}} until proven retirement"
+    },
+    {
+      "id": "map-config-manager",
+      "path": "src/local_runtime/configuration.rs",
+      "start": 64,
+      "end": 76,
+      "label": "UserConfigManager rereads current {{source-config}} bindings"
+    },
+    {
+      "id": "map-config-input",
+      "path": "src/local_runtime/configuration.rs",
+      "start": 110,
+      "end": 122,
+      "label": "SessionConfigInput contains explicit intent"
+    },
+    {
+      "id": "map-core-compose",
+      "path": "src/local_runtime/composition.rs",
+      "start": 1012,
+      "end": 1043,
+      "label": "LocalConversationCore {{composition}} of an inactive {{map-semantic}} runtime"
+    },
+    {
+      "id": "map-capability-commit",
+      "path": "src/capabilities/mod.rs",
+      "start": 3,
+      "end": 34,
+      "label": "CapabilityCoordinator: attempt leases serialize active {{map-capability-revision}} changes"
+    },
+    {
+      "id": "map-agent-kernel",
+      "path": "src/agent/mod.rs",
+      "start": 1,
+      "end": 25,
+      "label": "AgentExecution, ExecutionStateMachine and typed lifecycle seams"
+    },
+    {
+      "id": "map-gate-structure",
+      "path": "src/agent/cancellation.rs",
+      "start": 50,
+      "end": 72,
+      "label": "ModelTurnStartGate serializes cancellation and {{durable}} commit"
+    },
+    {
+      "id": "map-start-transaction",
+      "path": "src/durable/inbox.rs",
+      "start": 2002,
+      "end": 2040,
+      "label": "commit_model_turn_start: one {{map-semantic}} transaction and {{receipt}}"
+    },
+    {
+      "id": "map-start-reconstruct",
+      "path": "src/agent/execution.rs",
+      "start": 3080,
+      "end": 3119,
+      "label": "Reconstruct {{durable}} request and reject mismatch before {{dispatch}}"
+    },
+    {
+      "id": "map-checkpoint-types",
+      "path": "src/context/checkpoint.rs",
+      "start": 76,
+      "end": 106,
+      "label": "CheckpointCandidate: Original/Derived content and historical {{map-read-cut}}"
+    },
+    {
+      "id": "map-checkpoint-compiler",
+      "path": "src/context/checkpoint.rs",
+      "start": 181,
+      "end": 218,
+      "label": "compile_checkpoint verifies immutable dependencies and {{provenance-derived}}"
+    },
+    {
+      "id": "map-activation",
+      "path": "src/context/checkpoint.rs",
+      "start": 551,
+      "end": 568,
+      "label": "ProjectionActivation: {{map-activation}} order and origin"
+    },
+    {
+      "id": "map-read-cut",
+      "path": "src/context/resources.rs",
+      "start": 44,
+      "end": 65,
+      "label": "ResourceReadCut and {{bounded}} resource reads"
+    },
+    {
+      "id": "map-compaction-grant",
+      "path": "src/runtime/cancellation.rs",
+      "start": 72,
+      "end": 104,
+      "label": "CompactionCommitGrant: authorization distinct from request start"
+    },
+    {
+      "id": "map-compaction-progress",
+      "path": "src/context/compaction.rs",
+      "start": 365,
+      "end": 400,
+      "label": "Historical progress check, {{map-grant}} and ProjectionCommitInput"
+    },
+    {
+      "id": "map-projection-receipt",
+      "path": "src/durable/projection.rs",
+      "start": 17,
+      "end": 48,
+      "label": "ProjectionCheckpoint and ProjectionCommitReceipt"
+    },
+    {
+      "id": "map-context-engine",
+      "path": "src/context/engine.rs",
+      "start": 1,
+      "end": 9,
+      "label": "ContextEngine compiles {{bounded}} history; provider translation stays outside"
+    },
+    {
+      "id": "map-context-projection",
+      "path": "src/context/projection.rs",
+      "start": 1,
+      "end": 25,
+      "label": "ContextProjection: typed messages and exact effective prompt"
+    },
+    {
+      "id": "map-invocation-owner",
+      "path": "src/tools/invocation.rs",
+      "start": 1,
+      "end": 29,
+      "label": "Caller-neutral invocation cannot commit history or advance Workflow"
+    },
+    {
+      "id": "map-invocation-approval",
+      "path": "src/tools/invocation.rs",
+      "start": 64,
+      "end": 92,
+      "label": "authorize evaluates policy over immutable prepared facts"
+    },
+    {
+      "id": "map-invocation-run",
+      "path": "src/tools/invocation.rs",
+      "start": 220,
+      "end": 257,
+      "label": "ForegroundInvocation: {{frozen}} deadline policy and a two-plane handle"
+    },
+    {
+      "id": "map-invocation-winner",
+      "path": "src/tools/invocation.rs",
+      "start": 276,
+      "end": 315,
+      "label": "ForegroundInvocation chooses completion, cancellation or deadline"
+    },
+    {
+      "id": "map-invocation-settlement",
+      "path": "src/tools/invocation.rs",
+      "start": 337,
+      "end": 377,
+      "label": "Only {{settlement}} plane is awaited after cancellation wins"
+    },
+    {
+      "id": "map-executor-handle",
+      "path": "src/tools/executor.rs",
+      "start": 324,
+      "end": 341,
+      "label": "ToolExecutor::start constructs a handle without {{dispatch-tool}}"
+    },
+    {
+      "id": "map-executor-settlement",
+      "path": "src/tools/executor.rs",
+      "start": 356,
+      "end": 385,
+      "label": "ToolSettlement distinguishes {{map-physical-terminal}} proof and remote uncertainty"
+    },
+    {
+      "id": "map-tool-runtime",
+      "path": "src/tools/runtime.rs",
+      "start": 1,
+      "end": 16,
+      "label": "ConversationToolRuntime owns stable conversation resources"
+    },
+    {
+      "id": "map-native-child",
+      "path": "src/runtime/subagent.rs",
+      "start": 1,
+      "end": 22,
+      "label": "SubagentRegistry identities, sealing and final report {{map-subagent-authority}}"
+    },
+    {
+      "id": "map-child-process",
+      "path": "src/runtime/subagent/process.rs",
+      "start": 1,
+      "end": 29,
+      "label": "One process driver owns spawn, cancellation escalation and reap"
+    },
+    {
+      "id": "map-workflow-tool",
+      "path": "src/runtime/workflow/tool.rs",
+      "start": 31,
+      "end": 72,
+      "label": "Workflow Tool node uses ToolInvocationId::Workflow and {{native}} {{preflight}}"
+    },
+    {
+      "id": "map-workflow-bound",
+      "path": "src/runtime/workflow/execution.rs",
+      "start": 30,
+      "end": 67,
+      "label": "Workflow recursively validates {{finite}} expansion bounds"
+    },
+    {
+      "id": "map-goal-state",
+      "path": "src/goal.rs",
+      "start": 1,
+      "end": 8,
+      "label": "GoalPhase::Active authorizes eligible autonomous {{admission-goal}}"
+    },
+    {
+      "id": "map-goal-types",
+      "path": "src/goal.rs",
+      "start": 24,
+      "end": 72,
+      "label": "GoalRef, GoalPhase and {{durable}} GoalSnapshot"
+    },
+    {
+      "id": "map-extensions-bind",
+      "path": "src/extensions.rs",
+      "start": 28,
+      "end": 65,
+      "label": "NativeContextComposition registers Agent Status through ContextAssembly"
+    },
+    {
+      "id": "map-publication-proposals",
+      "path": "src/publication/mod.rs",
+      "start": 80,
+      "end": 93,
+      "label": "{{publication}} Tool proposals confer no execution {{map-agent-authority}}"
+    },
+    {
+      "id": "map-conversation-hot",
+      "path": "src/conversation/mod.rs",
+      "start": 1,
+      "end": 11,
+      "label": "{{canonical}} {{map-ledger}}, historical {{projection-context}} and hot state {{ownership}}"
+    }
+  ]
+}

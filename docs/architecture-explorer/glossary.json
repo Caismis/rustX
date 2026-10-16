@@ -1,0 +1,592 @@
+[
+  {
+    "id": "contract",
+    "label": "contract",
+    "explanation": "rustX 把调用规则写进内层接口；例如 ModelAdapter.stream 每次只发起一个 provider request，重试必须交回 AgentExecution，避免绕过请求启动记录。"
+  },
+  {
+    "id": "contract-model",
+    "label": "contract",
+    "explanation": "ModelAdapter.stream 接到一个 ModelRequest 后只能执行一次 provider 尝试；不能私下重试、重连或切换提供方，否则 AgentExecution 无法为每次实际请求分配身份和保存输入。"
+  },
+  {
+    "id": "contract-tool",
+    "label": "contract",
+    "explanation": "Tool Plane 用同一套定义、schema、策略与 ForegroundInvocation 管理原生 Tool、MCP 和 Python；Agent Loop 仍负责已接受调用的结果槽位和原子批次。"
+  },
+  {
+    "id": "contract-runtime",
+    "label": "contract",
+    "explanation": "ConversationRuntime 是一个 Conversation 的协调入口；外部组件提交输入，只有它能决定何时启动 AgentExecution，扩展不能另建一条执行队列。"
+  },
+  {
+    "id": "contract-publication",
+    "label": "contract",
+    "explanation": "AgentExecution 必须先把输出帧写入 Publication 存储，再交给客户端接口；最终仍须满足 P < U < C，客户端看到文本不等于 Assistant 已进入历史。"
+  },
+  {
+    "id": "responsibility",
+    "label": "responsibility",
+    "explanation": "ConversationRuntime 决定何时运行一个 Attempt，AgentExecution 决定 Attempt 内的模型轮次和 Tool 批次；客户端只展示这些组件产生的事实。"
+  },
+  {
+    "id": "ownership",
+    "label": "ownership",
+    "explanation": "rustX 将运行对象交给明确组件管理：ConversationRuntime 持有当前 Attempt，执行器收束自己启动的工作；取消信号不能代替资源回收。"
+  },
+  {
+    "id": "owner",
+    "label": "owner",
+    "explanation": "这里指负责执行并收束该工作的组件。例如 Tool 执行器必须处理自己启动的进程和 worker，Agent Loop 才能得到可提交的结果。"
+  },
+  {
+    "id": "owner-process",
+    "label": "owner",
+    "explanation": "本地 TUI 创建自己的 stdio App Server 子进程，因此正常退出时会显式请求关闭它；单纯 EOF 只会释放连接，不能代替该关闭请求。"
+  },
+  {
+    "id": "authority",
+    "label": "authority",
+    "explanation": "rustX 读取对应领域已提交的事实来作决定；例如 Tool 是否完成要查执行结果证据，不能根据 UI 进度或客户端断线来推断。"
+  },
+  {
+    "id": "authority-ledger",
+    "label": "authority",
+    "explanation": "ConversationStore 中不可变的 Message Ledger 决定 canonical 历史；Context Checkpoint、实时缓存与 Trace 都不能改写已提交消息。"
+  },
+  {
+    "id": "authority-goal",
+    "label": "authority",
+    "explanation": "只有 GoalDomain 的 GoalPhase::Active 授权后续自主轮次；UI 投影出的生命周期、Workflow 完成或 runtime drain 都不能自行把 Goal 判为完成或暂停。"
+  },
+  {
+    "id": "authority-request",
+    "label": "authority",
+    "explanation": "已启动请求的 RequestSnapshot 保存该请求确切输入；重新检查时按历史键读取，不能用当前配置或重新运行 compaction 猜测模型当时看到了什么。"
+  },
+  {
+    "id": "authority-delivery",
+    "label": "authority",
+    "explanation": "只有已提交的类型化 Tool 交付元数据能授权对话记录卡片；文件写入成功、进度事件或模型声称文件存在都不足以证明交付。"
+  },
+  {
+    "id": "authority-session",
+    "label": "authority",
+    "explanation": "SessionController 保存 Session 图、cwd 和显式选择；冷加载再解析当前资源。凭据、连接和当时的有效 Registry 不是 Session 保存的身份事实。"
+  },
+  {
+    "id": "authority-checkpoint",
+    "label": "authority",
+    "explanation": "已激活 Checkpoint 决定历史 Context 选中哪些 Original/Derived；它能排除 M96…M100，却不能删除这些 canonical Ledger 消息。"
+  },
+  {
+    "id": "native",
+    "label": "native",
+    "explanation": "rustX 自己的 runtime、Tool Plane 和领域接口直接处理操作；App Server 只转发到这些接口，不另造一套执行或取消规则。"
+  },
+  {
+    "id": "composition",
+    "label": "composition",
+    "explanation": "LocalConversationCore::compose_with_access 把解析后的模型、Tools、扩展与资源装成一个本地运行核心；Session 冷加载复用这条路径。"
+  },
+  {
+    "id": "residency",
+    "label": "residency",
+    "explanation": "SessionRuntimeManager 保存当前加载的 host/core 和 incarnation。成功 shutdown 并证明无剩余受管理工作后才卸载它们，Session 的磁盘数据继续保留。"
+  },
+  {
+    "id": "adoption",
+    "label": "adoption",
+    "explanation": "adopt_pending_batch 在同一事务中取出当前 Pending Inbound 批次、追加 canonical User 事实并移除 pending 记录；输入先被保存，不代表已经进入模型历史。"
+  },
+  {
+    "id": "acceptance",
+    "label": "acceptance",
+    "explanation": "rustX 先验证并提交事实，后续步骤才能据此运行；例如模型流中的 Tool 提案必须进入 canonical Assistant 后才产生可执行槽位。"
+  },
+  {
+    "id": "acceptance-inbound",
+    "label": "acceptance",
+    "explanation": "accept_inbound 原子分配序号并保存 Pending Inbound；此时可向客户端展示排队输入，但它尚未被 adopt_pending_batch 纳入 canonical User 历史。"
+  },
+  {
+    "id": "acceptance-assistant",
+    "label": "acceptance",
+    "explanation": "AgentExecution 在 provider 结果 P 和 Publication 终态 U 之后进行 Registry 检查，再提交 canonical Assistant C；只有其中的 ToolCall 才成为执行槽位。"
+  },
+  {
+    "id": "acceptance-tool",
+    "label": "acceptance",
+    "explanation": "Agent Loop 提交 Assistant 的 ToolCall 后，必须为每个已接受调用保留一个结果槽位；后续策略拒绝或启动前取消仍要产生对应结果。"
+  },
+  {
+    "id": "staging",
+    "label": "staging",
+    "explanation": "这里需区分两步：当前请求的 Context 可以只在内存中准备；Publication 输出帧则必须先写入存储，才能发给客户端。"
+  },
+  {
+    "id": "staging-context",
+    "label": "staging",
+    "explanation": "Context 先在当前请求内准备，尚不写入历史；只有模型启动 gate 获胜后，事务才一起提交 Context、RequestSnapshot 与 ModelRequestStarted。"
+  },
+  {
+    "id": "staging-publication",
+    "label": "staging",
+    "explanation": "flush_publication 先把合并后的输出帧持久写入 Publication，再向观测接口发送；这份审计只证明可能发出的内容，不证明用户看到。"
+  },
+  {
+    "id": "publication",
+    "label": "publication",
+    "explanation": "模型的流式文本或 Tool 提案经 Publication 写入并向客户端输出；即使完整显示，仍要等待独立的 canonical Assistant 提交，提案也不能立即执行。"
+  },
+  {
+    "id": "release",
+    "label": "release",
+    "explanation": "输出先进入 Publication 存储，再通过客户端接口向外发送；发送动作发生在 canonical Assistant 提交之前，不能据此认为提案已获执行许可或用户已经看到。"
+  },
+  {
+    "id": "publish",
+    "label": "publish",
+    "explanation": "这里是把已准备的结果交给下游，例如向客户端发送已提交帧或报告卸载成功；发送动作本身不构成客户端已读证明。"
+  },
+  {
+    "id": "dispatch",
+    "label": "dispatch",
+    "explanation": "AgentExecution 先提交实际请求启动、重建并校验 RequestSnapshot，随后才调用 ModelAdapter；有启动记录不等于已执行到这个调用。"
+  },
+  {
+    "id": "dispatch-tool",
+    "label": "dispatch",
+    "explanation": "ForegroundInvocation 经过取消、策略与批准检查后才启动 Tool 操作；构造调用对象只捕获资源，不能作为物理工作已开始的证据。"
+  },
+  {
+    "id": "arbitration",
+    "label": "arbitration",
+    "explanation": "request_cancel 与 arbitrate_model_turn_start 争用同一 Attempt gate：取消先进入则不执行启动事务；启动先进入则先提交，后来的取消不能撤销该身份。"
+  },
+  {
+    "id": "boundary",
+    "label": "boundary",
+    "explanation": "rustX 在不同步骤记录不同事实：输出帧已提交、Assistant 已进入历史、Tool 已物理完成，不能因为其中一步发生就推断另一步完成。"
+  },
+  {
+    "id": "boundary-contract",
+    "label": "boundary",
+    "explanation": "内层只依赖 rustX 的 ModelAdapter、ToolExecutor 等接口；提供方 SDK、MCP SDK、数据库和 HTTP 类型止于外层实现，不进入 Agent 内核。"
+  },
+  {
+    "id": "frontier",
+    "label": "frontier",
+    "explanation": "请求启动事务一旦提交，rustX 就不能把这次请求当作从未开始并静默重发；即使随后崩溃，也不能证明远端没执行。"
+  },
+  {
+    "id": "frontier-start",
+    "label": "frontier",
+    "explanation": "Context、RequestSnapshot 和 ModelRequestStarted 一起提交后，这次请求越过禁止重发的位置；崩溃可能发生在 ModelAdapter 调用前，恢复也不会盲目再发。"
+  },
+  {
+    "id": "frontier-tool",
+    "label": "frontier",
+    "explanation": "执行器启动证据先于实际外部修改，是保守的恢复判断点；存在它却没有可信结果时，rustX 必须保留 OutcomeUnknown，不能重试未知副作用。"
+  },
+  {
+    "id": "bounded",
+    "label": "bounded",
+    "explanation": "rustX 每次只读取给定 cut 内的历史或使用容量受限的缓存；例如 Context Tail 截止本次 request cut，后续消息不会偷偷进入已准备请求。"
+  },
+  {
+    "id": "finite",
+    "label": "finite",
+    "explanation": "本次工作只覆盖已确定的一组项目，例如当前 pending 批次、所选来源需求或 Workflow 节点；它不代表能够持续调度新 Goal 轮次。"
+  },
+  {
+    "id": "fold",
+    "label": "fold",
+    "explanation": "RuntimeClientProjection 把 runtime 事件依次合并为当前客户端视图，同时更新快照与游标；它不向执行层写回状态。"
+  },
+  {
+    "id": "materialization",
+    "label": "materialization",
+    "explanation": "Checkpoint commit 保存 Derived 的实际正文，而不是以后再运行摘要生成器；检查旧请求时因此能读取相同内容。"
+  },
+  {
+    "id": "normalization",
+    "label": "normalization",
+    "explanation": "ForegroundInvocation 先整理并校验 Tool 参数，再固定为不可变调用参数；批准展示与实际执行使用同一份参数，避免用户批准后执行内容又发生变化。"
+  },
+  {
+    "id": "normalization-path",
+    "label": "normalization",
+    "explanation": "SessionFileReference 保存文件对应的 Conversation/cwd 身份和整理后的路径；它仍指向可变文件，重新打开可能得到新内容或 Missing。"
+  },
+  {
+    "id": "normalization-events",
+    "label": "normalization",
+    "explanation": "ModelAdapter 把各家 provider 流转换成 ModelStreamItem；只有语义输出进入 Publication，内部进度不冒充模型正文。"
+  },
+  {
+    "id": "shadowing",
+    "label": "shadowing",
+    "explanation": "同名 Workspace 资源在校验前整体覆盖 User 定义；上层定义无效时操作明确失败，不退回下层可用定义。"
+  },
+  {
+    "id": "receipt",
+    "label": "receipt",
+    "explanation": "成功的存储事务返回已提交事实的凭证，例如模型启动或 Checkpoint commit；后来的取消不能抹掉它，也不能把它当作远端执行证明。"
+  },
+  {
+    "id": "slot",
+    "label": "slot",
+    "explanation": "一个 canonical ToolCall 对应一个结果位置；Agent Loop 按调用顺序一次提交整个批次，实际完成顺序和取消不会改变这些位置。"
+  },
+  {
+    "id": "effect",
+    "label": "effect",
+    "explanation": "Tool 可能已经写入共享 Session 文件或修改远端系统；取消、Workflow 失败和恢复都不会自动回滚这些已完成修改。"
+  },
+  {
+    "id": "physical",
+    "label": "physical",
+    "explanation": "这里检查真正启动的进程、worker 或远端操作，而非只看模型提案或取消标记；本地资源收束和远端结果已知仍是两件事。"
+  },
+  {
+    "id": "drain",
+    "label": "drain",
+    "explanation": "runtime 从 Running 进入 Draining 后关闭新输入 admission，继续监督已有 Attempt、后台工作、MCP 进程和 worker，直到各自完成 settlement。"
+  },
+  {
+    "id": "terminal",
+    "label": "terminal state",
+    "explanation": "Attempt 最后只交回一个完成、取消或失败候选；若 Journal 追加失败，状态机仍已终止并保留结果候选，但不会虚构持久终态记录或观察者事件。"
+  },
+  {
+    "id": "terminal-publication",
+    "label": "terminal state",
+    "explanation": "Publication 的最终帧/状态 U 在 provider 结果 P 之后提交、在 canonical Assistant C 之前提交；完整 U 没有 C 仍是 UnacceptedPublicationAudit。"
+  },
+  {
+    "id": "terminal-tool",
+    "label": "terminal state",
+    "explanation": "Tool 必须返回有证据支撑的 Success、Failed、Cancelled 等结果；传输丢失时不能凭取消意图认定远端已停止。"
+  },
+  {
+    "id": "terminal-goal",
+    "label": "terminal state",
+    "explanation": "GoalPhase::Complete 表示领域目标已结束；Workflow 返回或一个 Attempt 完成并不能自行把 Goal 写成 Complete。"
+  },
+  {
+    "id": "source",
+    "label": "source",
+    "explanation": "这里看实际数据从哪个领域读入：Context 编译器读取 Ledger 与 Checkpoint，不能从界面缓存倒推出执行历史。"
+  },
+  {
+    "id": "source-config",
+    "label": "source",
+    "explanation": "冷加载读取当前配置、MCP 定义和 Python 包；发现定义并不连接服务器或准备环境，只有选中并通过 admission 的需求才启动准备。"
+  },
+  {
+    "id": "provenance",
+    "label": "provenance",
+    "explanation": "rustX 保留输入或派生项来自哪次受限操作的信息；这些线索有助检查，但不能替代 canonical MessageId 或实际执行身份。"
+  },
+  {
+    "id": "provenance-derived",
+    "label": "provenance",
+    "explanation": "Derived Context 保存指向 canonical 消息或父 Checkpoint 项的来源引用；例如摘要可引用 M1…M20，但自身没有 canonical MessageId。这些引用不能移动 Checkpoint base 或让被排除消息重新进入 Tail。"
+  },
+  {
+    "id": "frozen",
+    "label": "frozen",
+    "explanation": "Agent 捕获本轮语义输入后不再让当前配置和发现结果改变它；每次实际请求仍获得新身份，并在启动时保存自己的精确 RequestSnapshot。"
+  },
+  {
+    "id": "replay",
+    "label": "replay",
+    "explanation": "RuntimeClientProjection 向重连客户端提供容量受限的事件记录以重建界面；这不是重新执行模型或 Tool，也不是恢复的事实依据。"
+  },
+  {
+    "id": "replay-tool",
+    "label": "replay",
+    "explanation": "恢复不会重新调用结果不明的 Tool；启动证据存在而结果未知时填补 OutcomeUnknown，避免外部修改被重复执行。"
+  },
+  {
+    "id": "recovery",
+    "label": "recovery",
+    "explanation": "加载时按持久事实修补缺失结果：无启动证据可报告启动前取消，有启动却结果未知则保留不确定性；已提交结果不覆盖，未知副作用不重跑。"
+  },
+  {
+    "id": "revision",
+    "label": "revision",
+    "explanation": "Session 设置或 Goal 状态改变时推进对应版本；Goal 轮次的输入保存、版本推进和已消耗轮次数在同一个事务中提交。"
+  },
+  {
+    "id": "snapshot",
+    "label": "snapshot",
+    "explanation": "客户端获取 runtime 当前视图的副本用于重建界面；它不是 canonical 历史，也不能作为请求恢复时重新执行工作的依据。"
+  },
+  {
+    "id": "snapshot-request",
+    "label": "snapshot",
+    "explanation": "RequestSnapshot 在实际请求启动事务中保存确切输入及依赖；启动 gate 之前不会留下该请求的快照，后来检查也不会重新发现当前资源。"
+  },
+  {
+    "id": "cursor",
+    "label": "cursor",
+    "explanation": "RuntimeClientProjection 为事件分配位置，客户端重连时据此读取可用事件；缓存有界，游标不是持久执行身份。"
+  },
+  {
+    "id": "scope",
+    "label": "scope",
+    "explanation": "WorkflowRuntime 为 root、branch、body 各自保存局部值和实例，完成 join 后按定义顺序汇合；这些执行仍共享 Session 工作区。"
+  },
+  {
+    "id": "scope-request",
+    "label": "scope",
+    "explanation": "本次请求的 Context 与 RequestSnapshot 只描述这次实际请求；它们不能代表整个 Attempt 后续重试和 continuation 的新请求身份。"
+  },
+  {
+    "id": "scope-derived",
+    "label": "scope",
+    "explanation": "Derived 的产生线索只适用于对应 compaction/Checkpoint，不提供 canonical 消息身份，也不授权 Tool 执行。"
+  },
+  {
+    "id": "preflight",
+    "label": "preflight",
+    "explanation": "Registry 在提交 canonical Assistant 前检查 Tool 结构和 schema；业务拒绝保留为结果槽位，不可信结构则不能进入执行批次。"
+  },
+  {
+    "id": "observation",
+    "label": "observation",
+    "explanation": "Prepared、Started、Progress、Completed 或客户端状态通知让 UI 展示进展；它们不授予权限，也不能代替可信 Tool 结果和物理完成证据。"
+  },
+  {
+    "id": "framing",
+    "label": "framing",
+    "explanation": "App Server 适配 Stdio JSONL 或 WebSocket 的消息封装，把带版本 JSON-RPC 请求交给相同路由，不把传输格式变成 Conversation 调度器。"
+  },
+  {
+    "id": "canonical",
+    "label": "canonical",
+    "explanation": "提交到 Message Ledger 的 User、Assistant 与 Tool 消息构成 Conversation 历史；流式提案和 Checkpoint 摘要不能冒充这些消息。Event Journal 另记真实执行事实，不能与模型历史消息混为一谈。"
+  },
+  {
+    "id": "projection",
+    "label": "projection",
+    "explanation": "RuntimeClientProjection 从 runtime 事实整理客户端视图；即使没有客户端连接，执行规则也相同，缓存不驱动恢复或取消。"
+  },
+  {
+    "id": "projection-context",
+    "label": "projection",
+    "explanation": "Context Engine 用 Checkpoint 中的 Original/Derived 和严格 Tail 编译模型输入；该选择可以排除旧消息，但不修改 Ledger，也不会执行其中的 Tool 内容。"
+  },
+  {
+    "id": "compaction",
+    "label": "compaction",
+    "explanation": "Context Engine 提交新的 Checkpoint 来选择历史输入，保存 Derived 正文和 base；M1…M100 等原始 Ledger 事实保持不可变，不插入 canonical 摘要消息。"
+  },
+  {
+    "id": "settlement",
+    "label": "settlement",
+    "explanation": "组件必须把自己管理的工作带到有证据的结束状态并交回结果；Tool 需要先回收本地 worker，runtime 卸载还要等待所有受管理工作完成，取消信号本身不够。"
+  },
+  {
+    "id": "settlement-publication",
+    "label": "settlement",
+    "explanation": "Publication 根据 P、U、C 已提交到哪一步，保留 Canonical、UnacceptedPublicationAudit 或 IncompletePublicationAudit；不能把未接受输出混入 Assistant 历史。"
+  },
+  {
+    "id": "admission",
+    "label": "admission",
+    "explanation": "ConversationRuntime 在同一个协调器锁下决定是否启动 Attempt；Running → Draining 也使用这把锁，因此关闭后不能再有输入偷偷越过运行入口。"
+  },
+  {
+    "id": "admission-config",
+    "label": "admission",
+    "explanation": "配置选择先形成有限的能力需求，rustX 校验并允许这些需求后才解析凭据、连接 MCP 或准备 Python；仅发现文件或列出子 Agent 不会激活资源。"
+  },
+  {
+    "id": "admission-context",
+    "label": "admission",
+    "explanation": "ContextAssembly 的动态内容须在当前请求获得允许后才能合入输入；它不能自行变成 canonical 消息，模型启动失败也不会留下部分 Context 提交。"
+  },
+  {
+    "id": "admission-transport",
+    "label": "admission",
+    "explanation": "WebSocket 连接建立前校验专用传输 token；initialize 只协商协议，不提供进程内租户身份验证。"
+  },
+  {
+    "id": "admission-goal",
+    "label": "admission",
+    "explanation": "GoalRoundDriver 仅在协调器安全空闲点提交普通 Pending Inbound；接受轮次、推进 Goal 版本和消耗轮次计数在同一 SQLite 事务完成。"
+  },
+  {
+    "id": "quiescence",
+    "label": "quiescence",
+    "explanation": "shutdown 必须证明所有 rustX 管理的 Attempt、worker、准备任务与进程已完成收束，SessionRuntimeManager 才能卸载旧组合并允许新写入者；断线或已发取消都不足够。"
+  },
+  {
+    "id": "durable",
+    "label": "durable",
+    "explanation": "SessionController 的 catalog 保存 Session 身份与显式设置，ConversationStore 保存各 Conversation 的 Ledger、输入、请求与审计等领域事实；这些数据在运行核心卸载后仍保留，连接与凭据不因此成为 Session 状态。"
+  },
+  {
+    "id": "persistence",
+    "label": "persistence",
+    "explanation": "rustX 将事实通过存储事务写入 SQLite；例如 Context、RequestSnapshot 和 ModelRequestStarted 同时成功或都不留下，准备好内存对象并不等于已经写入。"
+  },
+  {
+    "id": "authority-runtime",
+    "label": "authority",
+    "explanation": "ConversationRuntime 决定 admission、取消与运行生命周期；RuntimeClientProjection 和 App Server 只转发控制或展示事实，不能凭连接状态替它判定执行结束。"
+  },
+  {
+    "id": "authority-publication",
+    "label": "authority",
+    "explanation": "Assistant C 的提交关联已持久保存的 Publication 结果与终态 U；单凭实时输出、完整 U 或客户端进度都不能生成 canonical Assistant 事实。"
+  },
+  {
+    "id": "contract-context",
+    "label": "contract",
+    "explanation": "Context Engine 只编译获授权的历史和动态输入；Checkpoint 决定历史选择，Agent 冻结当前输入并通过启动事务提交精确请求，编译器不能修改 Ledger 或执行 Tool。"
+  },
+  {
+    "id": "contract-layering",
+    "label": "contract",
+    "explanation": "ModelAdapter、ToolExecutor 等内层接口只出现 rustX 自己的领域类型；提供方 SDK、MCP SDK、SQLite 与 HTTP 类型封装在适配器外层。"
+  },
+  {
+    "id": "contract-no-ack",
+    "label": "contract",
+    "explanation": "runtime 没有证明用户已看到输出的 ACK 机制；PublicationAudit 只限定可能被发送的内容，不能用它宣称客户端已读。"
+  },
+  {
+    "id": "composition-input",
+    "label": "composition",
+    "explanation": "Agent 将 Checkpoint/Tail 历史、Fresh Inbound、动态 Context、prompt、Tool 定义和 continuation 合成当前语义输入；这一步不重新创建 Session runtime。"
+  },
+  {
+    "id": "frozen-agent",
+    "label": "frozen",
+    "explanation": "DurableAgentAuthority 创建时捕获模型、Tools、Skills、Plugins、资源、策略和工作区；后续 activation 使用这组能力，不重新寻找另一个 profile。"
+  },
+  {
+    "id": "frozen-package",
+    "label": "frozen",
+    "explanation": "Managed Python 准备已捕获的包字节和隔离 uv 环境；子 Agent 获得已捕获的 Skills 包，后续调用不靠重新发现当前文件来改变输入。"
+  },
+  {
+    "id": "frozen-workspace",
+    "label": "frozen",
+    "explanation": "Agent activation 绑定 Session 已确定的绝对工作区目录；父子 Agent 共享该目录，能看到彼此未 commit 的文件写入，没有独立 worktree。"
+  },
+  {
+    "id": "frozen-config",
+    "label": "frozen",
+    "explanation": "一个配置 generation 捕获这次组合的能力与扩展；已通过 admission 的工作继续使用该 generation，后续配置变化不改写它。"
+  },
+  {
+    "id": "snapshot-model",
+    "label": "snapshot",
+    "explanation": "ConversationRuntime 保存当前 Attempt 使用的模型选择；子 Agent 省略模型选择时继承调用方 Attempt 已捕获的有效模型，不能临时重读默认配置。"
+  },
+  {
+    "id": "snapshot-content",
+    "label": "snapshot",
+    "explanation": "SessionFileReference 指向可变路径，不能保存当时的文件字节；与不可变 ArtifactStore 不同，再次打开可能得到变化后的内容或 Missing。"
+  },
+  {
+    "id": "physical-message",
+    "label": "physical",
+    "explanation": "canonical User、Assistant、Tool 消息各有真实 MessageId；Derived Context 没有这个身份，projection 中相似的 Tool 文本也不代表执行过一次 Tool。"
+  },
+  {
+    "id": "admission-subagent",
+    "label": "admission",
+    "explanation": "SubagentRegistry 针对具体 Agent 和 activation 分配受管理运行；使用已捕获的能力，精确控制这一次 activation，不能让后续任务替换已有等待目标。"
+  },
+  {
+    "id": "admission-workflow",
+    "label": "admission",
+    "explanation": "Workflow 静态检查并捕获本次程序需要的有限能力；执行 root、branch、body block 时复用它们，不重新发现资源或伪造模型 ToolCall。"
+  },
+  {
+    "id": "scope-agent",
+    "label": "scope",
+    "explanation": "子 Agent 的能力按其命名 profile 捕获；Root 专属 Goal 追求在子 Agent 范围内被拒绝，不会把 Root 的长期目标控制扩散到子运行。"
+  },
+  {
+    "id": "settlement-attempt",
+    "label": "settlement",
+    "explanation": "AgentExecution 把最终 ConversationState 和唯一的 Attempt 完成/取消/失败候选交回协调器；终态 Journal 追加失败时，候选与内存终止状态仍在，但不能伪造持久终态记录或观察者事件。"
+  },
+  {
+    "id": "replay-effect",
+    "label": "replay",
+    "explanation": "已有启动证据却没有可信结果时，rustX 不重新执行模型请求或 Tool；远端可能已发生修改，恢复须报告不确定性，避免重复副作用。"
+  },
+  {
+    "id": "replay-cursor",
+    "label": "replay",
+    "explanation": "重连客户端按游标读取 RuntimeClientProjection 已保存的有限事件，再重建界面；缓存不会重新执行 Tool 或充当 canonical 历史与恢复输入。"
+  },
+  {
+    "id": "allocation",
+    "label": "allocation",
+    "explanation": "SessionRuntimeManager 加载期间保留 Conversation 的目录/文件系统分配和运行 incarnation；只有旧运行成功收束后才释放，避免同一 Conversation 出现第二个可写 runtime。"
+  },
+  {
+    "id": "slot-attempt",
+    "label": "slot",
+    "explanation": "ConversationRuntime 在协调器锁下只持有一个当前 Attempt；生产者可以保存 pending 输入，但不能绕开这个位置另启 AgentExecution。"
+  },
+  {
+    "id": "release-output",
+    "label": "release",
+    "explanation": "flush_publication 在每帧写入 Publication 后才向客户端接口发送；审计只限定可能发送的内容，既不证明客户端已读，也不授权 Tool 提案执行。"
+  },
+  {
+    "id": "release-residency",
+    "label": "release",
+    "explanation": "SessionRuntimeManager 只有在 shutdown 成功并证明无剩余受管理工作后才释放 host/core、分配与条目；随后公布卸载成功，旧句柄成为 StaleIncarnation，Session 数据继续保留。"
+  },
+  {
+    "id": "source-code",
+    "label": "source",
+    "explanation": "这里展示固定 main commit 中指定文件与行号的 Rust 或文档摘录，用于核对 rustX 的实际接口和执行顺序；它不是当前 Session 重新发现的配置资源，也不会随运行状态变化。"
+  },
+  {
+    "id": "authority-result",
+    "label": "authority",
+    "explanation": "已提交的 canonical Tool 结果就是该调用的最终结果；恢复只补缺失项，不能用迟到取消、缓存进度或新的猜测覆盖它。"
+  },
+  {
+    "id": "authority-recovery",
+    "label": "authority",
+    "explanation": "恢复读取对应 Conversation 的持久 Ledger、请求启动、执行结果等领域事实；RuntimeClientProjection 的事件缓存和 Trace 只供展示，不能触发恢复或覆盖这些事实。"
+  },
+  {
+    "id": "provenance-context",
+    "label": "provenance",
+    "explanation": "Checkpoint 的 Original 项保留 canonical 消息引用与 digest；Derived 项保存 canonical 消息或父 Checkpoint 项的来源引用。两者都只是历史输入选择，不能产生 ToolExecution 事实。"
+  },
+  {
+    "id": "terminal-managed",
+    "label": "terminal state",
+    "explanation": "shutdown 等待每类受管理工作通过自己的完成规则：Attempt 交回最终候选，进程和 worker 完成本地收束，结果未知的远端操作保留不确定性；发出取消不能替代这些结束证据。"
+  },
+  {
+    "id": "contract-model-cancellation",
+    "label": "contract",
+    "explanation": "ModelAdapter 接收 Attempt 的子取消信号 model_cancellation()；取消按统一 ModelStreamItem 语义以 Failed(Cancelled) 结束流，不会撤销已提交启动或证明远端没有执行。"
+  },
+  {
+    "id": "acceptance-continuation",
+    "label": "acceptance",
+    "explanation": "Agent 只保留已经接受的 continuation，并与同一不可变输入版本一起进入下一轮；每次实际续接仍生成新请求身份并经过启动 gate，适配器不能私下续接。"
+  },
+  {
+    "id": "snapshot-source",
+    "label": "snapshot",
+    "explanation": "导览固定使用 8cb41624 这次 commit 的代码与文档视图；摘录字节和行号链接独立固定，不会跟随当前 checkout 改动。这是源码版本视图，不是 runtime/client 状态副本，也不是保存实际模型请求输入的 RequestSnapshot。"
+  }
+]
