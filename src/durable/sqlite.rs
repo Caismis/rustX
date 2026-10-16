@@ -324,7 +324,7 @@ fn count_conversation_store_open() {
 /// Earlier development stores are rejected without migration.
 /// Immutable context projection plus finite bounded observation layouts.
 /// Version 62 gives request fields explicit inline-header or original-span storage.
-pub const SQLITE_SCHEMA_VERSION: i64 = 65;
+pub const SQLITE_SCHEMA_VERSION: i64 = 66;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -19280,7 +19280,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 65);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 66);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19349,7 +19349,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 65);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 66);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

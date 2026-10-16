@@ -60,9 +60,12 @@ impl Drop for PreparationReads {
 pub(crate) fn take_preparation_visits() -> usize {
     PREPARATION_VISITS.with(|work| work.replace(0))
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "issue-387-profile"))]
 fn record_actual_visit() {
+    #[cfg(test)]
     ACTUAL_VISITS.with(|work| work.set(work.get() + 1));
+    #[cfg(feature = "issue-387-profile")]
+    crate::model::adapter::profile::borrowed_visit();
 }
 #[cfg(test)]
 pub(crate) fn take_materialized_items() -> usize {
@@ -201,7 +204,7 @@ fn node_metrics(node: &InputNode) -> InputMetrics {
             .add(node_metrics(right))
             .expect("bounded native input metrics"),
         InputNodeKind::Leaf(_) => {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "issue-387-profile"))]
             record_actual_visit();
             let message = node.actual.as_deref().expect("materialized model input");
             let visible = crate::context::tokens::model_visible_item_bytes(message);
@@ -322,7 +325,7 @@ fn prefix_equal(
             continue;
         }
         if x.count == 1 && y.count == 1 {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "issue-387-profile"))]
             {
                 record_actual_visit();
                 record_actual_visit();
@@ -828,7 +831,7 @@ fn set_actual(node: &mut Arc<InputNode>, index: usize, value: Arc<ModelInputMess
 fn actual(node: &InputNode, index: usize) -> &ModelInputMessage {
     match &node.kind {
         InputNodeKind::Leaf(_) => {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "issue-387-profile"))]
             record_actual_visit();
             node.actual
                 .as_deref()
@@ -1229,7 +1232,7 @@ fn next_model_leaf<'a>(
         let node = pending.pop()?;
         match &node.kind {
             InputNodeKind::Leaf(_) => {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "issue-387-profile"))]
                 record_actual_visit();
                 return Some(
                     node.actual

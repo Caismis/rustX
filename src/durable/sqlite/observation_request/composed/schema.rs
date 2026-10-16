@@ -2,7 +2,7 @@ use super::{Connection, ConversationStoreError, storage};
 const TABLES: [(&str, &str); 3] = [
     (
         "request_source_pages",
-        r"CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY CHECK(typeof(hash)='blob' AND length(hash)=32),bytes BLOB NOT NULL CHECK(typeof(bytes)='blob' AND length(bytes)<=65536)) WITHOUT ROWID",
+        r"CREATE TABLE request_source_pages(hash BLOB NOT NULL PRIMARY KEY CHECK(typeof(hash)='blob' AND length(hash)=32),bytes BLOB NOT NULL CHECK(typeof(bytes)='blob' AND length(bytes)<=65536))",
     ),
     (
         "request_source_nodes",

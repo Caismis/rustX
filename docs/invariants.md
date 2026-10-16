@@ -2749,7 +2749,7 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** The current SQLite 65, child IPC 33,
+- **Retired formats are refused.** The current SQLite 66, child IPC 33,
   Runtime Client 71 and App Server 50 gates include the subsequent bounded
   observation changes (#467) and refuse earlier stores and peers. Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.

@@ -57,6 +57,8 @@ pub fn validate_request(
     request: &ModelRequest,
     protocol: ModelProtocol,
 ) -> Result<ValidatedTools, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = super::profile::phase(super::profile::Phase::Validate);
     if request.protocol() != protocol {
         return Err(invalid_request(format!(
             "request protocol {} does not match adapter protocol {}",
@@ -68,8 +70,30 @@ pub fn validate_request(
     // Effective-capability agreement is checked before anything else that
     // could reach the network: content the invocation cannot represent is
     // rejected here, not by the provider.
-    validate_content_modalities(&request.messages, &request.invocation.capabilities)?;
-    if request.images.len() > 16 || crate::model::images::image_count(&request.messages) > 16 {
+    {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = super::profile::phase(super::profile::Phase::Modalities);
+        #[cfg(feature = "issue-387-profile")]
+        let messages = request.messages.iter().enumerate().map(|(index, message)| {
+            super::profile::item(index);
+            message
+        });
+        #[cfg(not(feature = "issue-387-profile"))]
+        let messages = &request.messages;
+        validate_content_modalities(messages, &request.invocation.capabilities)?;
+    }
+    if request.images.len() > 16 || {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = super::profile::phase(super::profile::Phase::ImageCount);
+        #[cfg(feature = "issue-387-profile")]
+        let messages = request.messages.iter().enumerate().map(|(index, message)| {
+            super::profile::item(index);
+            message
+        });
+        #[cfg(not(feature = "issue-387-profile"))]
+        let messages = &request.messages;
+        crate::model::images::image_count(messages) > 16
+    } {
         return Err(invalid_request(
             "request exceeds the 16-image limit".to_owned(),
         ));
@@ -102,7 +126,11 @@ pub fn validate_request(
         });
     }
 
-    validate_continuation(request, protocol)?;
+    {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = super::profile::phase(super::profile::Phase::Continuation);
+        validate_continuation(request, protocol)?;
+    }
     // Wire coverage/correlation is part of deterministic adapter admission,
     // including accepted stored calls absent from this request's explicit input.
     super::correlation::request_labels(request).map_err(invalid_request)?;
@@ -120,6 +148,8 @@ pub(crate) fn take_preflights() -> usize {
 pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), ModelError> {
     #[cfg(test)]
     PREFLIGHTS.with(|v| v.set(v.get() + 1));
+    #[cfg(feature = "issue-387-profile")]
+    let _request = super::profile::RequestScope::new(request.protocol(), "preflight");
     let tools = validate_request(request, request.protocol())?;
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
@@ -176,6 +206,8 @@ fn validate_continuation(
 }
 
 fn validate_tools(request: &ModelRequest) -> Result<ValidatedTools, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = super::profile::phase(super::profile::Phase::Tools);
     let mut by_name: BTreeMap<String, ToolId> = BTreeMap::new();
     for tool in &request.tools {
         if tool.name.is_empty() {

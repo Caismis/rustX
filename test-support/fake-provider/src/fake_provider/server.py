@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from fake_provider import control
 from fake_provider.control import ScenarioRun
+from fake_provider.measurement import Measurement, elapsed, stamp
 from fake_provider.protocols import codec_for, protocol_of_path
 from fake_provider.scenario import (
     Disconnect,
@@ -47,6 +48,7 @@ class ProviderServer:
         self.run = run
         self._server: asyncio.Server | None = None
         self._connections: set[asyncio.Task[None]] = set()
+        self._measurement = Measurement.configured()
 
     async def start(self, host: str, port: int) -> tuple[str, int]:
         self._server = await asyncio.start_server(self._handle, host, port)
@@ -106,14 +108,24 @@ class ProviderServer:
         writer: asyncio.StreamWriter,
     ) -> None:
         index = len(self.run.requests)
+        measurement = self._measurement
+        measured: dict[str, int] = {}
+        started = stamp() if measurement else None
         protocol = protocol_of_path(path)
         recorded_headers, credential_headers = sanitize_headers(headers)
+        began = stamp() if measurement else None
         body_text = body.decode("utf-8", errors="replace")
+        if began is not None:
+            measured.update(elapsed(began, "utf8_decode"))
+        began = stamp() if measurement else None
         try:
             parsed = json.loads(body_text) if body_text else None
         except json.JSONDecodeError:
             parsed = None
+        if began is not None:
+            measured.update(elapsed(began, "json_parse"))
         codec = codec_for(protocol) if protocol else None
+        began = stamp() if measurement else None
         request = RecordedRequest(
             index=index,
             method=method,
@@ -126,6 +138,10 @@ class ProviderServer:
             json=parsed if isinstance(parsed, dict) else None,
         )
         self.run.requests.append(request)
+        if measurement is not None and began is not None:
+            measured.update(elapsed(began, "record"))
+            measurement.retain(body_text, parsed, len(body))
+            measured["body_bytes"] = len(body)
         await self.run.observe(
             control.REQUEST_ACCEPTED, request_index=index, path=path, protocol=protocol
         )
@@ -145,7 +161,12 @@ class ProviderServer:
 
         step = self.run.scenario.steps[index]
         expected_codec = codec_for(step.expect.protocol)
+        began = stamp() if measurement else None
         failures = step.expect.failures(request, expected_codec)
+        if began is not None:
+            measured.update(elapsed(began, "match"))
+            measured["substring_checks"] = len(step.expect.body_contains) + len(step.expect.body_excludes)
+            measured["substring_input_chars"] = len(body_text) * measured["substring_checks"]
         if failures:
             self.run.fail_step(index)
             for failure in failures:
@@ -166,9 +187,20 @@ class ProviderServer:
         # Matching is progression, not completion. The step settles only if
         # the scripted response below reaches its terminal state.
         self.run.match_step(index)
+        began = stamp() if measurement else None
         await self._respond(step, expected_codec, request, index, reader, writer)
-        if self.run.all_settled:
+        if began is not None:
+            measured.update(elapsed(began, "response"))
+        began = stamp() if measurement else None
+        complete = self.run.all_settled
+        if began is not None:
+            measured.update(elapsed(began, "completion_check"))
+            measured["declared_steps"] = len(self.run.scenario.steps)
+        if complete:
             await self.run.observe(control.SCENARIO_COMPLETED)
+        if measurement is not None and started is not None:
+            measured.update(elapsed(started, "provider"))
+            measurement.sample(index, measured)
 
     async def _respond(
         self,

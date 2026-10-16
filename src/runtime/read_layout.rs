@@ -1,4 +1,6 @@
 //! Seekable immutable observation bytes derived from existing native authority.
+#[cfg(test)]
+mod byte_reader_tests;
 pub(crate) mod canonical;
 mod key_order;
 use rusqlite::OptionalExtension as _;
@@ -59,6 +61,10 @@ impl std::error::Error for ObservationReadError {}
 #[cfg(test)]
 thread_local! {
     static FILE_WORK: std::cell::Cell<(usize,usize)> = const {std::cell::Cell::new((0,0))};
+}
+#[cfg(test)]
+pub(crate) fn take_file_work() -> (usize, usize) {
+    FILE_WORK.with(|work| work.replace((0, 0)))
 }
 
 #[derive(Debug, Clone)]
@@ -275,21 +281,22 @@ impl Layout {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| "pending source page unavailable")
     }
-    fn bytes(&self, start: u64, count: usize) -> Result<Vec<u8>, &'static str> {
+    fn byte_file(&self) -> Result<std::fs::File, &'static str> {
         #[cfg(test)]
         FILE_WORK.with(|work| {
             let (writes, opens) = work.get();
             work.set((writes, opens + 1));
         });
-        let file = self
-            .file
+        self.file
             .as_ref()
             .map_or_else(
                 || std::fs::File::open(self.directory.path().join("bytes")),
                 std::fs::File::try_clone,
             )
-            .map_err(|_| "native byte source unavailable")?;
-        Self::read_bytes(&file, start, count)
+            .map_err(|_| "native byte source unavailable")
+    }
+    fn bytes(&self, start: u64, count: usize) -> Result<Vec<u8>, &'static str> {
+        Self::read_bytes(&self.byte_file()?, start, count)
     }
     fn read_bytes(file: &std::fs::File, start: u64, count: usize) -> Result<Vec<u8>, &'static str> {
         use std::os::unix::fs::FileExt as _;
@@ -310,6 +317,24 @@ impl Layout {
 #[derive(Debug)]
 pub(crate) struct SeekableObservationSource {
     layout: Layout,
+}
+/// One synchronous byte reader borrowed from its immutable source. The borrow
+/// pins the scratch directory; the `File` is closed when the capture scope ends.
+/// It owns neither a task nor a cached index/authentication result.
+pub(crate) struct ObservationByteReader<'a> {
+    source: &'a SeekableObservationSource,
+    file: std::fs::File,
+}
+impl ObservationByteReader<'_> {
+    pub(crate) fn indexed_span(
+        &self,
+        start: u64,
+        end: u64,
+        max_bytes: u32,
+    ) -> Result<Vec<u8>, ObservationReadError> {
+        let count = self.source.indexed_span_count(start, end, max_bytes)?;
+        Ok(Layout::read_bytes(&self.file, start, count)?)
+    }
 }
 struct FieldReader<'a> {
     connection: LayoutConnection<'a>,
@@ -340,6 +365,12 @@ fn append_field_path(parent: &str, component: &str) -> Result<String, &'static s
     Ok(encoded)
 }
 impl SeekableObservationSource {
+    pub(crate) fn byte_reader(&self) -> Result<ObservationByteReader<'_>, ObservationReadError> {
+        Ok(ObservationByteReader {
+            source: self,
+            file: self.layout.byte_file()?,
+        })
+    }
     pub(crate) fn new<T: serde::Serialize + schemars::JsonSchema>(
         value: &T,
     ) -> Result<Self, &'static str> {
@@ -411,6 +442,15 @@ impl SeekableObservationSource {
         end: u64,
         max_bytes: u32,
     ) -> Result<Vec<u8>, ObservationReadError> {
+        let count = self.indexed_span_count(start, end, max_bytes)?;
+        Ok(self.layout.bytes(start, count)?)
+    }
+    fn indexed_span_count(
+        &self,
+        start: u64,
+        end: u64,
+        max_bytes: u32,
+    ) -> Result<usize, ObservationReadError> {
         if max_bytes == 0
             || max_bytes > 65_536
             || start > end
@@ -421,9 +461,8 @@ impl SeekableObservationSource {
                 "invalid native indexed span",
             ));
         }
-        let count = usize::try_from(end - start)
-            .map_err(|_| "native indexed span exceeds platform capacity")?;
-        Ok(self.layout.bytes(start, count)?)
+        usize::try_from(end - start)
+            .map_err(|_| "native indexed span exceeds platform capacity".into())
     }
 
     /// The default visitor requests every original finite preview.

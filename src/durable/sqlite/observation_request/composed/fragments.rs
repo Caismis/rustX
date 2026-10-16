@@ -2,9 +2,14 @@ use super::{
     Connection, ConversationStoreError, Fact, Fragment, Leaf, Template, bounded, index, params,
     storage, weights,
 };
-use crate::runtime::read_layout::{FieldPreview, FieldPreviewPolicy, SeekableObservationSource};
+use crate::runtime::read_layout::{
+    FieldPreview, FieldPreviewPolicy, ObservationByteReader, SeekableObservationSource,
+};
 use base64::Engine as _;
 const CHUNK: u64 = 8192;
+#[cfg(test)]
+#[path = "reader_tests.rs"]
+mod reader_tests;
 fn geometry(
     source: &SeekableObservationSource,
     path: &[String],
@@ -36,7 +41,7 @@ fn field_key(path: &[String]) -> Result<String, ConversationStoreError> {
     Ok(format!("F{}", super::super::field_path(path)?))
 }
 fn source_bytes(
-    source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
     start: u64,
     end: u64,
 ) -> Result<Vec<u8>, ConversationStoreError> {
@@ -44,17 +49,17 @@ fn source_bytes(
         .checked_sub(start)
         .filter(|count| *count <= 65536)
         .ok_or_else(|| storage("composed producer byte range exceeds bound"))?;
-    let chunk = source
-        .read(
-            &[],
+    let bytes = reader
+        .indexed_span(
             start,
+            end,
             u32::try_from(count.max(1)).map_err(|_| storage("producer range exceeds bound"))?,
         )
         .map_err(|error| storage(error.to_string()))?;
-    if chunk.bytes.len() as u64 != count {
+    if bytes.len() as u64 != count {
         return Err(storage("composed producer bytes incomplete"));
     }
-    Ok(chunk.bytes)
+    Ok(bytes)
 }
 fn persist_key_fact(
     connection: &Connection,
@@ -87,6 +92,7 @@ fn persist_key_fact(
 fn capture_facts(
     connection: &Connection,
     source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
     start: u64,
     end: u64,
 ) -> Result<(u64, u64), ConversationStoreError> {
@@ -107,10 +113,10 @@ fn capture_facts(
                 let header = crate::runtime_client::checkpoint::bounded_bytes(value, 16384)
                     .unwrap_or_else(|| b"null".to_vec());
                 let span = field_end - field_start;
-                let first = source_bytes(source, field_start, field_start + u64::from(span > 0))?;
+                let first = source_bytes(reader, field_start, field_start + u64::from(span > 0))?;
                 let nodes = if span <= 16384 {
                     super::super::original_node_count(&source_bytes(
-                        source,
+                        reader,
                         field_start,
                         field_end,
                     )?)?
@@ -137,7 +143,7 @@ fn capture_facts(
                     name: key_span
                         .filter(|(start, end)| end - start <= 256)
                         .map(|(start, end)| {
-                            source_bytes(source, start, end).and_then(|bytes| {
+                            source_bytes(reader, start, end).and_then(|bytes| {
                                 serde_json::from_slice(&bytes)
                                     .map_err(|_| storage("original field key unavailable"))
                             })
@@ -181,11 +187,12 @@ fn capture_facts(
 fn persist_part(
     connection: &Connection,
     source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
     start: u64,
     end: u64,
 ) -> Result<Fragment, ConversationStoreError> {
     connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID; DELETE FROM request_source_fact_spool;").map_err(|error|storage(error.to_string()))?;
-    let (max_path, max_key_path) = capture_facts(connection, source, start, end)?;
+    let (max_path, max_key_path) = capture_facts(connection, source, reader, start, end)?;
     let mut builder = index::Builder::new(connection);
     let mut statement = connection
         .prepare("SELECT key,value FROM request_source_fact_spool ORDER BY key")
@@ -213,7 +220,7 @@ fn persist_part(
         let through = (offset + CHUNK).min(end);
         builder.push(
             chunk_key(offset - start),
-            source_bytes(source, offset, through)?,
+            source_bytes(reader, offset, through)?,
         )?;
         offset = through;
     }
@@ -258,7 +265,14 @@ pub(super) fn scalar(
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?
         .readable_end;
-    Ok((persist_part(connection, source, 0, length)?, start, end))
+    let reader = source
+        .byte_reader()
+        .map_err(|error| storage(error.to_string()))?;
+    Ok((
+        persist_part(connection, source, &reader, 0, length)?,
+        start,
+        end,
+    ))
 }
 fn header_parts(value: &serde_json::Value) -> Result<(String, String), ConversationStoreError> {
     let bytes = bounded(value, 16384)?;
@@ -330,6 +344,31 @@ fn display(
         None => super::super::bounded_message_descriptor(view, view.blocks.len(), false),
     }
 }
+fn template_node_count(
+    reader: &ObservationByteReader<'_>,
+    total: u64,
+) -> Result<u64, ConversationStoreError> {
+    if total <= 16384 {
+        super::super::original_node_count(&source_bytes(reader, 0, total)?)
+    } else {
+        Ok(33)
+    }
+}
+fn capture_suffix(
+    connection: &Connection,
+    value: &serde_json::Value,
+) -> Result<Fragment, ConversationStoreError> {
+    let source = SeekableObservationSource::new(value).map_err(storage)?;
+    let (_, end, _) = geometry(&source, &["provenance_source".into()])?;
+    let total = source
+        .read(&[], 0, 1)
+        .map_err(|error| storage(error.to_string()))?
+        .readable_end;
+    let reader = source
+        .byte_reader()
+        .map_err(|error| storage(error.to_string()))?;
+    persist_part(connection, &source, &reader, end, total)
+}
 pub(super) fn capture(
     connection: &Connection,
     scope: &crate::runtime::identity::ConversationId,
@@ -353,8 +392,11 @@ pub(super) fn capture(
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?
         .readable_end;
-    let prefix = persist_part(connection, &source, 0, hole_start)?;
-    let suffix = persist_part(connection, &source, hole_end, total)?;
+    let reader = source
+        .byte_reader()
+        .map_err(|error| storage(error.to_string()))?;
+    let prefix = persist_part(connection, &source, &reader, 0, hole_start)?;
+    let suffix = persist_part(connection, &source, &reader, hole_end, total)?;
     let (header_prefix, header_suffix) = header_parts(&minimum)?;
     let template = Template {
         prefix,
@@ -363,11 +405,7 @@ pub(super) fn capture(
         header_suffix,
         provenance_bytes,
         children: minimum.as_object().map_or(0, serde_json::Map::len) as u64,
-        nodes: if total <= 16384 {
-            super::super::original_node_count(&source_bytes(&source, 0, total)?)?
-        } else {
-            33
-        },
+        nodes: template_node_count(&reader, total)?,
     };
     view.provenance_source = Some(super::super::provenance_source(
         u64::MAX,
@@ -409,13 +447,7 @@ pub(super) fn capture(
             continue;
         }
         let suffix = if header.is_some() {
-            let source = SeekableObservationSource::new(&value).map_err(storage)?;
-            let (_, end, _) = geometry(&source, &["provenance_source".into()])?;
-            let total = source
-                .read(&[], 0, 1)
-                .map_err(|error| storage(error.to_string()))?
-                .readable_end;
-            persist_part(connection, &source, end, total)?
+            capture_suffix(connection, &value)?
         } else {
             templates[0].suffix.clone()
         };
@@ -525,5 +557,8 @@ pub(super) fn whole(
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?
         .readable_end;
-    persist_part(connection, source, 0, length)
+    let reader = source
+        .byte_reader()
+        .map_err(|error| storage(error.to_string()))?;
+    persist_part(connection, source, &reader, 0, length)
 }

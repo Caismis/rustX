@@ -271,6 +271,22 @@ fn t10_t14_t19_composed_source_schema_requires_exact_bounds_keys_and_original_wi
     let connection = store.lock().unwrap();
     for (name, columns) in [
         ("request_source_pages", "hash BLOB,bytes BLOB"),
+        (
+            "request_source_pages",
+            "hash BLOB PRIMARY KEY CHECK(typeof(hash)='blob' AND length(hash)=32),bytes BLOB NOT NULL CHECK(typeof(bytes)='blob' AND length(bytes)<=65536)",
+        ),
+        (
+            "request_source_pages",
+            "hash BLOB NOT NULL CHECK(typeof(hash)='blob' AND length(hash)=32),bytes BLOB NOT NULL CHECK(typeof(bytes)='blob' AND length(bytes)<=65536)",
+        ),
+        (
+            "request_source_pages",
+            "hash BLOB NOT NULL PRIMARY KEY CHECK(length(hash)=32),bytes BLOB NOT NULL CHECK(typeof(bytes)='blob' AND length(bytes)<=65536)",
+        ),
+        (
+            "request_source_pages",
+            "hash BLOB NOT NULL PRIMARY KEY CHECK(typeof(hash)='blob' AND length(hash)=32),bytes BLOB NOT NULL CHECK(typeof(bytes)='blob' AND length(bytes)<=65537)",
+        ),
         ("request_source_nodes", "native_id INTEGER,metadata BLOB"),
         (
             "request_source_roots",

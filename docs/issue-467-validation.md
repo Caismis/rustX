@@ -34,7 +34,203 @@ The external macOS targets were not reached and a new platform run is required.
 and environment qualification. PR #478 remains open for independent review and
 must not be merged by this task.
 
-### Current review corrections (local validation complete)
+### Published-head CI and local resource investigation
+
+At published HEAD `831c4010fc7c0c1a8b2f3bb0780b45eb0eb3cc52`,
+[CI run 38858905282](https://github.com/Caismis/rustX/actions/runs/38858905282)
+completed with passing Linux and macOS boundary suites, formatting/lint,
+generated protocol, TUI, and macOS desktop checks. The separate Workspace Host
+run passed on both platforms. **This head is not green:** Linux deterministic
+contracts exhausted the existing 25-minute job budget, and Full Web conformance
+reported 314 passes and three failures. No timeout or workload was increased.
+
+Both reading fixtures reached 246 of the required 300 Attempts before the
+unchanged 240-second setup deadline. Their applied cursors continued advancing;
+the diagnostics did not report a source fault or replay gap. The third failure,
+`convergence.spec.ts`'s Workspace-ready assertion, occurred after three successful
+Tool results and continuous event cursors 1–44. The fourth model turn began only
+about 153 ms before the assertion deadline. The trace contains no final assistant
+output before teardown. These observations establish insufficient progress within
+the guards, but do not identify every internal cost from CI alone.
+
+The following changes and measurements were completed under a local-only hold.
+On 2026-10-16 the user approved committing and pushing this validated batch to
+the existing PR, without merging it. That approval does not establish new-head
+CI success or resolve the measured memory and intermittent-latency limitations. The fixed
+instrumented baseline binary has SHA-256
+`e8c30e0702e3220a302e68e45c6687b8554715f20cd589c01e5fa18587904e39`.
+Serial 100/300/1,000-Attempt measurements retain real App Server execution,
+checkpoint/subscription, exact history reads, and fork preparation. They separately
+record adapter preparation, Source construction, provider parsing, and client fold
+cost. Resource measurements include per-process CPU and residency, cumulative
+process I/O, retained SQLite table/index space, and sampled temporary-file space.
+Process `write_bytes` is not final database size or SSD write amplification;
+RSS/PSS is not live heap allocation; milestone temporary-file samples do not prove
+an exact peak. The observed database journal mode is DELETE, not WAL.
+
+The initial short resource runs omitted the Python provider descendant because
+it was spawned from a launcher worker thread. Their native/storage data is retained
+with that qualification; separately labeled corrected runs enumerate all launcher
+threads. No incomplete provider measurement is treated as a complete total.
+These measurements and local changes do not supersede failed published-head CI.
+
+### Local scoped-reader measurement (review212)
+
+The temporary immutable Source now lends one synchronous byte reader to a capture.
+It retains its original geometry, preview, field, and span validation. The borrow
+pins the scratch directory and the scoped File closes before capture returns;
+it adds no task, authorization cache, or persistent content owner.
+Three new regressions prove exact original bytes/field previews, the same actual
+read work, errors before range I/O, physical read failure, and final scratch release.
+Scalar capture uses three index opens and four byte-file opens instead of a count
+proportional to fields and chunks. All 17 read-layout tests and three composed
+Source-module tests passed; these targeted results do not replace full validation.
+
+A fixed after binary (`31a782a1bc836439ea419fc47a96fb6c8b3974d1302dd1c67b6267502534ea24`)
+ran the same serial workloads as the fixed baseline above. Each run retained exact
+provider-request/settlement counts, bounded eight-entry heads, exact history/fork
+assertions, and physically joined native/provider cleanup.
+
+| Attempts | Total wall seconds, before → after | Native user+system CPU seconds | Median turn ms |
+| --- | --- | --- | --- |
+| 100 | 62.88 → 64.64 | 63.43 → 49.99 | 529.84 → 399.96 |
+| 300 | 172.23 → 158.90 | 192.75 → 154.41 | 538.55 → 411.59 |
+| 1,000 | 599.37 → 476.56 | 681.51 → 545.38 | 569.15 → 438.80 |
+
+All outliers remain in these totals. In particular, the after-100 run includes a
+22.34-second turn and does **not** demonstrate better total wall time. Most of that
+interval precedes the first received adapter-preflight record. Current telemetry
+cannot identify the physically blocked owner or exclude delayed telemetry delivery;
+this is not established infrastructure failure. Source duration on that turn was
+117 ms, not 22 seconds. No retries or new recovery operations were introduced.
+
+At 1,000 turns, native RSS was 329.38 → 323.90 MiB and final databases were
+348.45 → 348.41 MiB. Native logical read accounting (`rchar`) fell from 44.959 to
+29.486 GB, whereas task write accounting stayed essentially flat at 7.855 →
+7.851 GB. These are process counters, not measured SSD traffic. Source tables,
+including their unused page space, retain the same physical layout in this step.
+The fake provider separately retains every full-history request; its memory and
+the Node harness's full shutdown-report decoding are test infrastructure, not
+bounded product observation state. Exact heap allocation and transient temp peaks
+were not measured.
+
+A separate offline experiment rebuilt only `request_source_pages` on disposable
+copies of the closed 100-turn database, then compacted both variants equally.
+All 7,260 page hashes and BLOBs matched exactly; integrity, foreign-key checks,
+unrelated schema and row counts passed. A rowid table with explicit hash NOT NULL
+and a unique hash index used 13,996,032 bytes versus 24,616,960 bytes for WITHOUT
+ROWID; seeded insertion used 14,041,088 bytes. Those totals include the new index.
+This is packing evidence only. At this offline-experiment stage, the additional
+B-tree lookup and application CPU, I/O, memory, and correctness remained untested;
+the subsequent real application measurements and targeted tests follow below.
+
+### Local Source page-layout validation (review215)
+
+Schema **66** retains hash-addressed Source identities and all existing payload,
+cut, and publication checks. Only the large page BLOB table changes physical
+layout: a rowid table plus a separate unique 32-byte hash index. Explicit NOT NULL
+preserves the prior WITHOUT ROWID primary-key constraint. Old schema 65 is refused
+without conversion. App Server 50 and Runtime Client 71 are unchanged.
+
+All **349 SQLite tests** and **27 durable-content boundary tests** passed on the
+combined change. New tests verify effective constraints, the exact 64KiB boundary,
+hash deduplication, unchanged native epoch on optional page writes, and refusal
+of both old DDL and old schema versions. The real range test verifies a unique
+hash index search without scanning. Existing exact-byte, cold-reopen, corruption,
+optional/outer-transaction rollback, and native manifest tests remain intact.
+
+The fixed combined binary has SHA-256
+`b0bac729901de14ea54ec0f7a21bc99b766387f8b5643fdc98ccdb092a964acb`.
+All three application runs passed exact request/settlement and physical-cleanup
+checks. These are local debug-build measurements with scripted providers, not
+release-build throughput guarantees.
+
+| Attempts | Wall seconds: initial → scoped reader → combined | Native CPU seconds: initial → combined | Final database MiB: initial → combined | Combined Source tables and indexes MiB |
+| --- | --- | --- | --- | --- |
+| 100 | 62.88 → 64.64 → 86.36 | 63.43 → 50.50 | 36.87 → 26.10 | 25.81 → 15.11 |
+| 300 | 172.23 → 158.90 → 160.91 | 192.75 → 154.37 | 106.19 → 74.66 | 75.59 → 44.07 |
+| 1,000 | 599.37 → 476.56 → 471.85 | 681.51 → 540.60 | 348.45 → 244.25 | 249.08 → 144.92 |
+
+The rowid step itself shows storage/I/O savings with essentially unchanged CPU,
+RSS and median turn duration relative to the scoped reader; the 100-turn wall
+result is worse and remains reported. At 1,000 turns the new hash index occupies
+2.984 MiB, included in the combined totals. Source payload rises from 115.64 to
+118.10 MiB because the index stores hash keys, while unused Source page space
+falls from 132.53 to 25.56 MiB. No history, audit, Source or canonical content is
+truncated or removed to obtain the reduction.
+
+Initial → combined native counters at 1,000 turns: `rchar` 44.959 → 20.037 GB,
+`write_bytes` 7.855 → 6.824 GB, RSS 329.38 → 327.29 MiB. The I/O and residency
+qualifications above still apply. The repeated adapter-preparation proposal is
+not implemented: its small measured CPU cost did not justify retaining the
+provider payload across native commit and logical retries. Metadata deduplication
+and wider layout redesigns are also deferred; neither is needed for these two
+measured owner-local changes.
+
+Full final validation follows these targeted results. The first strict Clippy
+attempt (review216) rejected a new test's unseparated numeric literal; only the
+literal spelling was corrected, with no value or production-code change. The
+review217 rerun then identified function-length, iterator-counter, import-order
+and semicolon lints. Small helper extraction and lazy iterator instrumentation
+resolved those without changing capture or serialization semantics. Review218
+`cargo clippy --all-targets --all-features -- -D warnings` passed (75.50s).
+Review218 `cargo test --all-targets --all-features` passed in 3331.75s:
+4,831 passed, zero failed, nine ignored across 20 targets (library: 4,150 passed,
+four ignored). `cargo run --all-features --example check_test_lanes` passed.
+The original `definitions::skill_version_identity_is_frozen_across_the_boundary`
+test passed both inside the full Subagent target and individually with `--exact`.
+`cargo build --bins`, App Server protocol generation/drift and typecheck,
+`cargo fmt --all -- --check`, and `git diff --check` also passed. Both affected
+reading tests passed independently through `web-console/scripts/browser-tests.sh`
+with their exact title selectors and unchanged 300-Attempt fixtures (runner totals
+2.7m and 2.6m). `pnpm --dir web-console test:e2e` then passed all 317 tests
+with zero failures/skips in 21.8m, including both reading cases and the previously
+failed convergence scenario. Published-head CI remains failed and cannot validate
+this subsequently approved source. No commit, push, public PR update or merge was
+performed during the local-only validation phase; publication was authorized only
+after these results were reviewed.
+
+### Final local command ledger (review214/218)
+
+All commands ran serially. Native tests used `CARGO_INCREMENTAL=0`,
+`CARGO_BUILD_JOBS=4`, `RUST_TEST_THREADS=1`, and the required local Provider Emulator.
+No live Model API was called. The final fetch still resolves `origin/main` to
+`8cb41624eb2dc2ca87e4409961f42553ceb029cf`, already an ancestor of local HEAD
+`831c4010fc7c0c1a8b2f3bb0780b45eb0eb3cc52`; the validated changes were uncommitted at that checkpoint. The subsequent
+publication commit contains this ledger and the same tested source.
+
+| Exact command | Result |
+| --- | --- |
+| `cargo clippy --all-targets --all-features -- -D warnings` | PASS; earlier review216/217 lint failures corrected without suppression |
+| `cargo test --all-targets --all-features` | PASS, 4,831 passed / 0 failed / 9 existing ignores |
+| `cargo run --all-features --example check_test_lanes` | PASS |
+| `cargo test --test subagent --all-features definitions::skill_version_identity_is_frozen_across_the_boundary -- --exact` | PASS, 1 test; full Subagent target also 47/47 |
+| `cargo build --bins` | PASS |
+| `cargo fmt --all -- --check` | PASS |
+| `git diff --check` | PASS |
+| `pnpm --dir protocol/app-server check` | PASS; generated files unchanged |
+| `pnpm --dir protocol/app-server typecheck` | PASS |
+| `pnpm --dir dev typecheck` / `pnpm --dir dev test` | PASS; 41 tests |
+| `pnpm --dir tui typecheck` / `pnpm --dir tui test` | PASS; 1,163 passed / 1 existing skip |
+| `pnpm --dir web-console typecheck` | PASS |
+| `pnpm --dir web-console test` | PASS; 2,828 passed / 4 existing skips |
+| `pnpm --dir web-console build` | PASS; repeated by final E2E command |
+| `pnpm --dir web-console check:i18n` | PASS |
+| `pnpm --dir web-console check:provenance` | PASS |
+| `uv run --frozen pytest` in `test-support/fake-provider` | PASS, 55 tests |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'native distant reading rail, detached/latest follow and measured width in both locales'` | PASS, 1 test |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'Fork source exact Message landing and cancellation by scrolling, newer navigation and attachment replacement'` | PASS, 1 test |
+| `pnpm --dir web-console test:e2e` | PASS, 317 tests / 0 failures / 0 skips |
+
+There is no separate Web lint script in the maintained package scripts. Local
+macOS checks were not run on Linux. The published-head macOS boundary/Host jobs
+passed, but the new local SQLite layout still requires final-head platform CI.
+The published Linux deterministic job's budget cancellation and Web failure remain
+unresolved remote checks until the approved publication receives a new run; neither is
+classified as an external infrastructure failure. Local passing tests do not
+replace the controlled race evidence or guarantee latency on the CI runner.
+
+### Current review corrections (previous local validation complete)
 
 The current correction starts at `b0928347`. Current-attempt cancellation now
 selects and cancels under the native coordinator mutex shared with admission and
@@ -57,8 +253,9 @@ unavailability, and an actually blocked physical read plus held preparation lock
 Compaction proves actual optional-source failure, valid consecutive compactions
 with a held first receipt, and a lost JSONL response over a Tokio duplex connection.
 The latter is not an OS-pipe test. Model-call and native terminal counts remain exact.
-The unchanged reading fixtures and complete local validation now pass as recorded
-below. Remote results are recorded in [PR #478 checks](https://github.com/Caismis/rustX/pull/478/checks)
+The unchanged reading fixtures and complete local validation passed in the
+historical review201/202 runs recorded below. Review218 independently passed the
+current local source as recorded above; it does not establish remote CI success. Remote results are recorded in [PR #478 checks](https://github.com/Caismis/rustX/pull/478/checks)
 for the exact pushed commit; historical results are not proof for the repaired source.
 
 The current incremental Request Source shares augmentation on the native
@@ -192,12 +389,12 @@ by original registration/activation. Real Child Unix recovery preserves activati
 and never falls back to a second Parent projection or semantic replay.
 
 Current independent versions: App Server **50**, WebSocket **rustx.app-server.v50**,
-Runtime Client **71**, SQLite **65**, Runtime Event **1**, Subagent Control **33**,
+Runtime Client **71**, SQLite **66**, Runtime Event **1**, Subagent Control **33**,
 private Product Host **4**, Session catalog **16**. Generated contracts agree.
 
 ### Bounded work and source identity
 
-Schema 65 replaces the prior per-Request copied segments and shape packs with
+Schema 65 introduced (and schema 66 retains) the replacement of prior per-Request copied segments and shape packs with
 one native persistent selected-input tree and optional Source augmentation on
 those same nodes. Request metadata binds the exact root; full historical input is
 materialized only by explicit consumers. Publication and terminal checks use a

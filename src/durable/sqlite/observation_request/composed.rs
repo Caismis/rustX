@@ -10,8 +10,12 @@ mod index;
 #[cfg(test)]
 mod measurement;
 mod nodes;
+#[cfg(feature = "issue-387-profile")]
+mod profile;
 mod read;
 mod schema;
+#[cfg(test)]
+mod schema_tests;
 mod weights;
 #[cfg(test)]
 mod width_tests;
@@ -170,10 +174,14 @@ pub(super) fn index_selection(
     snapshot: &crate::model::RequestSnapshot,
     selection: &manifest::Selection,
 ) -> Result<(), ConversationStoreError> {
+    #[cfg(feature = "issue-387-profile")]
+    let mut profile = profile::Request::new(sequence, selection.root.map_or(0, |root| root.count));
     #[cfg(test)]
     let _measurement =
         measurement::Measurement::new(crate::agent::execution::attribution::SourceScope::Request);
     let source_hash = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = profile::Timer::new(profile::Phase::Capture);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceCapture,
@@ -181,6 +189,8 @@ pub(super) fn index_selection(
         nodes::capture(connection, sequence, scope, input, snapshot, selection)?
     };
     let (scalar, messages_start, messages_end) = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = profile::Timer::new(profile::Phase::Scalar);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceScalar,
@@ -194,6 +204,8 @@ pub(super) fn index_selection(
         fragments::scalar(connection, &source)?
     };
     {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = profile::Timer::new(profile::Phase::Paths);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourcePaths,
@@ -203,6 +215,8 @@ pub(super) fn index_selection(
         }
     }
     let messages_length = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = profile::Timer::new(profile::Phase::Length);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceLength,
@@ -249,6 +263,8 @@ pub(super) fn index_selection(
     // A separate original-R scalar seat prevents rehashing a corrupt optional
     // root from being accepted as the original capture on subsequent reads.
     connection.execute("INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json,shape_witness) VALUES(?1,'[]',NULL,NULL,0,?2,0,'inline',x'6e756c6c',?3)",params![sequence.to_string(),length,witness.as_slice()]).map_err(|error|storage(error.to_string()))?;
+    #[cfg(feature = "issue-387-profile")]
+    profile.layout_completed();
     Ok(())
 }
 type RootRow = (

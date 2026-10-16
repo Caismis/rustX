@@ -6,6 +6,10 @@ pub(super) fn stored_hash(
     connection: &Connection,
     native: &manifest::NodeRef,
 ) -> Result<index::Hash, ConversationStoreError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = super::profile::Timer::new(super::profile::Phase::Authenticate);
+    #[cfg(feature = "issue-387-profile")]
+    super::profile::auth_call();
     #[cfg(test)]
     let _measurement = super::measurement::Measurement::new(
         crate::agent::execution::attribution::SourceScope::Authenticate,
@@ -16,6 +20,8 @@ pub(super) fn stored_hash(
         .try_into()
         .map_err(|_| storage("selected Source hash unavailable"))?;
     let origin = origin.ok_or_else(|| storage("original Source node seat unavailable"))?;
+    #[cfg(feature = "issue-387-profile")]
+    super::profile::origin_root_load();
     let root = super::load_root(connection, &origin)?;
     let mut at = root
         .native
@@ -24,14 +30,22 @@ pub(super) fn stored_hash(
         .source_hash
         .ok_or_else(|| storage("original Source root hash unavailable"))?;
     let mut first = 0;
-    for _ in 0..manifest::MAX_HEIGHT {
+    for depth in 0..manifest::MAX_HEIGHT {
         if at == *native {
             if expected != digest {
                 return Err(storage("original Source node capture differs"));
             }
+            #[cfg(feature = "issue-387-profile")]
+            super::profile::proof_visit(connection, at, expected, &root, true);
             return Ok(expected);
         }
+        #[cfg(feature = "issue-387-profile")]
+        super::profile::path_hop(depth + 1);
+        #[cfg(not(feature = "issue-387-profile"))]
+        let _ = depth;
         let node = load(connection, at, expected)?;
+        #[cfg(feature = "issue-387-profile")]
+        super::profile::proof_visit(connection, at, expected, &root, false);
         match node.content {
             Content::Branch {
                 left,
@@ -58,6 +72,8 @@ pub(super) fn load(
     native: manifest::NodeRef,
     expected: index::Hash,
 ) -> Result<Augmentation, ConversationStoreError> {
+    #[cfg(feature = "issue-387-profile")]
+    super::profile::source_node_load();
     #[cfg(test)]
     super::WORK.with(|work| {
         let mut value = work.get();

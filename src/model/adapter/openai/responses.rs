@@ -73,6 +73,9 @@ impl ModelAdapter for OpenAiResponsesAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile =
+            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_stream_of_failure(error),
@@ -87,7 +90,7 @@ impl ModelAdapter for OpenAiResponsesAdapter {
         Box::pin(futures_util::stream::unfold(
             ResponsesPhase::Preparing {
                 client,
-                request: translated,
+                request: crate::model::adapter::provider_request(translated),
                 normalizer,
                 cancellation,
             },
@@ -274,13 +277,13 @@ fn cancelled_error() -> ModelError {
 enum ResponsesPhase {
     Preparing {
         client: Client<OpenAIConfig>,
-        request: serde_json::Value,
+        request: crate::model::adapter::ProviderRequest,
         normalizer: ResponsesNormalizer,
         cancellation: CancellationSignal,
     },
     Opening {
         client: Client<OpenAIConfig>,
-        request: serde_json::Value,
+        request: crate::model::adapter::ProviderRequest,
         normalizer: ResponsesNormalizer,
         cancellation: CancellationSignal,
     },
@@ -1269,6 +1272,9 @@ pub(crate) fn translate_request(
     tools: &ValidatedTools,
     storage_mode: ResponsesStorageMode,
 ) -> Result<serde_json::Value, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
     let continuation_variant = match &request.continuation {
         Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(variant)) => {
             Some(variant)
@@ -1297,12 +1303,18 @@ pub(crate) fn translate_request(
     // Every runtime-owned structural field is written first; no reasoning
     // field is ever synthesized here, so the selected Model Profile's
     // configured parameters are exactly what reaches the wire.
-    let mut request_value = serde_json::json!({
+    let mut request_value = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = crate::model::adapter::profile::phase(
+            crate::model::adapter::profile::Phase::TypedToValue,
+        );
+        serde_json::json!({
         "model": request.model(),
         "input": input_items,
         "stream": true,
         "store": storage_mode == ResponsesStorageMode::Stored,
-    });
+        })
+    };
     if storage_mode == ResponsesStorageMode::Stateless {
         // Opaque encrypted reasoning must be requested for stateless replay.
         request_value["include"] = serde_json::json!(["reasoning.encrypted_content"]);
@@ -1344,6 +1356,9 @@ pub(crate) fn translate_request(
     }
     crate::model::adapter::correlation::encode(&mut request_value, ModelProtocol::OpenAiResponses)
         .map_err(invalid_request)?;
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
     finalize_provider_request(
         request_value,
         request.request_params(),
@@ -1361,6 +1376,10 @@ fn translate_inputs(
     request: &ModelRequest,
     continuation_variant: Option<&OpenAiResponsesContinuation>,
 ) -> Result<TranslatedInputs, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::TranslateMessages,
+    );
     let mut input_items: Vec<serde_json::Value> = Vec::new();
     let instructions: Vec<String> = if request.effective_system_prompt.is_empty() {
         Vec::new()
@@ -1383,6 +1402,8 @@ fn translate_inputs(
                 .continuation_boundary()
                 .map_err(|error| invalid_request(&error))?
                 .ok_or_else(|| invalid_request("stateless continuation lacks accepted output"))?;
+            #[cfg(feature = "issue-387-profile")]
+            crate::model::adapter::profile::item(boundary);
             let ModelMessageView::Assistant(assistant) = request.messages[boundary].view() else {
                 return Err(invalid_request(
                     "native continuation boundary is not Assistant output",
@@ -1401,7 +1422,19 @@ fn translate_inputs(
             tail_after_boundary(request)?
         }
     };
-    for block in &blocks {
+    #[cfg(feature = "issue-387-profile")]
+    let profiled_blocks =
+        (request.messages.len() - blocks.len()..)
+            .zip(&blocks)
+            .map(|(index, block)| {
+                crate::model::adapter::profile::item(index);
+                block
+            });
+    #[cfg(feature = "issue-387-profile")]
+    let blocks = profiled_blocks;
+    #[cfg(not(feature = "issue-387-profile"))]
+    let blocks = &blocks;
+    for block in blocks {
         match block.view() {
             ModelMessageView::User(user) => {
                 input_items.push(translate_user_input(user, &request.images)?);
@@ -1490,6 +1523,8 @@ fn translate_assistant_inputs(
     let mut message_content = Vec::new();
     let mut tool_calls = Vec::new();
     for content in assistant {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::block();
         match content {
             AssistantContentBlock::Text(text) => {
                 message_content.push(serde_json::json!({
@@ -1885,10 +1920,21 @@ fn native_correlations_preserved<'a>(
         return false;
     }
     let mut ordinal = 0;
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::NativeCorrelation,
+    );
+    #[cfg(feature = "issue-387-profile")]
+    let messages = messages.into_iter().enumerate().map(|(index, message)| {
+        crate::model::adapter::profile::item(index);
+        message
+    });
     for message in messages {
         if let ModelMessageView::Assistant(content) = message.view() {
             let native=content.iter().any(|block|matches!(block,AssistantContentBlock::Reasoning(reasoning) if matches!(reasoning.provider_state,Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {..})))));
             for block in content {
+                #[cfg(feature = "issue-387-profile")]
+                crate::model::adapter::profile::block();
                 if matches!(block, AssistantContentBlock::ToolCall(_)) {
                     if native && labels.get(ordinal) != wire_calls.get(ordinal) {
                         return false;

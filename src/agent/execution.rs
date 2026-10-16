@@ -714,6 +714,8 @@ struct ModelInvocation {
 /// together so publication can never be attributed to a different actual
 /// request generation.
 struct StartedModelTurn {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     request_start_ms: Option<u64>,
     request: ModelRequest,
     message_id: MessageId,
@@ -737,6 +739,8 @@ struct RequestObservationIdentity {
 /// cancellation-vs-start arbitration in [`AgentExecution::start_model_turn`],
 /// and is discarded without a trace when cancellation wins there.
 struct PreparedModelTurn {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     /// The validated, not-yet-committed request-scoped context commits, in
     /// canonical append order.
     context: Vec<PreparedCanonicalCommit>,
@@ -763,6 +767,8 @@ struct PreparedModelTurn {
 /// Working set of the existing execution owner; never an execution state machine.
 #[derive(Clone)]
 struct FrozenLogicalInput {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     snapshot: RequestSnapshot,
     request: ModelRequest,
     anchor: ObservedAnchor,
@@ -801,6 +807,8 @@ struct PendingPostToolBatch {
 /// Effective System Prompt, projection, snapshot metadata, and request — all
 /// transient, nothing committed.
 struct StagedModelTurn {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     /// The staged projection (over the scratch conversation that includes
     /// the not-yet-committed request-scoped context).
     projection: ContextProjection,
@@ -2902,6 +2910,11 @@ impl<'a> AgentExecution<'a> {
             .engine
             .estimate_frozen_request(&request);
         Ok(StagedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: crate::model::adapter::profile::InputLayout {
+                selected_history_count: history.messages.len(),
+                request_only_at: inserted_at,
+            },
             input_manifest,
             retire_continuation,
             projection,
@@ -2935,6 +2948,11 @@ impl<'a> AgentExecution<'a> {
         // The single mandatory adapter-owned semantic admission boundary follows
         // all compaction/carryover/media transformations, before freeze and start.
         // Ordinary retries bypass finalization and reuse this validated input.
+        #[cfg(feature = "issue-387-profile")]
+        let adapter_preflight_profile = crate::model::adapter::profile::NativeScope::new(
+            staged.snapshot.request_id.as_str(),
+            staged.adapter_input_profile,
+        );
         crate::model::adapter::validation::validate_prepared_request(&staged.request).map_err(
             |error| Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -2944,6 +2962,8 @@ impl<'a> AgentExecution<'a> {
                 },
             },
         )?;
+        #[cfg(feature = "issue-387-profile")]
+        drop(adapter_preflight_profile);
         let associations = std::mem::take(&mut staged.snapshot.tool_associations);
         staged
             .snapshot
@@ -2988,6 +3008,8 @@ impl<'a> AgentExecution<'a> {
         });
         let request = staged.request;
         Ok(PreparedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: staged.adapter_input_profile,
             context,
             snapshot: staged.snapshot,
             request,
@@ -3162,6 +3184,8 @@ impl<'a> AgentExecution<'a> {
             });
         }
         self.current_input = Some(Box::new(FrozenLogicalInput {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: prepared.adapter_input_profile,
             snapshot: prepared.snapshot.clone(),
             request: prepared.request.clone(),
             anchor: prepared.anchor.clone(),
@@ -3169,6 +3193,8 @@ impl<'a> AgentExecution<'a> {
             estimated_input: prepared.estimated_input,
         }));
         Ok(StartedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: prepared.adapter_input_profile,
             // A replay's old timestamp must never be paired with a new clock read.
             request_start_ms: (start_commit.disposition
                 == ModelTurnStartCommitDisposition::NewlyCommitted)
@@ -3745,6 +3771,8 @@ impl<'a> AgentExecution<'a> {
         started: StartedModelTurn,
     ) -> Result<ModelInvocation, Terminal> {
         let StartedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile,
             request_start_ms,
             request,
             message_id,
@@ -3773,12 +3801,22 @@ impl<'a> AgentExecution<'a> {
         // at the same dispatch frontier, so a retry can never inherit the
         // accounting or the repetition window of the generation it replaces.
         let guard = GenerationGuard::new(self.generation_policy);
+        #[cfg(feature = "issue-387-profile")]
+        let adapter_dispatch_profile = crate::model::adapter::profile::NativeScope::new(
+            self.last_request_id
+                .as_ref()
+                .expect("native started request")
+                .as_str(),
+            adapter_input_profile,
+        );
         let stream = self
             .request
             .model
             .primary()
             .adapter()
             .stream(request, self.cancellation.model_cancellation());
+        #[cfg(feature = "issue-387-profile")]
+        drop(adapter_dispatch_profile);
         let mut assembler = ModelEventAssembler::new();
         let terminal = match self
             .consume_model_stream(&mut assembler, &message_id, stream, deadline, guard)
@@ -3825,6 +3863,8 @@ impl<'a> AgentExecution<'a> {
         // retains the original snapshot in the durable start authority.
         snapshot.request_context_ids.clear();
         let prepared = PreparedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: input.adapter_input_profile,
             context: Vec::new(),
             snapshot,
             request: input.request,
