@@ -1,20 +1,20 @@
-# Architecture explorer
+# 架构导览
 
-Open [`index.html`](index.html) directly in a browser. This single file works via `file://`, can be copied elsewhere, and includes all styles, scripts, content, and source excerpts. Viewing requires no server, build tools, network connection, account, or API. JavaScript must be enabled. Optional GitHub links need a network connection.
+在浏览器中直接打开 [`index.html`](index.html)。这是一个单文件页面，可通过 `file://` 打开，也可复制到其他位置；其中包含全部样式、脚本、内容和源码摘录。无需服务器、构建工具、网络连接、账号或 API 即可浏览。需要启用 JavaScript。可选的 GitHub 链接需要网络连接。
 
-The explorer is an educational simulation of the `main` baseline at **`8cb41624eb2dc2ca87e4409961f42553ceb029cf`**. It does not execute requests, inspect local configuration, or track the current checkout. Responsibility groups describe module ownership; they are not a deployment or process diagram.
+本架构导览是对 `main` 基线 **`8cb41624eb2dc2ca87e4409961f42553ceb029cf`** 的教学模拟。它不会执行请求、检查本地配置，也不会跟踪当前工作区。职责分组描述模块所有权，不代表部署图或进程图。
 
-Use the architecture map to inspect ownership and distinguish runtime calls, data flow, and code dependencies. The request walkthrough follows one representative path. The four boundary scenarios offer selected outcomes, with durable facts and client visibility shown at each step. Deep dives explain additional ownership boundaries. These curated paths explain the cited implementation; they do not enumerate every runtime branch. Source disclosures remain available offline in each mode.
+使用架构地图检查所有权，并区分运行时调用、数据流和代码依赖。请求讲解会追踪一条典型路径。四个边界场景展示所选结果，并在每一步说明持久化事实和客户端可见内容。深入专题进一步说明所有权边界。这些精选路径用于解释所引用的实现，不会列出所有运行时分支。每种模式都可离线查看源码摘录。
 
-Rebuild from the repository root with Node.js and Git:
+在仓库根目录中使用 Node.js 和 Git 重新构建：
 
 ```bash
 node docs/architecture-explorer/build.mjs
 node docs/architecture-explorer/build.mjs --check
 ```
 
-No package installation is needed. The baseline commit must be available in the local Git object database. `build.mjs` reads `content.json`, extracts source lines from that exact commit with `git show`, and embeds them alongside `styles.css` and `app.js` in `index.template.html`. It never substitutes `HEAD` for the baseline. Generated links also point to that exact commit.
+无需安装软件包。本地 Git 对象数据库中必须包含基线提交。`build.mjs` 会读取 `content.json`，通过 `git show` 从该精确提交提取源码行，并将其与 `styles.css`、`app.js` 一起嵌入 `index.template.html`。构建过程不会用 `HEAD` 替代基线。生成的链接也会指向该精确提交。
 
-`--check` validates the content and compares the expected output with the committed `index.html` without writing files. The build rejects invalid IDs and references, unknown relationship kinds, unsafe source paths, invalid line bounds, and excerpts longer than 80 lines. Output is deterministic and includes no timestamps or environment-specific paths. JSON is escaped for safe embedding in an inline script element.
+`--check` 会验证内容，并比较预期输出与已提交的 `index.html`，但不会写入文件。构建会拒绝无效 ID 和引用、未知关系类型、不安全的源码路径、无效行号范围，以及超过 80 行的摘录。输出具有确定性，不包含时间戳或环境专属路径。JSON 会经过转义，以便安全嵌入行内 script 元素。
 
-Edit `content.json` for explanations and evidence, `app.js` for interaction, `styles.css` for presentation, and `index.template.html` for the document shell. Rebuild and commit the generated `index.html` with its sources. To intentionally change the documented baseline, update the explicit baseline in both `content.json` and `build.mjs`, review every explanation and source range against the new snapshot, and update this document.
+编辑 `content.json` 可修改说明和依据，编辑 `app.js` 可修改交互，编辑 `styles.css` 可修改呈现，编辑 `index.template.html` 可修改文档外壳。修改后重新构建，并将生成的 `index.html` 与源文件一起提交。如需主动更改文档基线，请同时更新 `content.json` 和 `build.mjs` 中明确指定的基线，依据新快照检查所有说明和源码范围，并更新本文档。
