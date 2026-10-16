@@ -19,11 +19,11 @@
   }).join('');
   const list = (items) => `<ul class="plain-list">${items.map((item) => `<li>${rich(item)}</li>`).join('')}</ul>`;
   const badge = (kind) => `<span class="relation-kind ${kind}">${rich({ call: '运行时调用', data: '数据流', dependency: '代码依赖' }[kind])}</span>`;
-  const graph = () => state.view === 'overview' ? { title: '架构总览', summary: '从模块进入内部图，再沿机制逐层查看实现。', nodes: data.nodes, relations: data.relations } : views.get(state.view);
+  const graph = () => state.view === 'overview' ? { title: '架构总览', summary: '先了解各模块如何协作，再进入内部，逐层查看实现。', nodes: data.nodes, relations: data.relations } : views.get(state.view);
   const targetOf = (node) => state.view === 'overview' ? data.architecture.entries[node.id] : node.target;
   const visibleRelations = () => state.view === 'overview' ? selectedRelations() : graph().relations.filter((relation) => state.relation === 'all' || relation.kind === state.relation);
   const selectedRelations = () => graph().relations.filter((relation) => (relation.from === state.node || relation.to === state.node) && (state.relation === 'all' || relation.kind === state.relation));
-  const sourceDetails = (ids) => `<section class="source-section" aria-label="source 依据"><h3>查看 {{source-code}} <span class="count">${ids.length}</span></h3><p class="source-help">{{source-code}} 摘录已打包，可离线查看。GitHub 链接会打开固定基线。</p>${ids.map((id) => {
+  const sourceDetails = (ids) => `<section class="source-section" aria-label="源码依据"><h3>查看 {{source-code}} <span class="count">${ids.length}</span></h3><p class="source-help">{{source-code}} 摘录已打包，可离线查看。GitHub 链接会打开固定基线。</p>${ids.map((id) => {
     const item = evidence.get(id);
     return `<details class="source" data-source="${escape(id)}"><summary><span>${rich(item.label)}</span><code>${escape(item.path)}:${item.start}–${item.end}</code></summary><div class="source-body"><div class="source-toolbar"><span>基线 ${escape(data.baseline.commit.slice(0, 8))}</span><a href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">在 GitHub 查看 ↗</a></div><pre tabindex="0" lang="en" aria-label="${escape(item.path)}，第 ${item.start} 至 ${item.end} 行"><code>${item.text.split('\n').map((line, index) => `<span class="source-line"><span class="line-number" aria-hidden="true">${item.start + index}</span><span>${escape(line) || ' '}</span></span>`).join('')}</code></pre></div></details>`;
   }).join('')}</section>`;
@@ -34,13 +34,18 @@
     const neighbors = new Set(compact ? [] : selectedRelations().flatMap((relation) => [relation.from, relation.to]));
     const markers = ['call', 'data', 'dependency'].map((kind) => `<marker id="arrow-${kind}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 8 4 L 0 8 z"/></marker>`).join('');
     return `<div class="architecture-map ${compact ? 'compact' : state.view !== 'overview' ? 'detail-graph' : ''}" data-map>${compact ? '' : `<svg class="map-lines" aria-hidden="true"><defs>${markers}</defs><g data-lines></g></svg>`}${groups.map((layer, index) => `<section class="map-layer"><h3><span>${String(index + 1).padStart(2, '0')}</span>${rich(layer)}</h3><div class="layer-nodes">${current.nodes.filter((node) => node.layer === layer).map((node) => {
-      return `<button type="button" data-node="${escape(node.id)}" class="map-node ${!compact && node.id === state.node ? 'selected' : ''} ${compact && active.includes(node.id) ? 'active' : ''} ${!compact && neighbors.has(node.id) && node.id !== state.node ? 'neighbor' : ''} ${node.external ? 'external-node' : ''}" aria-label="${escape(plain(node.label))}，${compact ? '在架构总览中查看' : '选择并查看右侧说明'}" ${!compact ? `aria-pressed="${node.id === state.node}"` : ''}><span class="node-name">${rich(node.label)}</span>${!compact ? `<span class="node-summary">${rich(node.summary)}</span><span class="node-action">${rich(node.external ? '选择以查看右侧说明 · 外部 {{owner}}' : '选择以查看右侧说明')}</span>` : ''}${compact && active.includes(node.id) ? '<span class="active-dot" aria-hidden="true"></span>' : ''}</button>`;
+      const classes = `${!compact && node.id === state.node ? 'selected' : ''} ${compact && active.includes(node.id) ? 'active' : ''} ${!compact && neighbors.has(node.id) && node.id !== state.node ? 'neighbor' : ''} ${node.external ? 'external-node' : ''}`;
+      const selection = `<button type="button" data-node="${escape(node.id)}" class="map-node ${classes}" aria-label="${escape(plain(node.label))}，${compact ? '在架构总览中查看' : '选择并查看右侧说明'}" ${!compact ? `aria-pressed="${node.id === state.node}"` : ''}><span class="node-name">${rich(node.label)}</span>${!compact ? `<span class="node-summary">${rich(node.summary)}</span>` : ''}${compact && active.includes(node.id) ? '<span class="active-dot" aria-hidden="true"></span>' : ''}</button>`;
+      if (compact) return selection;
+      const target = targetOf(node);
+      const action = target ? `<button type="button" class="node-enter" data-enter="${escape(target)}" aria-label="进入 ${escape(plain(node.label))} 内部">进入内部 <span aria-hidden="true">${node.external ? '↗' : '→'}</span></button>` : '<span class="node-leaf">查看实现</span>';
+      return `<div class="node-card ${classes}">${selection}<div class="node-action">${node.external ? `<span class="external-owner">${rich('外部 {{owner}}')}</span>` : ''}${action}</div></div>`;
     }).join('')}</div></section>`).join('')}</div>`;
   }
   function relationsMarkup(node) {
     const relations = selectedRelations();
     const local = new Map(graph().nodes.map((item) => [item.id, item]));
-    return `<section class="relationships"><h3>${rich('关联 {{responsibility}}')}</h3><p class="source-help">箭头表示关系方向。代码依赖不代表运行时调用。</p>${relations.length ? `<ul>${relations.map((relation) => `<li>${badge(relation.kind)}<span class="relation-endpoints"><button type="button" data-select="${escape(relation.from)}">${rich(local.get(relation.from).label)}</button><span aria-hidden="true">→</span><button type="button" data-select="${escape(relation.to)}">${rich(local.get(relation.to).label)}</button></span><p>${rich(relation.label)}</p></li>`).join('')}</ul>` : '<p>此节点没有这种类型的关联。</p>'}</section>`;
+    return `<section class="relationships"><h3>相关关系</h3><p class="source-help">箭头表示关系方向。代码依赖不代表运行时调用。</p>${relations.length ? `<ul>${relations.map((relation) => `<li>${badge(relation.kind)}<span class="relation-endpoints"><button type="button" data-select="${escape(relation.from)}">${rich(local.get(relation.from).label)}</button><span aria-hidden="true">→</span><button type="button" data-select="${escape(relation.to)}">${rich(local.get(relation.to).label)}</button></span><p>${rich(relation.label)}</p></li>`).join('')}</ul>` : '<p>此节点没有这种类型的关联。</p>'}</section>`;
   }
   function breadcrumbs() {
     const path = [];
@@ -57,13 +62,13 @@
   function inspectorMarkup(node) {
     const target = targetOf(node);
     const next = target
-      ? `<button type="button" class="primary-button enter-graph" data-enter="${target}">${node.external ? '进入外部模块 ↗' : '进入内部图 →'}</button>`
+      ? `<button type="button" class="primary-button enter-graph" data-enter="${target}">${node.external ? '进入内部 ↗' : '进入内部 →'}</button>`
       : `<p class="leaf-note">${rich('此处为实现末端，可展开下方 {{source-code}} 依据。')}</p>`;
     return `<aside class="inspector" aria-label="所选节点">
       <p class="eyebrow">${rich(node.layer)}${node.external ? ' · 外部模块' : ''}</p>
       <h2>${rich(node.label)}</h2><p class="lead">${rich(node.summary)}</p>${next}
-      <h3>${rich('{{responsibility}}')}</h3>${list(node.owns)}
-      <h3>${rich('{{boundary}}')}</h3>${list(node.boundaries)}
+      <h3>负责什么</h3>${list(node.owns)}
+      <h3>需要留意什么</h3>${list(node.boundaries)}
       ${relationsMarkup(node)}${sourceDetails(node.evidence)}
     </aside>`;
   }
@@ -71,10 +76,10 @@
     const current = graph();
     const node = current.nodes.find((item) => item.id === state.node);
     const groupCount = new Set(current.nodes.map((item) => item.layer)).size;
-    const caption = '选择卡片查看右侧说明；需要进入下一层时，使用说明栏中的进入按钮。实现末端可展开 {{source-code}}。虚线外框表示其他 {{owner}}。' + (state.view === 'overview' ? '总览显示选中节点的关系。' : '内部图显示当前过滤下的所有关系，粗线突出选中节点的关系。') + '右侧清单解释选中节点的关系。';
+    const caption = '选择卡片主体查看右侧说明，点击“进入内部”继续探索。将鼠标停在带点状下划线的术语上，可查看该词的解释。实现末端可展开 {{source-code}}。虚线外框表示由其他模块负责的节点。' + (state.view === 'overview' ? '总览显示选中节点的关系。' : '内部图显示当前过滤下的所有关系，粗线突出选中节点的关系。') + '右侧清单解释选中节点的关系。';
     workspace.innerHTML = `${breadcrumbs()}
       <div class="section-heading">
-        <div><p class="eyebrow">01 / ${rich(state.view === 'overview' ? '{{ownership}} 总览' : '{{owner}} 内部图')}</p>
+        <div><p class="eyebrow">01 / ${state.view === 'overview' ? '模块总览' : '模块内部'}</p>
         <h2 tabindex="-1" data-graph-heading>${rich(current.title)}</h2></div><p>${rich(current.summary)}</p>
       </div>
       ${relationControls()}
@@ -86,19 +91,19 @@
   }
   function stepperMarkup(steps, index, context) {
     const step = steps[index];
-    return `<div class="walk-layout"><aside class="step-index" aria-label="步骤导航"><p class="eyebrow">${context === 'request' ? '请求路径' : '结果路径'}</p><ol>${steps.map((item, itemIndex) => `<li><button type="button" data-step="${itemIndex}" ${index === itemIndex ? 'aria-current="step"' : ''}><span class="step-number">${String(itemIndex + 1).padStart(2, '0')}</span><span>${rich(item.title)}</span>${itemIndex < index ? '<span class="completed" aria-label="已浏览">✓</span>' : ''}</button></li>`).join('')}</ol></aside><article class="step-content"><div class="step-control"><span class="step-progress">第 ${index + 1} 步 / 共 ${steps.length} 步</span><div><button type="button" class="text-button" data-replay ${index === 0 ? 'disabled' : ''}>↺ 重置</button><button type="button" class="square-button" data-prev ${index === 0 ? 'disabled' : ''} aria-label="上一步">←</button><button type="button" class="square-button" data-next ${index === steps.length - 1 ? 'disabled' : ''} aria-label="下一步">→</button></div></div><div class="step-announcement" aria-live="polite" aria-atomic="true"><p class="eyebrow">执行方 / ${rich(step.actor)}</p><h2>${rich(step.title)}</h2></div><p class="step-description">${rich(step.description)}</p><div class="fact-grid"><section><h3><span aria-hidden="true">▣</span> {{durable}} facts</h3><p>${rich(step.durable)}</p></section><section><h3><span aria-hidden="true">◉</span> 客户端可见内容</h3><p>${rich(step.visible)}</p></section></div><section class="active-responsibilities"><h3>此步骤涉及的 {{responsibility}}</h3>${nodeChips(step.active)}<p class="source-help">下方会突出显示相关 {{responsibility}}。选择一项 {{responsibility}} 可查看其架构。</p>${mapMarkup(step.active, true)}</section>${sourceDetails(step.evidence)}<div class="bottom-step-control"><button type="button" class="secondary-button" data-prev ${index === 0 ? 'disabled' : ''}>← 上一步</button>${index < steps.length - 1 ? '<button type="button" class="primary-button" data-next>下一步 →</button>' : '<span class="path-complete">路径结束 <span aria-hidden="true">✓</span></span>'}</div></article></div>`;
+    return `<div class="walk-layout"><aside class="step-index" aria-label="步骤导航"><p class="eyebrow">${context === 'request' ? '请求路径' : '结果路径'}</p><ol>${steps.map((item, itemIndex) => `<li><button type="button" data-step="${itemIndex}" ${index === itemIndex ? 'aria-current="step"' : ''}><span class="step-number">${String(itemIndex + 1).padStart(2, '0')}</span><span>${rich(item.title)}</span>${itemIndex < index ? '<span class="completed" aria-label="已浏览">✓</span>' : ''}</button></li>`).join('')}</ol></aside><article class="step-content"><div class="step-control"><span class="step-progress">第 ${index + 1} 步 / 共 ${steps.length} 步</span><div><button type="button" class="text-button" data-replay ${index === 0 ? 'disabled' : ''}>↺ 重置</button><button type="button" class="square-button" data-prev ${index === 0 ? 'disabled' : ''} aria-label="上一步">←</button><button type="button" class="square-button" data-next ${index === steps.length - 1 ? 'disabled' : ''} aria-label="下一步">→</button></div></div><div class="step-announcement" aria-live="polite" aria-atomic="true"><p class="eyebrow">执行方 / ${rich(step.actor)}</p><h2>${rich(step.title)}</h2></div><p class="step-description">${rich(step.description)}</p><div class="fact-grid"><section><h3><span aria-hidden="true">▣</span> 已保存的事实</h3><p>${rich(step.durable)}</p></section><section><h3><span aria-hidden="true">◉</span> 客户端可见内容</h3><p>${rich(step.visible)}</p></section></div><section class="active-responsibilities"><h3>这一步涉及哪些模块</h3>${nodeChips(step.active)}<p class="source-help">下方突出显示参与这一步的模块。选择模块可查看它在架构中的位置。</p>${mapMarkup(step.active, true)}</section>${sourceDetails(step.evidence)}<div class="bottom-step-control"><button type="button" class="secondary-button" data-prev ${index === 0 ? 'disabled' : ''}>← 上一步</button>${index < steps.length - 1 ? '<button type="button" class="primary-button" data-next>下一步 →</button>' : '<span class="path-complete">路径结束 <span aria-hidden="true">✓</span></span>'}</div></article></div>`;
   }
   function renderRequest() {
-    workspace.innerHTML = `<div class="section-heading"><div><p class="eyebrow">02 / 从意图到 {{observation}}</p><h2>追踪一次请求。</h2></div><p>沿着一条引导式执行路径，按自己的节奏前进，观察 {{responsibility}} 如何在系统中流转。</p></div>${stepperMarkup(data.request, state.request, 'request')}`;
+    workspace.innerHTML = `<div class="section-heading"><div><p class="eyebrow">02 / 一次请求的完整路径</p><h2>追踪一次请求。</h2></div><p>按自己的节奏逐步前进，看看一次请求如何经过各个模块，以及每一步会留下什么结果。</p></div>${stepperMarkup(data.request, state.request, 'request')}`;
   }
   function renderScenarios() {
     const scenario = data.scenarios[state.scenario];
     const choice = scenario.choices[state.choice];
-    workspace.innerHTML = `<div class="section-heading"><div><p class="eyebrow">03 / {{boundary}} 上的决策</p><h2>遇到这些情况时……</h2></div><p>选择一种情境和结果。这些有{{source-code}} 依据的路径说明了架构的约束。</p></div><div class="scenario-tabs" role="group" aria-label="{{boundary}} 场景">${data.scenarios.map((item, index) => `<button type="button" data-scenario="${index}" aria-pressed="${index === state.scenario}"><span>${String(index + 1).padStart(2, '0')}</span>${rich(item.title)}</button>`).join('')}</div><section class="scenario-intro"><div><h2>${rich(scenario.title)}</h2><p>${rich(scenario.intro)}</p></div><fieldset><legend>选择一种结果</legend>${scenario.choices.map((item, index) => `<label class="choice ${state.choice === index ? 'chosen' : ''}"><input type="radio" name="outcome" data-choice="${index}" value="${index}" ${state.choice === index ? 'checked' : ''}><span>${rich(item.label)}</span></label>`).join('')}</fieldset></section>${stepperMarkup(choice.steps, state.step, 'scenario')}`;
+    workspace.innerHTML = `<div class="section-heading"><div><p class="eyebrow">03 / 特殊情况如何处理</p><h2>遇到这些情况时……</h2></div><p>选择一种情境和结果。沿着有 {{source-code}} 依据的路径，看看系统如何处理这些情况。</p></div><div class="scenario-tabs" role="group" aria-label="特殊情况">${data.scenarios.map((item, index) => `<button type="button" data-scenario="${index}" aria-pressed="${index === state.scenario}"><span>${String(index + 1).padStart(2, '0')}</span>${rich(item.title)}</button>`).join('')}</div><section class="scenario-intro"><div><h2>${rich(scenario.title)}</h2><p>${rich(scenario.intro)}</p></div><fieldset><legend>选择一种结果</legend>${scenario.choices.map((item, index) => `<label class="choice ${state.choice === index ? 'chosen' : ''}"><input type="radio" name="outcome" data-choice="${index}" value="${index}" ${state.choice === index ? 'checked' : ''}><span>${rich(item.label)}</span></label>`).join('')}</fieldset></section>${stepperMarkup(choice.steps, state.step, 'scenario')}`;
   }
   function renderTopics() {
     const topic = data.topics[state.topic];
-    workspace.innerHTML = `<div class="section-heading"><div><p class="eyebrow">04 / 深入一层</p><h2>理解系统如何协同运作。</h2></div><p>了解一项设计决策，追踪相关 {{responsibility}}，并查看对应的 {{source-code}} {{snapshot-source}}。</p></div><div class="topic-layout"><aside class="topic-nav" aria-label="深入专题">${data.topics.map((item, index) => `<button type="button" data-topic="${index}" ${index === state.topic ? 'aria-current="true"' : ''}><span>${String(index + 1).padStart(2, '0')}</span>${rich(item.title)}<span aria-hidden="true">↗</span></button>`).join('')}</aside><article class="topic-content"><p class="eyebrow">深入专题 / ${String(state.topic + 1).padStart(2, '0')}</p><h2>${rich(topic.title)}</h2><p class="lead">${rich(topic.summary)}</p><div class="topic-details">${topic.details.map((detail) => `<p>${rich(detail)}</p>`).join('')}</div><h3>相关 {{responsibility}}</h3>${nodeChips(topic.nodes)}${sourceDetails(topic.evidence)}</article></div>`;
+    workspace.innerHTML = `<div class="section-heading"><div><p class="eyebrow">04 / 深入一层</p><h2>理解系统如何协同运作。</h2></div><p>从一个设计问题出发，了解相关模块如何协作，并查看对应的 {{source-code}}。</p></div><div class="topic-layout"><aside class="topic-nav" aria-label="深入专题">${data.topics.map((item, index) => `<button type="button" data-topic="${index}" ${index === state.topic ? 'aria-current="true"' : ''}><span>${String(index + 1).padStart(2, '0')}</span>${rich(item.title)}<span aria-hidden="true">↗</span></button>`).join('')}</aside><article class="topic-content"><p class="eyebrow">深入专题 / ${String(state.topic + 1).padStart(2, '0')}</p><h2>${rich(topic.title)}</h2><p class="lead">${rich(topic.summary)}</p><div class="topic-details">${topic.details.map((detail) => `<p>${rich(detail)}</p>`).join('')}</div><h3>相关模块</h3>${nodeChips(topic.nodes)}${sourceDetails(topic.evidence)}</article></div>`;
   }
   function render() {
     document.querySelectorAll('[data-mode]').forEach((button) => {
@@ -132,8 +137,8 @@
     const relations = visibleRelations().sort((a, b) => Number(a.from === state.node || a.to === state.node) - Number(b.from === state.node || b.to === state.node));
     group.replaceChildren();
     relations.forEach((relation) => {
-      const from = map.querySelector(`[data-node="${relation.from}"]`).getBoundingClientRect();
-      const to = map.querySelector(`[data-node="${relation.to}"]`).getBoundingClientRect();
+      const from = map.querySelector(`[data-node="${relation.from}"]`).closest('.node-card').getBoundingClientRect();
+      const to = map.querySelector(`[data-node="${relation.to}"]`).closest('.node-card').getBoundingClientRect();
       const down = to.top >= from.top;
       const sameRow = Math.abs(from.top - to.top) < Math.min(from.height, to.height) / 2;
       const right = to.left >= from.left;
@@ -190,6 +195,7 @@
   document.body.append(tooltip);
   let tooltipAnchor = null;
   let tooltipTimer;
+  let hoverPaused = false;
   function hideTooltip() {
     clearTimeout(tooltipTimer);
     if (tooltipAnchor) tooltipAnchor.removeAttribute('aria-describedby');
@@ -197,7 +203,7 @@
   }
   function positionTooltip() {
     if (!tooltipAnchor || tooltip.hidden) return;
-    const bounds = (tooltipAnchor.closest('button,summary,a,label') || tooltipAnchor).getBoundingClientRect();
+    const bounds = (tooltipAnchor.closest('.node-card') || tooltipAnchor.closest('button,summary,a,label') || tooltipAnchor).getBoundingClientRect();
     tooltip.style.maxHeight = 'calc(100vh - 24px)';
     const width = tooltip.offsetWidth; const height = tooltip.offsetHeight;
     const gap = 10; const margin = 12;
@@ -218,14 +224,10 @@
     }
     tooltip.style.left = `${left}px`; tooltip.style.top = `${top}px`;
   }
-  function showTooltip(anchor, spans) {
+  function showTooltip(anchor) {
     hideTooltip(); tooltipAnchor = anchor;
-    tooltip.innerHTML = spans.map((span) => {
-      const term = terms.get(span.dataset.term);
-      return `<p><strong lang="en">${escape(term.label)}</strong><span>${rich(term.explanation)}</span></p>`;
-    }).join('');
-    // Explanations are prose, never nested tooltip triggers.
-    tooltip.querySelectorAll('.term').forEach((span) => { span.replaceWith(document.createTextNode(span.textContent)); });
+    const term = terms.get(anchor.dataset.term);
+    tooltip.innerHTML = `<p><strong lang="en">${escape(term.label)}</strong><span>${escape(plain(term.explanation))}</span></p>`;
     tooltip.hidden = false; anchor.setAttribute('aria-describedby', tooltip.id); positionTooltip();
   }
   function hydrateTerms() {
@@ -251,9 +253,16 @@
     hideTooltip();
   }, 140); };
   document.addEventListener('pointerover', (event) => {
+    if (hoverPaused) return;
     const span = event.target.closest('.term');
-    if (span && !tooltip.contains(span)) showTooltip(span, [span]);
+    if (span && !tooltip.contains(span)) showTooltip(span);
     else if (tooltip.contains(event.target)) clearTimeout(tooltipTimer);
+  });
+  document.addEventListener('pointermove', (event) => {
+    if (!hoverPaused) return;
+    hoverPaused = false;
+    const span = event.target.closest('.term');
+    if (span && !tooltip.contains(span)) showTooltip(span);
   });
   document.addEventListener('pointerout', (event) => {
     if (event.target.closest('.term') || tooltip.contains(event.target)) {
@@ -263,15 +272,17 @@
   });
   document.addEventListener('focusin', (event) => {
     const anchor = event.target;
-    const scope = anchor.matches('input') ? anchor.closest('label') : anchor;
-    const spans = anchor.matches('.term') ? [anchor] : [...scope.querySelectorAll('.term')];
-    if (spans.length) showTooltip(anchor, spans); else hideTooltip();
+    if (anchor.matches('.term')) showTooltip(anchor); else hideTooltip();
   });
   document.addEventListener('focusout', delayedHide);
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') hideTooltip(); });
   window.addEventListener('scroll', positionTooltip, { passive: true });
   window.addEventListener('resize', positionTooltip);
   document.addEventListener('click', (event) => {
+    if (event.target.closest('button,summary,a,label,input')) {
+      hoverPaused = true;
+      hideTooltip();
+    }
     const button = event.target.closest('button');
     if (!button || button.disabled) return;
     if (button.dataset.mode) {
@@ -325,7 +336,7 @@
   });
   document.getElementById('intro').innerHTML = rich(data.intro);
   document.title = `${plain(data.title)} · rustX`;
-  document.getElementById('baseline').innerHTML = `<span class="baseline-tag">{{source-code}} 基线</span><details class="baseline-details"><summary><code>${escape(data.baseline.commit.slice(0, 8))}</code> <span data-verbatim>${escape(data.baseline.branch)}</span><span aria-hidden="true">⌄</span></summary><div><code>${escape(data.baseline.commit)}</code><p lang="en" data-verbatim>${escape(data.baseline.subject)}</p><p>本导览介绍的是固定 {{snapshot-source}}，不会跟踪当前工作区，也不会执行请求。</p></div></details><span class="simulation-label">教学模拟</span>`;
+  document.getElementById('baseline').innerHTML = `<span class="baseline-tag">{{source-code}} 基线</span><details class="baseline-details"><summary><code>${escape(data.baseline.commit.slice(0, 8))}</code> <span data-verbatim>${escape(data.baseline.branch)}</span><span aria-hidden="true">⌄</span></summary><div><code>${escape(data.baseline.commit)}</code><p lang="en" data-verbatim>${escape(data.baseline.subject)}</p><p>本导览基于固定的 {{snapshot-source}}，不会跟踪当前工作区，也不会执行请求。</p></div></details><span class="simulation-label">教学模拟</span>`;
   render();
   new ResizeObserver(() => {
     drawLines();

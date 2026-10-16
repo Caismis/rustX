@@ -588,5 +588,135 @@
     "id": "snapshot-source",
     "label": "snapshot",
     "explanation": "导览固定使用 8cb41624 这次 commit 的代码与文档视图；摘录字节和行号链接独立固定，不会跟随当前 checkout 改动。这是源码版本视图，不是 runtime/client 状态副本，也不是保存实际模型请求输入的 RequestSnapshot。"
+  },
+  {
+    "id": "concept-session",
+    "label": "Session",
+    "explanation": "你从 TUI 打开一个 Session，稍后可以换用 Web 客户端继续访问同一份数据。SessionController 保存它的 SessionNode/Conversation 图、cwd 与显式设置；连接断开或运行核心卸载后，这些数据仍然保留，凭据与实时连接则不属于 Session 状态。"
+  },
+  {
+    "id": "concept-conversation",
+    "label": "Conversation",
+    "explanation": "一个 Session 节点指向一个 Conversation。它以线性的 canonical 消息历史保存 User、Assistant 与 Tool 事实；进程内同时最多只有一个可写的活跃 runtime。子 Agent 有自己的 Conversation，但仍可共享 Session 工作区。"
+  },
+  {
+    "id": "concept-attempt",
+    "label": "Attempt",
+    "explanation": "用户输入被协调器允许执行后，AgentExecution 开始一次 Attempt。它可能先请求模型，再运行一批 Tool，随后继续请求模型；重试和 continuation 各有新请求身份，但可以仍属于同一次 Attempt。最后只交回一个完成、取消或失败候选。"
+  },
+  {
+    "id": "concept-tool",
+    "label": "Tool",
+    "explanation": "模型可以提出读取文件、运行命令或交付文件的 Tool 调用。提案先进入 canonical Assistant，才获得结果位置；策略、批准与调度仍会继续检查。Agent Loop 最后按调用顺序一次提交同批结果，取消不撤销已完成的文件或外部修改。"
+  },
+  {
+    "id": "concept-workflow",
+    "label": "Workflow",
+    "explanation": "例如把检查、并行处理与 Review 写成一个固定程序，选中的 Workflow 就作为前台 Tool 运行。WorkflowRuntime 管理 Agent、Tool、Branch、Parallel、Review、Loop、Return 节点和局部值；节点共享 Session 工作区，失败或取消不会回滚写入。"
+  },
+  {
+    "id": "concept-subagent",
+    "label": "Subagent",
+    "explanation": "Root 可以将任务交给允许列表中的命名 Agent。受管理的 Subagent 复用同一 runtime 栈，但有独立 Conversation 与 activation 身份；创建时捕获模型和能力，父子 Agent 在同一 Session 目录中读写文件。"
+  },
+  {
+    "id": "concept-checkpoint",
+    "label": "Checkpoint",
+    "explanation": "历史已有 M1…M100 时，Context Engine 可以创建以 L100 为 base 的 Checkpoint，保留部分 Original、加入 Derived，并排除 M96…M100。激活后它决定模型历史输入选用什么；Message Ledger 不变，Tail 只从 base 之后接入新消息。"
+  },
+  {
+    "id": "concept-original",
+    "label": "Original",
+    "explanation": "Checkpoint 若决定保留 M20，就以 Original 引用它，并保存 canonical 消息身份与 digest。它仍指向原来那条历史消息；最后保留的 Original 即使早于 Checkpoint base，也不会让被排除的后缀重新进入 Tail。"
+  },
+  {
+    "id": "concept-derived",
+    "label": "Derived",
+    "explanation": "Context Engine 可把一段旧历史整理为 Derived 正文，并在 Checkpoint 提交时保存实际内容与来源引用。它供模型读取，但没有 canonical MessageId；其中即使出现 ToolCall/ToolResult，也不会因此执行 Tool 或产生执行统计。"
+  },
+  {
+    "id": "concept-tail",
+    "label": "Tail",
+    "explanation": "Checkpoint base 为 L100，而下一请求的历史截止于 L101 时，Tail 只纳入区间 (L100,L101] 中合格的 canonical 消息。它补上 Checkpoint 之后的新历史，不会找回 base 之前已经排除的 M96…M100。"
+  },
+  {
+    "id": "concept-message-ledger",
+    "label": "Message Ledger",
+    "explanation": "Pending Inbound 经过 adoption 后，User 消息才进入 Message Ledger；Assistant 与 Tool 结果也只在各自提交成功后写入。ConversationStore 追加保存这些不可变事实。Context compaction 可以改变模型看到的历史选择，但不能修改消息或插入 canonical 摘要。"
+  },
+  {
+    "id": "concept-event-journal",
+    "label": "Event Journal",
+    "explanation": "一次实际模型请求开始、Tool 执行或 Attempt 结束，都有对应的执行事实，由 Event Journal 记录。Context 里引用过去的调用不会新增执行事件、usage 或时长；终态追加失败时也不能凭内存结果虚构记录。"
+  },
+  {
+    "id": "concept-request-snapshot",
+    "label": "RequestSnapshot",
+    "explanation": "一次实际请求通过启动 gate 后，启动事务保存它确切的、与提供方无关的输入与不可变依赖。以后检查这次请求时按历史键重建，不重读当前配置、不重新生成摘要；有快照只证明启动已提交，不能证明远端已经收到请求。"
+  },
+  {
+    "id": "concept-publication",
+    "label": "Publication",
+    "explanation": "模型流中的文字与 Tool 提案先分帧写入 Publication，再发往客户端。提供方结果 P、输出终态 U、canonical Assistant 提交 C 按 P < U < C 保存；完整输出仍可能未进入 Assistant 历史，审计也不能证明用户已读。"
+  },
+  {
+    "id": "concept-goal",
+    "label": "Goal",
+    "explanation": "Root 开始持续任务时，GoalDomain 保存目标与阶段。只有 Active 授权下一自主轮次，GoalRoundDriver 还需等待协调器安全空闲并提交普通输入；Workflow 结束或 runtime drain 都不会自行把 Goal 改成 Complete 或 Paused。"
+  },
+  {
+    "id": "concept-skills",
+    "label": "Skills",
+    "explanation": "选中 Skills 后，模型先看到渐进披露的指令信息，再用普通 Tool 读取正文与支持文件。选择影响 prompt 可见性，不授予文件系统权限；子 Agent 使用创建时已捕获的包，后续不重新发现当前文件。"
+  },
+  {
+    "id": "concept-mcp",
+    "label": "MCP",
+    "explanation": "rustX 通过 MCP 接入外部 Tool 服务。发现 .agents/mcp.toml 只读取定义；选中的需求获准后才连接并暴露能力。传输中断时，即使本地资源已回收，也可能无法确认远端操作结果，必须保留 OutcomeUnknown。"
+  },
+  {
+    "id": "concept-managed-python",
+    "label": "Managed Python",
+    "explanation": "选中的 Python 工具包先捕获包字节，准备隔离 uv 环境并生成 McpServerBinding，然后通过通用 MCP runtime 运行。它复用 Tool Plane 的调用、取消与结果规则，不另建一套执行协议。"
+  },
+  {
+    "id": "concept-agent-status",
+    "label": "agent_status",
+    "explanation": "启用 agent_status 后，rustX 按当前运行窗口整理状态 Context，帮助模型了解执行状态；它通过封闭的 Rust 扩展接入现有运行核心。这个扩展默认关闭，展示出的状态不替代 Goal、Ledger 或执行结果各自的事实。"
+  },
+  {
+    "id": "concept-todo",
+    "label": "todo",
+    "explanation": "启用 todo 后，Conversation 保存自己的任务列表，模型可用 todo Tool 更新它。列表更新与对应 canonical Tool 批次一起提交；客户端从运行快照读取已提交列表，而不会把它变成另一条独立存储路径。"
+  },
+  {
+    "id": "concept-app-server",
+    "label": "App Server",
+    "explanation": "TUI 或 Web 通过带版本 JSON-RPC 明确指定 Session/runtime，App Server 把操作转给对应本地组件。它适配 Stdio JSONL 与 WebSocket、管理连接 attachment；Conversation 的执行调度仍交给 ConversationRuntime。"
+  },
+  {
+    "id": "concept-runtime-client",
+    "label": "Runtime Client",
+    "explanation": "TUI 重新连接时，Runtime Client 提供当前快照和有限的事件记录，帮助界面恢复显示。RuntimeClientProjection 统一整理这些视图；客户端是否连接都不改变执行规则，缓存与 Trace 也不驱动恢复。"
+  },
+  {
+    "id": "concept-context-engine",
+    "label": "Context Engine",
+    "explanation": "模型下一次请求前，Context Engine 先读取获授权的历史，用 Checkpoint 的 Original/Derived 与严格 Tail 编译输入，并校验结构、计量 token、规划 compaction。Agent 再加入本轮输入并固定请求；编译器不修改 Ledger，也不执行历史中的 Tool。"
+  },
+  {
+    "id": "concept-tool-plane",
+    "label": "Tool Plane",
+    "explanation": "原生 Tool、MCP 与 Managed Python 都通过 Tool Plane 使用统一定义、schema、策略和 ForegroundInvocation。执行器负责实际工作与资源收束；canonical 调用位置和整个有序结果批次仍由 Agent Loop 管理。"
+  },
+  {
+    "id": "concept-agent-kernel",
+    "label": "Agent kernel",
+    "explanation": "Agent kernel 中的 AgentExecution 运行一个 Attempt：保存固定的逻辑输入，协调实际模型请求、重试、输出与 Tool 批次。它只依赖 rustX 内层接口，提供方 SDK、MCP SDK、数据库与 HTTP 类型留在外层适配器。"
+  },
+  {
+    "id": "concept-runtime",
+    "label": "ConversationRuntime",
+    "explanation": "输入可以先排队保存，但只有 ConversationRuntime 能决定何时启动下一次 AgentExecution。它为一个 Conversation 保留唯一的当前 Attempt，在同一锁下处理 admission 与 Running → Draining，并等待已有工作完成后证明可以卸载。"
   }
 ]

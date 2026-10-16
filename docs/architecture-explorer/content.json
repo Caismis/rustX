@@ -5,20 +5,20 @@
     "branch": "main",
     "subject": "Refactor compaction into immutable-history context projections (#466) (#477)"
   },
-  "intro": "在固定的 main commit 上探索 rustX 的 {{responsibility}} {{boundary}}。沿着一次请求查看源码依据，并比较确定性的教学场景。这些是用于解释机制的执行顺序，并非实时运行轨迹：导览不会调用模型、启动 Tool，也不会改变 Session 状态。",
+  "intro": "本导览以固定的 main commit 为依据，介绍 rustX 各组件的 {{responsibility}}，以及它们交接工作的 {{boundary}}。你可以沿着一次请求阅读源码，也可以切换教学场景，比较不同先后顺序的结果。场景不会调用模型、启动 {{concept-tool}} 或改变 {{concept-session}} 状态。",
   "nodes": [
     {
       "id": "clients",
       "label": "TUI / Web Console",
       "layer": "产品界面",
-      "summary": "客户端呈现 Conversation 状态，并发送目标明确、显式寻址的用户意图。",
+      "summary": "客户端展示 {{concept-conversation}} 状态，并明确指定用户操作的目标。",
       "owns": [
-        "TUI 交互、Web 对话界面、本地草稿和焦点。",
-        "自有的本地 App Server 子进程使用 Stdio JSONL；外部管理的服务器使用 WebSocket。"
+        "管理 TUI 交互、Web 对话界面、本地草稿与焦点。",
+        "本地客户端通过 Stdio JSONL 连接自有的 {{concept-app-server}} 子进程；外部管理的服务器使用 WebSocket。"
       ],
       "boundaries": [
-        "客户端焦点是路由状态，不负责选择进程全局的活跃 Session。",
-        "客户端断开连接不能证明执行已经停止。"
+        "焦点只决定客户端将操作发往哪里，不会选出一个进程全局的活跃 {{concept-session}}。",
+        "客户端断开连接时，服务端的执行可能仍在继续。"
       ],
       "evidence": [
         "topology",
@@ -27,16 +27,16 @@
     },
     {
       "id": "app-server",
-      "label": "App Server",
+      "label": "{{concept-app-server}}",
       "layer": "产品界面",
-      "summary": "与传输无关的外部产品协议将请求路由给 {{native}} {{owner}}。",
+      "summary": "{{concept-app-server}} 接收产品协议请求，将它们交给负责执行的 {{native}} 组件。",
       "owns": [
-        "带版本的 JSON-RPC 连接路由与传输 {{framing}}。",
-        "显式的 Session/runtime 寻址，以及经过身份验证的传输 {{admission-transport}}。"
+        "为带版本的 JSON-RPC 请求维护连接路由，并适配传输 {{framing}}。",
+        "明确寻址 {{concept-session}}/runtime；建立连接前，由传输 {{admission-transport}} 检查身份凭证。"
       ],
       "boundaries": [
-        "宿主身份验证、用户/进程路由与工作区隔离由更上层的产品宿主负责。",
-        "协议适配 {{native}} 权限与 {{authority-runtime}}，不承担 Conversation 调度。"
+        "更上层的产品宿主负责宿主身份验证、用户/进程路由与工作区隔离。",
+        "协议层转接权限检查与控制操作；{{concept-conversation}} 调度仍由 {{concept-runtime}} 决定。"
       ],
       "evidence": [
         "app-boundary",
@@ -46,16 +46,16 @@
     },
     {
       "id": "projection",
-      "label": "Runtime Client",
+      "label": "{{concept-runtime-client}}",
       "layer": "产品界面",
-      "summary": "确定性的 {{projection}} 通过 {{snapshot}}、{{cursor}} 和 {{bounded}} {{replay-cursor}} 呈现 {{authority}} 运行事实。",
+      "summary": "{{concept-runtime-client}} 将运行事实整理为客户端 {{projection}}，提供 {{snapshot}} 与 {{cursor}}，并保存事件供客户端 {{replay-cursor}}；缓存容量有固定上限。",
       "owns": [
-        "RuntimeClientProjection：唯一的 {{fold}}、{{cursor}} 分配、{{replay-cursor}} 与订阅者管理。",
-        "RuntimeClientHost：在 ConversationRuntime 之上提供 {{projection}}、控制与 attachment。"
+        "RuntimeClientProjection 统一合并事件、分配 {{cursor}}、保存回放记录并管理订阅者。",
+        "RuntimeClientHost 在 {{concept-runtime}} 之上提供视图、控制与 attachment。"
       ],
       "boundaries": [
-        "没有任何 attachment 时，执行仍走相同路径。",
-        "实时 {{projection}}/{{replay-cursor}} 缓存与 Trace 始终不是 {{recovery}} 的 {{authority-recovery}}。"
+        "即使没有任何 attachment，执行也遵循相同路径。",
+        "实时视图、事件缓存与 Trace 只供展示；{{recovery}} 从对应领域的持久事实读取依据。"
       ],
       "evidence": [
         "client-authority",
@@ -65,16 +65,16 @@
     },
     {
       "id": "sessions",
-      "label": "Session / {{residency}} 管理",
+      "label": "{{concept-session}} / {{residency}} 管理",
       "layer": "本地 {{composition}}",
-      "summary": "SessionController 管理 Session 身份的 {{persistence}}；SessionRuntimeManager 管理运行中 {{composition}} 的 {{residency}}。",
+      "summary": "SessionController 保存 {{concept-session}} 身份与设置，负责 {{persistence}}；SessionRuntimeManager 管理加载中的运行核心，负责其 {{residency}}。",
       "owns": [
-        "Session → SessionNode → Conversation 目录图、显式设置与 {{revision}}。",
-        "Single-flight 加载/卸载、保留的 {{allocation}} 与 RuntimeIncarnationId。"
+        "保存 {{concept-session}} → SessionNode → {{concept-conversation}} 目录图、显式设置与 {{revision}}。",
+        "以 single-flight 串行处理同一目标的加载/卸载，并保留 {{allocation}} 与 RuntimeIncarnationId。"
       ],
       "boundaries": [
-        "每个 Conversation 最多有一个可写的活跃 runtime；v1 还限制每个 Session 只能有一个 {{residency}} 节点。",
-        "成功卸载会证明 {{quiescence}} 并释放 {{composition}}，同时保留 {{persistence}} 的 Session 数据。"
+        "每个 {{concept-conversation}} 最多有一个可写的活跃 runtime；v1 还要求每个 {{concept-session}} 最多只能加载其中一个节点。",
+        "卸载成功前必须证明 {{quiescence}}，然后才能释放运行核心。{{concept-session}} 数据已经写入存储，卸载后仍会保留。"
       ],
       "evidence": [
         "session-identity",
@@ -86,14 +86,14 @@
       "id": "config",
       "label": "配置 / 资源",
       "layer": "本地 {{composition}}",
-      "summary": "{{native}} 解析结合 Session 的显式选择与当前 {{source-config}}，再对 {{finite}} 能力进行 {{admission-config}}。",
+      "summary": "本地配置解析先读取 {{concept-session}} 的显式选择与当前资源定义，再由 {{admission-config}} 检查本次需要的能力。",
       "owns": [
-        "UserConfigManager 解析、完整资源定义与精确的 profile 选择。",
-        "通过 LocalConversationCore::compose_with_access 提供唯一的 {{native}} {{composition}} 路径。"
+        "UserConfigManager 解析完整资源定义，并精确选择 profile。",
+        "统一通过 LocalConversationCore::compose_with_access 组装本地运行核心。"
       ],
       "boundaries": [
-        "发现 {{source-config}} 不会连接 MCP，也不会准备 Python。",
-        "{{persistence}} 的 Session 输入不等于解析后的有效配置、凭据或执行状态。"
+        "发现资源定义不会连接 {{concept-mcp}}，也不会准备 Python 环境。",
+        "{{concept-session}} 只保存显式输入；有效配置、凭据与执行状态要在解析和运行时确定。"
       ],
       "evidence": [
         "composition",
@@ -104,16 +104,16 @@
     },
     {
       "id": "runtime",
-      "label": "ConversationRuntime",
+      "label": "{{concept-runtime}}",
       "layer": "执行 {{owner}}",
-      "summary": "协调器负责一个 Conversation 的 {{admission}} 与生命周期。",
+      "summary": "{{concept-runtime}} 协调一个 {{concept-conversation}}：由 {{admission}} 决定何时启动工作，并管理运行生命周期。",
       "owns": [
-        "唯一的当前 Attempt {{slot-attempt}}、模型 {{snapshot-model}}、Attempt 之间的 ConversationState 与输入 {{adoption}}。",
-        "Running → Draining 转换、{{settlement}} 交接与经过证明的 {{quiescence}}。"
+        "保留唯一的当前 {{concept-attempt}} 与模型选择；在 {{concept-attempt}} 之间保存 ConversationState，并通过 {{adoption}} 接纳输入。",
+        "串行处理 Running → Draining，接回已有工作的结果，并等待 {{quiescence}} 证明。"
       ],
       "boundaries": [
-        "生产者提交普通输入；只有此协调器能对 AgentExecution 进行 {{admission}}。",
-        "取消、{{physical}} {{settlement}} 与 runtime {{quiescence}} 是彼此独立的事实。"
+        "生产者只提交输入。只有 {{concept-runtime}} 能启动 AgentExecution；是否允许启动由 {{admission}} 决定。",
+        "收到取消、实际工作已结束、runtime 已可安全卸载，这三个判断需要各自的证据。"
       ],
       "evidence": [
         "runtime-ownership",
@@ -123,16 +123,16 @@
     },
     {
       "id": "agent",
-      "label": "Agent kernel",
+      "label": "{{concept-agent-kernel}}",
       "layer": "执行 {{owner}}",
-      "summary": "AgentExecution 执行一个 Attempt，并协调与提供方无关的模型轮次和 {{canonical}} Tool 批次。",
+      "summary": "AgentExecution 运行一个 {{concept-attempt}}，协调模型轮次与 {{canonical}} {{concept-tool}} 批次；这些规则不依赖具体提供方。",
       "owns": [
-        "{{frozen}} 的逻辑生成输入、实际请求启动、重试预算与取消 {{arbitration}}。",
-        "{{canonical}} Assistant {{acceptance-assistant}}、同批 Tool {{slot}}/顺序，以及原子的 ToolResult 批次。"
+        "保存固定的逻辑生成输入，为实际请求记录启动，并管理重试预算与取消 {{arbitration}}。",
+        "提交 canonical Assistant，为同批 {{concept-tool}} 保留有序结果位置，再一次提交整个 ToolResult 批次。"
       ],
       "boundaries": [
-        "内核 {{contract-layering}} 中不应出现提供方 SDK、MCP SDK、数据库或 HTTP 框架类型。",
-        "执行器负责 {{physical}} {{effect}}；Publication 与 {{canonical}} {{acceptance-assistant}} 仍是不同 {{boundary}}。"
+        "按内核 {{contract-layering}}，提供方 SDK、MCP SDK、数据库与 HTTP 框架类型应留在外层实现。",
+        "执行器负责实际工作与完成证据；输出进入 {{concept-publication}} 后，还需独立提交 Assistant 历史。"
       ],
       "evidence": [
         "layering",
@@ -145,14 +145,14 @@
       "id": "extensions",
       "label": "Native Agent Extensions",
       "layer": "执行 {{owner}}",
-      "summary": "封闭的 {{native}} 扩展通过显式 runtime {{contract-runtime}} 提供能力，同时保留自身的领域状态。",
+      "summary": "封闭的 {{native}} 扩展通过现有 runtime {{contract-runtime}} 增加能力，并各自保存领域状态。",
       "owns": [
-        "{{composition}} 后的 agent_status、todo 与 goal 能力。",
-        "GoalDomain {{durable}} 状态，以及 GoalRoundDriver 在安全空闲 {{admission-goal}} 处的参与。"
+        "在运行核心完成 {{composition}} 时接入 {{concept-agent-status}}、{{concept-todo}} 与 goal。",
+        "由 GoalDomain 保存 {{durable}} 状态；GoalRoundDriver 在安全空闲点通过 {{admission-goal}} 提交下一轮输入。"
       ],
       "boundaries": [
-        "Plugins 默认关闭；不存在动态 hook 市场。",
-        "Goal 不负责模型执行、Tool 执行、请求组装或第二条队列。"
+        "Plugins 默认关闭，不提供动态 hook 市场。",
+        "{{concept-goal}} 只管理目标与继续执行的条件；模型、{{concept-tool}} 与请求组装仍由现有执行路径负责，也不另建队列。"
       ],
       "evidence": [
         "config-selection",
@@ -163,16 +163,16 @@
     },
     {
       "id": "context",
-      "label": "Context Engine",
+      "label": "{{concept-context-engine}}",
       "layer": "Runtime {{contract-layering}} 与适配器",
-      "summary": "历史编译器选择 Checkpoint 中的 Original/Derived 项与符合条件的 Tail；Agent {{frozen}} 当前核心输入。",
+      "summary": "{{concept-context-engine}} 从 {{concept-checkpoint}} 选择 {{concept-original}}/{{concept-derived}}，再接上符合条件的 {{concept-tail}}；Agent 随后保存一份固定的本轮输入。",
       "owns": [
-        "历史校验、token 计量、{{compaction}} 规划与 {{bounded}} 只读资源。",
-        "ContextAssembly 动态提案 {{admission-context}} 与精确的请求输入 {{composition-input}}。"
+        "校验历史、计量 token、规划 {{compaction}}，并只读取授权范围内的有限资源。",
+        "检查 ContextAssembly 动态提案是否满足 {{admission-context}}，再组装精确的请求输入。"
       ],
       "boundaries": [
-        "{{compaction}} 绝不修改 {{canonical}} Ledger，也不创建 {{canonical}} 摘要消息。",
-        "{{projection-context}} 中的 Tool 调用/结果绝不计作实际执行。"
+        "{{compaction}} 创建独立的历史选择，不修改 {{canonical}} {{concept-message-ledger}}，也不向其中加入摘要消息。",
+        "历史 {{projection-context}} 中出现的 {{concept-tool}} 调用/结果，只是模型输入内容，不产生实际执行记录。"
       ],
       "evidence": [
         "context-contract",
@@ -184,14 +184,14 @@
       "id": "model",
       "label": "模型 {{contract-model}} / 适配器",
       "layer": "Runtime {{contract-layering}} 与适配器",
-      "summary": "ModelAdapter 将一个与提供方无关的 ModelRequest 转换为一个 ModelStreamItem 流。",
+      "summary": "ModelAdapter 把与提供方无关的 ModelRequest 转换为一次请求，并返回 ModelStreamItem 流。",
       "owns": [
-        "OpenAI Chat Completions、OpenAI Responses 与 Anthropic Messages 协议转换。",
-        "提供方编码、{{normalization-events}} 流事件与不透明 continuation 的处理。"
+        "适配 OpenAI Chat Completions、OpenAI Responses 与 Anthropic Messages 协议。",
+        "处理提供方编码、不透明 continuation，并通过 {{normalization-events}} 统一流事件。"
       ],
       "boundaries": [
-        "一次 stream 调用只对应一次提供方尝试，没有隐藏的重试、重连或故障切换。",
-        "先完成 {{persistence}} 启动和重建校验，再进行 {{dispatch}}；仅有启动记录不能证明提供方执行过请求。"
+        "一次 stream 调用只执行一次提供方尝试；重试、重连或切换提供方都必须交回内核。",
+        "先将启动事实写入存储，重建并校验请求后才调用适配器；启动记录不能证明提供方已经执行。"
       ],
       "evidence": [
         "model-contract",
@@ -202,16 +202,16 @@
     },
     {
       "id": "tools",
-      "label": "Tool Plane / 执行器",
+      "label": "{{concept-tool-plane}} / 执行器",
       "layer": "Runtime {{contract-layering}} 与适配器",
-      "summary": "{{native}} Tool、MCP 与 Managed Python 共享定义、schema、策略和调用 {{contract-tool}}。",
+      "summary": "{{concept-tool-plane}} 为 {{native}} {{concept-tool}}、{{concept-mcp}} 与 {{concept-managed-python}} 提供统一的定义、schema、策略与调用 {{contract-tool}}。",
       "owns": [
-        "ToolRegistry 解析/{{preflight}} 与 ForegroundInvocation 生命周期。",
-        "{{physical}} 执行、取消、进度、{{effect}} {{boundary}} 证据与 {{settlement}}。"
+        "由 ToolRegistry 解析与 {{preflight}} 检查调用，并管理 ForegroundInvocation 生命周期。",
+        "执行实际工作，处理取消与进度，记录外部操作的 {{effect}} 证据，并回收自己管理的资源。"
       ],
       "boundaries": [
-        "已 {{acceptance-tool}} 的 {{canonical}} Tool {{slot}} 与有序结果 commit 由 Agent Loop 负责。",
-        "请求取消绝不证明 {{physical}} 执行已经停止；远程不确定性必须显式保留。"
+        "Agent Loop 为已接受的 canonical 调用保留结果位置，并按调用顺序一次提交整个批次。",
+        "取消只是请求。执行器还需证明实际工作已停止；无法确定的远程结果必须明确保留。"
       ],
       "evidence": [
         "tool-contract",
@@ -223,16 +223,16 @@
     },
     {
       "id": "subagents",
-      "label": "Subagents",
+      "label": "{{concept-subagent}}",
       "layer": "Runtime {{contract-layering}} 与适配器",
-      "summary": "受管理的子 Conversation 复用 {{native}} runtime 栈，使用 {{frozen-agent}} 的权限与 {{finite}} 的 activation 身份。",
+      "summary": "{{concept-subagent}} 使用独立的子 {{concept-conversation}}，复用同一 runtime 栈。创建时捕获权限，每次 activation 都有明确的运行身份。",
       "owns": [
-        "SubagentRegistry 身份/{{admission-subagent}} 与精确的 activation 控制。",
-        "独立的子 Conversation {{canonical}} 历史，以及 {{physical}} 执行已受控的证明。"
+        "由 SubagentRegistry 管理身份与 {{admission-subagent}}，并精确控制目标 activation。",
+        "维护子 {{concept-conversation}} 独立的 canonical 历史，并证明实际工作已完成收束。"
       ],
       "boundaries": [
-        "Agent 使用 Session 共享工作区；失败或取消后，已完成的写入仍会保留。",
-        "{{finite}} 的 Workflow 子任务归其 Workflow 节点管理，不能通过 {{durable}} Agent 控制 {{recovery}}。"
+        "父子 Agent 使用同一个 {{concept-session}} 工作区，失败或取消不会撤销已完成的写入。",
+        "{{concept-workflow}} 子任务归对应节点管理；普通持久 Agent 的控制操作不能用来恢复它们。"
       ],
       "evidence": [
         "agents-authority",
@@ -244,14 +244,14 @@
       "id": "workflows",
       "label": "WorkflowRuntime",
       "layer": "Runtime {{contract-layering}} 与适配器",
-      "summary": "被选中的 Workflow 是一个前台 Tool，执行固定的 {{scope}} 程序。",
+      "summary": "选中的 {{concept-workflow}} 作为一个前台 {{concept-tool}}，执行预先确定的程序；局部值由各自的 {{scope}} 管理。",
       "owns": [
-        "编译后的 block/node 实例、类型化绑定、局部值与 {{scope}} {{settlement}}。",
-        "Agent、Tool、Branch、Parallel、Review、Loop 与 Return 节点。"
+        "保存编译后的 block/node 实例、类型化绑定与局部值，并完成各 {{scope}} 的 {{settlement}}。",
+        "执行 Agent、{{concept-tool}}、Branch、Parallel、Review、Loop 与 Return 节点。"
       ],
       "boundaries": [
-        "{{native}} Tool 节点使用真实的 Workflow 调用身份，绝不伪造模型 ToolCall。",
-        "不隐含工作区回滚或交接；并行写入者共享 Session 目录。"
+        "{{native}} {{concept-tool}} 节点使用真实的 {{concept-workflow}} 调用身份，不伪造模型 ToolCall。",
+        "并行写入者共享 {{concept-session}} 目录；失败或取消不会自动回滚文件，也不隐含工作区交接。"
       ],
       "evidence": [
         "workflow-program",
@@ -262,16 +262,16 @@
     },
     {
       "id": "durable",
-      "label": "{{canonical}} 事实 / {{durable}} {{authority-ledger}}",
+      "label": "{{canonical}} 事实与 {{durable}} 存储",
       "layer": "{{durable}} 事实",
-      "summary": "ConversationStore 暴露 {{native}} 语义事务；SQLite 实现 {{persistence}} 后端。",
+      "summary": "ConversationStore 提供领域语义事务，由 SQLite 后端保存数据。",
       "owns": [
-        "已 {{acceptance-inbound}} 的 Pending Inbound、不可变 Message Ledger、{{canonical}} 追加记账与执行 Journal 事实。",
-        "类型化 {{projection-context}} Checkpoint、精确请求 {{snapshot-request}} 与原子语义 commit {{receipt}}。"
+        "保存已接收的 Pending Inbound、不可变 {{concept-message-ledger}}、canonical 追加记录与 {{concept-event-journal}} 执行事实。",
+        "保存类型化 {{concept-checkpoint}} 与精确请求快照，并返回原子提交的 {{receipt}}。"
       ],
       "boundaries": [
-        "Pending {{acceptance-inbound}} 与 {{canonical}} {{adoption}} 不同；邮箱只协调唤醒。",
-        "历史 {{projection-context}} 的包含范围由 Checkpoint 激活选择，独立于 {{canonical}} 事实。"
+        "输入先经过 {{acceptance-inbound}} 保存，再由 {{adoption}} 纳入 {{canonical}} 历史；邮箱只负责唤醒。",
+        "{{concept-checkpoint}} 激活决定历史输入选中什么；改变历史 {{projection-context}} 不会改写 {{canonical}} 事实。"
       ],
       "evidence": [
         "durable-inbound",
@@ -282,16 +282,16 @@
     },
     {
       "id": "publication",
-      "label": "Publication 层",
+      "label": "{{concept-publication}} 层",
       "layer": "{{durable}} 事实",
-      "summary": "面向用户的 {{durable}} 输出 {{publication}} 有独立的 {{staging-publication}}、{{terminal-publication}} 与 {{settlement-publication}} {{boundary}}。",
+      "summary": "{{concept-publication}} 单独保存面向用户的输出：{{staging-publication}} 写入帧，{{terminal-publication}} 记录结束状态，{{settlement-publication}} 确定最终审计分类。",
       "owns": [
-        "面向用户 {{publication}} 之前的 {{bounded}} 合并与 {{persistence}} 帧。",
-        "Canonical、UnacceptedPublicationAudit 或 IncompletePublicationAudit {{settlement-publication}}。"
+        "先将输出合并为大小受限的帧，再写入存储，最后发往客户端。",
+        "按已提交事实，将输出归为 Canonical、UnacceptedPublicationAudit 或 IncompletePublicationAudit。"
       ],
       "boundaries": [
-        "提供方结果 P 先于 Publication {{terminal-publication}} U，U 又先于 {{canonical}} {{acceptance-assistant}} C。",
-        "已 commit 待 {{publication}} 的内容只是可能显示内容的上界，绝不证明用户已经看到。"
+        "先保存提供方结果 P，再保存 {{concept-publication}} 终态 U，最后完成 {{canonical}} Assistant 的 {{acceptance-assistant}} C。",
+        "已提交、可能发出的内容只构成显示内容的上界，不能证明用户已经看到。"
       ],
       "evidence": [
         "publication-contract",
@@ -305,166 +305,166 @@
       "from": "clients",
       "to": "app-server",
       "kind": "call",
-      "label": "显式寻址的 JSON-RPC 意图"
+      "label": "显式寻址的 JSON-RPC 请求"
     },
     {
       "from": "app-server",
       "to": "sessions",
       "kind": "call",
-      "label": "Session 控制与 runtime attachment"
+      "label": "{{concept-session}} 控制与 runtime attachment"
     },
     {
       "from": "app-server",
       "to": "projection",
       "kind": "call",
-      "label": "已连接 runtime 的控制与 {{snapshot}}"
+      "label": "控制已连接 runtime，读取快照"
     },
     {
       "from": "sessions",
       "to": "config",
       "kind": "call",
-      "label": "冷解析与 {{source-config}} {{admission-config}}"
+      "label": "冷解析资源，检查本次需求"
     },
     {
       "from": "sessions",
       "to": "runtime",
       "kind": "call",
-      "label": "{{composition}}、激活与显式卸载"
+      "label": "组装、激活与显式卸载"
     },
     {
       "from": "projection",
       "to": "runtime",
       "kind": "call",
-      "label": "转发 {{native}} 控制意图"
+      "label": "转发本地控制请求"
     },
     {
       "from": "runtime",
       "to": "agent",
       "kind": "call",
-      "label": "对一个 Attempt 进行 {{admission}}"
+      "label": "允许启动一次 {{concept-attempt}}"
     },
     {
       "from": "runtime",
       "to": "durable",
       "kind": "call",
-      "label": "{{acceptance-inbound}}/{{adoption}} 输入与 {{recovery}}"
+      "label": "接收输入、纳入历史与恢复"
     },
     {
       "from": "agent",
       "to": "context",
       "kind": "call",
-      "label": "编译历史并 {{frozen}} 输入"
+      "label": "编译历史，固定本轮输入"
     },
     {
       "from": "agent",
       "to": "model",
       "kind": "call",
-      "label": "调用与提供方无关的 ModelAdapter"
+      "label": "调用 ModelAdapter"
     },
     {
       "from": "agent",
       "to": "tools",
       "kind": "call",
-      "label": "解析并执行已通过 {{acceptance-tool}} 的调用"
+      "label": "解析并执行已接受的调用"
     },
     {
       "from": "agent",
       "to": "durable",
       "kind": "call",
-      "label": "启动请求并 commit {{canonical}} 事实"
+      "label": "记录启动，提交 canonical 事实"
     },
     {
       "from": "agent",
       "to": "publication",
       "kind": "call",
-      "label": "输出 {{publication}} 的 {{staging-publication}} 与 {{settlement-publication}}"
+      "label": "保存输出帧，确定最终审计分类"
     },
     {
       "from": "durable",
       "to": "context",
       "kind": "data",
-      "label": "Ledger + Checkpoint + {{bounded}} Tail"
+      "label": "{{concept-message-ledger}} + {{concept-checkpoint}} + {{concept-tail}}"
     },
     {
       "from": "runtime",
       "to": "projection",
       "kind": "data",
-      "label": "{{native}} {{observation}}，不新增 {{authority-runtime}}"
+      "label": "报告运行事实"
     },
     {
       "from": "publication",
       "to": "projection",
       "kind": "data",
-      "label": "已 commit 的 {{publication}} 帧"
+      "label": "已经保存的输出帧"
     },
     {
       "from": "projection",
       "to": "app-server",
       "kind": "data",
-      "label": "{{snapshot}} 与 {{cursor}} 事件"
+      "label": "快照与带 cursor 的事件"
     },
     {
       "from": "app-server",
       "to": "clients",
       "kind": "data",
-      "label": "与客户端无关的传输 {{projection}}"
+      "label": "适配客户端传输"
     },
     {
       "from": "tools",
       "to": "subagents",
       "kind": "call",
-      "label": "Agent 控制 Tool 的实现"
+      "label": "Agent 控制 {{concept-tool}} 的实现"
     },
     {
       "from": "tools",
       "to": "workflows",
       "kind": "call",
-      "label": "被选中的 Workflow Tool 调用"
+      "label": "调用选中的 {{concept-workflow}} {{concept-tool}}"
     },
     {
       "from": "workflows",
       "to": "tools",
       "kind": "call",
-      "label": "共享的 {{native}} 调用 {{owner}}"
+      "label": "复用统一 {{concept-tool}} 调用入口"
     },
     {
       "from": "workflows",
       "to": "subagents",
       "kind": "call",
-      "label": "{{finite}} Agent 节点的 {{admission-subagent}}"
+      "label": "允许启动 Agent 节点"
     },
     {
       "from": "extensions",
       "to": "runtime",
       "kind": "call",
-      "label": "普通 Pending Inbound 经由 {{native}} {{admission}}"
+      "label": "提交普通 Pending Inbound"
     },
     {
       "from": "config",
       "to": "tools",
       "kind": "call",
-      "label": "对选定的 {{finite}} {{source-config}} 需求进行 {{admission-config}}"
+      "label": "检查选定的资源需求"
     },
     {
       "from": "agent",
       "to": "extensions",
       "kind": "dependency",
-      "label": "显式 {{native}} 扩展 {{contract-runtime}}"
+      "label": "调用封闭的本地扩展接口"
     }
   ],
   "request": [
     {
       "id": "route",
-      "title": "寻址 Session",
-      "actor": "TUI / Web → App Server",
+      "title": "寻址 {{concept-session}}",
+      "actor": "TUI / Web → {{concept-app-server}}",
       "active": [
         "clients",
         "app-server",
         "sessions"
       ],
-      "description": "客户端指定 Session/节点。Attach 加载或复用目标 runtime，并获取外部控制 attachment；冷加载解析当前 {{source-config}}、{{composition}} 一次、在尚未激活时绑定 {{projection}}，然后激活。",
-      "durable": "Session 图和显式选择已经确定 {{durable}} Conversation；attachment 并不创建新 Session。",
-      "visible": "客户端收到目标明确的 runtime {{snapshot}}；焦点仍是本地路由状态。",
+      "description": "客户端指定 {{concept-session}}/节点。Attach 加载或复用目标 runtime，并取得外部控制 attachment。冷加载先解析当前 {{source-config}}，完成一次 {{composition}}，在激活前绑定客户端 {{projection}}，最后激活运行核心。",
+      "durable": "{{concept-session}} 图和显式选择已经确定要使用的 {{durable}} {{concept-conversation}}；attachment 只连接它，不创建新 {{concept-session}}。",
+      "visible": "客户端收到目标 runtime 的 {{snapshot}}；焦点只决定本地操作发往哪里。",
       "evidence": [
         "topology",
         "session-residency",
@@ -474,16 +474,16 @@
     },
     {
       "id": "accept",
-      "title": "先 commit 输入，再进行 {{admission}}",
-      "actor": "ConversationRuntime + ConversationStore",
+      "title": "先保存输入，再决定何时运行",
+      "actor": "{{concept-runtime}} + ConversationStore",
       "active": [
         "runtime",
         "durable",
         "projection"
       ],
-      "description": "提交首先跨越 {{persistence}} Pending Inbound 的 {{acceptance-inbound}} {{boundary}}。在 {{native}} {{admission}}/安全 {{boundary}} 处，当前记录作为一个 {{finite}} 批次被 {{canonical}} {{adoption}}；协调器负责当前 Attempt {{slot-attempt}}。",
-      "durable": "accept_inbound 原子分配序号和 pending 记录。adopt_pending_batch 将精确的当前载荷、{{canonical}} 事实与记录移除一并 commit。",
-      "visible": "已 {{acceptance-inbound}} 的 pending 项可以在被 {{adoption}} 为 {{canonical}} User 消息之前展示。通知 {{observation}} 这些状态转换。",
+      "description": "ConversationStore 先通过 {{acceptance-inbound}} 保存 Pending Inbound。到达安全运行点后，{{concept-runtime}} 根据 {{admission}} 决定启动，并通过 {{adoption}} 将当前 {{finite}} 批次纳入 {{canonical}} 历史；协调器始终只保留一个当前 {{concept-attempt}} {{slot-attempt}}。",
+      "durable": "accept_inbound 原子分配序号并保存 pending 记录。adopt_pending_batch 在同一事务中提交精确的当前载荷、{{canonical}} 事实，并移除对应 pending 记录。",
+      "visible": "排队输入可以在成为 {{canonical}} User 消息之前显示；客户端通过 {{observation}} 接收状态变化。",
       "evidence": [
         "inbound-commit",
         "runtime-admission"
@@ -491,17 +491,17 @@
     },
     {
       "id": "freeze",
-      "title": "编译历史，将当前输入设为 {{frozen}}",
-      "actor": "Context Engine → AgentExecution",
+      "title": "编译历史，固定本轮输入",
+      "actor": "{{concept-context-engine}} → AgentExecution",
       "active": [
         "context",
         "agent",
         "durable",
         "config"
       ],
-      "description": "编译活跃的类型化 Checkpoint，以及严格位于其 base 之后、截至 request cut 的 Tail。加入受保护的 Fresh Inbound、通过 {{admission-context}} 的 Context、prompt、Tool 定义与 continuation，形成一个保持 {{frozen}} 的语义输入版本。",
-      "durable": "历史 Ledger/Checkpoint 事实保持不变。当前请求 {{scope-request}} 内的 Context 仅处于 {{staging-context}}，尚无 {{persistence}} 效果。",
-      "visible": "检查 Context/请求时，必须将 {{projection-context}} 内容与 {{canonical}} Conversation 历史分开标示。",
+      "description": "{{concept-context-engine}} 编译活跃 {{concept-checkpoint}} 中的类型化条目，再接上严格位于其 base 之后、截至 request cut 的 {{concept-tail}}。Agent 加入受保护的 Fresh Inbound、获准的 Context、prompt、{{concept-tool}} 定义与 continuation，保存一份固定的语义输入，后续变化不会改写它。",
+      "durable": "{{concept-message-ledger}} 与 {{concept-checkpoint}} 事实保持不变。本次 {{scope-request}} 内的 Context 仅处于 {{staging-context}}，尚未写入存储。",
+      "visible": "Context/请求检查器分别标示历史 {{projection-context}} 与 {{canonical}} {{concept-conversation}} 消息。",
       "evidence": [
         "context-contract",
         "context-cuts",
@@ -511,15 +511,15 @@
     },
     {
       "id": "start",
-      "title": "{{arbitration}} 请求的 {{persistence}} 启动",
+      "title": "由同一个 gate 决定取消或启动",
       "actor": "AgentCancellation → ConversationStore",
       "active": [
         "agent",
         "durable"
       ],
-      "description": "arbitrate_model_turn_start 在取消检查与 commit_model_turn_start 期间持有 Attempt gate。如果启动先赢，则在任何适配器 {{dispatch}} 之前独立重建并校验 {{frozen}} 请求。",
-      "durable": "一个事务 commit 请求 {{scope-request}} 内的 User context、RequestSnapshot 与 ModelRequestStarted。事务失败则三者均不留下；启动一旦 commit，就跨过禁止重发的 {{frontier-start}}。",
-      "visible": "启动记录是可检查的执行证据，不能证明提供方实际收到或运行过该请求。",
+      "description": "arbitrate_model_turn_start 在取消检查与 commit_model_turn_start 期间持有 {{concept-attempt}} gate。若启动先赢，事务先提交请求；随后独立重建并校验 {{frozen}} 输入，再交给适配器 {{dispatch}}。",
+      "durable": "一个事务一起提交本次 {{scope-request}} 内的 User context、{{concept-request-snapshot}} 与 ModelRequestStarted。失败时三者都不留下；成功后即越过禁止重发的 {{frontier-start}}。",
+      "visible": "启动记录可供检查，但不能证明提供方已经收到或执行请求。",
       "evidence": [
         "cancel-gate",
         "start-code",
@@ -528,15 +528,15 @@
     },
     {
       "id": "stream",
-      "title": "{{dispatch}} 一次实际的提供方请求",
+      "title": "发起一次实际的提供方请求",
       "actor": "AgentExecution → ModelAdapter",
       "active": [
         "agent",
         "model"
       ],
-      "description": "适配器接收中立请求与 Attempt 的子取消信号。它执行一次请求尝试并返回 {{normalization-events}} 事件；内核负责实际请求的重试和组装。",
-      "durable": "已 commit 的 {{snapshot-request}} 仍是此请求身份对应的精确输入 {{authority-request}}。提供方活动不会重写它。",
-      "visible": "只有 {{normalization-events}} 语义输出进入 Publication；仅用于执行的适配器进度单独处理。",
+      "description": "ModelAdapter 接收与提供方无关的请求，以及 {{concept-attempt}} 的子取消信号。它只尝试一次，并返回统一事件；内核负责组装模型输出、记录每次实际请求并决定重试。",
+      "durable": "已提交的请求 {{snapshot-request}} 保存这次请求的精确输入，是检查输入时的 {{authority-request}}；提供方活动不会改写它。",
+      "visible": "只有统一后的语义输出进入 {{concept-publication}}；适配器内部进度单独处理。",
       "evidence": [
         "model-contract",
         "model-dispatch",
@@ -546,16 +546,16 @@
     },
     {
       "id": "release",
-      "title": "先 commit 帧，再进行输出 {{publication}}",
-      "actor": "AgentExecution + Publication 层",
+      "title": "先保存帧，再发送输出",
+      "actor": "AgentExecution + {{concept-publication}} 层",
       "active": [
         "agent",
         "publication",
         "projection"
       ],
-      "description": "合并器创建 {{bounded}} 的 Publication 帧。flush_publication 先完成每帧的 {{staging-publication}}，再通过 {{observation}} 接口进行 {{release-output}}。客户端可在请求期间看到文本或 Tool 提案。",
-      "durable": "Publication {{staging-publication}} 记录已 commit 待 {{publication}} 的输出。这既不是 {{canonical}} Assistant 消息，也不授权执行提案中的 Tool。",
-      "visible": "通过 {{publication}} 展示的提案仍是提案。{{durable}} 的 Publication 审计绝不证明客户端已经看到。",
+      "description": "合并器生成大小受限的 {{concept-publication}} 帧。flush_publication 先完成 {{staging-publication}}，再通过观测接口发送；客户端可在请求进行时看到文本或 {{concept-tool}} 提案。",
+      "durable": "保存后的 {{concept-publication}} 帧记录可能发出的输出；它还不是 {{canonical}} Assistant 消息，也不授权执行其中的 {{concept-tool}} 提案。",
+      "visible": "流式显示的提案仍需后续检查与提交。即使 {{concept-publication}} 审计已写入存储，也不能证明客户端已经看到。",
       "evidence": [
         "publication-flush",
         "publication-contract",
@@ -564,16 +564,16 @@
     },
     {
       "id": "accept-output",
-      "title": "区分提供方、{{publication}} 与 {{canonical}} 完成",
+      "title": "分别记录提供方结束、输出结束与历史提交",
       "actor": "AgentExecution + {{durable}} 存储",
       "active": [
         "agent",
         "publication",
         "durable"
       ],
-      "description": "结构组装完成后，先 commit 提供方结果 P，再 commit 最终帧/{{terminal-publication}} U。随后进行 Registry {{preflight}} 和 {{canonical}} Assistant {{acceptance-assistant}} C。只有已 {{acceptance-assistant}} 的 {{canonical}} ToolCall 才会成为执行 {{slot}}。",
-      "durable": "存储强制保证 P < U < C。{{canonical}} {{acceptance-assistant}} 会 commit Assistant 内容及其事件；只有完整 U 而没有 C 时，仍为 UnacceptedPublicationAudit。",
-      "visible": "已完整 {{publication}} 的输出仍可能未被 {{acceptance-assistant}}。不能将 Publication 状态与 {{canonical}} 历史混为一谈。",
+      "description": "组装完成后，先提交提供方结果 P，再提交最终帧与 {{terminal-publication}} U。随后进行 Registry {{preflight}}，完成 {{canonical}} Assistant 的 {{acceptance-assistant}} C。只有 C 中的 ToolCall 才获得可执行的 {{slot}}。",
+      "durable": "存储强制保持 P < U < C。C 一起提交 Assistant 内容与对应事件；若只有完整 U 而没有 C，输出仍归为 UnacceptedPublicationAudit。",
+      "visible": "完整显示的输出也可能没有通过 {{acceptance-assistant}}；界面需分别展示 {{concept-publication}} 状态与 {{canonical}} 历史。",
       "evidence": [
         "publication-contract",
         "publication-terminal",
@@ -583,15 +583,15 @@
     },
     {
       "id": "execute-tools",
-      "title": "只执行已 {{acceptance-tool}} 的 Tool {{slot}}",
-      "actor": "Agent Loop → Tool Plane",
+      "title": "执行已接受的 {{concept-tool}} 调用",
+      "actor": "Agent Loop → {{concept-tool-plane}}",
       "active": [
         "agent",
         "tools"
       ],
-      "description": "{{preflight}} 将 schema/业务拒绝保留为结果 {{slot}}，同时拒绝不可信的结构。Assistant 通过 {{acceptance-assistant}} 后，策略/批准与调度共同控制调用。保守的执行器启动 {{frontier-tool}} 先于实际 {{physical}} {{effect}} 的 {{boundary}}。",
-      "durable": "已 {{acceptance-tool}} 的调用是 {{canonical}} 事实。{{native}} 启动/进度 {{observation}} 不能替代权限 gate 或 {{physical}} 证据。",
-      "visible": "客户端可展示真实 Tool 进度。选定的 Agent 或 Workflow Tool 可通过其 {{native}} {{owner}} 委派；这些执行共享 Session 工作区。",
+      "description": "{{preflight}} 将 schema/业务拒绝保留为结果位置，并拒绝不可信结构。Assistant 提交后，策略、批准与调度继续约束调用。执行器先记录保守的启动 {{frontier-tool}}，随后才可能实际修改文件或外部系统。",
+      "durable": "通过 {{acceptance-tool}} 的调用已是 {{canonical}} 事实；但启动/进度 {{observation}} 既不能代替权限 gate，也不能证明实际工作已完成。",
+      "visible": "客户端可展示真实 {{concept-tool}} 进度。选中的 Agent 或 {{concept-workflow}} {{concept-tool}} 由对应组件委派执行，使用同一 {{concept-session}} 工作区。",
       "evidence": [
         "tool-acceptance",
         "agent-owns",
@@ -601,16 +601,16 @@
     },
     {
       "id": "settle-tools",
-      "title": "证明 {{physical}} {{settlement}}，commit 整个批次",
+      "title": "收束实际工作，一次提交同批结果",
       "actor": "执行器 → Agent Loop",
       "active": [
         "tools",
         "agent",
         "durable"
       ],
-      "description": "执行器提供已知结果或显式不确定性。取消会填充未启动 {{slot}}，并 {{drain}} 已启动的同批调用。Agent Loop 按 {{canonical}} 调用顺序排列结果，并将同批所有结果原子 commit。",
-      "durable": "一个原子 ToolResult 批次才是 {{canonical}} 事实；同批结果不能部分 commit。仅凭取消请求不能判定 Cancelled 或 TimedOut。",
-      "visible": "类型化的 Success、Failed、Denied、Cancelled、TimedOut 或 OutcomeUnknown 说明已知情况。完成顺序不会改变模型可见批次的顺序。",
+      "description": "执行器提供已知结果或明确的不确定性。取消为尚未启动的调用填入结果，同时等待已启动的同批调用收束。Agent Loop 按 canonical 调用顺序整理结果，原子提交整个 ToolResult 批次。",
+      "durable": "同批结果要么全部成为 {{canonical}} 事实，要么全部不提交；仅凭取消请求不能判定 Cancelled 或 TimedOut。",
+      "visible": "Success、Failed、Denied、Cancelled、TimedOut 或 OutcomeUnknown 如实描述已知情况。执行完成的先后不改变模型看到的批次顺序。",
       "evidence": [
         "tool-evidence",
         "tool-acceptance",
@@ -619,17 +619,17 @@
     },
     {
       "id": "continue",
-      "title": "在同一 Attempt 中继续，最后只进行一次 {{settlement}}",
-      "actor": "AgentExecution → ConversationRuntime",
+      "title": "继续同一 {{concept-attempt}}，再交回最终结果",
+      "actor": "AgentExecution → {{concept-runtime}}",
       "active": [
         "agent",
         "context",
         "runtime",
         "durable"
       ],
-      "description": "{{settlement}} 后的 Tool 批次可携带已 {{acceptance-continuation}} 的 continuation 和当前不可变输入，进入下一模型轮次。每个实际请求都经过同一启动 gate。最后，Attempt 将状态及其唯一 {{terminal}} {{settlement-attempt}} 候选交回协调器。",
-      "durable": "通常会 commit 一个 AttemptCompleted、AttemptCancelled 或 AttemptFailed。若 {{terminal}} 追加失败，状态机虽已终止，但不会虚构 Journal 事实或观察者事件。",
-      "visible": "新的模型请求不等于新的 Attempt。每个实际请求，包括每次重试或 Tool continuation，都有全新的请求身份；其 Attempt 和 {{frozen}} 的逻辑生成输入则可能延续。",
+      "description": "{{concept-tool}} 批次收束后，可带着已经接受的 continuation 与当前不可变输入进入下一模型轮次。每个实际请求仍经过同一启动 gate。最后，AgentExecution 将 ConversationState 与唯一的最终结果候选交回协调器。",
+      "durable": "通常会提交一个 AttemptCompleted、AttemptCancelled 或 AttemptFailed。若终态追加失败，状态机仍已终止，但不会虚构 Journal 事实或观察者事件。",
+      "visible": "一次 {{concept-attempt}} 可以包含多个模型请求。重试与 {{concept-tool}} continuation 每次都有新请求身份；{{concept-attempt}} 身份和固定的逻辑生成输入则可能延续。",
       "evidence": [
         "continuation",
         "agent-owns",
@@ -638,17 +638,17 @@
     },
     {
       "id": "project",
-      "title": "为已连接客户端提供事实 {{projection}}",
-      "actor": "Runtime Client → App Server → 客户端",
+      "title": "为客户端整理可读取的运行事实",
+      "actor": "{{concept-runtime-client}} → {{concept-app-server}} → 客户端",
       "active": [
         "runtime",
         "projection",
         "app-server",
         "clients"
       ],
-      "description": "唯一的 RuntimeClientProjection 通过 {{fold}} 更新 {{snapshot}}、分配 {{cursor}}，并提供 {{bounded}} {{replay-cursor}}。{{canonical}} 对话记录/历史与 {{frozen}} 请求详情从各自的 {{native}} {{durable}} {{authority}} 读取。",
-      "durable": "{{projection}} 缓存、客户端 {{cursor}} 与 Trace 不会成为 {{recovery}} 输入。没有任何 attachment 时，runtime 也以相同方式执行。",
-      "visible": "TUI/Web 可以重新连接，并通过 {{snapshot}}/{{replay-cursor}} 与 {{bounded}} 历史重建界面。它们通过 {{observation}} 了解执行，不负责执行。",
+      "description": "RuntimeClientProjection 统一合并事件、更新 {{snapshot}}、分配 {{cursor}}，并保存事件记录供客户端 {{replay-cursor}}。对话历史与精确请求详情从各自的持久领域读取。",
+      "durable": "客户端视图缓存、{{cursor}} 与 Trace 不参与 {{recovery}}。即使没有任何 attachment，runtime 也遵循相同执行规则。",
+      "visible": "TUI/Web 重连后通过 {{snapshot}}、事件回放与有限范围的历史重建界面，读取执行事实并展示进展。",
       "evidence": [
         "client-authority",
         "client-owners",
@@ -660,7 +660,7 @@
     {
       "id": "cancellation",
       "title": "取消与模型请求启动的竞争",
-      "intro": "选择哪一方先通过同一个 gate。这些执行顺序解释确定性的先后关系，并非实际时钟计时或实时请求。",
+      "intro": "切换取消与启动通过同一个 gate 的先后顺序，观察各自会留下什么事实。本场景只演示确定的顺序，不发起实时请求，也不模拟真实时钟。",
       "choices": [
         {
           "id": "cancel-first",
@@ -668,15 +668,15 @@
           "steps": [
             {
               "id": "cancel-first-prepared",
-              "title": "已准备仍是临时状态",
+              "title": "请求已准备，尚未启动",
               "actor": "AgentExecution",
               "active": [
                 "agent",
                 "context"
               ],
-              "description": "Context 已 {{staging-context}}，中立请求已准备好。在任何请求 {{scope-request}} 内的 {{persistence}} 启动之前，取消仍可能先赢。",
-              "durable": "尚未为此已准备请求 commit RequestSnapshot 或 ModelRequestStarted。先前已 {{acceptance-inbound}} 的输入仍是独立事实。",
-              "visible": "仅仅准备好并不授权任何提供方输出。",
+              "description": "Context 仅在本次请求内完成 {{staging-context}}，与提供方无关的请求也已准备好。启动事务提交前，取消仍可能先进入 gate。",
+              "durable": "此时还没有为该请求提交 {{concept-request-snapshot}} 或 ModelRequestStarted；此前通过 {{acceptance-inbound}} 保存的输入仍然保留。",
+              "visible": "准备好请求并不授权提供方输出。",
               "evidence": [
                 "context-start",
                 "cancel-gate"
@@ -684,15 +684,15 @@
             },
             {
               "id": "cancel-first-gate",
-              "title": "记录胜出的取消原因",
+              "title": "保留首个取消原因",
               "actor": "AgentCancellation.request_cancel",
               "active": [
                 "agent",
                 "runtime"
               ],
-              "description": "request_cancel 进入启动 gate，写入首个语义原因并取消共享信号。后续请求不能更改该原因。",
-              "durable": "信号/原因是进程持有的取消状态；此调用本身不是 {{terminal}} Journal commit。",
-              "visible": "首个取消请求选定的 UserRequested 或 RuntimeShutdown 会保留为胜出原因。",
+              "description": "request_cancel 进入启动 gate，记录首个语义原因并取消共享信号。后来的取消请求不再改变原因。",
+              "durable": "原因与信号保存在进程中；该调用本身不会向 Journal 提交终态。",
+              "visible": "首先确定的 UserRequested 或 RuntimeShutdown 会保留为取消原因。",
               "evidence": [
                 "cancel-cause",
                 "attempt-terminal"
@@ -700,15 +700,15 @@
             },
             {
               "id": "cancel-first-no-start",
-              "title": "拒绝 {{persistence}} 启动",
+              "title": "取消先到，跳过启动事务",
               "actor": "AgentCancellation.arbitrate_model_turn_start",
               "active": [
                 "agent",
                 "durable"
               ],
-              "description": "{{arbitration}} 看到已取消信号，返回 CancelledBeforeStart，不执行 commit 闭包。此请求不能调用适配器。",
-              "durable": "此请求不存在请求 {{scope-request}} 内的 Context commit、RequestSnapshot 或 ModelRequestStarted。",
-              "visible": "没有新的模型输出可 {{publish}}。Attempt 沿取消 {{settlement}} 路径继续。",
+              "description": "{{arbitration}} 发现信号已取消，返回 CancelledBeforeStart，并跳过 commit 闭包；该请求不会调用适配器。",
+              "durable": "本次请求不会留下 Context、{{concept-request-snapshot}} 或 ModelRequestStarted。",
+              "visible": "没有新的模型输出可发送；{{concept-attempt}} 继续完成取消后的 {{settlement}}。",
               "evidence": [
                 "cancel-gate",
                 "start-code"
@@ -718,19 +718,19 @@
         },
         {
           "id": "start-first",
-          "label": "{{persistence}} 启动先赢",
+          "label": "启动事务先提交",
           "steps": [
             {
               "id": "start-first-commit",
-              "title": "持有 gate 完成 commit",
+              "title": "持有 gate 提交启动事务",
               "actor": "AgentExecution + ConversationStore",
               "active": [
                 "agent",
                 "durable"
               ],
-              "description": "启动闭包持有 gate，并在一个事务中 commit 请求 {{scope-request}} 内的 Context、精确 {{snapshot-request}} 与 ModelRequestStarted。",
-              "durable": "{{persistence}} 结果先确定，受阻的竞争取消请求才能进入 gate。事务失败不会留下部分启动状态。",
-              "visible": "成功启动确定了 {{durable}} 请求身份，并不证明远程提供方已执行。",
+              "description": "启动闭包持有 gate，在同一事务中保存本次请求的 Context、精确 {{snapshot-request}} 与 ModelRequestStarted。",
+              "durable": "事务结果确定后，竞争的取消请求才能进入 gate。事务失败时，不会留下部分启动状态。",
+              "visible": "成功提交会确定持久的请求身份，但不能证明远程提供方已经执行。",
               "evidence": [
                 "cancel-gate",
                 "start-code",
@@ -739,15 +739,15 @@
             },
             {
               "id": "start-first-cancel",
-              "title": "取消已启动的请求",
+              "title": "随后到达的取消仍然生效",
               "actor": "AgentCancellation.request_cancel",
               "active": [
                 "agent",
                 "runtime"
               ],
-              "description": "取消随后进入。若尚无原因，则确立首个原因，通知后代，且不能将此请求重新归类为从未启动。",
-              "durable": "已 commit 的启动仍然保留。取消不能撤销启动 {{receipt}}。",
-              "visible": "UI 必须区分启动后取消与从未跨过启动 {{frontier-start}} 的请求。",
+              "description": "取消随后进入 gate。若尚无原因，就保留首个原因并通知后代；该请求已经启动的事实仍然成立。",
+              "durable": "启动记录继续保留；取消不能撤销已提交的启动 {{receipt}}。",
+              "visible": "UI 分别展示启动后取消与从未越过 {{frontier-start}} 的请求。",
               "evidence": [
                 "cancel-gate",
                 "cancel-cause"
@@ -755,15 +755,15 @@
             },
             {
               "id": "start-first-child",
-              "title": "通过适配器 {{contract-model}} 传播",
+              "title": "向适配器传递取消信号",
               "actor": "ModelAdapter",
               "active": [
                 "agent",
                 "model"
               ],
-              "description": "重建校验后，被调用的适配器收到 model_cancellation()，它是 Attempt 信号的子信号。取消通过 {{normalization-events}} 的 Failed(Cancelled) {{contract-model-cancellation}} 终止流。",
-              "durable": "启动记录仍不证明发生过 {{dispatch}}；适配器调用之前可能崩溃。{{recovery}} 绝不跨越此 {{boundary}} 静默重发。",
-              "visible": "任何已 commit 输出都保留如实的 Publication {{settlement-publication}}；取消不意味着用户什么都没看到。",
+              "description": "重建校验后，适配器接收 model_cancellation()，即 {{concept-attempt}} 信号的子信号。按统一 {{contract-model-cancellation}}，取消通过 Failed(Cancelled) 结束事件流。",
+              "durable": "启动记录不保证已经 {{dispatch}}，因为进程可能在调用适配器前崩溃。{{recovery}} 也不会因此静默重发。",
+              "visible": "已提交输出仍按事实完成 {{concept-publication}} {{settlement-publication}}；用户在取消前可能已经看到部分内容。",
               "evidence": [
                 "cancel-child",
                 "model-contract",
@@ -778,24 +778,24 @@
     },
     {
       "id": "compaction",
-      "title": "Context {{compaction}}：{{projection-context}} 与执行",
-      "intro": "示例 Ledger 为 M1…M100。以 L100 为 base 的 Checkpoint 特意排除 M96…M100。切换历史选择时，{{canonical}} 事实保持相同。",
+      "title": "Context compaction：改变模型输入，保留执行历史",
+      "intro": "示例 {{concept-message-ledger}} 已有 M1…M100。新 {{concept-checkpoint}} 以 L100 为 base，并特意排除 M96…M100。切换前后，canonical 历史保持相同，模型输入的历史选择发生变化。",
       "choices": [
         {
           "id": "before",
-          "label": "新 Checkpoint 之前",
+          "label": "新 {{concept-checkpoint}} 之前",
           "steps": [
             {
               "id": "compact-before-ledger",
-              "title": "读取不可变事实",
+              "title": "读取不可变历史",
               "actor": "Canonical History",
               "active": [
                 "durable",
                 "context"
               ],
-              "description": "{{canonical}} User、Assistant 与 Tool 消息拥有 {{physical-message}} MessageId，以及真实调用/结果的 occurrence 身份。编译器只能读取其获授权的 {{bounded}} 资源。",
-              "durable": "M1…M100 仍是已 commit 的 Ledger 事实。cut {{finite}}，且在操作期间不会移动。",
-              "visible": "对话历史展示真实的 Conversation 事实，不会制造 {{compaction}} 摘要消息。",
+              "description": "{{canonical}} User、Assistant 与 {{concept-tool}} 消息各有 MessageId，真实调用与结果也有自己的 occurrence 身份。编译器只能读取已获授权且 {{bounded}} 的资源。",
+              "durable": "M1…M100 都是已提交的 {{concept-message-ledger}} 事实。本次 cut 固定，操作期间不会移动。",
+              "visible": "对话历史展示 {{concept-conversation}} 的真实消息，不额外创建 compaction 摘要。",
               "evidence": [
                 "canonical-history",
                 "context-owners",
@@ -804,15 +804,15 @@
             },
             {
               "id": "compact-before-projection",
-              "title": "编译现有选择",
-              "actor": "Context Engine",
+              "title": "编译现有历史选择",
+              "actor": "{{concept-context-engine}}",
               "active": [
                 "context",
                 "agent"
               ],
-              "description": "若存在活跃 Checkpoint，则由它选择 Original/Derived 项。Tail 包含严格位于该 Checkpoint base 之后、截至本次 request cut 的合格 {{canonical}} 消息。",
-              "durable": "编译不会修改 Ledger，也不创建 ToolExecution 事件。",
-              "visible": "历史 Context 面板可以将选中的 Context 与实际对话记录分开展示。",
+              "description": "若已有活跃 {{concept-checkpoint}}，就读取它选中的 {{concept-original}}/{{concept-derived}}。{{concept-tail}} 只包含严格位于 {{concept-checkpoint}} base 之后、截至本次 request cut 的合格 {{canonical}} 消息。",
+              "durable": "编译仅读取 {{concept-message-ledger}}，不修改消息，也不产生 ToolExecution 事件。",
+              "visible": "历史 Context 面板可以单独展示模型输入中选用了哪些内容。",
               "evidence": [
                 "context-contract",
                 "context-typed",
@@ -821,16 +821,16 @@
             },
             {
               "id": "compact-before-request",
-              "title": "将一次实际请求设为 {{frozen}}",
+              "title": "固定一次实际请求的输入",
               "actor": "AgentExecution",
               "active": [
                 "agent",
                 "model",
                 "durable"
               ],
-              "description": "Agent 对编译后的历史与当前受保护输入进行 {{composition-input}}，再将实际请求设为 {{frozen}}。每个新的实际请求都有自己的 request occurrence 身份。",
-              "durable": "RequestSnapshot 在 {{persistence}} 启动时记录精确输入；后续重建不会重新发现当前 {{source-config}}。",
-              "visible": "检查请求即可看到实际提供的内容，无需根据当前 Context head 猜测。",
+              "description": "Agent 将编译后的历史与当前受保护输入完成 {{composition-input}}，保存一份固定的本轮请求。每个实际请求都有新的 occurrence 身份。",
+              "durable": "{{concept-request-snapshot}} 在启动事务中保存精确输入；以后重建时不重新发现当前资源。",
+              "visible": "请求检查器可读取该请求保存的内容，无需根据当前 Context head 推测。",
               "evidence": [
                 "frozen-input",
                 "context-start"
@@ -840,19 +840,19 @@
         },
         {
           "id": "after",
-          "label": "Checkpoint L100 之后，再追加 M101",
+          "label": "{{concept-checkpoint}} L100 激活后，再追加 M101",
           "steps": [
             {
               "id": "compact-after-checkpoint",
-              "title": "commit 完整的包含决策",
-              "actor": "Context Engine + {{durable}} 存储",
+              "title": "提交完整的历史选择",
+              "actor": "{{concept-context-engine}} + {{durable}} 存储",
               "active": [
                 "context",
                 "durable"
               ],
-              "description": "创建以 L100 为 base 的类型化 Checkpoint，包含保留的 Original 引用与已完成 {{materialization}} 的 Derived 内容。其选择排除 M96…M100。原子 commit {{persistence}} 内容、activation/head、本地完成状态与 {{receipt}}。",
-              "durable": "M1…M100 仍是未变的 {{canonical}} 事实。Checkpoint 是独立的历史 {{projection-context}} {{authority-checkpoint}}，不是新的 {{canonical}} 摘要。",
-              "visible": "{{projection-context}} 项携带类型化 {{provenance-context}}；Derived 内容没有 {{canonical}} MessageId。",
+              "description": "创建以 L100 为 base 的类型化 {{concept-checkpoint}}，保存保留的 {{concept-original}} 引用与已完成 {{materialization}} 的 {{concept-derived}} 正文，明确排除 M96…M100。正文、activation/head、本地完成状态与 {{receipt}} 原子提交。",
+              "durable": "M1…M100 仍是原来的 {{canonical}} 事实。{{concept-checkpoint}} 决定历史输入选择，但不会成为新的 canonical 摘要消息。",
+              "visible": "条目通过 {{provenance-context}} 标示来源；{{concept-derived}} 没有 canonical MessageId。",
               "evidence": [
                 "context-typed",
                 "compaction-commit",
@@ -861,15 +861,15 @@
             },
             {
               "id": "compact-after-tail",
-              "title": "不让被排除的后缀重新出现",
+              "title": "被排除的后缀不会进入 {{concept-tail}}",
               "actor": "Context 编译器",
               "active": [
                 "context",
                 "durable"
               ],
-              "description": "当 B=L100、请求 L=L100 时，即使最后保留的 Original 早于 M96，Tail (B,L] 仍为空。被排除的 M96…M100 不能通过 Tail 重新出现。",
-              "durable": "base 是完整的包含/排除 {{boundary}}；{{provenance-derived}} 与最后保留的 Original 都不会移动它。",
-              "visible": "Context 视图省略 M96…M100，而 {{canonical}} 历史仍能读取它们未变的地址。",
+              "description": "当 B=L100、请求 L=L100 时，即使最后保留的 {{concept-original}} 早于 M96，{{concept-tail}} (B,L] 仍为空。因此 M96…M100 不会从 {{concept-tail}} 重新进入模型输入。",
+              "durable": "base 确定完整的包含/排除范围；{{concept-derived}} 的 {{provenance-derived}} 或最后保留的 {{concept-original}} 都不会移动它。",
+              "visible": "Context 视图省略 M96…M100；canonical 历史仍可按原地址读取它们。",
               "evidence": [
                 "context-cuts",
                 "canonical-history"
@@ -877,16 +877,16 @@
             },
             {
               "id": "compact-after-append",
-              "title": "允许真正更新的 Tail 项",
-              "actor": "ConversationRuntime → Context 编译器",
+              "title": "新消息从 {{concept-tail}} 进入下一请求",
+              "actor": "{{concept-runtime}} → Context 编译器",
               "active": [
                 "runtime",
                 "durable",
                 "context"
               ],
-              "description": "后续真实的 {{canonical}} 追加 M101 将 request cut 推进至 L101。M101 此时可通过 Tail (L100,L101] 纳入；更早的被排除后缀仍保持排除。",
-              "durable": "M101 是新的 {{canonical}} 事实。它既不改变旧 Checkpoint 内容，也不修改 M96…M100。",
-              "visible": "下一次请求可包含 Checkpoint 选择与 M101，{{frozen}} {{snapshot-request}} 会记录该输入。",
+              "description": "真实追加的 M101 将 request cut 推进至 L101。此时 {{concept-tail}} (L100,L101] 可以纳入 M101，较早被排除的后缀仍保持排除。",
+              "durable": "M101 是新的 {{canonical}} 事实；旧 {{concept-checkpoint}} 与 M96…M100 都保持不变。",
+              "visible": "下一请求可以包含 {{concept-checkpoint}} 选择与 M101，对应的 {{snapshot-request}} 会保存这份输入。",
               "evidence": [
                 "context-cuts",
                 "frozen-input"
@@ -894,16 +894,16 @@
             },
             {
               "id": "compact-after-execution",
-              "title": "区分 {{projection-context}} 调用与实际 {{effect}}",
-              "actor": "AgentExecution + Tool Plane",
+              "title": "历史中的调用文字不会再次执行",
+              "actor": "AgentExecution + {{concept-tool-plane}}",
               "active": [
                 "agent",
                 "tools",
                 "context"
               ],
-              "description": "{{projection-context}} 中的 ToolCall/ToolResult 内容可以描述历史，但只有真实、已 {{acceptance-tool}} 的 {{canonical}} 调用才能进入执行。默认 Summary 会清除活跃的 primary continuation，并编译新 {{projection-context}}。",
-              "durable": "不会从 {{projection-context}} occurrence 推断 usage、时长或 ToolExecution 事实。真实执行事实保留自身 {{authority}}。",
-              "visible": "Context 检查器与执行记录有意回答不同的问题。",
+              "description": "历史 {{projection-context}} 中的 ToolCall/ToolResult 可以描述过去发生的事。只有实际进入 canonical 历史、通过 {{acceptance-tool}} 的调用才执行。默认 Summary 会清除活跃的 primary continuation，再编译新的历史视图。",
+              "durable": "Context 条目的 occurrence 不产生 usage、时长或 ToolExecution 事实；实际执行仍由自己的领域记录证明。",
+              "visible": "Context 检查器解释模型输入；执行记录解释实际运行。",
               "evidence": [
                 "context-typed",
                 "continuation",
@@ -916,8 +916,8 @@
     },
     {
       "id": "lifetimes",
-      "title": "断开连接、runtime 卸载与 {{durable}} Session",
-      "intro": "这些教学顺序用于解释独立的生命周期。点击选项不会分离客户端、停止真实 runtime 或更改任何本地 Session。",
+      "title": "断线、卸载 runtime 与保留 {{concept-session}}",
+      "intro": "比较连接与运行核心各自如何结束。切换选项只演示顺序，不会分离真实客户端、停止 runtime 或修改本地 {{concept-session}}。",
       "choices": [
         {
           "id": "disconnect",
@@ -925,32 +925,32 @@
           "steps": [
             {
               "id": "disconnect-link",
-              "title": "释放连接的 attachment",
-              "actor": "App Server 连接",
+              "title": "释放此连接的 attachment",
+              "actor": "{{concept-app-server}} 连接",
               "active": [
                 "clients",
                 "app-server",
                 "projection"
               ],
-              "description": "EOF/关闭会释放此连接的外部 attachment。显式 detach 也遵循相同的语义分离。",
-              "durable": "不会虚构取消、交互 {{settlement}}、卸载、删除或服务器关闭事实。",
-              "visible": "此客户端失去实时流；它没有 {{native}} 工作已经停止的证据。",
+              "description": "EOF 或连接关闭会释放该连接的外部 attachment；显式 detach 也只分离 attachment。",
+              "durable": "这一步不记录取消、交互结束、卸载、删除或服务器关闭。",
+              "visible": "客户端失去实时流，但无法据此判断服务端工作是否已停止。",
               "evidence": [
                 "connection-detach"
               ]
             },
             {
               "id": "disconnect-runtime",
-              "title": "保持 {{native}} {{responsibility}} 独立",
-              "actor": "ConversationRuntime",
+              "title": "runtime 继续管理执行",
+              "actor": "{{concept-runtime}}",
               "active": [
                 "runtime",
                 "agent",
                 "tools"
               ],
-              "description": "没有 Runtime Client attachment 时，runtime 仍使用相同的 {{admission}}/执行路径。在外部管理的服务器中，断开连接本身不会关闭进程。",
-              "durable": "已通过 {{acceptance-inbound}} 的输入与 {{canonical}} 历史保留各自的 {{authority}}。",
-              "visible": "本地 UI 缺席不会完成待处理交互的 {{settlement}}，也不会取消 Tool。独立的显式策略仍可能管理服务器。",
+              "description": "即使没有 {{concept-runtime-client}} attachment，runtime 仍走相同的 {{admission}} 与执行路径。外部管理的服务器也不会仅因断线而关闭进程。",
+              "durable": "已保存的输入与 {{canonical}} 历史继续保留各自的领域事实。",
+              "visible": "UI 离线不取消 {{concept-tool}}，也不结束待处理交互；服务器仍可能受其他显式策略管理。",
               "evidence": [
                 "client-authority",
                 "client-owners",
@@ -959,17 +959,17 @@
             },
             {
               "id": "disconnect-reconnect",
-              "title": "重新连接当前 runtime {{authority-runtime}}",
-              "actor": "客户端 → App Server",
+              "title": "重新连接目标 runtime",
+              "actor": "客户端 → {{concept-app-server}}",
               "active": [
                 "clients",
                 "app-server",
                 "sessions",
                 "projection"
               ],
-              "description": "重连会寻址 {{durable}} Session 并获取新的 attachment。加载可以复用现有 incarnation；冷加载则遵循普通配置解析与 {{recovery}} 流程。",
-              "durable": "{{durable}} Session 身份独立于旧连接。{{bounded}} {{replay-cursor}} 仍只是 {{projection}} 缓存。",
-              "visible": "新客户端使用 {{snapshot}}/{{cursor}} 与 {{bounded}} {{native}} 历史重建界面。",
+              "description": "客户端重新寻址已保存的 {{concept-session}}，获取新 attachment。加载可以复用现有 incarnation；若需冷加载，则按通常流程解析配置并进行 {{recovery}}。",
+              "durable": "{{concept-session}} 身份不依赖旧连接；事件 {{replay-cursor}} 只使用客户端视图缓存，缓存容量有限。",
+              "visible": "新客户端通过 {{snapshot}}、{{cursor}} 与有限范围的历史重建界面。",
               "evidence": [
                 "session-residency",
                 "residency-load",
@@ -984,15 +984,15 @@
           "steps": [
             {
               "id": "unload-close",
-              "title": "关闭语义 {{admission}}",
-              "actor": "SessionRuntimeManager → ConversationRuntime",
+              "title": "关闭新工作的运行入口",
+              "actor": "SessionRuntimeManager → {{concept-runtime}}",
               "active": [
                 "sessions",
                 "runtime"
               ],
-              "description": "卸载先进入 Unloading，随后 shutdown 在与输入 {{admission}} 相同的协调器锁下串行执行 Running → Draining。已经通过 {{admission}} 的工作保留其 {{settlement}} 路径。",
-              "durable": "后续输入不能跨过已关闭的 runtime gate；竞争的 {{acceptance-inbound}} 操作要么先赢，要么什么也不 commit。",
-              "visible": "Unloading 是 {{residency}} 转换，不是 {{durable}} Session 状态，也不证明已立即停止。",
+              "description": "卸载先进入 Unloading。shutdown 随后在同一协调器锁下完成 Running → Draining，这把锁也保护输入 {{admission}}。已获准运行的工作继续完成 {{settlement}}。",
+              "durable": "gate 关闭后不再接受新输入；竞争的 {{acceptance-inbound}} 要么先完成，要么不提交任何内容。",
+              "visible": "Unloading 描述运行核心正在卸载，并不改写已保存的 {{concept-session}} 身份，也不代表工作已经停止。",
               "evidence": [
                 "residency-unload",
                 "runtime-drain"
@@ -1000,17 +1000,17 @@
             },
             {
               "id": "unload-prove",
-              "title": "等待所有受管理工作的 {{settlement}}",
-              "actor": "ConversationRuntime",
+              "title": "等待受管理工作全部收束",
+              "actor": "{{concept-runtime}}",
               "active": [
                 "runtime",
                 "agent",
                 "tools",
                 "subagents"
               ],
-              "description": "{{drain}} 监督 Attempt/task、前台/后台工作、准备过程、MCP 进程 {{ownership}} 与 {{admission}} worker，使其通过各自的 {{native}} {{terminal-managed}} {{boundary}}。",
-              "durable": "仅请求取消还不够。{{settlement}} 失败会保留旧的 Unloading {{composition}} 与诊断信息。",
-              "visible": "只有经过证明的 {{native}} {{quiescence}} 才能授权成功释放 {{residency}}。",
+              "description": "runtime 在 {{drain}} 期间监督 {{concept-attempt}}/task、前台与后台工作、准备任务、{{concept-mcp}} 进程和 admission worker，直到它们满足各自的 {{terminal-managed}} 条件。",
+              "durable": "发出取消还不够。若收束失败，就保留旧核心的 Unloading 状态与诊断。",
+              "visible": "只有证明 {{quiescence}}，才允许释放当前运行核心。",
               "evidence": [
                 "runtime-drain",
                 "residency-unload"
@@ -1018,16 +1018,16 @@
             },
             {
               "id": "unload-release",
-              "title": "释放 {{composition}}，保留 Session",
+              "title": "释放运行核心，保留 {{concept-session}} 数据",
               "actor": "SessionRuntimeManager",
               "active": [
                 "sessions",
                 "durable",
                 "projection"
               ],
-              "description": "shutdown 成功后，通过 {{release-residency}} 释放 host/core 与 {{allocation}}，移除 {{residency}} 条目并报告成功。旧的非持有句柄返回 StaleIncarnation。",
-              "durable": "Session 与 Conversation 数据保留。后续加载以新的 incarnation 执行正常冷 {{recovery}}。",
-              "visible": "runtime 已不存在；{{durable}} Session 仍在列表中，且可以重新打开。",
+              "description": "shutdown 成功后，SessionRuntimeManager 完成 {{release-residency}}：释放 host/core 与 {{allocation}}，移除 residency 条目并报告成功。旧的弱引用句柄返回 StaleIncarnation。",
+              "durable": "{{concept-session}} 与 {{concept-conversation}} 数据继续保留；下次加载使用新 incarnation，并按正常流程进行冷恢复。",
+              "visible": "runtime 已卸载，{{concept-session}} 仍在列表中，可以重新打开。",
               "evidence": [
                 "residency-unload"
               ]
@@ -1036,36 +1036,36 @@
         },
         {
           "id": "owned-child",
-          "label": "本地 TUI {{owner-process}} 正常退出",
+          "label": "本地 TUI 正常退出",
           "steps": [
             {
               "id": "owner-explicit",
-              "title": "请求关闭自有进程",
+              "title": "显式关闭自有子进程",
               "actor": "本地 TUI",
               "active": [
                 "clients",
                 "app-server"
               ],
-              "description": "本地 TUI 正常退出时，会通过进程生命周期接口显式关闭自己的 stdio App Server 子进程。EOF 本身只意味着 detach。",
-              "durable": "{{owner-process}} 显式关闭意图与传输丢失不同。",
-              "visible": "若要在 TUI 退出后继续执行，需要使用外部管理的 App Server。",
+              "description": "本地 TUI 正常退出时，通过进程生命周期接口请求关闭自有的 stdio {{concept-app-server}} 子进程；EOF 本身只会分离连接。",
+              "durable": "本地 TUI 作为 {{owner-process}} 发出了显式关闭请求；这与传输丢失分别记录。",
+              "visible": "若要在 TUI 退出后继续执行，应连接外部管理的 {{concept-app-server}}。",
               "evidence": [
                 "connection-detach"
               ]
             },
             {
               "id": "owner-drain",
-              "title": "监督 {{native}} runtime {{drain}}",
-              "actor": "App Server → ConversationRuntime",
+              "title": "监督进程关闭前的工作收束",
+              "actor": "{{concept-app-server}} → {{concept-runtime}}",
               "active": [
                 "app-server",
                 "sessions",
                 "runtime",
                 "tools"
               ],
-              "description": "进程关闭路径使用 {{native}} {{drain}} 与 {{settlement}} {{boundary}}，不会把流消失当作完成。",
-              "durable": "受管理工作必须完成 {{physical}} {{settlement}}，才能宣称 {{quiescence}}。{{durable}} 历史仍然独立。",
-              "visible": "进程退出请求并不即时保证 Tool 已成功终止。",
+              "description": "{{concept-app-server}} 关闭进程时，先通过 runtime {{drain}} 等待已有工作完成 {{settlement}}；流中断不能代替完成证据。",
+              "durable": "只有受管理工作全部收束，才能证明 {{quiescence}}。已经保存的历史继续保留。",
+              "visible": "请求进程退出时，{{concept-tool}} 未必已经成功终止。",
               "evidence": [
                 "connection-detach",
                 "runtime-drain"
@@ -1073,16 +1073,16 @@
             },
             {
               "id": "owner-reopen",
-              "title": "稍后重新打开 {{durable}} 状态",
-              "actor": "Session / {{residency}} 管理",
+              "title": "稍后从已保存状态重新打开",
+              "actor": "{{concept-session}} / {{residency}} 管理",
               "active": [
                 "sessions",
                 "config",
                 "durable"
               ],
-              "description": "后续 {{composition}} 使用 {{persistence}} 的显式 Session 输入解析当前 {{source-config}}，并遵循普通 {{recovery}} 流程。实时连接、凭据与有效 Registry 从来都不是 Session 的 {{authority-session}} 状态。",
-              "durable": "{{durable}} 图/设置与已 commit 的 Conversation 事实在 runtime {{residency}} 结束后仍然保留。",
-              "visible": "重新打开的 Session 是建立在现有 {{durable}} 状态之上的全新运行中 {{composition}}。",
+              "description": "下次加载时，根据已保存的 {{concept-session}} 显式输入重新解析当前 {{source-config}}，组合运行核心，并进行正常 {{recovery}}。连接、凭据与有效 Registry 不属于 {{concept-session}} 保存的身份事实。",
+              "durable": "{{concept-session}} 图、设置与已提交的 {{concept-conversation}} 事实，在运行核心卸载后仍然保留。",
+              "visible": "重新打开时，新运行核心使用原有持久数据。",
               "evidence": [
                 "session-config",
                 "residency-unload"
@@ -1094,8 +1094,8 @@
     },
     {
       "id": "tool-recovery",
-      "title": "Tool 在调用与 commit {{boundary}} 处的中断",
-      "intro": "沿真实的已 {{acceptance-tool}} 调用移动中断点。{{canonical}} 结构 {{settlement}} 不保证外部 {{effect}} exactly-once；{{recovery}} 依据肯定性证据，不 {{replay-effect}} 结果不明的工作。",
+      "title": "{{concept-tool}} 中断后，如何确定结果",
+      "intro": "移动中断点，查看已接受调用会留下哪些证据。canonical 结果结构完整，不代表外部 effect 保证 exactly-once；recovery 只根据已有证据补齐结果，不重新执行结果不明的工作。",
       "choices": [
         {
           "id": "before-invocation",
@@ -1103,16 +1103,16 @@
           "steps": [
             {
               "id": "tool-before-accepted",
-              "title": "先完成调用的 {{acceptance-tool}}",
+              "title": "先接受调用，保留结果位置",
               "actor": "Agent Loop",
               "active": [
                 "agent",
                 "durable",
                 "tools"
               ],
-              "description": "结构校验与 {{preflight}} 先于 {{canonical}} Assistant commit。即使后续策略或调度阻止调用，已 {{acceptance-assistant}} 的调用仍拥有一个 {{canonical}} 结果 {{slot}}。",
-              "durable": "已 {{acceptance-assistant}} 的 Assistant ToolCall 是 {{canonical}} 事实；仅有流式提案还不够。",
-              "visible": "模型提案现在可展示为已 {{acceptance-tool}} 调用，并与正在执行的状态区分。",
+              "description": "结构校验与 {{preflight}} 先于 canonical Assistant 提交。调用一旦通过 {{acceptance-assistant}}，即使后来被策略或调度阻止，也仍须填充对应结果 {{slot}}。",
+              "durable": "已接受的 Assistant ToolCall 属于 {{canonical}} 历史；仅显示流式提案还不够。",
+              "visible": "界面现在可将调用显示为已接受，并继续区分是否正在执行。",
               "evidence": [
                 "tool-acceptance",
                 "assistant-commit"
@@ -1120,15 +1120,15 @@
             },
             {
               "id": "tool-before-cancel",
-              "title": "在 {{physical}} {{dispatch-tool}} 之前停止",
+              "title": "在实际启动前停止",
               "actor": "ForegroundInvocation + 执行器",
               "active": [
                 "tools",
                 "agent"
               ],
-              "description": "构造只捕获资源。通用入口与协作句柄在构造前、首次操作 poll 前检查取消。",
-              "durable": "此教学分支中，没有执行器启动证据，也没有跨过 {{physical}} {{effect}} {{boundary}}。",
-              "visible": "{{slot}} 可以按启动前取消 {{settlement}}；不会 {{replay-effect}} 调用。",
+              "description": "构造 ForegroundInvocation 只捕获资源。通用入口与协作句柄会在构造前和首次操作 poll 前检查取消。",
+              "durable": "本分支没有执行器启动证据，也未跨过实际 {{effect}} 的 {{boundary}}。",
+              "visible": "对应结果可记录为启动前取消，系统不会重新执行调用。",
               "evidence": [
                 "tool-acceptance",
                 "tool-recovery"
@@ -1136,15 +1136,15 @@
             },
             {
               "id": "tool-before-repair",
-              "title": "修复缺失的 {{canonical}} 结果",
+              "title": "补齐缺失的历史结果",
               "actor": "runtime {{recovery}} → ConversationStore",
               "active": [
                 "runtime",
                 "durable"
               ],
-              "description": "{{recovery}} 只修复缺失结果。没有启动证据时，生成启动前取消结果；修复 commit 是原子且幂等的。",
-              "durable": "一个 {{canonical}} 结果闭合已 {{acceptance-tool}} 调用。若结果已经 commit，则保持不变。",
-              "visible": "修复后的对话记录如实报告启动前取消。",
+              "description": "{{recovery}} 只补缺失结果。没有启动证据时，原子且幂等地写入启动前取消结果。",
+              "durable": "每个已接受调用最终有对应的 canonical 结果；已经提交的结果保持不变。",
+              "visible": "修复后的对话记录如实显示启动前取消。",
               "evidence": [
                 "tool-recovery"
               ]
@@ -1157,31 +1157,31 @@
           "steps": [
             {
               "id": "tool-unknown-frontier",
-              "title": "跨过保守的启动 {{frontier-tool}}",
+              "title": "记录保守的启动位置",
               "actor": "Agent Loop → 执行器",
               "active": [
                 "agent",
                 "tools",
                 "durable"
               ],
-              "description": "执行器启动事实先于 {{physical}} 工作。它是保守的 {{recovery}} {{frontier-tool}}，与适配器实际发生 {{effect}} 的 {{boundary}} 不同。",
-              "durable": "启动证据不能证明外部修改是否发生或完成。",
-              "visible": "运行/进度 UI 不能证明最终 {{effect}}。",
+              "description": "执行器先记录启动事实，随后才可能开展实际工作。这个 {{frontier-tool}} 用于保守判断恢复方式，与外部 {{effect}} 实际发生的位置不同。",
+              "durable": "有启动证据，仍不能证明外部修改是否发生或完成。",
+              "visible": "运行状态与进度展示也不能证明最终修改结果。",
               "evidence": [
                 "tool-acceptance"
               ]
             },
             {
               "id": "tool-unknown-settle",
-              "title": "先回收本地持有资源",
+              "title": "先回收本地持有的资源",
               "actor": "执行器 {{settlement}} {{owner}}",
               "active": [
                 "tools",
                 "runtime"
               ],
-              "description": "远程传输丢失且没有关联 {{terminal-tool}} 结果时，先完成 rustX 持有的本地传输/worker 资源的 {{settlement}}。取消意图不能证明远程已停止。",
-              "durable": "只有回收本地持有资源后，Unconfirmed 才能变为 OutcomeUnknown；本地 worker 仍在运行则属于控制面 {{settlement}} 失败。",
-              "visible": "对于 MCP，本地释放证明与远程结果未知是不同证据。Managed Python 使用相同 {{boundary}}。",
+              "description": "远程传输中断且没有可信终态结果时，执行器先完成本地传输与 worker 的 {{settlement}}。发出取消并不能证明远端已经停止。",
+              "durable": "本地资源回收后，Unconfirmed 才能转为 OutcomeUnknown；若 worker 仍在运行，应报告控制面收束失败。",
+              "visible": "{{concept-mcp}} 需要分别说明本地资源已释放与远端结果未知；{{concept-managed-python}} 遵循相同规则。",
               "evidence": [
                 "tool-evidence",
                 "tool-adapters"
@@ -1189,16 +1189,16 @@
             },
             {
               "id": "tool-unknown-recover",
-              "title": "commit 不确定性，不进行 {{replay-effect}}",
+              "title": "保留未知结果，避免重复执行",
               "actor": "runtime {{recovery}} + Agent Loop",
               "active": [
                 "runtime",
                 "agent",
                 "durable"
               ],
-              "description": "若结果缺失，且 {{durable}} 启动证据没有可信 {{terminal-tool}} 结果，则 {{recovery}} 为 OutcomeUnknown。不要静默重试结果不明的 {{effect}}。",
-              "durable": "{{recovery}} 是原子/幂等的，绝不替换已 commit 的 {{canonical}} 事实。这不承诺外部 {{effect}} exactly-once。",
-              "visible": "用户看到显式不确定性，可先调查外部系统再决定是否开展新工作。",
+              "description": "若缺少结果，且已有持久启动证据却没有可信 {{terminal-tool}} 结果，{{recovery}} 就填入 OutcomeUnknown，不静默重试可能已产生修改的工作。",
+              "durable": "恢复原子且幂等，绝不覆盖已有 canonical 事实；外部 effect 不保证 exactly-once。",
+              "visible": "用户先看到明确的不确定性，可以调查外部系统后再决定是否发起新工作。",
               "evidence": [
                 "tool-recovery",
                 "tool-evidence"
@@ -1212,30 +1212,30 @@
           "steps": [
             {
               "id": "tool-known-proof",
-              "title": "保留已证明的完成结果",
+              "title": "保留已有证据支持的结果",
               "actor": "执行器 → Agent Loop",
               "active": [
                 "tools",
                 "agent"
               ],
-              "description": "即使已有取消意图，{{physical}} {{settlement}} 仍可返回已知的 Success 或 Failed。已知证据保持不可变，不会被迟到信号重新标记。",
-              "durable": "该证据是调用结果；有序的 {{canonical}} 结果批次可能仍待 commit。",
-              "visible": "完成已获证明时，取消操作不一定产生 Cancelled 结果。",
+              "description": "即使已经请求取消，执行器完成 {{physical}} 工作收束时仍可返回已知的 Success 或 Failed。后来的信号不会重新标记这些结果。",
+              "durable": "调用结果已经确定，但有序的 canonical 结果批次可能尚未提交。",
+              "visible": "若完成已有证据，取消操作不一定产生 Cancelled。",
               "evidence": [
                 "tool-evidence"
               ]
             },
             {
               "id": "tool-known-batch",
-              "title": "将同批结果一起 commit",
+              "title": "一次提交同批所有结果",
               "actor": "Agent Loop + ConversationStore",
               "active": [
                 "agent",
                 "durable"
               ],
-              "description": "准备完整结果组，并在一个事务中按 {{canonical}} 调用顺序追加所有同批 Tool 消息/事件。",
-              "durable": "{{durable}} 批次失败则不写入任何结果。成功时确立的 {{canonical}} 结果与 {{physical}} 完成顺序无关。",
-              "visible": "只有已 commit 的类型化 Tool 事实才能授权 {{durable}} 对话记录/交付展示。",
+              "description": "Agent Loop 准备完整结果组，再由一个事务按 canonical 调用顺序追加同批 {{concept-tool}} 消息与事件。",
+              "durable": "事务失败时没有任何结果写入；成功后的结果顺序不受实际完成时序影响。",
+              "visible": "只有已经提交的类型化 {{concept-tool}} 事实，才授权对话记录或文件交付展示。",
               "evidence": [
                 "tool-batch",
                 "tool-acceptance",
@@ -1244,15 +1244,15 @@
             },
             {
               "id": "tool-known-recovery",
-              "title": "只修复缺失部分",
+              "title": "恢复时只补缺失结果",
               "actor": "runtime {{recovery}}",
               "active": [
                 "runtime",
                 "durable"
               ],
-              "description": "{{durable}} 的已知结果证据可以补齐缺失结果。若 {{canonical}} 结果已经存在，它就是 {{authority-result}} 终值。",
-              "durable": "不会发生 {{recovery}} 覆盖或结果不明的 {{replay-effect}}。Session 共享工作区中已完成的 {{effect}} 不会回滚。",
-              "visible": "{{recovery}} 解释现有事实，不会虚构第二次调用。",
+              "description": "已有持久结果证据可以补齐缺失项。若 canonical 结果已经提交，它就作为该调用的最终 {{authority-result}}。",
+              "durable": "恢复不会覆盖已有结果，也不会重新执行结果不明的工作。{{concept-session}} 工作区中已经完成的修改不会回滚。",
+              "visible": "恢复解释并补全已有事实，不虚构第二次调用。",
               "evidence": [
                 "tool-recovery",
                 "agents-workspace",
@@ -1267,12 +1267,12 @@
   "topics": [
     {
       "id": "direction",
-      "title": "依赖指向 runtime {{contract-runtime}}",
-      "summary": "图中区分调用、数据流与代码依赖。箭头不表示外部 SDK 拥有内核 {{responsibility}}。",
+      "title": "让内核依赖稳定的 runtime 接口",
+      "summary": "图中分别标示调用、数据流与代码依赖；执行责任仍由内核组件承担。",
       "details": [
-        "crate 分别公开 agent、runtime、model、context、tools、durable、publication、local_runtime、app_server 与 runtime_client 模块。外部 SDK 类型止于适配器。",
-        "ConversationRuntime 协调一个 Conversation。AgentExecution 协调一个 Attempt。ModelAdapter 与 ToolExecutor 是与提供方无关的 {{boundary-contract}}；SQLite 与传输实现外层能力。",
-        "从 {{durable}} 事实指向 Context 编译器的数据箭头表示输入 {{source}}，并非数据库框架到 Agent 内核的依赖。调用共享 Tool Plane 可以到达 MCP 或 Python 实现，而无需向内核暴露其传输协议。"
+        "crate 分别公开 agent、runtime、model、context、tools、durable、publication、local_runtime、app_server 与 runtime_client 模块。外部 SDK 类型封装在适配器中。",
+        "{{concept-runtime}} 协调一个 {{concept-conversation}}，AgentExecution 运行其中的一次 {{concept-attempt}}。内层通过 ModelAdapter 与 ToolExecutor 等 {{boundary-contract}} 使用外部能力；SQLite 与传输协议留在外层实现。",
+        "Context 编译器从持久事实读取输入，图中的数据箭头标示这种 {{source}} 关系。内核通过共享 {{concept-tool-plane}} 调用 {{concept-mcp}} 或 Python，无需依赖数据库框架或它们的传输协议。"
       ],
       "nodes": [
         "agent",
@@ -1292,14 +1292,14 @@
     },
     {
       "id": "resources",
-      "title": "配置、Skills 与选定需求的激活",
-      "summary": "定义、可见性、{{admission-config}} 与 {{physical}} 准备是不同阶段。",
+      "title": "配置、{{concept-skills}} 与资源何时激活",
+      "summary": "先发现定义，再决定可见性与 {{admission-config}}；通过检查后才准备实际运行所需的资源。",
       "details": [
-        "SessionPersistentState 保存显式 cwd 与可选的完整模型选择。冷加载时，{{native}} {{owner}} 重新解析当前提供方定义、凭据、策略、profile、Skills 与资源；有效状态不是 {{persistence}} 的 Session {{authority-session}} 状态。",
-        "校验之前，Workspace 资源会整体 {{shadowing}} User 定义。无效的上层定义绝不回退到下层有效资源。选择无效资源会使类型化操作失败；未使用的无效资源只产生 {{bounded}} 诊断。",
-        "发现 .agents/mcp.toml 中的 MCP 定义与 .agents/tools 下的 Python 包字节时，不会激活它们。选择产生 {{finite}} 且经过 {{admission-config}} 的需求；随后由现有生命周期解析凭据、连接或准备、校验并暴露精确能力。仅将 Agent 加入允许列表不会准备该子 Agent 的 {{source-config}}。",
-        "Managed Python 准备 {{frozen-package}} 的包字节与隔离的 uv 环境，生成 McpServerBinding，随后使用通用 MCP 机制。它不是第二套 runtime 协议。",
-        "Skills 是渐进式披露的指令包。选择控制 prompt 可见性，不控制文件系统访问。正文/支持文件通过普通 Tool 读取；子 Agent 的 {{admission-subagent}} 携带已捕获的包，而不重新发现当前文件。"
+        "SessionPersistentState 保存显式 cwd 与可选的完整模型选择。冷加载时，本地组件重新解析当前提供方定义、凭据、策略、profile、{{concept-skills}} 与资源。{{concept-session}} 只保存显式选择，这些有效配置在冷加载时重新确定。",
+        "同名资源先按 {{shadowing}} 规则由 Workspace 定义整体覆盖 User 定义，再进行校验。若选中的上层资源无效，操作明确失败；未使用的无效资源只产生 {{bounded}} 诊断。",
+        "发现 .agents/mcp.toml 中的 {{concept-mcp}} 定义或 .agents/tools 下的 Python 包，并不会激活资源。选择先形成 {{finite}} 需求，通过 {{admission-config}} 后才解析凭据、连接或准备环境、校验并暴露指定能力。仅将 Agent 加入允许列表，也不会准备它的资源。",
+        "{{concept-managed-python}} 先准备已捕获的包字节与隔离 uv 环境，生成 McpServerBinding，再交给通用 {{concept-mcp}} 机制运行。",
+        "{{concept-skills}} 按需提供指令：选择决定 prompt 中可见的内容，文件系统权限仍按原规则检查。正文与支持文件由普通 {{concept-tool}} 读取；子 Agent 通过 {{admission-subagent}} 获得已捕获的包，后续不重新发现当前文件。"
       ],
       "nodes": [
         "config",
@@ -1318,14 +1318,14 @@
     },
     {
       "id": "children",
-      "title": "Subagents：{{frozen-agent}} 权限、独立历史、共享文件",
-      "summary": "受管理的子 Agent 拥有自己的 Conversation 与 activation 生命周期，文件 {{effect}} 则发生在同一 Session 工作区。",
+      "title": "{{concept-subagent}}：权限固定，历史独立，文件共享",
+      "summary": "每个受管理的 {{concept-subagent}} 有自己的 {{concept-conversation}} 与 activation 生命周期，文件写入则落在同一 {{concept-session}} 工作区。",
       "details": [
-        "Root 的显式命名 Agent 允许列表授权委派。命名 profile 拥有完整的受支持能力，不存在通用 Root Tool/Plugin 上限。若子 Agent 省略模型选择，{{admission-subagent}} 会继承调用方 Attempt {{frozen}} 的有效模型。",
-        "DurableAgentAuthority 在创建时 {{frozen-agent}} 解析后的模型、Tools、Skills、Plugins、资源、策略与工作区。ActivationAdmission 提供新的任务/Context 和 {{provenance}}；后续 activation 不会查找不同的 profile。",
-        "interrupt_agent 针对预留/当前 activation，并等待 {{physical}} {{settlement}}。wait_agent 捕获一个 activation；后续 activation 不能重新指定该等待的目标。send_message 只有在子 Agent 输入被 {{canonical}} {{acceptance-inbound}} 后才成功；确认丢失意味着显式的交付未知，不构成重试许可。",
-        "每次 Agent activation 都使用 Session {{frozen-workspace}} 的绝对工作区绑定。它能看到父 Agent 未 commit 的改动。成功、失败与取消都保留已完成的写入；不存在 Agent worktree、复制、交接或销毁操作。",
-        "子 Conversation 的 {{canonical}} 历史仍由子方管理。Workflow 管理的 {{finite}} 子运行归具体 Workflow 节点所有，不能通过普通 {{durable}} Agent 控制 {{recovery}}。"
+        "Root 显式列出的命名 Agent 才能接受委派。命名 profile 定义完整的受支持能力，不套用统一的 Root {{concept-tool}}/Plugin 上限。子 Agent 若未指定模型，会继承调用方 {{concept-attempt}} 已捕获的有效模型。",
+        "DurableAgentAuthority 创建时就固定解析后的模型、Tools、{{concept-skills}}、Plugins、资源、策略与工作区。ActivationAdmission 为每次运行提供新任务、Context 与来源信息；后续 activation 直接沿用已捕获的 profile。",
+        "interrupt_agent 中断预留或当前 activation，并等待实际工作收束。wait_agent 一经捕获目标 activation，就不会转而等待后续运行。send_message 只有在子 Agent 保存输入后才成功；确认丢失时交付结果未知，不能据此重试。",
+        "每次 activation 都绑定 {{concept-session}} 已确定的绝对工作区目录，因此能看到父 Agent 未 commit 的改动。成功、失败或取消都保留已完成写入；系统不会为 Agent 创建独立 worktree、复制目录或安排文件交接与销毁。",
+        "子 {{concept-conversation}} 独立管理自己的 {{canonical}} 历史。{{concept-workflow}} 的 {{finite}} 子运行归具体节点管理，普通 {{durable}} Agent 控制不能用来恢复它们。"
       ],
       "nodes": [
         "subagents",
@@ -1343,14 +1343,14 @@
     },
     {
       "id": "workflow",
-      "title": "Workflow 执行 {{finite}} 的 {{scope}} 程序",
-      "summary": "WorkflowRuntime 负责图/值/{{scope}} 的推进，并共享 {{native}} 执行与 {{settlement}} 机制。",
+      "title": "{{concept-workflow}}：执行预先确定的程序",
+      "summary": "WorkflowRuntime 推进节点、保存局部值，并复用 {{native}} 执行与 {{settlement}} 机制。",
       "details": [
-        "被选中的 Workflow 是一个前台 Tool。静态 {{admission-workflow}} {{frozen-config}} 所需能力；block 不会重新发现它们。封闭的节点词汇为 Agent、Tool、Branch、Parallel、Review、Loop 与 Return。",
-        "WorkflowRuntime::execute_block 是 root/branch/body 共用的生命周期入口。WorkflowRunId、WorkflowBlockInstance 与 WorkflowNodeInstance 标识实际调用，不从自然语言、PID 或完成顺序推导身份。",
-        "{{native}} Workflow Tool 节点具有 Workflow 调用身份，绝不伪造 {{canonical}} 模型 ToolCall。共享的 ForegroundInvocation 负责 {{normalization}}/批准/期限/取消/{{physical}} {{settlement}}；只有 Agent 执行负责外层 {{canonical}} 调用 {{slot}} 与有序结果批次。",
-        "Parallel join 在分支完成 {{settlement}} 后按定义顺序报告带键结果；这不承诺进程时序确定。所有 Agent 与 Tool 节点都使用 Session 共享工作区。并发写入由作者负责；Review 拒绝、检查失败或取消都不会回滚 {{effect}}。",
-        "Workflow 完成不意味着 Goal 完成。{{recovery}} 会创建全新的 {{native}} Attempt 身份，而不 {{recovery}} 旧 Workflow 运行。"
+        "选中的 {{concept-workflow}} 是一个前台 {{concept-tool}}。静态 {{admission-workflow}} 先检查并捕获程序所需能力，block 运行时直接复用。节点类型固定为 Agent、{{concept-tool}}、Branch、Parallel、Review、Loop 与 Return。",
+        "WorkflowRuntime::execute_block 为 root、branch、body 提供统一生命周期入口。WorkflowRunId、WorkflowBlockInstance 与 WorkflowNodeInstance 明确标识实际调用，无需从自然语言、PID 或完成顺序推断。",
+        "{{concept-workflow}} {{concept-tool}} 节点使用自己的调用身份，不伪造 {{canonical}} 模型 ToolCall。共享 ForegroundInvocation 负责参数 {{normalization}}、批准、期限、取消与 {{physical}} 工作的 {{settlement}}；外层 {{canonical}} 结果 {{slot}} 和有序批次由 Agent 执行负责。",
+        "Parallel join 等待分支完成 {{settlement}} 后，按定义顺序返回带键结果；进程实际完成的时序仍可能不同。所有 Agent 与 {{concept-tool}} 节点共享 {{concept-session}} 工作区，作者须自行处理并发写入。Review 拒绝、检查失败或取消都不会回滚已发生的 {{effect}}。",
+        "{{concept-workflow}} 返回只说明这次程序执行结束，{{concept-goal}} 是否完成仍由目标状态决定。{{recovery}} 使用全新的 {{native}} {{concept-attempt}} 身份，不恢复旧 {{concept-workflow}} 运行。"
       ],
       "nodes": [
         "workflows",
@@ -1369,14 +1369,14 @@
     },
     {
       "id": "goal",
-      "title": "Goal 与扩展保留 {{native}} 领域 {{responsibility}}",
-      "summary": "封闭 {{composition}} 模型通过现有 {{contract-runtime}} 添加能力，不引入第二套 Agent 引擎。",
+      "title": "{{concept-goal}} 与扩展：各自管理领域状态",
+      "summary": "扩展在封闭的运行 {{composition}} 中通过现有 {{contract-runtime}} 接入能力，继续使用同一条 Agent 执行路径。",
       "details": [
-        "agent_status、todo 与 goal 默认关闭。一个配置 generation {{frozen-config}} {{composition}}，已 {{admission}} 的工作保留其 generation。Todo 列表与 Goal 状态仍属于 Conversation 领域状态；子 {{scope-agent}} 拒绝仅限 Root 的 Goal 追求。",
-        "GoalPhase::Active 是 {{durable}} 的 {{authority-goal}}：当 runtime {{admission}} 满足条件时继续执行。Paused 与 Blocked 移除此授权；Complete 是 {{terminal-goal}}。生命周期 {{projection}} 绝不能覆盖 Goal 领域状态。",
-        "GoalRoundDriver 在协调器现有的安全空闲 {{boundary}} 同步参与，并提交普通 Pending Inbound。同一个 SQLite 事务 {{acceptance-inbound}} 该轮次、推进 Goal {{revision}}/已消耗轮次，并写入 {{bounded}} {{admission-goal}} 事实。",
-        "Runtime {{drain}} 不会将 Active 改写为 Paused，也不退还已 commit 轮次。显式中断自主运行中的 Goal Attempt 时，会先 {{persistence}} 暂停 Goal 并请求取消，再确认成功。",
-        "Goal 不负责模型执行、Tool 执行、{{canonical}} 历史、请求组装或第二条队列。Workflow {{finite}} 执行 HOW；Goal 负责持续追求 WHAT。"
+        "{{concept-agent-status}}、{{concept-todo}} 与 goal 默认关闭。配置 generation 捕获本次运行核心的能力；已经通过 {{admission}} 的工作继续使用原 generation。Todo 列表与 {{concept-goal}} 状态属于 {{concept-conversation}} 领域；子 {{scope-agent}} 不允许追求仅限 Root 的 {{concept-goal}}。",
+        "{{concept-goal}} 以 GoalDomain 保存的 GoalPhase 为准：Active 授权后续自主轮次，runtime 仍需满足 {{admission}} 条件才能执行。Paused 与 Blocked 收回授权，Complete 表示目标已经结束。生命周期视图不能改写这些状态。",
+        "GoalRoundDriver 在协调器现有的安全空闲点同步提交普通 Pending Inbound。同一 SQLite 事务接收本轮输入、推进 {{concept-goal}} 版本与已消耗轮次数，并保存本轮获准执行的有限事实。",
+        "Runtime 进入 {{drain}} 时，Active 保持原值，已经提交的轮次也不会退还。若用户显式中断正在自主运行的 {{concept-goal}} {{concept-attempt}}，系统先将暂停状态写入存储并请求取消，再确认成功。",
+        "{{concept-goal}} 决定是否继续追求目标；{{concept-workflow}} 描述一次确定的工作如何完成。模型执行、{{concept-tool}} 执行、canonical 历史与请求组装仍归现有组件负责，{{concept-goal}} 不另建队列。"
       ],
       "nodes": [
         "extensions",
@@ -1396,14 +1396,14 @@
     },
     {
       "id": "history",
-      "title": "{{canonical}} 历史、请求 {{snapshot-request}}、Journal 与 Trace",
-      "summary": "不同视图分别回答发生了什么、模型看到了什么、输出 {{publication}} 包含什么，以及客户端当前显示什么。",
+      "title": "历史、精确请求、执行记录与客户端视图",
+      "summary": "{{concept-message-ledger}} 记录对话事实，{{concept-request-snapshot}} 保存模型输入，{{concept-event-journal}} 记录执行事实，{{concept-publication}} 与客户端视图分别展示输出与当前状态。",
       "details": [
-        "不可变 Message Ledger 负责已 commit 的 Conversation 事实。类型化 Checkpoint 与激活坐标选择历史模型 Context，不修改这些事实。Original 引用保留 {{canonical}} 身份 / digest；Derived Context 具有 {{scope-derived}} 内的 {{provenance-derived}}，但没有 {{canonical}} MessageId。",
-        "RequestSnapshot 为一个实际已启动请求 {{frozen}} 精确的、与提供方无关的输入，包括不可变依赖、Derived 正文、Context、Tool 关联与调用。重建执行按键历史读取，不重新运行发现、贡献者、图片选择或 {{compaction}}。",
-        "Event Journal 事实描述实际执行。{{projection-context}} 中的调用/结果不产生 usage、时长或执行次数。{{native}} Tool 的 Prepared/Started/Progress/Completed {{observation}} 既不是权限 gate，也不是另一结果 {{authority}}；{{durable}} 交互批准仍有自己显式的 gate。",
-        "RuntimeClientProjection 负责唯一的实时读取模型、{{cursor}}/{{replay-cursor}} 与订阅者 {{fold}}。它的缓存和 TraceProjection 都是只读展示，绝不是执行、取消、{{settlement}} 或 {{recovery}} 的输入。",
-        "导览的请求导览与执行顺序都是确定性教学场景，并非记录下来的实时运行轨迹。下方源码摘录将 {{contract-layering}} 固定到一个不可变的仓库 commit。"
+        "不可变 {{concept-message-ledger}} 保存已提交的 {{concept-conversation}} 事实。{{concept-checkpoint}} 与激活坐标只选择历史 Context：{{concept-original}} 保留 {{canonical}} 身份与 digest；{{concept-derived}} 通过 {{provenance-derived}} 记录来源，但没有 {{canonical}} MessageId。",
+        "{{concept-request-snapshot}} 保存一次实际已启动请求的精确输入，包括不可变依赖、{{concept-derived}} 正文、Context、{{concept-tool}} 关联与调用。重建时按历史键读取，无需重新发现资源、运行贡献者、选择图片或进行 {{compaction}}。",
+        "{{concept-event-journal}} 记录实际执行。历史 {{projection-context}} 中的调用/结果不产生 usage、时长或执行次数。{{native}} {{concept-tool}} 的 Prepared/Started/Progress/Completed 只提供 {{observation}}；权限、可信结果与持久交互批准各有明确的规则和证据。",
+        "RuntimeClientProjection 统一合并运行事件、更新实时读取模型、分配 {{cursor}}、保存回放记录并管理订阅者。它的缓存与 TraceProjection 只供展示，不驱动执行、取消、工作收束或恢复。",
+        "本导览以确定的先后顺序演示机制，场景不是实时运行记录。下方源码摘录固定到同一个不可变仓库 commit，可用于核对接口与执行规则。"
       ],
       "nodes": [
         "durable",
@@ -1424,14 +1424,14 @@
     },
     {
       "id": "publication-delivery",
-      "title": "Publication 与文件交付具有不同的 commit {{boundary}}",
-      "summary": "流式 {{publication}}、{{canonical}} {{acceptance-assistant}} 与已 commit 的文件声明不可混淆。",
+      "title": "{{concept-publication}} 与文件交付分别何时成立",
+      "summary": "流式输出写入 {{concept-publication}} 后，还需独立提交 Assistant 历史；文件卡片则需要已提交的类型化交付事实。",
       "details": [
-        "模型输出先合并并完成 {{staging-publication}}，然后才进行 {{release-output}}。提供方结果 P、Publication {{terminal-publication}} U 与 {{canonical}} {{acceptance-assistant}} C 彼此独立，顺序保持 P < U < C。不完整或未通过 {{acceptance-assistant}} 的流不属于 {{canonical}} Assistant 历史。",
-        "PublicationAudit 记录已 commit、可能 {{publication}} 的输出。它是可能出现内容的上界，绝不证明客户端已看到；runtime 没有面向用户的 ACK {{contract-no-ack}}。",
-        "present 是普通 {{native}} Tool。成功 commit 的类型化 Tool 交付授权对话记录卡片。写入、执行完成 {{observation}} 或声称文件存在的文字都不是交付 {{authority-delivery}}。",
-        "受管理的 ArtifactId 标识不可变 ArtifactStore 字节。SessionFileReference 标识原始 Conversation/cwd 身份与可变文件的 {{normalization-path}} 路径。重新打开时可能看到变化，或显式的 Missing/Unauthorized/Unavailable 结果；它不是内容 {{snapshot-content}}。",
-        "已 commit 交付的访问由 app_server::delivery_access 负责。经过传输身份验证的调用方获取权限；精确的 attachment/请求/Publication 检查约束响应 {{publication}}。客户端消费类型化事实，并负责本地预览展示。"
+        "模型输出先合并并写入 {{concept-publication}}，再发往客户端。提供方结果 P、{{concept-publication}} 终态 U 与 canonical Assistant 提交 C 按 P < U < C 保存。不完整或未被接受的流不会成为 canonical Assistant 消息。",
+        "PublicationAudit 记录已提交、可能发出的输出，只能限定用户可能看到的内容。runtime 没有证明用户已读的 ACK {{contract-no-ack}}。",
+        "present 是普通 {{native}} {{concept-tool}}。只有成功提交的类型化 {{concept-tool}} 交付元数据，才授权对话记录显示文件卡片；文件写入、完成 {{observation}} 或模型文字声明都不能提供这种 {{authority-delivery}}。",
+        "ArtifactId 指向 ArtifactStore 中不可变的字节。SessionFileReference 保存原始 {{concept-conversation}}/cwd 身份与可变文件的 {{normalization-path}} 路径；再次打开可能读到新内容，也可能返回 Missing、Unauthorized 或 Unavailable。它没有保存当时字节的 {{snapshot-content}}。",
+        "app_server::delivery_access 管理已提交交付的访问。调用方通过传输身份验证后获得权限；响应发出前还须精确检查 attachment、请求与 {{concept-publication}}。客户端读取类型化事实，再提供本地预览。"
       ],
       "nodes": [
         "publication",
@@ -1450,15 +1450,15 @@
     },
     {
       "id": "lifetimes-security",
-      "title": "Session、{{residency}}、连接与安全 {{boundary}}",
-      "summary": "区分 {{durable}} 身份、活跃写入者 {{ownership}}、attachment 路由与宿主隔离。",
+      "title": "{{concept-session}}、运行核心与连接各有生命周期",
+      "summary": "{{concept-session}} 数据可以长期保存；当前写入者、attachment 路由与宿主隔离分别由对应组件管理。",
       "details": [
-        "外部管理的部署中，一个已认证用户对应一个 App Server 进程/配置环境/{{durable}} 根目录。更上层宿主负责用户路由、身份验证、工作区分配/隔离、环境注入与重启策略。",
-        "Session cwd 是执行与配置解析的上下文，不是文件系统沙箱。{{native}} 文件 Tool 支持普通宿主绝对路径。进程内单写入者管理不是多进程租户/租约设计。",
-        "SessionRuntimeManager 对加载/卸载实施 single-flight，并保留 {{residency}} {{composition}}。v1 中，一个 Session 只有一个 {{residency}} 节点；不同 Session 可以同时 {{residency}}。弱引用 ManagedRuntimeClient 句柄不能让已卸载 {{composition}} 继续存活。",
-        "断开连接/EOF 与显式 detach 释放外部 attachment，不取消 Attempt，也不对交互进行 {{settlement}}。本地 TUI 正常退出会显式请求关闭自有子进程。外部管理的服务器支持在客户端断开后继续执行。",
-        "只有 shutdown 证明 {{native}} {{quiescence}} 后，卸载才成功。失败时保留 Unloading 与精确诊断，不向新的写入者开放运行资源。成功卸载保留 {{durable}} 数据，并使旧句柄成为 StaleIncarnation。",
-        "WebSocket {{admission-transport}} 在构建连接前使用专用传输 token。可选的交付访问具有独立的传输授予权限。initialize 是协议协商，不是服务器内部的身份验证或租户 {{boundary}}。"
+        "外部管理部署为每个已认证用户提供一个 {{concept-app-server}} 进程、配置环境与 {{durable}} 根目录。更上层宿主负责用户路由、身份验证、工作区分配与隔离、环境注入及重启策略。",
+        "{{concept-session}} cwd 决定执行与配置解析的上下文，并不提供文件系统沙箱；{{native}} 文件 {{concept-tool}} 可以使用普通宿主绝对路径。进程内的单写入者规则也不提供多进程租户管理或租约。",
+        "SessionRuntimeManager 以 single-flight 管理加载/卸载，并保留正在使用的运行核心。v1 中，每个 {{concept-session}} 最多有一个处于 {{residency}} 的节点，不同 {{concept-session}} 则可同时加载。ManagedRuntimeClient 只持有弱引用，不能让已卸载核心继续存活。",
+        "断线、EOF 或显式 detach 都会释放外部 attachment；{{concept-attempt}} 仍可运行，待处理交互也不会自动结束。本地 TUI 正常退出时显式请求关闭自有子进程；外部管理的服务器则支持断线后继续执行。",
+        "shutdown 证明所有受管理工作已收束、达到 {{quiescence}} 后，才能卸载成功。失败时保持 Unloading 并保留精确诊断，避免新写入者进入。成功后持久数据继续保留，旧句柄返回 StaleIncarnation。",
+        "WebSocket 在建立连接前通过 {{admission-transport}} 检查专用传输 token。可选交付访问另需传输授予的权限。initialize 只协商协议，不承担进程内身份验证或租户隔离。"
       ],
       "nodes": [
         "clients",
@@ -1485,7 +1485,7 @@
       "path": "src/lib.rs",
       "start": 1,
       "end": 27,
-      "label": "Runtime {{contract-layering}} 与 SDK {{boundary-contract}}"
+      "label": "Runtime 接口与外部 SDK 的边界"
     },
     {
       "id": "topology",
@@ -1499,63 +1499,63 @@
       "path": "src/app_server/mod.rs",
       "start": 1,
       "end": 19,
-      "label": "与传输无关的 App Server 模块"
+      "label": "与传输无关的 {{concept-app-server}} 模块"
     },
     {
       "id": "composition",
       "path": "src/local_runtime/mod.rs",
       "start": 1,
       "end": 24,
-      "label": "共享的本地配置与 {{composition}} {{owner}}"
+      "label": "本地配置与运行核心由谁组装"
     },
     {
       "id": "session-identity",
       "path": "docs/durable-sessions.md",
       "start": 1,
       "end": 23,
-      "label": "Session 图与目录 {{authority-session}}"
+      "label": "{{concept-session}} 图与目录身份由谁保存"
     },
     {
       "id": "session-residency",
       "path": "docs/durable-sessions.md",
       "start": 44,
       "end": 76,
-      "label": "显式 Session 控制、{{residency}} 与客户端焦点"
+      "label": "显式 {{concept-session}} 控制、{{residency}} 与客户端焦点"
     },
     {
       "id": "session-config",
       "path": "docs/durable-sessions.md",
       "start": 79,
       "end": 106,
-      "label": "{{persistence}} 选择与解析后的有效配置"
+      "label": "已保存的显式选择与解析后的有效配置"
     },
     {
       "id": "runtime-ownership",
       "path": "src/runtime/conversation_runtime.rs",
       "start": 1,
       "end": 35,
-      "label": "ConversationRuntime 负责语义协调"
+      "label": "{{concept-runtime}} 负责语义协调"
     },
     {
       "id": "runtime-admission",
       "path": "src/runtime/conversation_runtime.rs",
       "start": 48,
       "end": 74,
-      "label": "一个 {{admission}} 锁与一个活跃 Attempt"
+      "label": "一把运行入口锁，一个活跃 {{concept-attempt}}"
     },
     {
       "id": "runtime-drain",
       "path": "src/runtime/conversation_runtime.rs",
       "start": 76,
       "end": 111,
-      "label": "{{drain}}、{{settlement}} 与经过证明的 {{quiescence}}"
+      "label": "关闭新工作入口，等待现有工作收束"
     },
     {
       "id": "residency-load",
       "path": "docs/runtime-residency.md",
       "start": 93,
       "end": 116,
-      "label": "Single-flight 冷 {{composition}} 与激活前的 {{projection}} 绑定"
+      "label": "Single-flight 冷加载，激活前绑定客户端视图"
     },
     {
       "id": "residency-unload",
@@ -1569,105 +1569,105 @@
       "path": "src/runtime_client/mod.rs",
       "start": 1,
       "end": 33,
-      "label": "基于 runtime {{authority}} 事实的 {{projection}}，支持零 attachment"
+      "label": "客户端从 runtime 事实生成视图，无连接也能执行"
     },
     {
       "id": "client-owners",
       "path": "src/runtime_client/mod.rs",
       "start": 48,
       "end": 90,
-      "label": "{{projection}}、{{replay-cursor}}、控制与 attachment 的 {{ownership}}"
+      "label": "客户端视图、事件回放与 attachment 由谁管理"
     },
     {
       "id": "canonical-history",
       "path": "src/conversation/mod.rs",
       "start": 1,
       "end": 11,
-      "label": "不可变 Ledger、{{projection-context}} Checkpoint 与热状态"
+      "label": "不可变 {{concept-message-ledger}}、{{concept-checkpoint}} 与热状态"
     },
     {
       "id": "durable-inbound",
       "path": "src/durable/mod.rs",
       "start": 1,
       "end": 26,
-      "label": "独立的输入、{{canonical}} 事实、Journal 与 Publication 领域"
+      "label": "分别保存输入、对话历史、{{concept-event-journal}} 与 {{concept-publication}}"
     },
     {
       "id": "inbound-commit",
       "path": "src/durable/mod.rs",
       "start": 49,
       "end": 67,
-      "label": "{{acceptance-inbound}} 与 {{canonical}} {{adoption}} 事务"
+      "label": "先接收输入，再原子纳入 canonical 历史"
     },
     {
       "id": "agent-owns",
       "path": "docs/agent-loop.md",
       "start": 44,
       "end": 83,
-      "label": "Attempt 循环、Publication 与 Tool 批次的 {{ownership}}"
+      "label": "{{concept-attempt}}、{{concept-publication}} 与 {{concept-tool}} 批次由谁管理"
     },
     {
       "id": "context-contract",
       "path": "src/context/mod.rs",
       "start": 1,
       "end": 12,
-      "label": "历史编译器 {{contract-context}} 与动态 Context Assembly"
+      "label": "历史编译器的接口与动态 Context Assembly"
     },
     {
       "id": "context-owners",
       "path": "docs/context-engine.md",
       "start": 18,
       "end": 36,
-      "label": "Context {{responsibility}} 与 {{finite}} {{canonical}} 缓存"
+      "label": "Context 编译职责与有限历史缓存"
     },
     {
       "id": "context-cuts",
       "path": "docs/context-engine.md",
       "start": 38,
       "end": 54,
-      "label": "Read cut、Checkpoint base、激活与严格的 Tail"
+      "label": "Read cut、{{concept-checkpoint}} base、激活与严格的 {{concept-tail}}"
     },
     {
       "id": "context-typed",
       "path": "docs/context-engine.md",
       "start": 56,
       "end": 82,
-      "label": "Original 与 Derived 身份不是执行身份"
+      "label": "{{concept-original}} 与 {{concept-derived}} 身份不是执行身份"
     },
     {
       "id": "compaction-commit",
       "path": "docs/context-engine.md",
       "start": 94,
       "end": 115,
-      "label": "原子 Checkpoint commit、{{receipt}} 与取消授权"
+      "label": "{{concept-checkpoint}} 的原子提交与取消授权"
     },
     {
       "id": "frozen-input",
       "path": "docs/context-engine.md",
       "start": 267,
       "end": 300,
-      "label": "{{frozen}} 的语义 generation、实际请求与精确重建"
+      "label": "固定逻辑输入，为实际请求保存精确快照"
     },
     {
       "id": "context-start",
       "path": "docs/agent-loop.md",
       "start": 626,
       "end": 662,
-      "label": "{{staging-context}} Context、{{frozen}} 请求，再进行合并的 {{persistence}} 启动"
+      "label": "先准备 Context 与请求，再原子提交启动事实"
     },
     {
       "id": "start-meaning",
       "path": "docs/agent-loop.md",
       "start": 664,
       "end": 691,
-      "label": "Started 是禁止重发的 {{frontier-start}}，不证明提供方已执行"
+      "label": "Started 禁止静默重发，但不证明远端已执行"
     },
     {
       "id": "start-code",
       "path": "src/agent/execution.rs",
       "start": 3013,
       "end": 3045,
-      "label": "取消 {{arbitration}} 下实际合并的请求启动 commit"
+      "label": "在取消 gate 下原子提交请求启动"
     },
     {
       "id": "cancel-gate",
@@ -1702,210 +1702,210 @@
       "path": "src/agent/execution.rs",
       "start": 3717,
       "end": 3744,
-      "label": "适配器 {{dispatch}} 接收 Attempt 子信号"
+      "label": "调用适配器，传入 {{concept-attempt}} 的子取消信号"
     },
     {
       "id": "publication-contract",
       "path": "src/publication/mod.rs",
       "start": 1,
       "end": 38,
-      "label": "Publication 先 commit 再 {{publication}}；P、U、C 各不相同"
+      "label": "{{concept-publication}} 先保存再发送，保持 P < U < C"
     },
     {
       "id": "publication-outcomes",
       "path": "src/publication/mod.rs",
       "start": 47,
       "end": 76,
-      "label": "Canonical、未 {{acceptance-assistant}} 与不完整 Publication；没有感知 ACK"
+      "label": "区分 Canonical、未接受与不完整输出；没有用户已读 ACK"
     },
     {
       "id": "publication-flush",
       "path": "src/agent/execution.rs",
       "start": 5568,
       "end": 5588,
-      "label": "源码实现在 {{publication}} 帧之前先 {{staging-publication}}"
+      "label": "flush_publication 先保存帧，再发送"
     },
     {
       "id": "publication-terminal",
       "path": "src/agent/execution.rs",
       "start": 5590,
       "end": 5616,
-      "label": "源码实现在最终 {{publication}} 前先 commit U"
+      "label": "发送最终输出前，先提交终态 U"
     },
     {
       "id": "assistant-commit",
       "path": "src/agent/execution.rs",
       "start": 5352,
       "end": 5387,
-      "label": "{{canonical}} Assistant {{acceptance-assistant}} 通过 Publication {{authority-publication}} commit"
+      "label": "关联已保存的 {{concept-publication}}，再提交 Assistant"
     },
     {
       "id": "tool-contract",
       "path": "src/tools/mod.rs",
       "start": 1,
       "end": 14,
-      "label": "{{native}} Tool、MCP 与 Python 使用共享 Tool Plane"
+      "label": "原生 {{concept-tool}}、{{concept-mcp}} 与 Python 共享 {{concept-tool-plane}}"
     },
     {
       "id": "tool-acceptance",
       "path": "docs/tool-lifecycle.md",
       "start": 56,
       "end": 96,
-      "label": "{{preflight}}、{{canonical}} {{acceptance-tool}}、{{physical}} 执行与原子批次"
+      "label": "检查调用、提交 Assistant、执行工作，再原子提交结果"
     },
     {
       "id": "tool-evidence",
       "path": "docs/tool-lifecycle.md",
       "start": 99,
       "end": 129,
-      "label": "类型化结果确定性与 {{physical}} {{settlement}}"
+      "label": "区分已知结果、未知结果与本地资源收束"
     },
     {
       "id": "tool-adapters",
       "path": "docs/tool-lifecycle.md",
       "start": 131,
       "end": 149,
-      "label": "进程 {{ownership}} 与远程 MCP 不确定性"
+      "label": "管理进程，并保留远程 {{concept-mcp}} 结果的不确定性"
     },
     {
       "id": "tool-batch",
       "path": "src/agent/execution.rs",
       "start": 5390,
       "end": 5432,
-      "label": "源码实现原子追加整个 Tool 批次"
+      "label": "源码实现原子追加整个 {{concept-tool}} 批次"
     },
     {
       "id": "tool-recovery",
       "path": "docs/tool-lifecycle.md",
       "start": 238,
       "end": 247,
-      "label": "{{recovery}} 绝不 {{replay-effect}} 结果不明的 {{effect}}，也不替换已 commit 结果"
+      "label": "恢复只补缺失结果，不重做结果未知的外部操作"
     },
     {
       "id": "continuation",
       "path": "docs/agent-loop.md",
       "start": 531,
       "end": 553,
-      "label": "已 {{acceptance-continuation}} 的 continuation 与不可变的 {{frozen}} 输入版本"
+      "label": "接受 continuation 后，沿用固定的输入版本"
     },
     {
       "id": "attempt-terminal",
       "path": "docs/agent-loop.md",
       "start": 1498,
       "end": 1509,
-      "label": "唯一 {{terminal}} {{settlement}} 候选；追加失败保持显式"
+      "label": "只交回一个最终结果候选，追加失败时保留诊断"
     },
     {
       "id": "source-demand",
       "path": "docs/source-activation.md",
       "start": 1,
       "end": 27,
-      "label": "发现不激活 {{source-config}}；选定的 {{finite}} 需求授权准备"
+      "label": "发现资源不激活；选中并获准后才准备"
     },
     {
       "id": "config-selection",
       "path": "docs/configuration.md",
       "start": 296,
       "end": 320,
-      "label": "精确 Tool 选择与由 Rust 管理的封闭 Plugins"
+      "label": "精确 {{concept-tool}} 选择与由 Rust 管理的封闭 Plugins"
     },
     {
       "id": "resources",
       "path": "docs/configuration.md",
       "start": 394,
       "end": 419,
-      "label": "完整资源 {{shadowing}}、Skills 与完整 Agent profile"
+      "label": "同名资源整体覆盖、{{concept-skills}} 与完整 Agent profile"
     },
     {
       "id": "python-mcp",
       "path": "src/tools/python.rs",
       "start": 1,
       "end": 19,
-      "label": "Managed Python 编译到通用 MCP runtime"
+      "label": "{{concept-managed-python}} 编译到通用 {{concept-mcp}} runtime"
     },
     {
       "id": "skills-contract",
       "path": "src/skills/mod.rs",
       "start": 24,
       "end": 35,
-      "label": "Skill 环境 {{ownership}} 与普通 Tool 访问"
+      "label": "Skill 环境由谁管理，如何通过普通 {{concept-tool}} 访问"
     },
     {
       "id": "agents-authority",
       "path": "docs/jobs-and-agents.md",
       "start": 139,
       "end": 153,
-      "label": "{{frozen}} 的 {{durable}} Agent 权限与 {{finite}} Workflow 子任务"
+      "label": "子 Agent 使用已捕获权限，{{concept-workflow}} 子任务归节点管理"
     },
     {
       "id": "agents-workspace",
       "path": "docs/jobs-and-agents.md",
       "start": 258,
       "end": 269,
-      "label": "Session 共享工作区与独立 {{physical}} 证明"
+      "label": "{{concept-session}} 共享工作区，各自证明实际工作已收束"
     },
     {
       "id": "agent-controls",
       "path": "docs/jobs-and-agents.md",
       "start": 101,
       "end": 132,
-      "label": "精确 activation 的中断、等待与输入 {{acceptance-inbound}}"
+      "label": "针对同一次 activation 中断、等待与接收输入"
     },
     {
       "id": "workflow-program",
       "path": "docs/workflow-programs.md",
       "start": 15,
       "end": 28,
-      "label": "被选中的 Workflow 是执行固定 {{scope}} 程序的一个 Tool"
+      "label": "选中的 {{concept-workflow}} 作为一个 {{concept-tool}} 运行固定程序"
     },
     {
       "id": "workflow-owner",
       "path": "docs/workflow-programs.md",
       "start": 352,
       "end": 384,
-      "label": "WorkflowRuntime 负责 {{scope}} 值、实例与确定性 join"
+      "label": "WorkflowRuntime 管理局部值、实例与按定义顺序汇合"
     },
     {
       "id": "workflow-workspace",
       "path": "docs/workflow-programs.md",
       "start": 651,
       "end": 674,
-      "label": "Workflow 失败或取消后，共享工作区 {{effect}} 仍保留"
+      "label": "{{concept-workflow}} 失败或取消，已完成的工作区写入仍保留"
     },
     {
       "id": "goal-authority",
       "path": "docs/goal-extension.md",
       "start": 3,
       "end": 21,
-      "label": "只有 GoalPhase 具有自主继续的 {{authority-goal}}"
+      "label": "GoalPhase 决定是否授权自主继续"
     },
     {
       "id": "goal-runtime",
       "path": "docs/goal-extension.md",
       "start": 42,
       "end": 76,
-      "label": "Goal 状态、runtime 可用性与原子轮次 {{admission-goal}} 各不相同"
+      "label": "分别检查 {{concept-goal}} 阶段、runtime 可用性与轮次接收"
     },
     {
       "id": "extensions-owner",
       "path": "docs/architecture.md",
       "start": 104,
       "end": 120,
-      "label": "Goal 使用协调器与普通 Pending Inbound"
+      "label": "{{concept-goal}} 使用协调器与普通 Pending Inbound"
     },
     {
       "id": "delivery-commit",
       "path": "docs/file-delivery.md",
       "start": 26,
       "end": 55,
-      "label": "交付是已 commit 的类型化 Tool 元数据；Session 文件仍可变"
+      "label": "交付来自已提交的类型化 {{concept-tool}} 元数据；{{concept-session}} 文件仍可变"
     },
     {
       "id": "delivery-access",
       "path": "docs/architecture.md",
       "start": 19,
       "end": 39,
-      "label": "传输授予的交付权限与精确 Publication 检查"
+      "label": "传输授予的交付权限与精确 {{concept-publication}} 检查"
     },
     {
       "id": "connection-detach",
@@ -1926,7 +1926,7 @@
       "path": "docs/architecture.md",
       "start": 6582,
       "end": 6588,
-      "label": "Trace 是只读 {{projection}}，绝不是 {{recovery}} 输入"
+      "label": "Trace 只供读取，不参与恢复"
     },
     {
       "id": "model-items",
@@ -1940,7 +1940,7 @@
       "path": "src/extensions.rs",
       "start": 1,
       "end": 12,
-      "label": "封闭 {{native}} {{composition}} 保留 Conversation 领域状态"
+      "label": "封闭的本地扩展保留 {{concept-conversation}} 领域状态"
     },
     {
       "id": "inward-contracts",
@@ -1961,7 +1961,7 @@
       "path": "docs/tool-lifecycle.md",
       "start": 1,
       "end": 28,
-      "label": "共享 ForegroundInvocation，以及 {{observation}} 与权限 gate 的区别"
+      "label": "共享 ForegroundInvocation；进度观察不授予权限"
     }
   ]
 }

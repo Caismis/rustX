@@ -22,18 +22,18 @@
       "parent": "overview",
       "owner": "clients",
       "title": "Clients · TUI / Web Console",
-      "summary": "客户端保留交互状态，通过同一 App Server {{contract}} 读取 {{projection}} 并提交显式目标操作。",
+      "summary": "客户端通过同一 {{concept-app-server}} 协议读取运行状态，并在每次操作中明确指定目标；界面状态由客户端自己管理。",
       "nodes": [
         {
           "id": "module-clients-tui",
-          "label": "AppServerClient",
-          "layer": "Client protocol",
-          "summary": "TUI 统一处理 JSON-RPC request ID、响应关联和 {{dispatch}}。",
+          "label": "{{map-concept-app-server-client}}",
+          "layer": "客户端协议",
+          "summary": "TUI 用 {{map-concept-app-server-client}} 关联 JSON-RPC 请求与响应，并分发服务端通知。",
           "owns": [
-            "initialize、pending-request map 与 transport terminal {{map-client-settlement}}。"
+            "完成初始化，维护待响应请求，并在连接结束时处理每个请求的 {{map-client-settlement}}。"
           ],
           "boundaries": [
-            "丢失写响应会返回 uncertain outcome；不会自动重发操作。"
+            "修改操作丢失响应时返回 UncertainOutcomeError，不会自动重发。"
           ],
           "evidence": [
             "map-tui-client"
@@ -41,14 +41,14 @@
         },
         {
           "id": "module-clients-session",
-          "label": "Session",
-          "layer": "Client state",
-          "summary": "一次 attach 取得 {{snapshot}}、{{cursor}} 与订阅；后续事件通过身份 {{map-fencing}}。",
+          "label": "{{map-concept-client-session}}",
+          "layer": "客户端状态",
+          "summary": "客户端 {{map-concept-client-session}} 一次 attach 即取得同一时点的 {{snapshot}}、{{cursor}} 和订阅，后续通知经过身份 {{map-fencing}}。",
           "owns": [
-            "单个 Session 的 {{projection}} 安装与 resync 修复。"
+            "安装单个会话的 {{projection}}，并在需要时重新同步。"
           ],
           "boundaries": [
-            "本地状态不提供 Agent execution {{authority-runtime}}。"
+            "这个客户端对象只管理视图，不能决定 Agent 如何执行。"
           ],
           "evidence": [
             "map-tui-session"
@@ -57,13 +57,13 @@
         {
           "id": "module-clients-web",
           "label": "Web Console client",
-          "layer": "Client state",
-          "summary": "Web Console 复用生成的 App Server 类型和 foldRuntimeEvent。",
+          "layer": "客户端状态",
+          "summary": "Web Console 复用生成的 {{concept-app-server}} 类型，通过 foldRuntimeEvent 更新本地视图。",
           "owns": [
-            "SessionLifecycles、输入请求关联与页面交互状态。"
+            "管理 SessionLifecycles、输入请求的关联关系和页面交互状态。"
           ],
           "boundaries": [
-            "只读历史 preview 不能作为活跃 runtime 控制凭据。"
+            "历史预览是只读内容，不能用作控制活跃 runtime 的凭据。"
           ],
           "evidence": [
             "map-web-client"
@@ -72,13 +72,13 @@
         {
           "id": "module-clients-transport",
           "label": "Stdio JSONL / WebSocket",
-          "layer": "Transport",
-          "summary": "本地自有子进程或外部服务器连接进入同一协议。",
+          "layer": "传输",
+          "summary": "客户端可连接自己启动的本地子进程，也可连接外部服务器，两者使用同一协议。",
           "owns": [
-            "字节传输与连接关闭通知。"
+            "传送字节，并通知连接关闭。"
           ],
           "boundaries": [
-            "disconnect 不等于取消、unload 或 {{quiescence}}。"
+            "连接断开不代表执行已取消、runtime 已卸载或已达到 {{quiescence}}。"
           ],
           "evidence": [
             "topology",
@@ -87,14 +87,14 @@
         },
         {
           "id": "module-clients-server",
-          "label": "AppServerConnection",
-          "layer": "{{native}} peer",
-          "summary": "所有显式目标操作进入 App Server 的协议入口。",
+          "label": "{{map-concept-app-server-connection}}",
+          "layer": "服务端入口",
+          "summary": "带有明确目标的客户端操作，由 {{map-concept-app-server-connection}} 统一接收。",
           "owns": [
-            "由服务端验证目标身份并路由到 {{native}} {{map-semantic-owner}}。"
+            "验证目标身份，再交给负责该操作的 {{map-semantic-owner}}。"
           ],
           "boundaries": [
-            "客户端 focus 不能选择进程全局的活跃 Session。"
+            "客户端切换焦点不会替整个进程选择活跃 {{concept-session}}。"
           ],
           "evidence": [
             "app-boundary",
@@ -109,7 +109,7 @@
           "from": "module-clients-tui",
           "to": "module-clients-transport",
           "kind": "call",
-          "label": "send request / receive response"
+          "label": "发送请求 / 接收响应"
         },
         {
           "from": "module-clients-transport",
@@ -121,19 +121,19 @@
           "from": "module-clients-tui",
           "to": "module-clients-session",
           "kind": "data",
-          "label": "targeted notifications"
+          "label": "按目标发送通知"
         },
         {
           "from": "module-clients-server",
           "to": "module-clients-web",
           "kind": "data",
-          "label": "typed responses + events"
+          "label": "类型化响应与事件"
         },
         {
           "from": "module-clients-session",
           "to": "module-clients-tui",
           "kind": "call",
-          "label": "typed operations"
+          "label": "类型化操作"
         }
       ]
     },
@@ -141,19 +141,19 @@
       "id": "module-app-server",
       "parent": "overview",
       "owner": "app-server",
-      "title": "App Server · Protocol routing",
-      "summary": "连接层处理协议与资源额度，Session 控制与 Conversation 执行仍由各自 {{native}} {{map-semantic-owner}} 决定。",
+      "title": "{{concept-app-server}} · 协议与路由",
+      "summary": "连接层处理协议和资源额度；持久 {{concept-session}} 的管理与 {{concept-conversation}} 的执行，仍交给各自负责的组件。",
       "nodes": [
         {
           "id": "module-app-server-connection",
-          "label": "AppServerConnection",
-          "layer": "Protocol",
-          "summary": "处理版本化请求并按显式 Session/runtime 目标路由。",
+          "label": "{{map-concept-app-server-connection}}",
+          "layer": "协议",
+          "summary": "{{map-concept-app-server-connection}} 处理版本化请求，并按请求指定的 {{concept-session}} 或 runtime 路由。",
           "owns": [
-            "连接身份、请求响应和目标 route。"
+            "管理连接身份、请求响应和目标路由。"
           ],
           "boundaries": [
-            "传输 {{framing}} 不参与 Attempt {{admission}}。"
+            "传输 {{framing}} 只解决消息如何收发，不决定 {{concept-attempt}} 能否开始。"
           ],
           "evidence": [
             "map-app-dispatch",
@@ -162,14 +162,14 @@
         },
         {
           "id": "module-app-server-host",
-          "label": "AppServerHost",
-          "layer": "Process resources",
-          "summary": "一个进程级 host 汇总 manager、连接资源和文件操作额度。",
+          "label": "{{map-concept-app-server-host}}",
+          "layer": "进程资源",
+          "summary": "进程内的 {{map-concept-app-server-host}} 统一管理 {{map-concept-session-runtime-manager}}、连接资源和文件操作额度。",
           "owns": [
-            "Host lifecycle、requests、attachments、uploads 与 archives。"
+            "管理宿主生命周期，以及请求、连接绑定、上传和归档资源。"
           ],
           "boundaries": [
-            "Host capacity reservation 与 runtime {{residency}} pin 是不同对象。"
+            "宿主容量预留与阻止 runtime 卸载的 {{residency}} pin 各有用途，不能互相替代。"
           ],
           "evidence": [
             "map-app-host"
@@ -178,13 +178,13 @@
         {
           "id": "module-app-server-transport",
           "label": "transport::stdio / websocket",
-          "layer": "Transport",
-          "summary": "JSONL 与 WebSocket 将字节连接到同一协议 {{contract}}。",
+          "layer": "传输",
+          "summary": "JSONL 与 WebSocket 将字节连接接入同一 {{concept-app-server}} 协议。",
           "owns": [
-            "传输认证与 {{framing}}。"
+            "处理传输认证和消息 {{framing}}。"
           ],
           "boundaries": [
-            "更上层宿主仍负责用户路由和工作区隔离。"
+            "用户路由与工作区隔离仍由上层宿主负责。"
           ],
           "evidence": [
             "transport-security",
@@ -193,14 +193,14 @@
         },
         {
           "id": "module-app-server-manager",
-          "label": "SessionRuntimeManager",
-          "layer": "{{native}} routing target",
-          "summary": "load/unload 请求转交 {{residency}} {{map-semantic-owner}}。",
+          "label": "{{map-concept-session-runtime-manager}}",
+          "layer": "驻留管理入口",
+          "summary": "加载与卸载请求交给 {{map-concept-session-runtime-manager}} 管理。",
           "owns": [
-            "在显式 Conversation 和 incarnation 上执行 manager 操作。"
+            "对明确指定的 {{concept-conversation}} 和 runtime incarnation 执行管理操作。"
           ],
           "boundaries": [
-            "客户端断开不授权释放 runtime。"
+            "客户端断开连接，不能据此释放 runtime。"
           ],
           "evidence": [
             "map-app-host",
@@ -211,14 +211,14 @@
         },
         {
           "id": "module-app-server-projection",
-          "label": "RuntimeClientHost",
-          "layer": "{{native}} routing target",
-          "summary": "runtime 操作与观察进入目标 host。",
+          "label": "{{map-concept-runtime-client-host}}",
+          "layer": "运行控制入口",
+          "summary": "对指定 runtime 的控制与观察请求，交给对应的 {{map-concept-runtime-client-host}}。",
           "owns": [
-            "提供控制 attachment 与只读 {{projection}}。"
+            "提供控制连接和只读 {{projection}}。"
           ],
           "boundaries": [
-            "不是 Conversation 的第二个调度器。"
+            "{{concept-conversation}} 的调度仍由 {{concept-runtime}} 决定。"
           ],
           "evidence": [
             "client-owners"
@@ -232,25 +232,25 @@
           "from": "module-app-server-transport",
           "to": "module-app-server-connection",
           "kind": "call",
-          "label": "{{framing}} requests"
+          "label": "解析请求 {{framing}}"
         },
         {
           "from": "module-app-server-connection",
           "to": "module-app-server-host",
           "kind": "call",
-          "label": "resource {{map-host-admission}}"
+          "label": "检查宿主资源额度"
         },
         {
           "from": "module-app-server-connection",
           "to": "module-app-server-manager",
           "kind": "call",
-          "label": "Session / {{residency}} control"
+          "label": "{{concept-session}} 与驻留控制"
         },
         {
           "from": "module-app-server-connection",
           "to": "module-app-server-projection",
           "kind": "call",
-          "label": "runtime-targeted operations"
+          "label": "针对指定 runtime 的操作"
         }
       ]
     },
@@ -258,19 +258,19 @@
       "id": "module-projection",
       "parent": "overview",
       "owner": "projection",
-      "title": "Runtime Client · {{projection}} / control",
-      "summary": "一个 {{projection}} {{map-semantic-owner}} 将已提交事实 {{fold}} 为 {{snapshot}}、{{cursor}} 和 {{bounded}} {{replay}}。",
+      "title": "{{concept-runtime-client}} · 状态视图与控制",
+      "summary": "{{map-concept-runtime-client-projection}} 将运行时提供的事实归并为当前 {{snapshot}}，再通过 {{cursor}} 和有限的事件窗口支持重连。",
       "nodes": [
         {
           "id": "module-projection-host",
-          "label": "RuntimeClientHost",
-          "layer": "Control adapter",
-          "summary": "在 ConversationRuntime 之上绑定控制和 {{map-attachment}}。",
+          "label": "{{map-concept-runtime-client-host}}",
+          "layer": "控制适配",
+          "summary": "{{map-concept-runtime-client-host}} 在 {{concept-runtime}} 之上接入控制请求和客户端 {{map-attachment}}。",
           "owns": [
-            "一个 control attachment、只读观察 attachments 与协议适配。"
+            "管理一个控制 attachment、多个只读观察 attachment，并适配协议。"
           ],
           "boundaries": [
-            "零 attachment 时仍使用同一执行路径。"
+            "即使没有客户端连接，{{concept-conversation}} 也沿用同一条执行路径。"
           ],
           "evidence": [
             "client-owners",
@@ -279,14 +279,14 @@
         },
         {
           "id": "module-projection-fold",
-          "label": "RuntimeClientProjection",
-          "layer": "Read model",
-          "summary": "{{fold}}、{{cursor}} 分配和事件 {{map-projection-publish}} 共享一个同步点。",
+          "label": "{{map-concept-runtime-client-projection}}",
+          "layer": "只读状态",
+          "summary": "{{map-concept-runtime-client-projection}} 在同一个同步点更新视图、分配 {{cursor}} 并交付事件。",
           "owns": [
-            "当前 {{snapshot}} 与 RuntimeClientEvent 顺序。"
+            "保存当前 {{snapshot}}，确定 RuntimeClientEvent 的顺序。"
           ],
           "boundaries": [
-            "输入必须来自 {{native}} {{authority-runtime}}；不猜测执行结果。"
+            "只根据执行组件提供的事实更新，不推测执行结果。"
           ],
           "evidence": [
             "map-projection-fold"
@@ -294,14 +294,14 @@
         },
         {
           "id": "module-projection-ring",
-          "label": "{{bounded}} {{replay-cursor}} ring",
-          "layer": "Delivery",
-          "summary": "订阅者只保存一个 {{cursor}}，共同读取同一个 {{bounded}} ring。",
+          "label": "有限事件重放环",
+          "layer": "事件交付",
+          "summary": "订阅者各自保存一个 {{cursor}}，共同读取同一个有限事件环。",
           "owns": [
-            "保留窗口、订阅位置与显式 resync_required。"
+            "管理保留窗口和订阅位置；无法补齐时明确返回 resync_required。"
           ],
           "boundaries": [
-            "超出窗口必须重新取 {{snapshot}}；ring 不是 {{recovery}} 输入。"
+            "超出窗口就重新获取 {{snapshot}}；事件环不参与执行 {{recovery}}。"
           ],
           "evidence": [
             "map-projection-ring"
@@ -309,14 +309,14 @@
         },
         {
           "id": "module-projection-runtime",
-          "label": "ConversationRuntime",
-          "layer": "{{authority-runtime}} peer",
-          "summary": "执行与 {{admission}} 的事实从 coordinator 向外流动。",
+          "label": "{{concept-runtime}}",
+          "layer": "执行事实来源",
+          "summary": "{{concept-runtime}} 的协调器向外报告执行情况，以及是否允许新 {{concept-attempt}} 开始。",
           "owns": [
-            "Agent control 请求转交真正的执行 {{map-semantic-owner}}。"
+            "将 Agent 控制请求交给真正负责执行的组件。"
           ],
           "boundaries": [
-            "Trace 与 UI {{projection}} 不能改变语义事实。"
+            "Trace 和界面 {{projection}} 不能反过来改变执行事实。"
           ],
           "evidence": [
             "runtime-ownership",
@@ -327,14 +327,14 @@
         },
         {
           "id": "module-projection-durable",
-          "label": "ConversationStore",
-          "layer": "{{durable}} read peer",
-          "summary": "历史和当前 Surface bootstrap 由持久 {{authority-ledger}} 提供。",
+          "label": "{{map-concept-conversation-store}}",
+          "layer": "持久历史来源",
+          "summary": "{{map-concept-conversation-store}} 提供持久历史，用于初始化历史视图和当前 Surface。",
           "owns": [
-            "{{bounded}} 历史读取。"
+            "在明确上界内读取历史。"
           ],
           "boundaries": [
-            "client {{cursor}} 不是 Ledger 或 Journal 位置。"
+            "客户端 {{cursor}} 不能用作 Ledger 或 Journal 的位置。"
           ],
           "evidence": [
             "map-projection-ring"
@@ -348,31 +348,31 @@
           "from": "module-projection-runtime",
           "to": "module-projection-host",
           "kind": "data",
-          "label": "{{map-semantic}} {{observation}} facts"
+          "label": "已确定的运行事实"
         },
         {
           "from": "module-projection-host",
           "to": "module-projection-fold",
           "kind": "call",
-          "label": "apply {{observation}}"
+          "label": "应用运行事实"
         },
         {
           "from": "module-projection-fold",
           "to": "module-projection-ring",
           "kind": "data",
-          "label": "{{cursor}} + event"
+          "label": "{{cursor}} 与事件"
         },
         {
           "from": "module-projection-host",
           "to": "module-projection-runtime",
           "kind": "call",
-          "label": "control"
+          "label": "控制请求"
         },
         {
           "from": "module-projection-durable",
           "to": "module-projection-host",
           "kind": "data",
-          "label": "{{durable}} bootstrap"
+          "label": "从持久记录初始化"
         }
       ]
     },
@@ -380,19 +380,19 @@
       "id": "module-sessions",
       "parent": "overview",
       "owner": "sessions",
-      "title": "Session · Identity / {{residency}}",
-      "summary": "持久 Session 目录与进程内 {{residency}} 分开管理；{{map-single-flight}} 操作最终依靠 runtime 的真实结束证明。",
+      "title": "{{concept-session}} · 身份与驻留",
+      "summary": "{{concept-session}} 的持久目录与进程内 runtime 的加载状态分开管理。并发操作可以汇合，但释放资源前必须证明旧 runtime 已结束。",
       "nodes": [
         {
           "id": "module-sessions-controller",
-          "label": "SessionController",
-          "layer": "{{durable}} identity",
-          "summary": "管理 Session → SessionNode → Conversation 目录图和显式设置。",
+          "label": "{{map-concept-session-controller}}",
+          "layer": "持久身份",
+          "summary": "{{map-concept-session-controller}} 管理 {{concept-session}} → SessionNode → {{concept-conversation}} 目录图，以及用户明确保存的设置。",
           "owns": [
-            "持久身份、目录事务与配置输入。"
+            "维护持久身份、目录事务和配置输入。"
           ],
           "boundaries": [
-            "controller 不保存活跃 runtime registry。"
+            "不保存活跃 runtime 的注册表。"
           ],
           "evidence": [
             "session-identity",
@@ -401,14 +401,14 @@
         },
         {
           "id": "module-sessions-manager",
-          "label": "SessionRuntimeManager",
-          "layer": "{{residency}}",
-          "summary": "clone 共享 registry，load/unload 在同一 {{map-single-flight}} transition 汇合。",
+          "label": "{{map-concept-session-runtime-manager}}",
+          "layer": "驻留管理",
+          "summary": "{{map-concept-session-runtime-manager}} 的克隆共享同一注册表；并发加载或卸载通过 {{map-single-flight}} 汇合。",
           "owns": [
-            "Loading / Loaded / Unloading 及分配保留。"
+            "维护 Loading / Loaded / Unloading 状态，并保留对应资源分配。"
           ],
           "boundaries": [
-            "等待者 drop 不拥有取消 transition 的权限。"
+            "等待者被丢弃，不会因此取消整个状态转换。"
           ],
           "evidence": [
             "map-residency-flight",
@@ -417,14 +417,14 @@
         },
         {
           "id": "module-sessions-incarnation",
-          "label": "RuntimeIncarnationId",
-          "layer": "{{residency}} identity",
-          "summary": "每次活跃 {{composition}} 具有独立 {{map-incarnation}}。",
+          "label": "{{map-concept-runtime-incarnation-id}}",
+          "layer": "单次加载身份",
+          "summary": "每次加载形成的活跃 runtime，都有独立的 {{map-concept-runtime-incarnation-id}}。",
           "owns": [
-            "过期控制句柄的身份隔离。"
+            "识别过期控制句柄，防止其操作新加载的 runtime。"
           ],
           "boundaries": [
-            "不是持久 Session ID，也不是客户端 {{cursor}}。"
+            "该身份区别于持久 {{concept-session}} ID 和客户端 {{cursor}}。"
           ],
           "evidence": [
             "map-residency-id"
@@ -432,14 +432,14 @@
         },
         {
           "id": "module-sessions-compose",
-          "label": "LocalConversationCore",
-          "layer": "{{composition}} peer",
-          "summary": "冷 load 解析配置并走统一 {{composition}} 入口。",
+          "label": "{{map-concept-local-conversation-core}}",
+          "layer": "统一组装",
+          "summary": "首次加载时先解析配置，再通过 {{map-concept-local-conversation-core}} 统一组装。",
           "owns": [
-            "先绑定 {{projection}} 再 activate。"
+            "先绑定 {{projection}}，再激活 runtime。"
           ],
           "boundaries": [
-            "v1 每个 Session 最多一个 {{residency}} 节点。"
+            "v1 中每个 {{concept-session}} 最多只有一个驻留节点。"
           ],
           "evidence": [
             "residency-load",
@@ -451,13 +451,13 @@
         {
           "id": "module-sessions-retire",
           "label": "unload / shutdown",
-          "layer": "Writer retirement",
-          "summary": "卸载先等待 shutdown 的 {{map-quiescence-proof}}，再释放旧 allocation。",
+          "layer": "写入者退出",
+          "summary": "卸载先等待 shutdown 给出完整的 {{map-quiescence-proof}}，再释放旧资源分配。",
           "owns": [
-            "失败时保留 Unloading 与旧 {{composition}}。"
+            "结束失败时保留 Unloading 状态和原有 runtime 组件。"
           ],
           "boundaries": [
-            "不能用 disconnect 或 cancellation signal 证明写入者消失。"
+            "连接断开或取消信号，都不能证明旧写入者已经退出。"
           ],
           "evidence": [
             "map-residency-retire",
@@ -472,31 +472,31 @@
           "from": "module-sessions-controller",
           "to": "module-sessions-manager",
           "kind": "data",
-          "label": "{{durable}} identity + settings"
+          "label": "持久身份与设置"
         },
         {
           "from": "module-sessions-manager",
           "to": "module-sessions-compose",
           "kind": "call",
-          "label": "cold load"
+          "label": "首次加载"
         },
         {
           "from": "module-sessions-manager",
           "to": "module-sessions-incarnation",
           "kind": "data",
-          "label": "{{publish}} live identity"
+          "label": "公布本次运行身份"
         },
         {
           "from": "module-sessions-manager",
           "to": "module-sessions-retire",
           "kind": "call",
-          "label": "unload"
+          "label": "卸载"
         },
         {
           "from": "module-sessions-retire",
           "to": "module-sessions-manager",
           "kind": "data",
-          "label": "proven writer retirement"
+          "label": "旧写入者已结束的证据"
         }
       ]
     },
@@ -504,19 +504,19 @@
       "id": "module-config",
       "parent": "overview",
       "owner": "config",
-      "title": "Configuration · Resolution / {{composition}}",
-      "summary": "当前 {{source}} 与 Session 显式输入形成 {{native}} {{composition}}；只有被选中的 {{finite}} 能力才进入准备。",
+      "title": "Configuration · 解析与组装",
+      "summary": "当前配置来源与 {{concept-session}} 保存的显式选择共同决定 runtime 如何组装；只有实际选中的能力才进入准备流程。",
       "nodes": [
         {
           "id": "module-config-inputs",
-          "label": "SessionConfigInput",
-          "layer": "Intent",
-          "summary": "Session 保存 cwd 与可选 model 选择，省略值仍保持省略。",
+          "label": "{{map-concept-session-config-input}}",
+          "layer": "用户选择",
+          "summary": "{{map-concept-session-config-input}} 保存 cwd 和可选的模型选择；未指定的值保持未指定。",
           "owns": [
-            "用户明确选择。"
+            "记录用户的明确选择。"
           ],
           "boundaries": [
-            "cwd 是执行与配置上下文，不是 sandbox。"
+            "cwd 决定执行和配置上下文，本身不是 sandbox。"
           ],
           "evidence": [
             "map-config-input",
@@ -525,14 +525,14 @@
         },
         {
           "id": "module-config-manager",
-          "label": "UserConfigManager",
-          "layer": "Resolution",
-          "summary": "每次解析重读当前文件，并保留完整资源定义的 {{shadowing}} 规则。",
+          "label": "{{map-concept-user-config-manager}}",
+          "layer": "配置解析",
+          "summary": "{{map-concept-user-config-manager}} 每次解析都重读当前文件，并按完整资源定义执行 {{shadowing}}。",
           "owns": [
-            "配置 {{source}}、精确 profile 解析与诊断。"
+            "读取配置来源，精确解析 profile，并报告诊断信息。"
           ],
           "boundaries": [
-            "持久 Session 输入不包含有效凭据和执行状态。"
+            "{{concept-session}} 持久输入不保存有效凭据或执行状态。"
           ],
           "evidence": [
             "map-config-manager",
@@ -541,14 +541,14 @@
         },
         {
           "id": "module-config-capability",
-          "label": "CapabilityCoordinator",
-          "layer": "Capability generation",
-          "summary": "准备候选后，在零 AttemptCapabilityLease 时原子切换有效 {{map-capability-revision}}。",
+          "label": "{{map-concept-capability-coordinator}}",
+          "layer": "能力版本",
+          "summary": "{{map-concept-capability-coordinator}} 准备好候选能力后，等所有 {{map-concept-attempt-capability-lease}} 释放，再原子切换有效版本。",
           "owns": [
-            "active CapabilitySnapshot 和租约同步点。"
+            "保存当前 {{map-concept-capability-snapshot}}，并协调租约与版本切换。"
           ],
           "boundaries": [
-            "发现 MCP 配置不代表连接；诊断变化本身不推进有效 executable {{map-capability-revision}}。"
+            "发现 {{concept-mcp}} 配置不代表已连接；仅诊断文字变化不会推进有效能力的 {{map-capability-revision}}。"
           ],
           "evidence": [
             "map-capability-commit",
@@ -557,14 +557,14 @@
         },
         {
           "id": "module-config-core",
-          "label": "LocalConversationCore",
-          "layer": "{{composition}}",
-          "summary": "统一{{composition}} ConversationRuntime、Tool runtime 与 CapabilityCoordinator。",
+          "label": "{{map-concept-local-conversation-core}}",
+          "layer": "统一组装",
+          "summary": "{{map-concept-local-conversation-core}} 统一组装 {{concept-runtime}}、{{concept-tool}} runtime 和 {{map-concept-capability-coordinator}}。",
           "owns": [
-            "先生成 Inactive runtime，再由具体产品入口完成绑定和 activate。"
+            "先构造 Inactive runtime，再由产品入口完成绑定并激活。"
           ],
           "boundaries": [
-            "不再建立第二条 TUI、headless 或 child 专用语义路径。"
+            "TUI、headless 和子进程都复用这条执行路径。"
           ],
           "evidence": [
             "map-core-compose"
@@ -572,14 +572,14 @@
         },
         {
           "id": "module-config-runtime",
-          "label": "ConversationRuntime",
-          "layer": "Execution peer",
-          "summary": "激活后的 Conversation 执行移交 coordinator。",
+          "label": "{{concept-runtime}}",
+          "layer": "执行组件",
+          "summary": "激活后，{{concept-runtime}} 的协调器接管 {{concept-conversation}} 的执行。",
           "owns": [
-            "新 Attempt {{frozen}}本次 model/capability 视图。"
+            "每个新 {{concept-attempt}} 固定本次使用的模型与能力视图。"
           ],
           "boundaries": [
-            "配置切换不会追溯改写已 {{admission}} 的工作。"
+            "后续配置切换不会改写已经获准开始的工作。"
           ],
           "evidence": [
             "runtime-ownership",
@@ -594,31 +594,31 @@
           "from": "module-config-inputs",
           "to": "module-config-manager",
           "kind": "data",
-          "label": "explicit intent"
+          "label": "显式选择"
         },
         {
           "from": "module-config-manager",
           "to": "module-config-core",
           "kind": "data",
-          "label": "resolved inputs"
+          "label": "解析后的输入"
         },
         {
           "from": "module-config-core",
           "to": "module-config-capability",
           "kind": "call",
-          "label": "{{composition}} of {{finite}} capabilities"
+          "label": "准备选定能力"
         },
         {
           "from": "module-config-core",
           "to": "module-config-runtime",
           "kind": "data",
-          "label": "inactive runtime → activate"
+          "label": "构造后再激活"
         },
         {
           "from": "module-config-capability",
           "to": "module-config-runtime",
           "kind": "data",
-          "label": "immutable active {{snapshot-model}}"
+          "label": "不可变能力快照"
         }
       ]
     },
@@ -626,19 +626,19 @@
       "id": "module-runtime",
       "parent": "overview",
       "owner": "runtime",
-      "title": "ConversationRuntime · {{admission}} / lifecycle",
-      "summary": "单个 coordinator 通过一个 lock 决定输入 {{adoption}}、Attempt {{admission}} 和 Running → Draining 的先后。",
+      "title": "{{concept-runtime}} · 启动与生命周期",
+      "summary": "{{concept-runtime}} 的协调器用同一把锁确定输入采纳、{{concept-attempt}} 启动以及 Running → Draining 的先后。",
       "nodes": [
         {
           "id": "module-runtime-inbound",
-          "label": "ConversationInboundMailbox",
-          "layer": "Inbound coordination",
-          "summary": "生产者{{acceptance-inbound}}普通输入并唤醒 worker。",
+          "label": "{{map-concept-conversation-inbound-mailbox}}",
+          "layer": "输入协调",
+          "summary": "输入生产者通过 {{map-concept-conversation-inbound-mailbox}} 接受普通输入，并唤醒执行 worker。",
           "owns": [
-            "进程内 wake 与 {{map-watermark}} 协调。"
+            "协调进程内唤醒与输入 {{map-watermark}}。"
           ],
           "boundaries": [
-            "Pending Inbound 的持久 {{acceptance-inbound}} 仍由 store 提供。"
+            "Pending Inbound 是否已被持久接受，仍以 store 的事务结果为准。"
           ],
           "evidence": [
             "runtime-ownership",
@@ -648,13 +648,13 @@
         {
           "id": "module-runtime-admit",
           "label": "admit_next_attempt",
-          "layer": "{{admission}}",
-          "summary": "在同一 lock 内选择 {{finite}} 输入、提交 {{adoption}}、{{frozen}} model 并占用当前 Attempt {{map-attempt-slot}}。",
+          "layer": "{{concept-attempt}} 启动",
+          "summary": "admit_next_attempt 在同一把锁内选择有限输入、提交采纳结果、固定模型，并登记当前 {{concept-attempt}}。",
           "owns": [
-            "每个 Conversation 最多一个活跃 AgentExecution。"
+            "保证每个 {{concept-conversation}} 最多有一个活跃 {{map-concept-agent-execution}}。"
           ],
           "boundaries": [
-            "生产者不能直接启动 Attempt。"
+            "输入生产者只能提交输入，不能直接启动 {{concept-attempt}}。"
           ],
           "evidence": [
             "runtime-admission"
@@ -662,14 +662,14 @@
         },
         {
           "id": "module-runtime-state",
-          "label": "ConversationState / SessionModelState",
-          "layer": "Between attempts",
-          "summary": "coordinator 持有 Attempt 之间的热状态及可变 Session model。",
+          "label": "{{map-concept-conversation-state}} / {{map-concept-session-model-state}}",
+          "layer": "两次 {{concept-attempt}} 之间",
+          "summary": "协调器在两次 {{concept-attempt}} 之间保存 {{map-concept-conversation-state}}，以及可变的 {{map-concept-session-model-state}}。",
           "owns": [
-            "下一次 Attempt 的状态移交与 {{snapshot-model}}。"
+            "向下一次 {{concept-attempt}} 移交热状态，并提供本次模型快照。"
           ],
           "boundaries": [
-            "模型更新只影响在线性顺序之后的 {{admission}}。"
+            "模型更新只影响在它之后获准开始的 {{concept-attempt}}。"
           ],
           "evidence": [
             "runtime-ownership",
@@ -679,14 +679,14 @@
         },
         {
           "id": "module-runtime-execution",
-          "label": "AgentExecution",
-          "layer": "Execution peer",
-          "summary": "被 {{admission}} 的 Attempt 接管热状态并运行到 {{settlement}}。",
+          "label": "{{map-concept-agent-execution}}",
+          "layer": "单次执行",
+          "summary": "{{concept-attempt}} 获准开始后，{{map-concept-agent-execution}} 接管热状态，直到本轮执行完成收束。",
           "owns": [
-            "一个 Attempt 的 model/Tool 循环。"
+            "运行一个 {{concept-attempt}} 内的模型与 {{concept-tool}} 循环。"
           ],
           "boundaries": [
-            "coordinator 始终保留 lifecycle {{authority-runtime}}。"
+            "{{concept-conversation}} 的生命周期始终由协调器管理。"
           ],
           "evidence": [
             "agent-owns",
@@ -698,13 +698,13 @@
         {
           "id": "module-runtime-drain",
           "label": "shutdown / begin_drain",
-          "layer": "Lifecycle",
-          "summary": "Running → Draining 关闭新工作，等待所有具体 {{owner}} 到达结束点。",
+          "layer": "生命周期",
+          "summary": "Running → Draining 先停止接收新工作，再等待各个执行与资源负责人到达结束点。",
           "owns": [
-            "{{drain}} supervision 和 {{quiescence}} 结论。"
+            "监督 {{drain}}，并判断 runtime 是否达到 {{quiescence}}。"
           ],
           "boundaries": [
-            "cancel、operation {{settlement}} 和 runtime {{quiescence}} 是不同事实。"
+            "请求取消、一次操作收束、整个 runtime 静止，是三个不同事实。"
           ],
           "evidence": [
             "runtime-drain"
@@ -717,37 +717,37 @@
           "from": "module-runtime-inbound",
           "to": "module-runtime-admit",
           "kind": "call",
-          "label": "Notify worker"
+          "label": "唤醒 worker"
         },
         {
           "from": "module-runtime-admit",
           "to": "module-runtime-state",
           "kind": "call",
-          "label": "{{frozen}} input + transfer"
+          "label": "固定输入并移交"
         },
         {
           "from": "module-runtime-admit",
           "to": "module-runtime-execution",
           "kind": "call",
-          "label": "{{admission}} of Attempt"
+          "label": "允许 {{concept-attempt}} 开始"
         },
         {
           "from": "module-runtime-execution",
           "to": "module-runtime-state",
           "kind": "data",
-          "label": "{{settlement}} handoff"
+          "label": "结束后交还状态"
         },
         {
           "from": "module-runtime-drain",
           "to": "module-runtime-admit",
           "kind": "data",
-          "label": "closed {{admission}} gate"
+          "label": "关闭新 {{concept-attempt}} 入口"
         },
         {
           "from": "module-runtime-drain",
           "to": "module-runtime-execution",
           "kind": "call",
-          "label": "request cancellation + await task"
+          "label": "请求取消并等待任务"
         }
       ]
     },
@@ -755,19 +755,19 @@
       "id": "module-agent",
       "parent": "overview",
       "owner": "agent",
-      "title": "Agent kernel · One Attempt",
-      "summary": "AgentExecution 用与提供方无关的 {{contract}} 执行 model → Tool → {{map-continuation}}，并提出一个 {{terminal}} {{settlement}} 候选。",
+      "title": "{{concept-agent-kernel}} · 单次 {{concept-attempt}}",
+      "summary": "{{map-concept-agent-execution}} 通过与提供方无关的模型接口完成模型调用、{{concept-tool}} 执行和后续步骤，并提交一个最终状态候选。",
       "nodes": [
         {
           "id": "module-agent-machine",
-          "label": "ExecutionStateMachine",
-          "layer": "Attempt lifecycle",
-          "summary": "显式跟踪 RunningModel、WaitingForTool 与完成/失败/取消。",
+          "label": "{{map-concept-execution-state-machine}}",
+          "layer": "{{concept-attempt}} 生命周期",
+          "summary": "{{map-concept-execution-state-machine}} 显式跟踪 RunningModel、WaitingForTool，以及完成、失败和取消。",
           "owns": [
-            "一个 Attempt 的状态转换。"
+            "管理单个 {{concept-attempt}} 的状态转换。"
           ],
           "boundaries": [
-            "唯一 {{terminal}} 候选追加失败必须保持显式。"
+            "若唯一的最终状态候选未能追加成功，必须明确报告失败。"
           ],
           "evidence": [
             "map-agent-kernel",
@@ -777,13 +777,13 @@
         {
           "id": "module-agent-request",
           "label": "prepare_model_turn / start_model_turn",
-          "layer": "Model turn",
-          "summary": "先{{frozen}}逻辑输入，再执行真实 request-start 事务与重建校验。",
+          "layer": "模型调用",
+          "summary": "先固定模型调用的逻辑输入，再完成实际请求启动事务和重建校验。",
           "owns": [
-            "请求 {{snapshot-request}}、重试预算和 {{map-continuation}}。"
+            "管理请求快照、重试预算和 {{map-continuation}}。"
           ],
           "boundaries": [
-            "Started 不证明提供方已经执行，不能在 {{recovery}} 中重发旧请求。"
+            "Started 不证明提供方已经执行；恢复时也不能重发这个旧请求。"
           ],
           "evidence": [
             "context-start",
@@ -793,14 +793,14 @@
         },
         {
           "id": "module-agent-cancel",
-          "label": "AgentCancellation",
-          "layer": "Attempt cancellation",
-          "summary": "同一 ModelTurnStartGate 对取消与实际 request-start 进行 {{arbitration}}。",
+          "label": "{{map-concept-agent-cancellation}}",
+          "layer": "{{concept-attempt}} 取消",
+          "summary": "{{map-concept-agent-cancellation}} 通过同一个 {{map-concept-model-turn-start-gate}}，确定取消与实际请求启动谁先发生。",
           "owns": [
-            "首个语义取消原因与子信号。"
+            "保存首个语义取消原因，并提供子取消信号。"
           ],
           "boundaries": [
-            "取消不能撤销已经成功的持久启动。"
+            "取消不能撤销已经成功提交的持久启动事实。"
           ],
           "evidence": [
             "cancel-cause",
@@ -810,14 +810,14 @@
         },
         {
           "id": "module-agent-lifecycle",
-          "label": "AttemptLifecycle",
-          "layer": "Typed policy seams",
-          "summary": "PreStepPolicy、PreToolPolicy 和 ToolResultObserver 通过固定类型参与执行。",
+          "label": "{{map-concept-attempt-lifecycle}}",
+          "layer": "类型化策略接口",
+          "summary": "{{map-concept-attempt-lifecycle}} 通过固定类型接入 PreStepPolicy、PreToolPolicy 和 ToolResultObserver。",
           "owns": [
-            "不可变的每 Attempt policy/observer {{composition}}。"
+            "为本次 {{concept-attempt}} 固定策略与观察器组合。"
           ],
           "boundaries": [
-            "扩展拿不到 canonical、Tool identity、取消 trigger 或 {{terminal}} {{map-agent-authority}}。"
+            "扩展不能改写 canonical 内容、分配 {{concept-tool}} 身份、触发取消或决定最终状态。"
           ],
           "evidence": [
             "map-agent-kernel"
@@ -825,14 +825,14 @@
         },
         {
           "id": "module-agent-batch",
-          "label": "{{canonical}} Assistant / ToolResult batch",
-          "layer": "{{canonical}} {{acceptance-assistant}}",
-          "summary": "先{{acceptance-assistant}} Assistant 的同批 Tool {{slot}}，执行后按顺序原子提交整批结果。",
+          "label": "canonical Assistant / ToolResult 批次",
+          "layer": "canonical 接受",
+          "summary": "Agent 先接受 Assistant 及其同批 {{concept-tool}} 调用位置，执行后再按原顺序原子提交整批结果。",
           "owns": [
-            "Tool 批次身份、顺序和 canonical {{acceptance-tool}}。"
+            "确定 {{concept-tool}} 批次身份、结果顺序和 canonical 接受结果。"
           ],
           "boundaries": [
-            "{{physical}} 执行由 executor 决定；canonical commit 不保证外部 {{map-exactly-once}}。"
+            "真实执行由 executor 负责；历史原子提交不保证外部操作 {{map-exactly-once}}。"
           ],
           "evidence": [
             "tool-acceptance",
@@ -841,14 +841,14 @@
         },
         {
           "id": "module-agent-tools",
-          "label": "Tool Plane",
-          "layer": "Execution peer",
-          "summary": "执行已{{acceptance-tool}}的调用并返回类型化执行事实。",
+          "label": "{{concept-tool-plane}}",
+          "layer": "真实执行",
+          "summary": "{{concept-tool-plane}} 执行已通过接受检查的调用，并返回类型化执行事实。",
           "owns": [
-            "{{physical}} {{effect}} 与取消 {{settlement}}。"
+            "管理真实操作及取消后的收束。"
           ],
           "boundaries": [
-            "Tool-call {{publication}} 帧本身没有执行权限。"
+            "模型输出中的 Tool-call 帧只是建议，本身没有执行权限。"
           ],
           "evidence": [
             "tool-evidence",
@@ -863,43 +863,43 @@
           "from": "module-agent-machine",
           "to": "module-agent-request",
           "kind": "call",
-          "label": "enter model turn"
+          "label": "进入模型调用"
         },
         {
           "from": "module-agent-request",
           "to": "module-agent-cancel",
           "kind": "call",
-          "label": "{{arbitration}} of actual start"
+          "label": "协调实际启动"
         },
         {
           "from": "module-agent-machine",
           "to": "module-agent-lifecycle",
           "kind": "call",
-          "label": "phase-specific seam"
+          "label": "按执行阶段调用策略"
         },
         {
           "from": "module-agent-request",
           "to": "module-agent-batch",
           "kind": "data",
-          "label": "assembled Assistant proposal"
+          "label": "组装 Assistant 提案"
         },
         {
           "from": "module-agent-batch",
           "to": "module-agent-tools",
           "kind": "call",
-          "label": "{{acceptance-tool}} of {{canonical}} invocation"
+          "label": "检查调用资格"
         },
         {
           "from": "module-agent-tools",
           "to": "module-agent-batch",
           "kind": "data",
-          "label": "ordered results"
+          "label": "按序返回结果"
         },
         {
           "from": "module-agent-batch",
           "to": "module-agent-machine",
           "kind": "data",
-          "label": "continuation or {{terminal}}"
+          "label": "继续执行或结束"
         }
       ]
     },
@@ -907,19 +907,19 @@
       "id": "module-extensions",
       "parent": "overview",
       "owner": "extensions",
-      "title": "{{native}} Agent Extensions · Closed {{composition}}",
-      "summary": "封闭 Rust 扩展接入现有 Context、Tool 和 Conversation {{map-semantic-owner}}；领域状态随 Conversation 保留。",
+      "title": "Native Agent Extensions · 固定扩展组合",
+      "summary": "Rust 内置扩展接入现有 Context、{{concept-tool}} 和 {{concept-conversation}} 组件；领域状态随 {{concept-conversation}} 保留。",
       "nodes": [
         {
           "id": "module-extensions-composition",
-          "label": "NativeAgentExtensions",
-          "layer": "Configuration generation",
-          "summary": "Root/named profiles 显式启用 Agent Status、Todo 和 Goal。",
+          "label": "{{map-concept-native-agent-extensions}}",
+          "layer": "配置生成",
+          "summary": "{{map-concept-native-agent-extensions}} 根据 Root 或 named profile，显式启用 {{map-concept-agent-status-display}}、{{map-concept-todo-display}} 和 {{concept-goal}}。",
           "owns": [
-            "按配置 generation {{frozen}}封闭扩展集合。"
+            "每次配置生成时固定所启用的扩展集合。"
           ],
           "boundaries": [
-            "默认关闭，不提供动态 loader 或第三方 lifecycle API。"
+            "默认关闭；不提供动态加载器或第三方生命周期 API。"
           ],
           "evidence": [
             "extensions-code"
@@ -927,14 +927,14 @@
         },
         {
           "id": "module-extensions-status",
-          "label": "NativeContextComposition / AgentStatusEngine",
-          "layer": "Context contribution",
-          "summary": "在 ContextAssembly 注册 Agent Status contributor，读取 background 与 Todo 状态。",
+          "label": "{{map-concept-native-context-composition}} / {{map-concept-agent-status-engine}}",
+          "layer": "Context 贡献",
+          "summary": "{{map-concept-native-context-composition}} 在 {{map-concept-context-assembly}} 注册 {{map-concept-agent-status-display}} contributor，读取后台任务与 {{map-concept-todo-display}} 状态。",
           "owns": [
-            "每次请求准备的一份状态 {{observation}}。"
+            "为每次请求准备一份状态观察结果。"
           ],
           "boundaries": [
-            "模型与客户端共享同一次 composed {{observation}}。"
+            "模型与客户端使用同一次组合得到的观察结果。"
           ],
           "evidence": [
             "map-extensions-bind",
@@ -943,14 +943,14 @@
         },
         {
           "id": "module-extensions-goal",
-          "label": "GoalDomain / GoalPhase",
-          "layer": "Domain {{authority-goal}}",
-          "summary": "GoalPhase::Active 持久授权在安全 idle 点继续。",
+          "label": "{{map-concept-goal-domain}} / {{map-concept-goal-phase}}",
+          "layer": "{{concept-goal}} 当前状态",
+          "summary": "{{map-concept-goal-domain}} 通过持久的 GoalPhase::Active，允许 runtime 在安全空闲点继续执行。",
           "owns": [
-            "GoalRef {{revision}} 与 GoalSnapshot 的预算、阶段和计数。"
+            "维护 {{map-concept-goal-ref}} 版本，以及 {{map-concept-goal-snapshot}} 的预算、阶段和计数。"
           ],
           "boundaries": [
-            "Paused/Blocked 不授权继续；历史事件不是 Goal 当前状态 {{authority-goal}}。"
+            "Paused / Blocked 不允许继续；当前 {{concept-goal}} 状态以快照为准，不能用历史事件替代。"
           ],
           "evidence": [
             "map-goal-state",
@@ -959,14 +959,14 @@
         },
         {
           "id": "module-extensions-driver",
-          "label": "GoalRoundDriver",
-          "layer": "{{admission-goal}} participation",
-          "summary": "在 runtime 已满足安全 idle 条件时，原子消耗一轮并{{acceptance-inbound}}普通 Pending Inbound。",
+          "label": "{{map-concept-goal-round-driver}}",
+          "layer": "参与启动流程",
+          "summary": "{{map-concept-goal-round-driver}} 确认 runtime 已满足安全空闲条件后，原子消耗一轮预算，并接受普通 Pending Inbound。",
           "owns": [
-            "参与既有 {{admission-goal}} 流程。"
+            "让 {{concept-goal}} 的下一轮进入已有的 {{concept-attempt}} 启动流程。"
           ],
           "boundaries": [
-            "不拥有第二条队列、模型请求组装或 Tool 执行器。"
+            "不另设队列，也不组装模型请求或执行 {{concept-tool}}。"
           ],
           "evidence": [
             "map-goal-driver",
@@ -976,14 +976,14 @@
         },
         {
           "id": "module-extensions-runtime",
-          "label": "ConversationRuntime",
-          "layer": "{{native}} peer",
-          "summary": "是否可以开始下一轮仍由 Conversation coordinator 决定。",
+          "label": "{{concept-runtime}}",
+          "layer": "执行组件",
+          "summary": "是否可以开始下一轮，仍由 {{concept-runtime}} 的协调器决定。",
           "owns": [
-            "同一 Attempt {{admission}} 和 lifecycle。"
+            "复用同一套 {{concept-attempt}} 启动和生命周期规则。"
           ],
           "boundaries": [
-            "Goal Active 与 runtime 当前可用不是同一事实。"
+            "{{concept-goal}} 为 Active，不代表 runtime 此刻一定可以执行。"
           ],
           "evidence": [
             "goal-runtime"
@@ -997,31 +997,31 @@
           "from": "module-extensions-composition",
           "to": "module-extensions-status",
           "kind": "call",
-          "label": "bind contributor"
+          "label": "绑定 contributor"
         },
         {
           "from": "module-extensions-composition",
           "to": "module-extensions-goal",
           "kind": "dependency",
-          "label": "{{native}} domain {{composition}}"
+          "label": "组装内置领域扩展"
         },
         {
           "from": "module-extensions-goal",
           "to": "module-extensions-driver",
           "kind": "data",
-          "label": "active authorization + budget"
+          "label": "Active 授权与预算"
         },
         {
           "from": "module-extensions-runtime",
           "to": "module-extensions-driver",
           "kind": "call",
-          "label": "eligible idle opportunity"
+          "label": "安全空闲时继续"
         },
         {
           "from": "module-extensions-driver",
           "to": "module-extensions-runtime",
           "kind": "data",
-          "label": "ordinary Pending Inbound"
+          "label": "普通 Pending Inbound"
         }
       ]
     },
@@ -1029,19 +1029,19 @@
       "id": "module-context",
       "parent": "overview",
       "owner": "context",
-      "title": "Context Engine · History / request assembly",
-      "summary": "历史选择、动态 Context 提案和当前 Agent 输入分别有明确 {{map-semantic-owner}}，最后形成精确的 provider-neutral 请求。",
+      "title": "{{concept-context-engine}} · 历史与请求组装",
+      "summary": "历史选择、动态 Context 提案和当前 Agent 输入分别由对应组件负责，最后组成与提供方无关的精确请求。",
       "nodes": [
         {
           "id": "module-context-history",
-          "label": "{{map-checkpoint}} + eligible {{map-tail}}",
-          "layer": "Historical compiler",
-          "summary": "用 {{map-read-cut}} 选择当前 {{map-checkpoint}} 并接上严格符合条件的 {{map-tail}}。",
+          "label": "{{concept-checkpoint}} + 符合条件的 {{concept-tail}}",
+          "layer": "历史编译",
+          "summary": "读取历史时先固定 {{map-read-cut}}，选择当前 {{concept-checkpoint}}，再接上严格符合条件的 {{concept-tail}}。",
           "owns": [
-            "Original/Derived 验证、{{provenance-derived}} 与 Tool 配对。"
+            "校验 {{concept-original}} / {{concept-derived}}、来源依据和 {{concept-tool}} 配对。"
           ],
           "boundaries": [
-            "历史 {{projection-context}} 坐标不是实际执行身份。"
+            "历史视图中的坐标，不是实际执行身份。"
           ],
           "evidence": [
             "context-cuts",
@@ -1052,14 +1052,14 @@
         },
         {
           "id": "module-context-engine",
-          "label": "ContextEngine",
-          "layer": "Fit / planning",
-          "summary": "编译历史、估算 token、规划 {{compaction}} 并校验 fit/progress。",
+          "label": "{{map-concept-context-engine-class}}",
+          "layer": "容量与规划",
+          "summary": "{{map-concept-context-engine-class}} 编译历史、估算 token，并规划压缩，检查结果是否放得下且取得进展。",
           "owns": [
-            "{{bounded}} 历史输入与模型窗口下的预算计算。"
+            "在有限历史范围内，根据模型窗口计算预算。"
           ],
           "boundaries": [
-            "不修改 canonical Ledger，也不决定提供方 wire 规则。"
+            "不修改 canonical Ledger，也不决定提供方的传输格式。"
           ],
           "evidence": [
             "map-context-engine",
@@ -1068,14 +1068,14 @@
         },
         {
           "id": "module-context-assembly",
-          "label": "ContextAssembly",
-          "layer": "Dynamic input",
-          "summary": "Contributor 返回类型化提案，经过 {{admission-context}} 才成为本次 Context。",
+          "label": "{{map-concept-context-assembly}}",
+          "layer": "动态输入",
+          "summary": "{{map-concept-context-assembly}} 接收 contributor 的类型化提案，经过检查后才纳入本次 Context。",
           "owns": [
-            "动态提案、兼容性和 request-only system sections。"
+            "校验动态提案的兼容性，区分仅本次请求使用的 system sections。"
           ],
           "boundaries": [
-            "提案不自动获得 canonical 消息身份。"
+            "提案不会自动获得 canonical 消息身份。"
           ],
           "evidence": [
             "map-context-contributor",
@@ -1085,14 +1085,14 @@
         },
         {
           "id": "module-context-projection",
-          "label": "ContextProjection",
-          "layer": "Measured input",
-          "summary": "包含有序类型化消息、有效 System Prompt 和本次 token 计量。",
+          "label": "{{map-concept-context-projection}}",
+          "layer": "可计量输入",
+          "summary": "{{map-concept-context-projection}} 包含有序的类型化消息、实际 System Prompt，以及本次 token 计量。",
           "owns": [
-            "确定性 fingerprint 的测量对象。"
+            "提供计算确定性 fingerprint 的完整输入。"
           ],
           "boundaries": [
-            "不是 UI RuntimeClientProjection。"
+            "它面向模型请求，区别于界面使用的 {{map-concept-runtime-client-projection}}。"
           ],
           "evidence": [
             "map-context-projection"
@@ -1100,14 +1100,14 @@
         },
         {
           "id": "module-context-agent",
-          "label": "AgentExecution",
-          "layer": "Current-input peer",
-          "summary": "{{frozen}}当前 core 输入与贡献，负责实际 request-start。",
+          "label": "{{map-concept-agent-execution}}",
+          "layer": "当前输入来源",
+          "summary": "{{map-concept-agent-execution}} 固定当前核心输入和扩展贡献，并负责真正启动请求。",
           "owns": [
-            "{{frozen}} generation 和最终请求输入。"
+            "确定本次请求的配置 generation 和最终输入。"
           ],
           "boundaries": [
-            "历史 compiler 不持有取消或实际启动 {{map-agent-authority}}。"
+            "历史编译器不能触发取消，也不能决定实际请求何时启动。"
           ],
           "evidence": [
             "frozen-input",
@@ -1122,31 +1122,31 @@
           "from": "module-context-history",
           "to": "module-context-engine",
           "kind": "data",
-          "label": "compiled historical messages"
+          "label": "已编译的历史消息"
         },
         {
           "from": "module-context-engine",
           "to": "module-context-projection",
           "kind": "data",
-          "label": "typed input + measurement"
+          "label": "类型化输入与计量"
         },
         {
           "from": "module-context-assembly",
           "to": "module-context-agent",
           "kind": "data",
-          "label": "{{admission-context}} of contributions"
+          "label": "检查并纳入贡献"
         },
         {
           "from": "module-context-projection",
           "to": "module-context-agent",
           "kind": "data",
-          "label": "historical input"
+          "label": "历史输入"
         },
         {
           "from": "module-context-engine",
           "to": "module-context-history",
           "kind": "call",
-          "label": "{{compaction}} candidate validation"
+          "label": "校验压缩候选"
         }
       ]
     },
@@ -1154,19 +1154,19 @@
       "id": "module-model",
       "parent": "overview",
       "owner": "model",
-      "title": "Model · Provider-neutral {{contract-model}} / adapters",
-      "summary": "Agent 只看 ModelRequest 与 ModelStreamItem；三个协议 adapter 各完成一次 {{physical}} provider attempt。",
+      "title": "Model · 统一协议与提供方适配",
+      "summary": "Agent 通过 {{map-concept-model-request}} 和 {{map-concept-model-stream-item}} 与 adapter 交互；每个协议 adapter 的一次调用，只执行一次提供方请求。",
       "nodes": [
         {
           "id": "module-model-binding",
-          "label": "ResolvedModelInvocation / FrozenModelSpec",
-          "layer": "Model {{map-subagent-authority}}",
-          "summary": "父进程先解析模型语义，child 只按已{{frozen}} binding {{map-model-materialization}}。",
+          "label": "{{map-concept-resolved-model-invocation}} / {{map-concept-frozen-model-spec}}",
+          "layer": "固定模型选择",
+          "summary": "父进程先确定模型选择；子进程只根据固定的绑定信息完成 {{map-model-materialization}}。",
           "owns": [
-            "协议、endpoint、预算与明确 credential binding。"
+            "保存协议、endpoint、预算和明确的凭据绑定。"
           ],
           "boundaries": [
-            "child 不重读可变配置来重新选择模型。"
+            "子进程不重读可变配置来重新选择模型。"
           ],
           "evidence": [
             "map-model-frozen"
@@ -1174,14 +1174,14 @@
         },
         {
           "id": "module-model-request",
-          "label": "ModelRequest",
-          "layer": "Neutral input",
-          "summary": "接收精确{{frozen}}后的 typed messages、Tool definitions 与 prompt。",
+          "label": "{{map-concept-model-request}}",
+          "layer": "统一请求输入",
+          "summary": "{{map-concept-model-request}} 接收已经固定的类型化消息、{{concept-tool}} definitions 和 prompt。",
           "owns": [
-            "提供方无关的请求输入。"
+            "表达与提供方无关的精确请求输入。"
           ],
           "boundaries": [
-            "请求必须先完成 durable start 与重建相等校验。"
+            "真正发送前，必须完成持久启动事务，并通过请求重建相等校验。"
           ],
           "evidence": [
             "model-contract",
@@ -1191,13 +1191,13 @@
         {
           "id": "module-model-adapter",
           "label": "ModelAdapter::stream",
-          "layer": "Adapter {{contract-model}}",
-          "summary": "一次 stream 只对应一次 provider attempt。",
+          "layer": "Adapter 协议",
+          "summary": "{{map-concept-model-adapter}} 每次调用 ModelAdapter::stream，只执行一次提供方请求。",
           "owns": [
-            "协议编码、{{normalization-events}} 事件与不透明 {{map-continuation}}。"
+            "编码协议，规范化事件，并保留不透明的 continuation 数据。"
           ],
           "boundaries": [
-            "没有隐藏重试、重连或 failover。"
+            "不隐藏重试、重连或 failover。"
           ],
           "evidence": [
             "model-contract",
@@ -1207,13 +1207,13 @@
         {
           "id": "module-model-protocols",
           "label": "OpenAI / Anthropic adapters",
-          "layer": "Protocol implementation",
-          "summary": "Chat Completions、Responses、Messages 各自完成 wire translation。",
+          "layer": "协议实现",
+          "summary": "各 adapter 分别转换 Chat Completions、Responses 和 Messages 的传输格式。",
           "owns": [
-            "provider 原始事件到 ModelStreamItem 的转换。"
+            "将提供方原始事件转换为 {{map-concept-model-stream-item}}。"
           ],
           "boundaries": [
-            "provider SDK 与 HTTP 框架类型不进入 Agent kernel {{contract}}。"
+            "提供方 SDK 和 HTTP 框架类型不进入 {{concept-agent-kernel}} 协议。"
           ],
           "evidence": [
             "model-protocols",
@@ -1222,14 +1222,14 @@
         },
         {
           "id": "module-model-stream",
-          "label": "ModelStreamItem",
-          "layer": "{{normalization-events}} output",
-          "summary": "区分语义 ModelEvent 与 execution-only progress。",
+          "label": "{{map-concept-model-stream-item}}",
+          "layer": "规范化输出",
+          "summary": "{{map-concept-model-stream-item}} 区分有语义的 {{map-concept-model-event}}，以及只反映执行进度的信息。",
           "owns": [
-            "将规范事件送回 Agent assembler。"
+            "向 Agent 的消息组装器传递规范事件。"
           ],
           "boundaries": [
-            "progress 不是 canonical 对话内容。"
+            "进度信息不会成为 canonical 对话内容。"
           ],
           "evidence": [
             "model-items"
@@ -1237,14 +1237,14 @@
         },
         {
           "id": "module-model-agent",
-          "label": "AgentExecution",
-          "layer": "Retry {{owner}}",
-          "summary": "失败重试与下一轮调用仍由 Agent 显式启动。",
+          "label": "{{map-concept-agent-execution}}",
+          "layer": "重试决策",
+          "summary": "失败重试和下一轮调用，都由 {{map-concept-agent-execution}} 显式发起。",
           "owns": [
-            "共享逻辑步骤预算和请求序号。"
+            "管理共享的逻辑步骤预算和请求序号。"
           ],
           "boundaries": [
-            "adapter 不代替 durable-start {{arbitration}}。"
+            "adapter 不能代替 Agent 协调取消与持久启动。"
           ],
           "evidence": [
             "agent-owns",
@@ -1259,37 +1259,37 @@
           "from": "module-model-binding",
           "to": "module-model-adapter",
           "kind": "data",
-          "label": "resolved provider binding"
+          "label": "确定提供方绑定"
         },
         {
           "from": "module-model-request",
           "to": "module-model-adapter",
           "kind": "call",
-          "label": "one stream invocation"
+          "label": "一次 stream 调用"
         },
         {
           "from": "module-model-protocols",
           "to": "module-model-adapter",
           "kind": "dependency",
-          "label": "implement ModelAdapter"
+          "label": "实现 {{map-concept-model-adapter}}"
         },
         {
           "from": "module-model-adapter",
           "to": "module-model-stream",
           "kind": "data",
-          "label": "{{normalization-events}} of items"
+          "label": "规范化事件"
         },
         {
           "from": "module-model-stream",
           "to": "module-model-agent",
           "kind": "data",
-          "label": "{{canonical}} assembly input"
+          "label": "交给 canonical 组装"
         },
         {
           "from": "module-model-agent",
           "to": "module-model-request",
           "kind": "data",
-          "label": "durably started input"
+          "label": "已持久启动的输入"
         }
       ]
     },
@@ -1297,19 +1297,19 @@
       "id": "module-tools",
       "parent": "overview",
       "owner": "tools",
-      "title": "Tool Plane · {{preflight}} / {{physical}} execution",
-      "summary": "{{native}} Tool、MCP 与 Managed Python 共享执行 {{contract}}；canonical {{acceptance}} 与 {{physical}} {{settlement}} 分开。",
+      "title": "{{concept-tool-plane}} · 检查与真实执行",
+      "summary": "内置 {{concept-tool}}、{{concept-mcp}} 和 {{concept-managed-python}} 共享同一执行协议；接受 canonical 结果与确认真实操作结束，分别处理。",
       "nodes": [
         {
           "id": "module-tools-registry",
-          "label": "ToolRegistry / PreparedInvocation",
-          "layer": "{{preflight}}",
-          "summary": "解析精确定义、校验 schema 和{{frozen}}执行 policy。",
+          "label": "{{map-concept-tool-registry}} / {{map-concept-prepared-invocation}}",
+          "layer": "执行前检查",
+          "summary": "{{map-concept-tool-registry}} 解析精确定义、校验 schema，并将执行策略固定在 {{map-concept-prepared-invocation}} 中。",
           "owns": [
-            "{{preflight}} 与完整调用输入。"
+            "完成 {{preflight}}，保存完整调用输入。"
           ],
           "boundaries": [
-            "{{preflight}} 不代表已执行；canonical 批次顺序仍由 Agent 决定。"
+            "检查通过不代表已经执行；canonical 批次顺序仍由 Agent 决定。"
           ],
           "evidence": [
             "map-tool-preflight",
@@ -1319,14 +1319,14 @@
         },
         {
           "id": "module-tools-invocation",
-          "label": "ForegroundInvocation",
-          "layer": "Execution lifecycle",
-          "summary": "以同一调用状态机驱动 completion、deadline、取消与 {{settlement}}。",
+          "label": "{{map-concept-foreground-invocation}}",
+          "layer": "调用生命周期",
+          "summary": "{{map-concept-foreground-invocation}} 用同一状态机处理自然完成、deadline、取消和后续收束。",
           "owns": [
-            "调用级 {{map-invocation-arbitration}} 和类型化 InvocationFact。"
+            "协调调用级结果，并返回类型化的 {{map-concept-invocation-fact}}。"
           ],
           "boundaries": [
-            "调用者负责身份、{{map-caller-admission}} 和 {{map-caller-publication}}。"
+            "调用者仍负责身份、调用资格和结果记录。"
           ],
           "evidence": [
             "map-invocation-owner",
@@ -1336,14 +1336,14 @@
         },
         {
           "id": "module-tools-executor",
-          "label": "ToolExecutor / ToolExecutionHandle",
-          "layer": "{{physical}} {{owner}}",
-          "summary": "start 构造 handle，实际 {{dispatch}} 和清理保留在 handle 内。",
+          "label": "{{map-concept-tool-executor}} / {{map-concept-tool-execution-handle}}",
+          "layer": "真实执行与清理",
+          "summary": "ToolExecutor::start 构造 {{map-concept-tool-execution-handle}}，真实执行和清理都保留在 handle 中。",
           "owns": [
-            "本地执行、取消清理及两条结果通道。"
+            "管理本地执行、取消清理，以及完成和清理两条结果通道。"
           ],
           "boundaries": [
-            "取消请求不能代替 {{physical}} {{map-physical-terminal}} 证明。"
+            "取消请求不能代替操作已到达 {{map-physical-terminal}} 的证据。"
           ],
           "evidence": [
             "map-executor-handle",
@@ -1352,14 +1352,14 @@
         },
         {
           "id": "module-tools-adapters",
-          "label": "{{native}} / MCP / Managed Python",
-          "layer": "Adapters",
-          "summary": "Bash/文件 Tool、远程 MCP 与 Python package 使用同一 Tool Plane。",
+          "label": "内置 {{concept-tool}} / {{concept-mcp}} / {{concept-managed-python}}",
+          "layer": "执行适配",
+          "summary": "Bash、文件 {{concept-tool}}、远程 {{concept-mcp}} 和 Python package 都经过同一个 {{concept-tool-plane}}。",
           "owns": [
-            "各自真实 {{effect}} {{boundary}} 和确定性证据。"
+            "各自报告真实操作的边界和可确认的证据。"
           ],
           "boundaries": [
-            "远程 MCP 允许显式 OutcomeUnknown；不保证外部 {{map-exactly-once}}。"
+            "远程 {{concept-mcp}} 可明确返回 OutcomeUnknown；不保证外部操作 {{map-exactly-once}}。"
           ],
           "evidence": [
             "python-mcp",
@@ -1369,14 +1369,14 @@
         },
         {
           "id": "module-tools-runtime",
-          "label": "ConversationToolRuntime",
-          "layer": "Conversation resources",
-          "summary": "稳定绑定 workspace、artifact store、mailbox 和 background registry。",
+          "label": "{{map-concept-conversation-tool-runtime}}",
+          "layer": "{{concept-conversation}} 资源",
+          "summary": "{{map-concept-conversation-tool-runtime}} 稳定绑定工作区、artifact store、mailbox 和后台任务注册表。",
           "owns": [
-            "每个 Conversation 的资源 {{ownership}}。"
+            "管理单个 {{concept-conversation}} 使用的执行资源。"
           ],
           "boundaries": [
-            "配置更改不能替换 registry 来遗忘已有执行。"
+            "配置更新不能通过替换注册表来遗忘已有执行。"
           ],
           "evidence": [
             "map-tool-runtime"
@@ -1384,14 +1384,14 @@
         },
         {
           "id": "module-tools-agent",
-          "label": "AgentExecution",
-          "layer": "{{canonical}} peer",
-          "summary": "接收执行结果，并原子提交已{{acceptance-tool}} Tool {{slot}} 的有序批次。",
+          "label": "{{map-concept-agent-execution}}",
+          "layer": "canonical 接受",
+          "summary": "{{map-concept-agent-execution}} 收到执行结果后，按原定 {{concept-tool}} 调用位置原子提交有序批次。",
           "owns": [
-            "canonical ToolResult {{settlement}}。"
+            "将 ToolResult 作为 canonical 对话内容收束。"
           ],
           "boundaries": [
-            "不能把模型 proposal 或 timeout 当作已执行成功。"
+            "模型建议或 timeout 都不能当作执行成功。"
           ],
           "evidence": [
             "tool-acceptance",
@@ -1406,31 +1406,31 @@
           "from": "module-tools-registry",
           "to": "module-tools-invocation",
           "kind": "data",
-          "label": "prepared invocation + {{frozen}} policy"
+          "label": "准备调用并固定策略"
         },
         {
           "from": "module-tools-invocation",
           "to": "module-tools-executor",
           "kind": "call",
-          "label": "construct + drive handle"
+          "label": "构造并驱动 handle"
         },
         {
           "from": "module-tools-adapters",
           "to": "module-tools-executor",
           "kind": "dependency",
-          "label": "implement ToolExecutor"
+          "label": "实现 {{map-concept-tool-executor}}"
         },
         {
           "from": "module-tools-runtime",
           "to": "module-tools-executor",
           "kind": "data",
-          "label": "bound resources"
+          "label": "绑定资源"
         },
         {
           "from": "module-tools-invocation",
           "to": "module-tools-agent",
           "kind": "data",
-          "label": "result + execution evidence"
+          "label": "结果与执行证据"
         }
       ]
     },
@@ -1438,19 +1438,19 @@
       "id": "module-subagents",
       "parent": "overview",
       "owner": "subagents",
-      "title": "Subagents · {{durable}} Agent / {{finite}} activation",
-      "summary": "稳定 Agent 身份与 {{finite}} activation 分开；子 Conversation 使用相同{{native}} runtime 栈与 Session 共享目录。",
+      "title": "Subagents · 持久身份与单次运行",
+      "summary": "Agent 的稳定身份与每次有限的 activation 分开管理。子 {{concept-conversation}} 复用同一执行栈，并与父 {{concept-conversation}} 共享 {{concept-session}} 目录。",
       "nodes": [
         {
           "id": "module-subagents-catalog",
-          "label": "AgentCatalog / resolver",
-          "layer": "Creation {{map-subagent-authority}}",
-          "summary": "{{frozen}} named Agent 的能力、模型和 Session execution binding。",
+          "label": "{{map-concept-agent-catalog}} / resolver",
+          "layer": "创建权限",
+          "summary": "{{map-concept-agent-catalog}} 与 resolver 在创建时固定 named Agent 的能力、模型和 {{concept-session}} execution binding。",
           "owns": [
-            "创建时 admitted {{map-subagent-authority}}。"
+            "确定创建时允许使用的 {{map-subagent-authority}}。"
           ],
           "boundaries": [
-            "后续 send_message 复用既有权限，不能重新扩大 profile。"
+            "后续 send_message 复用既有权限，不能借当前 profile 扩大能力。"
           ],
           "evidence": [
             "agents-authority",
@@ -1459,14 +1459,14 @@
         },
         {
           "id": "module-subagents-registry",
-          "label": "SubagentRegistry",
-          "layer": "Logical lifecycle",
-          "summary": "管理 AgentId、ConversationId 和零或一个当前 SubagentId activation。",
+          "label": "{{map-concept-subagent-registry}}",
+          "layer": "逻辑生命周期",
+          "summary": "{{map-concept-subagent-registry}} 关联 AgentId、ConversationId，以及至多一个当前 SubagentId activation。",
           "owns": [
-            "输入 {{admission-subagent}}、sealing 与精确 activation 控制。"
+            "检查输入资格，封闭输入，并精确控制每次 activation。"
           ],
           "boundaries": [
-            "停止中或证明不足时不能静默重新激活。"
+            "仍在停止或缺少结束证据时，不能静默重新激活。"
           ],
           "evidence": [
             "map-native-child",
@@ -1476,13 +1476,13 @@
         {
           "id": "module-subagents-driver",
           "label": "process driver",
-          "layer": "{{physical}} lifecycle",
-          "summary": "唯一 driver 持有 process group、控制 IPC、升级取消和 reap。",
+          "layer": "进程生命周期",
+          "summary": "唯一的 process driver 持有进程组和控制 IPC，负责逐级取消并回收进程。",
           "owns": [
-            "{{physical}} containment 与进程结束证据。"
+            "控制真实子进程，并提供其结束证据。"
           ],
           "boundaries": [
-            "Activity channel 丢失只是诊断，不证明 child 停止。"
+            "Activity channel 丢失只提供诊断信息，不能证明子进程已停止。"
           ],
           "evidence": [
             "map-child-process"
@@ -1490,14 +1490,14 @@
         },
         {
           "id": "module-subagents-history",
-          "label": "child Conversation / final report",
-          "layer": "{{durable}} content",
-          "summary": "子 canonical 历史保存内容，final report 进入父普通 inbound。",
+          "label": "子 {{concept-conversation}} / final report",
+          "layer": "持久内容",
+          "summary": "子 {{concept-conversation}} 的 canonical 历史保存对话内容；final report 作为普通输入交给父 {{concept-conversation}}。",
           "owns": [
-            "独立对话内容与 activation 关联。"
+            "保存独立对话内容，并关联对应 activation。"
           ],
           "boundaries": [
-            "Event Journal 不是第二份 child transcript。"
+            "{{concept-event-journal}} 不另外保存一份子对话全文。"
           ],
           "evidence": [
             "map-native-child"
@@ -1505,14 +1505,14 @@
         },
         {
           "id": "module-subagents-runtime",
-          "label": "LocalConversationCore",
-          "layer": "Shared runtime peer",
-          "summary": "child 复用{{native}} {{composition}} 和执行 {{contract}}。",
+          "label": "{{map-concept-local-conversation-core}}",
+          "layer": "统一执行栈",
+          "summary": "子进程通过 {{map-concept-local-conversation-core}} 复用相同的 runtime 组装与执行规则。",
           "owns": [
-            "按{{frozen}}输入构造自己的 Conversation runtime。"
+            "沿用创建时确定的输入，启动自己的 {{concept-conversation}} runtime。"
           ],
           "boundaries": [
-            "child 与 parent 共享 Session 工作区，失败没有 {{map-rollback}}。"
+            "子进程与父进程共享 {{concept-session}} 工作区；失败不会 {{map-rollback}} 已完成的修改。"
           ],
           "evidence": [
             "agents-workspace",
@@ -1523,14 +1523,14 @@
         },
         {
           "id": "module-subagents-workflow",
-          "label": "Workflow-owned {{finite}} child",
-          "layer": "{{scope}} peer",
-          "summary": "Workflow child 复用监督 primitive，但由节点管理其 {{finite}} {{scope}}。",
+          "label": "{{concept-workflow}} 的有限子任务",
+          "layer": "节点范围",
+          "summary": "{{concept-workflow}} 的子任务复用现有监督机制，由所属节点管理这次有限运行。",
           "owns": [
-            "节点级 {{settlement}}。"
+            "收束节点范围内的执行。"
           ],
           "boundaries": [
-            "不能通过持久 Agent 控制重新启动。"
+            "不能通过持久 Agent 的控制接口重新启动。"
           ],
           "evidence": [
             "agents-authority",
@@ -1545,37 +1545,37 @@
           "from": "module-subagents-catalog",
           "to": "module-subagents-registry",
           "kind": "data",
-          "label": "{{frozen}} creation {{map-subagent-authority}}"
+          "label": "固定创建权限"
         },
         {
           "from": "module-subagents-registry",
           "to": "module-subagents-driver",
           "kind": "call",
-          "label": "commit staged child {{ownership}}"
+          "label": "提交子进程资源归属"
         },
         {
           "from": "module-subagents-driver",
           "to": "module-subagents-runtime",
           "kind": "call",
-          "label": "spawn child runtime"
+          "label": "启动子 runtime"
         },
         {
           "from": "module-subagents-runtime",
           "to": "module-subagents-history",
           "kind": "data",
-          "label": "{{canonical}} child content"
+          "label": "canonical 子对话内容"
         },
         {
           "from": "module-subagents-history",
           "to": "module-subagents-registry",
           "kind": "data",
-          "label": "final report + {{acceptance-inbound}}"
+          "label": "接受 final report 为输入"
         },
         {
           "from": "module-subagents-workflow",
           "to": "module-subagents-registry",
           "kind": "dependency",
-          "label": "reuse SubagentRegistry supervision"
+          "label": "复用子任务监督"
         }
       ]
     },
@@ -1583,19 +1583,19 @@
       "id": "module-workflows",
       "parent": "overview",
       "owner": "workflows",
-      "title": "WorkflowRuntime · Fixed {{scope}} program",
-      "summary": "选定 Workflow 是一个前台 Tool；固定程序决定节点和局部值，执行复用 {{native}} 调用 {{boundary}}。",
+      "title": "{{map-concept-workflow-runtime}} · 固定程序",
+      "summary": "选定的 {{concept-workflow}} 作为一个前台 {{concept-tool}} 执行。固定程序决定节点与局部值，节点再复用现有调用机制。",
       "nodes": [
         {
           "id": "module-workflows-program",
           "label": "WorkflowProgram::compile",
-          "layer": "Program {{admission-workflow}}",
-          "summary": "编译 block/node、typed bindings 和执行上界。",
+          "layer": "程序检查",
+          "summary": "{{map-concept-workflow-program}} 编译时检查 block、node、类型化绑定和执行上界。",
           "owns": [
-            "固定程序及递归展开预算。"
+            "保存固定程序，限定递归展开预算。"
           ],
           "boundaries": [
-            "不是由模型临时生成的开放执行队列。"
+            "不接受模型临时生成的开放执行队列。"
           ],
           "evidence": [
             "workflow-program",
@@ -1604,14 +1604,14 @@
         },
         {
           "id": "module-workflows-runtime",
-          "label": "WorkflowRuntime",
-          "layer": "{{scope}} execution",
-          "summary": "执行 Root、Parallel、Loop block，管理局部值和确定性 join。",
+          "label": "{{map-concept-workflow-runtime}}",
+          "layer": "范围内执行",
+          "summary": "{{map-concept-workflow-runtime}} 执行 Root、Parallel 和 Loop block，管理局部值，并按确定规则汇合结果。",
           "owns": [
-            "WorkflowBlockInstance、WorkflowNodeInstance 与 {{scope}} {{settlement}}。"
+            "管理 WorkflowBlockInstance、WorkflowNodeInstance 及各自范围内的收束。"
           ],
           "boundaries": [
-            "失败/取消不撤销 Session 目录中已完成写入。"
+            "失败或取消不会撤销 {{concept-session}} 目录中已经完成的写入。"
           ],
           "evidence": [
             "map-workflow-runtime",
@@ -1622,13 +1622,13 @@
         {
           "id": "module-workflows-tool",
           "label": "invoke_tool",
-          "layer": "{{native}} Tool node",
-          "summary": "为 node 创建真实 ToolInvocationId::Workflow，做精确选择与 {{preflight}}。",
+          "layer": "{{concept-tool}} 节点",
+          "summary": "invoke_tool 为节点分配真实的 ToolInvocationId::Workflow，再精确选择 {{concept-tool}} 并完成 {{preflight}}。",
           "owns": [
-            "已 {{admission-workflow}} registration 和 native invocation。"
+            "为获准执行的节点登记调用，并走现有执行路径。"
           ],
           "boundaries": [
-            "不伪造模型 ToolCall；不直接获得 canonical 历史写权限。"
+            "不伪造模型 ToolCall，也不直接获得写入 canonical 历史的权限。"
           ],
           "evidence": [
             "map-workflow-tool"
@@ -1636,14 +1636,14 @@
         },
         {
           "id": "module-workflows-agent",
-          "label": "{{finite}} Agent node",
-          "layer": "Child supervision peer",
-          "summary": "节点以 {{finite}} 子任务获得独立 Conversation 和受控 execution binding。",
+          "label": "有限 Agent 节点",
+          "layer": "子任务监督",
+          "summary": "Agent 节点作为有限子任务运行，使用独立 {{concept-conversation}} 和受控 execution binding。",
           "owns": [
-            "子任务监督与节点结果。"
+            "监督子任务，并取得节点结果。"
           ],
           "boundaries": [
-            "不能通过持久 Agent 控制 {{recovery}}。"
+            "不能通过持久 Agent 控制接口恢复或重新运行。"
           ],
           "evidence": [
             "agents-authority",
@@ -1654,14 +1654,14 @@
         },
         {
           "id": "module-workflows-invocation",
-          "label": "ForegroundInvocation",
-          "layer": "{{physical}} execution peer",
-          "summary": "Tool 节点执行共享前台 {{map-invocation-arbitration}} 与 {{settlement}} 机制。",
+          "label": "{{map-concept-foreground-invocation}}",
+          "layer": "真实执行",
+          "summary": "{{concept-tool}} 节点通过 {{map-concept-foreground-invocation}} 复用前台调用的结果裁定与收束机制。",
           "owns": [
-            "实际 Tool {{effect}} 的生命周期。"
+            "管理真实 {{concept-tool}} 操作的生命周期。"
           ],
           "boundaries": [
-            "Workflow 的图推进仍由 WorkflowRuntime 决定。"
+            "{{map-concept-workflow-runtime}} 仍决定后续执行哪个节点。"
           ],
           "evidence": [
             "map-invocation-owner",
@@ -1676,37 +1676,37 @@
           "from": "module-workflows-program",
           "to": "module-workflows-runtime",
           "kind": "data",
-          "label": "compiled {{scope}} program"
+          "label": "编译后的固定程序"
         },
         {
           "from": "module-workflows-runtime",
           "to": "module-workflows-tool",
           "kind": "call",
-          "label": "Tool node"
+          "label": "{{concept-tool}} 节点"
         },
         {
           "from": "module-workflows-runtime",
           "to": "module-workflows-agent",
           "kind": "call",
-          "label": "Agent node"
+          "label": "Agent 节点"
         },
         {
           "from": "module-workflows-tool",
           "to": "module-workflows-invocation",
           "kind": "call",
-          "label": "{{native}} prepared invocation"
+          "label": "已准备的 {{concept-tool}} 调用"
         },
         {
           "from": "module-workflows-invocation",
           "to": "module-workflows-runtime",
           "kind": "data",
-          "label": "typed result for graph progression"
+          "label": "结果用于推进节点"
         },
         {
           "from": "module-workflows-agent",
           "to": "module-workflows-runtime",
           "kind": "data",
-          "label": "settled node value"
+          "label": "已收束的节点值"
         }
       ]
     },
@@ -1714,19 +1714,19 @@
       "id": "module-durable",
       "parent": "overview",
       "owner": "durable",
-      "title": "{{durable}} {{authority-ledger}} · {{map-semantic}} transactions",
-      "summary": "ConversationStore 暴露 rustX 领域事务；SQLite backend 实现持久性，kernel 不依赖数据库框架。",
+      "title": "Durable Store · 持久事实与领域事务",
+      "summary": "{{map-concept-conversation-store}} 提供 rustX 的领域事务，SQLite backend 实现具体存储；{{concept-agent-kernel}} 不依赖数据库框架。",
       "nodes": [
         {
           "id": "module-durable-inbox",
           "label": "Pending Inbound Inbox",
-          "layer": "{{acceptance-inbound}} input",
-          "summary": "accept_inbound 原子分配 sequence 并保存待 {{adoption}} 输入。",
+          "layer": "输入接受",
+          "summary": "accept_inbound 原子分配输入序号，并保存等待采纳的 Pending Inbound。",
           "owns": [
-            "{{acceptance-inbound}} 和 edit/remove 对 {{adoption}} 的事务顺序。"
+            "确定输入接受、编辑、删除与采纳之间的事务顺序。"
           ],
           "boundaries": [
-            "不是 Message Ledger、第二个 scheduler 或通用 queue。"
+            "Inbox 不是 {{concept-message-ledger}}，也不负责调度执行。"
           ],
           "evidence": [
             "durable-inbound",
@@ -1735,14 +1735,14 @@
         },
         {
           "id": "module-durable-ledger",
-          "label": "{{map-ledger}} / Surface",
-          "layer": "{{canonical}} facts",
-          "summary": "adopt_pending_batch 原子追加 canonical 消息并移除 pending。",
+          "label": "{{concept-message-ledger}} / Surface",
+          "layer": "canonical 消息",
+          "summary": "adopt_pending_batch 原子追加 canonical 消息，并移除对应的待处理输入。",
           "owns": [
-            "不可变消息事实、普通追加和精确 answer obligation。"
+            "保存不可变消息、Surface 普通追加记录和精确的待回答义务。"
           ],
           "boundaries": [
-            "Surface 普通追加记录不决定压缩历史的选择。"
+            "Surface 的普通追加记录不决定压缩后选择哪些历史。"
           ],
           "evidence": [
             "inbound-commit",
@@ -1751,14 +1751,14 @@
         },
         {
           "id": "module-durable-journal",
-          "label": "{{map-journal}} / RequestSnapshot",
-          "layer": "Execution evidence",
-          "summary": "保存执行事实、精确请求和原子 request-start {{receipt}}。",
+          "label": "{{concept-event-journal}} / {{concept-request-snapshot}}",
+          "layer": "执行证据",
+          "summary": "{{concept-event-journal}} 保存执行事实，{{concept-request-snapshot}} 保存精确请求；请求启动事务返回持久回执。",
           "owns": [
-            "请求重建与 {{recovery}} 判断需要的事实。"
+            "提供请求重建和恢复判断所需的事实。"
           ],
           "boundaries": [
-            "Started 只禁止旧请求重发，不证明 provider 执行。"
+            "Started 禁止重发旧请求，但不证明提供方已经执行。"
           ],
           "evidence": [
             "map-start-transaction",
@@ -1767,14 +1767,14 @@
         },
         {
           "id": "module-durable-checkpoint",
-          "label": "ProjectionCheckpoint / activation",
-          "layer": "Historical inclusion",
-          "summary": "Checkpoint 内容、head、activation、completion 与 {{receipt}} 在语义事务中提交。",
+          "label": "{{map-concept-projection-checkpoint}} / activation",
+          "layer": "历史选择",
+          "summary": "{{map-concept-projection-checkpoint}} 的内容、head、activation、completion 和回执，一起通过领域事务提交。",
           "owns": [
-            "历史包含/排除与独立 activation 顺序。"
+            "决定历史的纳入与排除，并维护独立的 activation 顺序。"
           ],
           "boundaries": [
-            "不改写 Ledger，不生成 canonical summary 消息。"
+            "不改写 Ledger，也不生成 canonical summary 消息。"
           ],
           "evidence": [
             "compaction-commit",
@@ -1785,14 +1785,14 @@
         },
         {
           "id": "module-durable-publication",
-          "label": "{{publication}} plane",
-          "layer": "{{durable}} {{release-output}} peer",
-          "summary": "用独立记录证明哪些输出已经 commit for release。",
+          "label": "{{concept-publication}} 持久记录",
+          "layer": "输出持久记录",
+          "summary": "{{concept-publication}} 用独立记录标明哪些输出已经提交、可以向用户释放。",
           "owns": [
-            "P、U、C 的持久约束与三类 {{settlement-publication}}。"
+            "强制 P、U、C 的持久约束，并区分三类输出收束结果。"
           ],
           "boundaries": [
-            "不能把审计内容当作 canonical Assistant。"
+            "输出审计不能当作 canonical Assistant 内容。"
           ],
           "evidence": [
             "publication-contract",
@@ -1803,14 +1803,14 @@
         },
         {
           "id": "module-durable-sqlite",
-          "label": "SqliteConversationStore",
-          "layer": "Backend implementation",
-          "summary": "实现 ConversationStore 的{{native}}语义事务。",
+          "label": "{{map-concept-sqlite-conversation-store}}",
+          "layer": "后端实现",
+          "summary": "{{map-concept-sqlite-conversation-store}} 实现 {{map-concept-conversation-store}} 定义的领域事务。",
           "owns": [
-            "后端具体存储与事务原子性。"
+            "实现具体存储，并保证事务原子性。"
           ],
           "boundaries": [
-            "不把 SQLite/SQL 类型推入 Agent kernel {{contract}}。"
+            "SQLite 和 SQL 类型不进入 {{concept-agent-kernel}} 协议。"
           ],
           "evidence": [
             "durable-inbound",
@@ -1823,31 +1823,31 @@
           "from": "module-durable-inbox",
           "to": "module-durable-ledger",
           "kind": "call",
-          "label": "atomic {{adoption}}"
+          "label": "原子采纳输入"
         },
         {
           "from": "module-durable-sqlite",
           "to": "module-durable-journal",
           "kind": "dependency",
-          "label": "implement {{map-semantic}} transactions"
+          "label": "实现领域事务"
         },
         {
           "from": "module-durable-sqlite",
           "to": "module-durable-ledger",
           "kind": "dependency",
-          "label": "implement {{map-semantic}} transactions"
+          "label": "实现领域事务"
         },
         {
           "from": "module-durable-sqlite",
           "to": "module-durable-checkpoint",
           "kind": "dependency",
-          "label": "implement {{map-semantic}} transactions"
+          "label": "实现领域事务"
         },
         {
           "from": "module-durable-sqlite",
           "to": "module-durable-publication",
           "kind": "dependency",
-          "label": "implement {{map-semantic}} transactions"
+          "label": "实现领域事务"
         }
       ]
     },
@@ -1855,19 +1855,19 @@
       "id": "module-publication",
       "parent": "overview",
       "owner": "publication",
-      "title": "{{publication}} · {{durable}} {{release-output}}",
-      "summary": "输出先 {{staging-publication}} 再 {{release-output}}；provider 结果、用户输出 {{terminal-publication}} 与 canonical {{acceptance-assistant}} 采用 {{map-puc}}。",
+      "title": "{{concept-publication}} · 提交后释放输出",
+      "summary": "输出先暂存并持久提交，再向用户释放。提供方完成、输出终结与 canonical Assistant 接受，按 {{map-puc}} 分开提交。",
       "nodes": [
         {
           "id": "module-publication-coalescer",
-          "label": "PublicationCoalescer",
-          "layer": "Flush policy",
-          "summary": "按字节、最老 payload 的绝对 deadline、结构或 {{terminal-publication}} 合并帧。",
+          "label": "{{map-concept-publication-coalescer}}",
+          "layer": "合帧规则",
+          "summary": "{{map-concept-publication-coalescer}} 按字节量、最早 payload 的绝对 deadline、结构边界或输出结束来合帧。",
           "owns": [
-            "{{bounded}} buffer 与确定性 flush 策略。"
+            "限定 buffer 大小，并按确定规则输出帧。"
           ],
           "boundaries": [
-            "provider chunk size 不决定 {{publication}} 单位。"
+            "提供方的 chunk 大小不决定 {{concept-publication}} 的帧边界。"
           ],
           "evidence": [
             "publication-contract"
@@ -1875,14 +1875,14 @@
         },
         {
           "id": "module-publication-frames",
-          "label": "PublicationFrame / {{staging-publication}}",
-          "layer": "{{durable}} {{release-output}}",
-          "summary": "每个帧先持久提交，随后才送到 user-facing Runtime Client。",
+          "label": "{{map-concept-publication-frame}} / 暂存",
+          "layer": "提交后释放",
+          "summary": "{{map-concept-publication-frame}} 先持久提交，随后才发送给面向用户的 {{concept-runtime-client}}。",
           "owns": [
-            "可释放输出的持久上界。"
+            "标明当前哪些输出已获准释放。"
           ],
           "boundaries": [
-            "commit for release 不是用户已经看到的 ACK。"
+            "提交可释放，不等于用户已经收到或看到。"
           ],
           "evidence": [
             "publication-flush",
@@ -1892,13 +1892,13 @@
         {
           "id": "module-publication-terminal",
           "label": "P / U / C",
-          "layer": "{{settlement-publication}} mechanism",
-          "summary": "完成 P、再完成 U、最后才允许 C；store 也校验蕴含关系。",
+          "layer": "输出收束",
+          "summary": "先提交 P，再提交 U，最后才允许 C；store 也会检查 C ⇒ U ⇒ P。",
           "owns": [
-            "三种互斥 {{settlement-publication}} 和崩溃可区分点。"
+            "区分三种互斥的输出收束结果，以及崩溃可能发生的位置。"
           ],
           "boundaries": [
-            "P 与 U 不合成同一个事务。"
+            "P 与 U 分别通过各自事务提交。"
           ],
           "evidence": [
             "publication-contract",
@@ -1908,14 +1908,14 @@
         },
         {
           "id": "module-publication-proposals",
-          "label": "ProposedToolCall frames",
-          "layer": "{{map-proposal}} {{boundary}}",
-          "summary": "模型 Tool-call 帧显式标为 proposal。",
+          "label": "{{map-concept-proposed-tool-call}} 帧",
+          "layer": "模型建议",
+          "summary": "{{map-concept-proposed-tool-call}} 帧明确表示模型提出的调用建议。",
           "owns": [
-            "对模型建议的流式呈现。"
+            "让客户端在流式输出中看到模型建议。"
           ],
           "boundaries": [
-            "Incomplete / Unaccepted proposal 不能授权执行或 ToolResult。"
+            "Incomplete 或 Unaccepted 的建议，不能授权执行或生成 ToolResult。"
           ],
           "evidence": [
             "map-publication-proposals"
@@ -1923,14 +1923,14 @@
         },
         {
           "id": "module-publication-client",
-          "label": "RuntimeClientProjection",
-          "layer": "{{release-output}} peer",
-          "summary": "接收已 commit 的帧并进入用户观察面。",
+          "label": "{{map-concept-runtime-client-projection}}",
+          "layer": "客户端观察",
+          "summary": "{{map-concept-runtime-client-projection}} 接收已提交的输出帧，将其交给客户端观察。",
           "owns": [
-            "输出 {{projection}} 与订阅{{dispatch}}。"
+            "更新输出视图，并分发订阅事件。"
           ],
           "boundaries": [
-            "attachment 断开不能改变 durable {{settlement-publication}}。"
+            "attachment 断开不会改变已经持久确定的输出收束结果。"
           ],
           "evidence": [
             "publication-contract",
@@ -1945,25 +1945,25 @@
           "from": "module-publication-coalescer",
           "to": "module-publication-frames",
           "kind": "data",
-          "label": "typed flush frame"
+          "label": "类型化输出帧"
         },
         {
           "from": "module-publication-frames",
           "to": "module-publication-client",
           "kind": "data",
-          "label": "commit before {{release-output}}"
+          "label": "先提交再释放"
         },
         {
           "from": "module-publication-frames",
           "to": "module-publication-terminal",
           "kind": "data",
-          "label": "final frame + {{terminal-publication}} marker"
+          "label": "最终帧与终结标记"
         },
         {
           "from": "module-publication-proposals",
           "to": "module-publication-frames",
           "kind": "data",
-          "label": "{{map-proposal}} payload"
+          "label": "调用建议内容"
         }
       ]
     },
@@ -1971,19 +1971,19 @@
       "id": "agent-cancellation",
       "parent": "module-agent",
       "owner": "agent",
-      "title": "Mechanism · Cancellation vs request start",
-      "summary": "ModelTurnStartGate 把取消与实际 durable request-start 放进同一个 {{arbitration}} 区间。",
+      "title": "执行机制 · 取消与请求启动",
+      "summary": "{{map-concept-model-turn-start-gate}} 让取消与持久请求启动共用同一临界区，确定哪一方先发生。",
       "nodes": [
         {
           "id": "agent-cancellation-cancel",
           "label": "request_cancel(reason)",
-          "layer": "Competing transition",
-          "summary": "取得 start gate 后提交 signal 与首个语义 cause。",
+          "layer": "取消一方",
+          "summary": "request_cancel(reason) 取得启动锁后，提交取消信号和首个语义原因。",
           "owns": [
-            "首个获胜原因不可重写，例如 RuntimeShutdown。"
+            "保留首个成功记录的原因，例如 RuntimeShutdown，后续取消不能改写它。"
           ],
           "boundaries": [
-            "signal 只提出停止要求，不证明 Tool 已 {{physical}} {{settlement}}。"
+            "信号只要求停止，不能证明 {{concept-tool}} 已经结束并完成清理。"
           ],
           "evidence": [
             "cancel-cause"
@@ -1992,13 +1992,13 @@
         {
           "id": "agent-cancellation-start",
           "label": "arbitrate_model_turn_start(commit)",
-          "layer": "Competing transition",
-          "summary": "同样取得 gate，先看 signal，再在持锁期间运行 commit closure。",
+          "layer": "启动一方",
+          "summary": "arbitrate_model_turn_start(commit) 取得同一把锁，先检查取消信号，再持锁运行提交闭包。",
           "owns": [
-            "每次实际请求的唯一取消/启动 {{arbitration}}。"
+            "为每个实际请求确定取消与启动的先后。"
           ],
           "boundaries": [
-            "每个 retry 和 {{map-continuation}} 都必须重新经过这里。"
+            "初始请求、每次重试和 {{map-continuation}} 都必须重新检查。"
           ],
           "evidence": [
             "cancel-gate"
@@ -2007,13 +2007,13 @@
         {
           "id": "agent-cancellation-gate",
           "label": "ModelTurnStartGate::critical",
-          "layer": "Shared synchronization",
-          "summary": "同一个 mutex 决定 cancellation 与 durable commit 谁先进入。",
+          "layer": "共享同步点",
+          "summary": "{{map-concept-model-turn-start-gate}} 的 critical 临界区，用同一个 mutex 串行处理取消和持久启动提交。",
           "owns": [
-            "check 与 commit 之间没有未同步窗口。"
+            "让取消检查与提交之间不存在未同步的空隙。"
           ],
           "boundaries": [
-            "这是 Agent start gate；不是 {{compaction}} grant gate。"
+            "它负责 Agent 请求启动，区别于历史压缩的授权 gate。"
           ],
           "evidence": [
             "map-gate-structure"
@@ -2022,13 +2022,13 @@
         {
           "id": "agent-cancellation-before",
           "label": "CancelledBeforeStart",
-          "layer": "No {{durable}} start",
-          "summary": "取消先赢则 closure 不执行，没有请求 {{snapshot-request}} 或 request-scoped Context commit。",
+          "layer": "从未启动",
+          "summary": "取消先发生时，不运行提交闭包，也不写入请求快照或仅本次请求使用的 Context。",
           "owns": [
-            "精确的 never-started 结果。"
+            "返回精确的 CancelledBeforeStart，表明请求从未启动。"
           ],
           "boundaries": [
-            "不能存在 provider invocation。"
+            "此时不能调用提供方。"
           ],
           "evidence": [
             "cancel-gate"
@@ -2037,13 +2037,13 @@
         {
           "id": "agent-cancellation-started",
           "label": "Started({{receipt}})",
-          "layer": "{{durable}} start",
-          "summary": "commit 成功后返回 Started；后到取消属于已启动请求。",
+          "layer": "持久启动",
+          "summary": "启动事务成功后返回 Started；此后到达的取消，按已启动请求处理。",
           "owns": [
-            "durable start 的 {{receipt}}。"
+            "返回持久启动回执。"
           ],
           "boundaries": [
-            "commit Err 会传播，不留下 start claim。"
+            "提交出错会直接传播错误，不留下成功启动的声明。"
           ],
           "evidence": [
             "cancel-gate",
@@ -2053,13 +2053,13 @@
         {
           "id": "agent-cancellation-child",
           "label": "model_cancellation / execution_cancellation",
-          "layer": "Signal propagation",
-          "summary": "model 使用 child signal；Tool 使用只读执行取消 view 和 cause {{map-cancellation-authority}}。",
+          "layer": "信号传递",
+          "summary": "模型接收子取消信号；{{concept-tool}} 接收只读的执行取消视图，并读取同一个语义原因。",
           "owns": [
-            "让已经在执行的 owner 观察同一取消原因。"
+            "让已启动的执行组件观察 {{map-concept-agent-cancellation}} 保存的取消原因。"
           ],
           "boundaries": [
-            "executor 不获得 Attempt trigger；也不提供 cleanup 证明。"
+            "executor 不能触发整个 {{concept-attempt}} 的取消；信号本身也不证明清理完成。"
           ],
           "evidence": [
             "cancel-child"
@@ -2071,31 +2071,31 @@
           "from": "agent-cancellation-cancel",
           "to": "agent-cancellation-gate",
           "kind": "call",
-          "label": "lock before signal transition"
+          "label": "持锁提交取消信号"
         },
         {
           "from": "agent-cancellation-start",
           "to": "agent-cancellation-gate",
           "kind": "call",
-          "label": "lock across check + commit"
+          "label": "持锁检查并提交"
         },
         {
           "from": "agent-cancellation-gate",
           "to": "agent-cancellation-before",
           "kind": "data",
-          "label": "cancelled signal observed"
+          "label": "观察到取消"
         },
         {
           "from": "agent-cancellation-gate",
           "to": "agent-cancellation-started",
           "kind": "data",
-          "label": "commit succeeded"
+          "label": "提交成功"
         },
         {
           "from": "agent-cancellation-cancel",
           "to": "agent-cancellation-child",
           "kind": "data",
-          "label": "shared signal + cause"
+          "label": "共享信号与原因"
         }
       ]
     },
@@ -2103,19 +2103,19 @@
       "id": "agent-request-start",
       "parent": "module-agent",
       "owner": "agent",
-      "title": "Mechanism · Actual request-start transaction",
-      "summary": "先形成精确请求，再在取消 gate 内原子 commit；重建相等通过后才允许 ModelAdapter::stream。",
+      "title": "执行机制 · 实际请求启动事务",
+      "summary": "Agent 先准备精确请求，再在取消锁内原子提交启动事实；从持久记录重建并校验一致后，才调用 ModelAdapter::stream。",
       "nodes": [
         {
           "id": "agent-request-start-prepare",
-          "label": "PreparedModelTurn",
-          "layer": "Pre-start preparation",
-          "summary": "{{staging-context}} Context、{{frozen}} generation 与请求参数，构造精确 RequestSnapshot。",
+          "label": "{{map-concept-prepared-model-turn}}",
+          "layer": "启动前准备",
+          "summary": "{{map-concept-prepared-model-turn}} 暂存 Context，固定本轮语义输入与请求参数，构造精确的 {{concept-request-snapshot}}。",
           "owns": [
-            "可失败的准备检查和 provider-neutral request。"
+            "完成可能失败的准备检查，形成与提供方无关的请求。"
           ],
           "boundaries": [
-            "此时还没有 request-start 事实，不能 {{dispatch}} provider。"
+            "准备完成不代表请求已启动，此时不能向提供方发送。"
           ],
           "evidence": [
             "context-start",
@@ -2124,14 +2124,14 @@
         },
         {
           "id": "agent-request-start-gate",
-          "label": "AgentCancellation start gate",
-          "layer": "Start {{arbitration}} peer",
-          "summary": "为这一个实际请求线性化取消与 commit。",
+          "label": "{{map-concept-agent-cancellation}} 启动锁",
+          "layer": "取消与启动协调",
+          "summary": "{{map-concept-agent-cancellation}} 的启动锁，为这一个实际请求确定取消与提交的先后。",
           "owns": [
-            "覆盖初始请求、retry 和 {{map-continuation}}。"
+            "覆盖初始请求、重试和后续继续调用。"
           ],
           "boundaries": [
-            "不同于先检查取消再单独写数据库。"
+            "检查取消和写入数据库必须处在同一临界区。"
           ],
           "evidence": [
             "cancel-gate"
@@ -2140,13 +2140,13 @@
         {
           "id": "agent-request-start-commit",
           "label": "ConversationStore::commit_model_turn_start",
-          "layer": "Atomic {{durable}} transition",
-          "summary": "一次事务提交 request Context、RequestSnapshot 与 ModelRequestStarted；Agent Status 也在同一事务中。",
+          "layer": "原子持久事务",
+          "summary": "ConversationStore::commit_model_turn_start 在同一事务中提交请求 Context、{{concept-request-snapshot}}、ModelRequestStarted 和 {{map-concept-agent-status-display}}。",
           "owns": [
-            "失败时所有输入都不提交；精确重试返回带 disposition 的 {{receipt}}。"
+            "失败时全部不提交；精确重试返回注明提交结果的回执。"
           ],
           "boundaries": [
-            "store 只负责结构与持久性，不决定取消 policy。"
+            "store 检查结构并保证持久性，取消策略仍由 Agent 决定。"
           ],
           "evidence": [
             "map-start-transaction"
@@ -2154,14 +2154,14 @@
         },
         {
           "id": "agent-request-start-install",
-          "label": "install_prepared / {{publish}} start events",
-          "layer": "Post-commit handoff",
-          "summary": "安装事先验证的 Context，在线事件仅来自 fresh durable {{receipt}}。",
+          "label": "install_prepared / 报告启动事件",
+          "layer": "提交后安装",
+          "summary": "安装已验证的 Context；只有本次新提交的持久回执，才向在线观察器报告启动事件。",
           "owns": [
-            "内存热状态与已提交启动事实对齐。"
+            "使内存热状态与已提交的启动事实保持一致。"
           ],
           "boundaries": [
-            "IdempotentReplay 不向在线 observer 再 {{map-start-event-replay}} 历史事件。"
+            "IdempotentReplay 不能把回执中的历史事件再次发给在线观察器。"
           ],
           "evidence": [
             "map-start-install"
@@ -2170,13 +2170,13 @@
         {
           "id": "agent-request-start-verify",
           "label": "reconstruct_model_request",
-          "layer": "Post-start verification",
-          "summary": "从 durable RequestSnapshot 重建并与 live provider-neutral request 比较。",
+          "layer": "启动后校验",
+          "summary": "reconstruct_model_request 从持久 {{concept-request-snapshot}} 重建请求，并与当前内存中的精确请求比较。",
           "owns": [
-            "精确请求完整性校验。"
+            "验证真正要发送的内容与持久记录完全一致。"
           ],
           "boundaries": [
-            "读取失败或不相等都阻止 provider {{dispatch}}，但不能抹掉已 commit 的 Started。"
+            "读取失败或内容不等都会阻止发送，但已提交的 Started 仍然成立。"
           ],
           "evidence": [
             "map-start-reconstruct"
@@ -2185,13 +2185,13 @@
         {
           "id": "agent-request-start-dispatch",
           "label": "ModelAdapter::stream",
-          "layer": "Provider peer",
-          "summary": "只有 start 与重建校验完成后，传入 Attempt child cancellation signal。",
+          "layer": "提供方调用",
+          "summary": "启动事务与重建校验都成功后，才通过 {{map-concept-model-adapter}} 发送请求，并传入 {{concept-attempt}} 的子取消信号。",
           "owns": [
-            "一次 provider attempt。"
+            "执行一次提供方请求。"
           ],
           "boundaries": [
-            "崩溃在 commit 与 {{dispatch}} 间仍属于 Started；{{recovery}} 不重发旧请求。"
+            "即使在提交后、发送前崩溃，也属于 Started；恢复时不重发旧请求。"
           ],
           "evidence": [
             "model-dispatch",
@@ -2206,31 +2206,31 @@
           "from": "agent-request-start-prepare",
           "to": "agent-request-start-gate",
           "kind": "call",
-          "label": "one actual request"
+          "label": "本次实际请求"
         },
         {
           "from": "agent-request-start-gate",
           "to": "agent-request-start-commit",
           "kind": "call",
-          "label": "commit closure under gate"
+          "label": "锁内执行提交闭包"
         },
         {
           "from": "agent-request-start-commit",
           "to": "agent-request-start-install",
           "kind": "data",
-          "label": "fresh / {{map-idempotent}} {{receipt}}"
+          "label": "新提交或精确重试回执"
         },
         {
           "from": "agent-request-start-install",
           "to": "agent-request-start-verify",
           "kind": "call",
-          "label": "{{durable}} reconstruction"
+          "label": "从持久记录重建"
         },
         {
           "from": "agent-request-start-verify",
           "to": "agent-request-start-dispatch",
           "kind": "data",
-          "label": "equal request permits invocation"
+          "label": "相等后允许发送"
         }
       ]
     },
@@ -2238,19 +2238,19 @@
       "id": "context-checkpoint",
       "parent": "module-context",
       "owner": "context",
-      "title": "Mechanism · {{map-checkpoint}} compilation / {{map-activation}} / {{map-tail}}",
-      "summary": "不可变内容、activation、Ledger frontier 和 Journal frontier 各用自己的坐标；编译历史不产生执行身份。",
+      "title": "执行机制 · {{concept-checkpoint}} 编译与生效",
+      "summary": "{{concept-checkpoint}} 内容、activation 顺序、Ledger 位置与 Journal 位置各自独立。编译历史只决定模型看到什么，不产生执行身份。",
       "nodes": [
         {
           "id": "context-checkpoint-cut",
-          "label": "ResourceReadCut / RequestHistoryCut",
-          "layer": "Read {{authority-checkpoint}}",
-          "summary": "先固定 {{map-read-cut}}、已选 {{map-activation}} 与 base frontier。",
+          "label": "{{map-concept-resource-read-cut}} / {{map-concept-request-history-cut}}",
+          "layer": "读取范围",
+          "summary": "先固定 {{map-read-cut}}、所选 activation 和历史基准位置，再读取所需资源。",
           "owns": [
-            "{{finite}} 历史读取范围。"
+            "为本次历史读取确定有限范围。"
           ],
           "boundaries": [
-            "Pending Inbound 不属于 {{compaction}} 依赖；之后追加不混入这次读取。"
+            "Pending Inbound 不参与压缩依赖；之后追加的内容也不混入本次读取。"
           ],
           "evidence": [
             "map-read-cut",
@@ -2259,14 +2259,14 @@
         },
         {
           "id": "context-checkpoint-candidate",
-          "label": "CheckpointCandidate",
-          "layer": "Immutable content",
-          "summary": "以 Original 引用或 Derived 值完整决定 base 之前的历史包含与排除。",
+          "label": "{{map-concept-checkpoint-candidate}}",
+          "layer": "不可变内容",
+          "summary": "{{map-concept-checkpoint-candidate}} 通过 {{concept-original}} 引用和 {{concept-derived}} 内容，完整决定基准位置之前的历史取舍。",
           "owns": [
-            "{{provenance-derived}}、Tool call/result 配对坐标和结构预算。"
+            "保存来源依据、{{concept-tool}} 调用与结果配对坐标，以及结构预算。"
           ],
           "boundaries": [
-            "Derived 不获得 canonical MessageId，也不授权 {{physical}} Tool 执行。"
+            "{{concept-derived}} 不获得 canonical MessageId，也不能授权真实 {{concept-tool}} 执行。"
           ],
           "evidence": [
             "map-checkpoint-types",
@@ -2276,13 +2276,13 @@
         {
           "id": "context-checkpoint-compile",
           "label": "compile_checkpoint",
-          "layer": "Structural compiler",
-          "summary": "解析不可变依赖，拒绝伪造 {{provenance-derived}}、孤立结果、拆分批次和不合法顺序。",
+          "layer": "结构编译",
+          "summary": "compile_checkpoint 解析不可变依赖，拒绝伪造来源、孤立结果、拆开的批次和非法顺序。",
           "owns": [
-            "输出 CompiledCheckpoint 的 typed messages 与 Tool associations。"
+            "生成 {{map-concept-compiled-checkpoint}} 的类型化消息与 {{concept-tool}} 关联关系。"
           ],
           "boundaries": [
-            "历史关联 wire ID 不能替换实际 invocation identity。"
+            "历史配对使用的 wire ID，不能替代真实调用身份。"
           ],
           "evidence": [
             "map-checkpoint-compiler"
@@ -2291,13 +2291,13 @@
         {
           "id": "context-checkpoint-grant",
           "label": "authorize_compaction_commit",
-          "layer": "Cancellation authorization",
-          "summary": "fit/progress 校验通过后申请单 operation 的 {{map-grant}}。",
+          "layer": "取消与提交授权",
+          "summary": "压缩结果通过窗口容量和进展校验后，authorize_compaction_commit 为本次操作申请 {{map-grant}}。",
           "owns": [
-            "取消与本次 Checkpoint 授权先后。"
+            "确定取消与本次 {{concept-checkpoint}} 提交授权的先后。"
           ],
           "boundaries": [
-            "授权后到达的取消不能撤销该次 commit；不是 ModelTurnStartGate。"
+            "授权之后到达的取消不能撤销这次提交；这套授权区别于 {{map-concept-model-turn-start-gate}}。"
           ],
           "evidence": [
             "map-compaction-progress",
@@ -2307,13 +2307,13 @@
         {
           "id": "context-checkpoint-activate",
           "label": "commit_projection / {{receipt}}",
-          "layer": "{{durable}} {{map-activation}}",
-          "summary": "原子提交内容、head/activation、completion fact 和稳定 {{receipt}}。",
+          "layer": "持久生效",
+          "summary": "commit_projection 原子提交内容、head、activation、完成事实和稳定回执。",
           "owns": [
-            "历史切换和精确重试验证。"
+            "切换生效历史，并校验精确重试。"
           ],
           "boundaries": [
-            "不会改写 Ledger 或生成 canonical summary；store 不制造 grant。"
+            "不改写 Ledger 或生成 canonical summary；store 也不会自行授予压缩权限。"
           ],
           "evidence": [
             "compaction-commit",
@@ -2323,14 +2323,14 @@
         },
         {
           "id": "context-checkpoint-tail",
-          "label": "compiled {{map-checkpoint}} + eligible {{map-tail}}",
-          "layer": "Historical model input",
-          "summary": "按当前 {{map-activation}} 选择内容，再接上严格晚于 base 的符合条件消息。",
+          "label": "编译后的 {{concept-checkpoint}} + 符合条件的 {{concept-tail}}",
+          "layer": "模型历史输入",
+          "summary": "根据当前 activation 选择编译后的 {{concept-checkpoint}}，再接上严格晚于基准位置且符合条件的 {{concept-tail}}。",
           "owns": [
-            "历史输入顺序和纳入范围。"
+            "确定历史输入的顺序和纳入范围。"
           ],
           "boundaries": [
-            "Agent 当前 staged Context 在 pre-start cut 之外，之后单独{{frozen}}。"
+            "Agent 当前暂存的 Context 不在启动前的历史切面内，之后再单独固定。"
           ],
           "evidence": [
             "context-cuts",
@@ -2339,14 +2339,14 @@
         },
         {
           "id": "context-checkpoint-agent",
-          "label": "AgentExecution",
-          "layer": "Current-input peer",
-          "summary": "Agent 将历史结果与本次 core input 合成最终请求。",
+          "label": "{{map-concept-agent-execution}}",
+          "layer": "当前输入来源",
+          "summary": "{{map-concept-agent-execution}} 将编译后的历史，与本次核心输入合成最终模型请求。",
           "owns": [
-            "当前请求 generation 与实际启动。"
+            "确定当前请求的配置 generation，并负责实际启动。"
           ],
           "boundaries": [
-            "{{compaction}} 没有替 Agent 启动 model request。"
+            "历史压缩不会替 Agent 发起模型调用。"
           ],
           "evidence": [
             "map-context-engine",
@@ -2361,43 +2361,43 @@
           "from": "context-checkpoint-cut",
           "to": "context-checkpoint-candidate",
           "kind": "data",
-          "label": "{{bounded}} immutable dependencies"
+          "label": "有限范围内的不可变依赖"
         },
         {
           "from": "context-checkpoint-candidate",
           "to": "context-checkpoint-compile",
           "kind": "call",
-          "label": "validate + materialize"
+          "label": "校验并编译内容"
         },
         {
           "from": "context-checkpoint-compile",
           "to": "context-checkpoint-grant",
           "kind": "data",
-          "label": "validated candidate + fit/progress"
+          "label": "候选通过容量与进展检查"
         },
         {
           "from": "context-checkpoint-grant",
           "to": "context-checkpoint-activate",
           "kind": "data",
-          "label": "operation-bound grant"
+          "label": "绑定本次操作的授权"
         },
         {
           "from": "context-checkpoint-activate",
           "to": "context-checkpoint-tail",
           "kind": "data",
-          "label": "selected {{map-checkpoint}} + {{map-activation}}"
+          "label": "选定内容及生效顺序"
         },
         {
           "from": "context-checkpoint-cut",
           "to": "context-checkpoint-tail",
           "kind": "data",
-          "label": "eligible {{canonical}} {{map-tail}}"
+          "label": "符合条件的 canonical {{concept-tail}}"
         },
         {
           "from": "context-checkpoint-tail",
           "to": "context-checkpoint-agent",
           "kind": "data",
-          "label": "typed historical input"
+          "label": "类型化历史输入"
         }
       ]
     },
@@ -2405,19 +2405,19 @@
       "id": "tools-invocation",
       "parent": "module-tools",
       "owner": "tools",
-      "title": "Mechanism · Foreground invocation / {{effect}} / {{settlement}}",
-      "summary": "调用者提交自己的 start frontier；ForegroundInvocation 随后驱动真实 executor，并保留外部 {{effect}} 的不确定性。",
+      "title": "执行机制 · 前台调用与结果确认",
+      "summary": "调用者先提交自己的启动事实，{{map-concept-foreground-invocation}} 再驱动真实执行；外部操作无法确认时，结果明确保留不确定性。",
       "nodes": [
         {
           "id": "tools-invocation-prepared",
-          "label": "PreparedInvocation / authorize",
-          "layer": "Prepared facts",
-          "summary": "schema/selector 检查与 policy 只看已经{{frozen}}的事实；Approval 无法替换参数。",
+          "label": "{{map-concept-prepared-invocation}} / authorize",
+          "layer": "固定调用事实",
+          "summary": "schema、selector 和 policy 都只检查 {{map-concept-prepared-invocation}} 中已固定的事实；Approval 不能替换参数。",
           "owns": [
-            "{{preflight}} 输入与一次权限 gate。"
+            "完成执行前检查，并通过一次权限 gate。"
           ],
           "boundaries": [
-            "observer 只是看见事实；只有 policy gate 能允许/拒绝调用。"
+            "observer 只能观察事实；允许或拒绝调用由 policy gate 决定。"
           ],
           "evidence": [
             "tool-acceptance",
@@ -2428,13 +2428,13 @@
         {
           "id": "tools-invocation-handle",
           "label": "ToolExecutor::start",
-          "layer": "Before {{physical}} {{dispatch-tool}}",
-          "summary": "构造 completion / {{map-settlement-plane}} handle 时禁止 {{dispatch}} 工作。",
+          "layer": "执行前构造",
+          "summary": "{{map-concept-tool-executor}} 的 start 只构造完成与清理两条通道的 handle，此时禁止开始真实执行。",
           "owns": [
-            "真正执行及 cleanup 的 handle {{ownership}}。"
+            "由 handle 持有实际操作和清理所需资源。"
           ],
           "boundaries": [
-            "取消先于第一次 operation poll 可以证明未发生 {{effect}}。"
+            "若取消早于第一次 operation poll，可以证明操作未产生外部影响。"
           ],
           "evidence": [
             "map-executor-handle"
@@ -2443,13 +2443,13 @@
         {
           "id": "tools-invocation-winner",
           "label": "ForegroundInvocation::execute",
-          "layer": "Execution {{map-invocation-arbitration}}",
-          "summary": "{{frozen}} deadline/progress capability，选择 {{physical}} completion、取消或 deadline。",
+          "layer": "调用结果裁定",
+          "summary": "{{map-concept-foreground-invocation}} 在执行前固定 deadline 与进度能力，再从自然完成、取消和超时中确定唯一结果。",
           "owns": [
-            "单一 {{map-invocation-terminal}} winner 与类型化 InvocationFact。"
+            "返回单一调用终结结果和类型化的 {{map-concept-invocation-fact}}。"
           ],
           "boundaries": [
-            "进度必须是真实 executor 证据；不能伪造 heartbeat 延命。"
+            "进度必须来自真实执行证据，不能伪造 heartbeat 来延长期限。"
           ],
           "evidence": [
             "map-invocation-run",
@@ -2460,13 +2460,13 @@
         {
           "id": "tools-invocation-settle",
           "label": "ToolExecutionHandle::settlement",
-          "layer": "Cleanup {{authority}}",
-          "summary": "取消/deadline 赢后触发 child cancellation，此后只等 {{map-settlement-plane}}。",
+          "layer": "清理与结束确认",
+          "summary": "取消或 deadline 先发生时，触发子取消信号，之后只等待 {{map-concept-tool-execution-handle}} 的独立清理通道。",
           "owns": [
-            "kill、wait、reap、join 的本地资源生命周期。"
+            "完成 kill、wait、reap、join，收束本地资源生命周期。"
           ],
           "boundaries": [
-            "control guard 超时产生 SettlementControlFailed 与 OutcomeUnknown；这不是 executor 的 Unconfirmed 证据，既不证明本地 cleanup 完成，也不证明 {{physical}} 操作停止。"
+            "控制等待超时会返回 SettlementControlFailed 和 OutcomeUnknown；这不能当作 executor 的 Unconfirmed，也不能证明本地清理完成或真实操作已经停止。"
           ],
           "evidence": [
             "map-invocation-settlement",
@@ -2476,13 +2476,13 @@
         {
           "id": "tools-invocation-certainty",
           "label": "Confirmed / Unconfirmed",
-          "layer": "{{physical}} evidence",
-          "summary": "Confirmed 证明 {{physical}} {{map-physical-terminal}}；Unconfirmed 要求本地已清理、外部结果仍不明。",
+          "layer": "真实执行证据",
+          "summary": "Confirmed 证明操作已到达结束点；Unconfirmed 则表示本地已清理，但外部结果仍然不明。",
           "owns": [
-            "{{map-result-certainty}} 和 OutcomeUnknown。"
+            "明确区分结果可确认程度，并在必要时返回 OutcomeUnknown。"
           ],
           "boundaries": [
-            "取消没有 {{map-rollback}}；远程结果不明不能盲目 {{replay-effect}}。"
+            "取消不会撤销既有影响；远程结果不明时不能盲目重试。"
           ],
           "evidence": [
             "map-executor-settlement",
@@ -2491,14 +2491,14 @@
         },
         {
           "id": "tools-invocation-caller",
-          "label": "Caller result / InvocationFact",
-          "layer": "Caller {{authority}}",
-          "summary": "调用者接收结果，分别负责 canonical batch 或 Workflow graph progression。",
+          "label": "Caller result / {{map-concept-invocation-fact}}",
+          "layer": "调用者职责",
+          "summary": "调用者接收结果和 {{map-concept-invocation-fact}}，再分别提交 canonical 批次或推进 {{concept-workflow}} 节点。",
           "owns": [
-            "自己的身份、{{map-caller-admission}} 和结果 {{map-caller-publication}}。"
+            "维护自己的调用身份、资格检查和结果记录。"
           ],
           "boundaries": [
-            "ForegroundInvocation 不直接提交 history，也不推进 graph。"
+            "{{map-concept-foreground-invocation}} 不直接写入对话历史，也不推进 {{concept-workflow}} 图。"
           ],
           "evidence": [
             "map-invocation-owner"
@@ -2510,37 +2510,37 @@
           "from": "tools-invocation-prepared",
           "to": "tools-invocation-handle",
           "kind": "call",
-          "label": "authorized prepared invocation"
+          "label": "已授权的调用输入"
         },
         {
           "from": "tools-invocation-handle",
           "to": "tools-invocation-winner",
           "kind": "data",
-          "label": "completion + {{settlement}} futures"
+          "label": "完成与清理两条通道"
         },
         {
           "from": "tools-invocation-winner",
           "to": "tools-invocation-settle",
           "kind": "call",
-          "label": "cancel / deadline wins"
+          "label": "取消或 deadline 先发生"
         },
         {
           "from": "tools-invocation-settle",
           "to": "tools-invocation-certainty",
           "kind": "data",
-          "label": "{{native}} {{map-physical-terminal}} evidence"
+          "label": "执行结束证据"
         },
         {
           "from": "tools-invocation-winner",
           "to": "tools-invocation-caller",
           "kind": "data",
-          "label": "{{physical}} completion wins"
+          "label": "自然完成先发生"
         },
         {
           "from": "tools-invocation-certainty",
           "to": "tools-invocation-caller",
           "kind": "data",
-          "label": "typed result + facts"
+          "label": "类型化结果与事实"
         }
       ]
     },
@@ -2548,19 +2548,19 @@
       "id": "runtime-drain",
       "parent": "module-runtime",
       "owner": "runtime",
-      "title": "Mechanism · Runtime {{drain}} / {{residency}} {{release-residency}}",
-      "summary": "关闭 {{admission}} 后必须监督所有具体 {{owner}}；只有完整 {{map-quiescence-proof}} 才允许释放旧 writer allocation。",
+      "title": "执行机制 · Runtime 停机与卸载",
+      "summary": "停止接收新工作后，仍要监督每个执行与资源负责人。只有完整的 {{map-quiescence-proof}} 才允许释放旧 runtime 的写入资源。",
       "nodes": [
         {
           "id": "runtime-drain-close",
           "label": "Running → Draining",
-          "layer": "Lifecycle {{map-linearization}}",
-          "summary": "在 coordinator lock 下关闭新输入、model 更新和 Attempt {{admission}}。",
+          "layer": "生命周期切换点",
+          "summary": "协调器持锁切换为 Draining，关闭新输入、模型更新和新 {{concept-attempt}} 启动。",
           "owns": [
-            "精确 {{drain}} {{map-linearization}}。"
+            "确定停止接收工作的精确 {{map-linearization}}。"
           ],
           "boundaries": [
-            "已有工作仍有类型化 {{settlement}} 路径，不能直接丢弃。"
+            "已有工作仍需沿类型化收束路径结束，不能直接丢弃。"
           ],
           "evidence": [
             "runtime-drain"
@@ -2568,14 +2568,14 @@
         },
         {
           "id": "runtime-drain-attempt",
-          "label": "current Attempt + task",
-          "layer": "Attempt participant",
-          "summary": "请求 AgentCancellation 并等待 AgentExecution 和其 task 都到达结束点。",
+          "label": "当前 {{concept-attempt}} 与 task",
+          "layer": "{{concept-attempt}} 参与者",
+          "summary": "通过 {{map-concept-agent-cancellation}} 请求取消，再等待 {{map-concept-agent-execution}} 和承载它的 task 都到达结束点。",
           "owns": [
-            "当前 Attempt 的 {{settlement}} 与 join。"
+            "完成当前 {{concept-attempt}} 的收束与任务 join。"
           ],
           "boundaries": [
-            "取消 signal 不是 task 已退出的证据。"
+            "发出取消信号不能证明 task 已退出。"
           ],
           "evidence": [
             "runtime-drain",
@@ -2584,14 +2584,14 @@
         },
         {
           "id": "runtime-drain-execution",
-          "label": "foreground / background / processes",
-          "layer": "Execution participants",
-          "summary": "取消或关闭 foreground Tool、background terminal {{map-background-publication}} 与所有已拥有进程。",
+          "label": "前台 / 后台 / 进程",
+          "layer": "执行参与者",
+          "summary": "取消或关闭前台 {{concept-tool}}、后台结果通知路径，以及 runtime 已持有的全部进程。",
           "owns": [
-            "每个执行 {{owner}} 的{{native}} {{map-physical-terminal}} {{boundary}}。"
+            "等待每个执行组件达到自身可证明的结束边界。"
           ],
           "boundaries": [
-            "一个 participant 失败不授权放弃仍可能行动的 sibling。"
+            "一个参与者失败后，仍要监督其他可能继续行动的参与者。"
           ],
           "evidence": [
             "runtime-drain",
@@ -2600,14 +2600,14 @@
         },
         {
           "id": "runtime-drain-resources",
-          "label": "capability preparation / MCP / worker",
-          "layer": "Resource participants",
-          "summary": "等待计数中的准备、in-flight MCP connection owner、retained MCP process 及 admission worker 退出。",
+          "label": "能力准备 / {{concept-mcp}} / worker",
+          "layer": "资源参与者",
+          "summary": "等待已计入的能力准备、正在建立的 {{concept-mcp}} 连接、保留的 {{concept-mcp}} 进程和启动 worker 退出。",
           "owns": [
-            "执行之外仍可能持有资源或开始动作的具体 {{owner}}。"
+            "收束执行之外仍可能持有资源或发起动作的组件。"
           ],
           "boundaries": [
-            "空 registry 和 OS signal 都不构成 {{quiescence}}。"
+            "注册表为空或已发送 OS signal，都不足以证明 runtime 静止。"
           ],
           "evidence": [
             "runtime-drain"
@@ -2615,14 +2615,14 @@
         },
         {
           "id": "runtime-drain-proof",
-          "label": "Quiescent / {{settlement}} failure",
-          "layer": "Runtime conclusion",
-          "summary": "全部 owner 到达各自{{boundary}}后，才决定 Quiescent 或聚合 {{settlement}} failure。",
+          "label": "Quiescent / 收束失败",
+          "layer": "Runtime 结论",
+          "summary": "全部组件到达各自结束边界后，才判定 Quiescent，或汇总明确的收束失败。",
           "owns": [
-            "runtime 的完整 writer-retirement 结论。"
+            "给出整个 runtime 是否可以交还写入资源的结论。"
           ],
           "boundaries": [
-            "失败保持显式且不能重新开放健康 {{admission}}。"
+            "失败必须显式保留，也不能将 runtime 重新开放为健康可用。"
           ],
           "evidence": [
             "runtime-drain"
@@ -2630,14 +2630,14 @@
         },
         {
           "id": "runtime-drain-release",
-          "label": "SessionRuntimeManager unload",
-          "layer": "{{residency}} peer",
-          "summary": "shutdown 成功后释放 allocation 和 {{composition}}，保留持久 Session。",
+          "label": "{{map-concept-session-runtime-manager}} unload",
+          "layer": "驻留管理",
+          "summary": "shutdown 成功后，{{map-concept-session-runtime-manager}} 释放资源分配和已组装组件，保留持久 {{concept-session}}。",
           "owns": [
-            "Unloaded 的提交与下一次 writer 创建资格。"
+            "提交 Unloaded 状态，允许后续创建新写入者。"
           ],
           "boundaries": [
-            "证明不足时保留旧 Unloading {{map-residency-slot}}；不会创建替代 writer。"
+            "证明不足时保留旧 Unloading 条目；不能创建替代写入者。"
           ],
           "evidence": [
             "map-residency-retire",
@@ -2652,43 +2652,43 @@
           "from": "runtime-drain-close",
           "to": "runtime-drain-attempt",
           "kind": "call",
-          "label": "cancel + await"
+          "label": "取消并等待"
         },
         {
           "from": "runtime-drain-close",
           "to": "runtime-drain-execution",
           "kind": "call",
-          "label": "close + supervise"
+          "label": "关闭并监督"
         },
         {
           "from": "runtime-drain-close",
           "to": "runtime-drain-resources",
           "kind": "call",
-          "label": "close + supervise"
+          "label": "关闭并监督"
         },
         {
           "from": "runtime-drain-attempt",
           "to": "runtime-drain-proof",
           "kind": "data",
-          "label": "attempt and task {{terminal}}"
+          "label": "{{concept-attempt}} 和任务均已结束"
         },
         {
           "from": "runtime-drain-execution",
           "to": "runtime-drain-proof",
           "kind": "data",
-          "label": "{{native}} {{settlement}} evidence"
+          "label": "各执行组件的收束证据"
         },
         {
           "from": "runtime-drain-resources",
           "to": "runtime-drain-proof",
           "kind": "data",
-          "label": "resource and worker closure"
+          "label": "资源与 worker 均已关闭"
         },
         {
           "from": "runtime-drain-proof",
           "to": "runtime-drain-release",
           "kind": "data",
-          "label": "successful shutdown proof"
+          "label": "成功停机证明"
         }
       ]
     },
@@ -2696,19 +2696,19 @@
       "id": "publication-settlement",
       "parent": "module-publication",
       "owner": "publication",
-      "title": "Mechanism · {{map-puc}} / three {{settlement-publication}} outcomes",
-      "summary": "提供方完成、输出 {{terminal-publication}} 和 canonical Assistant {{acceptance-assistant}} 分开提交，因此崩溃后的审计仍能精确说明到达哪一层。",
+      "title": "执行机制 · P / U / C 与三类输出结果",
+      "summary": "提供方完成、输出终结和 canonical Assistant 接受分别提交。即使进程在中间崩溃，审计仍能准确说明输出到达哪一步。",
       "nodes": [
         {
           "id": "publication-settlement-p",
           "label": "P · ModelRequestCompleted",
-          "layer": "Provider outcome",
-          "summary": "Agent 取得合法 provider outcome 后，先提交 Event Journal 的 P。",
+          "layer": "提供方结果",
+          "summary": "Agent 取得有效的提供方结果后，先在 {{concept-event-journal}} 提交 P。",
           "owns": [
-            "提供方结果的持久执行事实。"
+            "持久记录提供方请求的完成事实。"
           ],
           "boundaries": [
-            "P 不证明 user-facing {{publication}} 达到 {{terminal-publication}}。"
+            "P 不代表面向用户的 {{concept-publication}} 已经终结。"
           ],
           "evidence": [
             "publication-contract",
@@ -2718,13 +2718,13 @@
         {
           "id": "publication-settlement-u",
           "label": "U · commit_publication_terminal",
-          "layer": "{{publication}} outcome",
-          "summary": "最终帧与 terminal marker 持久提交，再允许最终 {{release-output}}。",
+          "layer": "输出终结",
+          "summary": "最终输出帧与终结标记持久提交为 U 后，才允许向用户释放最终输出。",
           "owns": [
-            "{{publication}} 自己的 durable {{terminal-publication}}。"
+            "确定 {{concept-publication}} 自身的持久终结状态。"
           ],
           "boundaries": [
-            "P 与 U 不合成同一个事务；commit 不等于用户 perception。"
+            "P 与 U 分开提交；U 也不证明用户已经看到输出。"
           ],
           "evidence": [
             "publication-terminal",
@@ -2734,13 +2734,13 @@
         {
           "id": "publication-settlement-c",
           "label": "C · commit_canonical_publication",
-          "layer": "{{canonical}} {{acceptance-assistant}}",
-          "summary": "U 之后原子{{acceptance-assistant}} canonical Assistant；store 强制 C ⇒ U ⇒ P。",
+          "layer": "canonical 接受",
+          "summary": "U 之后才原子接受 canonical Assistant；store 强制 C ⇒ U ⇒ P。",
           "owns": [
-            "Message Ledger 的 canonical {{authority-ledger}}。"
+            "将正式对话内容写入 {{concept-message-ledger}}。"
           ],
           "boundaries": [
-            "Tool proposal 只有经 canonical {{acceptance-assistant}} 才可能进入执行检查。"
+            "{{concept-tool}} proposal 只有被纳入 canonical Assistant 后，才可能进入执行检查。"
           ],
           "evidence": [
             "assistant-commit",
@@ -2751,13 +2751,13 @@
         {
           "id": "publication-settlement-canonical",
           "label": "Canonical",
-          "layer": "{{settlement-publication}} classification",
-          "summary": "U 和 C 都已到达；对话内容以 Ledger 为准。",
+          "layer": "输出分类",
+          "summary": "U 与 C 都已经提交，对话内容以 Ledger 为准。",
           "owns": [
-            "单一 stream 的 canonical {{settlement-publication}}。"
+            "将这次输出确定为 Canonical。"
           ],
           "boundaries": [
-            "审计不是第二份 canonical 历史。"
+            "输出审计不能另作一份正式对话历史。"
           ],
           "evidence": [
             "publication-outcomes"
@@ -2765,14 +2765,14 @@
         },
         {
           "id": "publication-settlement-unaccepted",
-          "label": "UnacceptedPublicationAudit",
-          "layer": "{{settlement-publication}} classification",
-          "summary": "U 已到达、C 永远未到达：完整输出仍未被对话{{acceptance-assistant}}。",
+          "label": "{{map-concept-unaccepted-publication-audit}}",
+          "layer": "输出分类",
+          "summary": "U 已经提交，而 C 最终没有提交：完整输出仍未成为正式对话内容。",
           "owns": [
-            "已经 commit for release 的输出审计。"
+            "审计已经获准向用户释放、但未被 canonical 接受的输出。"
           ],
           "boundaries": [
-            "不能凭完整 Tool proposal 授权执行。"
+            "完整 {{concept-tool}} proposal 也不能据此获得执行权限。"
           ],
           "evidence": [
             "publication-outcomes",
@@ -2781,14 +2781,14 @@
         },
         {
           "id": "publication-settlement-incomplete",
-          "label": "IncompletePublicationAudit",
-          "layer": "{{settlement-publication}} classification",
-          "summary": "U 未到达；即使 P 已完成也属于 incomplete {{publication}}。",
+          "label": "{{map-concept-incomplete-publication-audit}}",
+          "layer": "输出分类",
+          "summary": "U 没有提交；即使 P 已完成，这次 {{concept-publication}} 仍未完整终结。",
           "owns": [
-            "没有 durable {{terminal-publication}} 的输出审计。"
+            "审计缺少持久终结标记的输出。"
           ],
           "boundaries": [
-            "不声称 provider transport 一定没有结束。"
+            "这不表示提供方的传输过程一定没有结束。"
           ],
           "evidence": [
             "publication-outcomes"
@@ -2800,31 +2800,31 @@
           "from": "publication-settlement-p",
           "to": "publication-settlement-u",
           "kind": "call",
-          "label": "commit ordering P < U"
+          "label": "先 P 后 U"
         },
         {
           "from": "publication-settlement-u",
           "to": "publication-settlement-c",
           "kind": "call",
-          "label": "commit ordering U < C"
+          "label": "先 U 后 C"
         },
         {
           "from": "publication-settlement-c",
           "to": "publication-settlement-canonical",
           "kind": "data",
-          "label": "U reached + C reached"
+          "label": "U 与 C 均已提交"
         },
         {
           "from": "publication-settlement-u",
           "to": "publication-settlement-unaccepted",
           "kind": "data",
-          "label": "U reached + C never"
+          "label": "U 已提交，C 最终未提交"
         },
         {
           "from": "publication-settlement-p",
           "to": "publication-settlement-incomplete",
           "kind": "data",
-          "label": "U never reached, even if P reached"
+          "label": "U 未提交，包括 P 已提交的情况"
         }
       ]
     }
@@ -2833,227 +2833,557 @@
     {
       "id": "map-read-cut",
       "label": "read cut",
-      "explanation": "Context 读取历史时先固定 Ledger、Journal 与 activation 的位置；之后追加的 ToolResult 不能混进同一次 compaction 输入。"
+      "explanation": "Context 开始读取前，先固定 Ledger、Journal 和 activation 的位置。之后追加的 ToolResult 不会混入同一次历史压缩输入。"
     },
     {
       "id": "map-checkpoint",
       "label": "Checkpoint",
-      "explanation": "当旧历史需要缩短时，rustX 保存 Original 引用与 Derived 内容的完整选择；它改变下次模型看到的历史，不会改写已经提交的 Message Ledger。"
+      "explanation": "旧历史过长时，rustX 用 Original 引用和 Derived 内容完整描述历史取舍。Checkpoint 改变后续模型看到的历史，不改写已提交的 Message Ledger。"
     },
     {
       "id": "map-tail",
       "label": "Tail",
-      "explanation": "激活某个 Checkpoint 后，Context 只接上其 base frontier 之后仍符合条件的 canonical 消息，避免把已经由 Checkpoint 决定的旧消息再拼一次。"
+      "explanation": "当前 Checkpoint 决定基准位置之前的历史取舍，Tail 只接上基准之后仍符合条件的 canonical 消息，避免重复拼接旧内容。"
     },
     {
       "id": "map-activation",
       "label": "activation",
-      "explanation": "同一份 Checkpoint 内容可以带有独立的安装顺序；读取历史时选择生效的 activation，而不是拿 Journal 序号冒充它。"
+      "explanation": "Checkpoint 内容与它何时生效分别记录。读取历史时按独立的 activation 顺序选择当前内容，不能用 Journal 序号替代。"
     },
     {
       "id": "map-gate",
       "label": "start gate",
-      "explanation": "AgentCancellation 的同一个 mutex 包住 request_cancel 和实际 request-start commit；取消先进入就没有请求快照，commit 先成功则后到取消只能按已启动处理。"
+      "explanation": "AgentCancellation 用同一把锁处理取消和实际请求启动。取消先发生时不提交请求快照；启动事务先成功时，后到的取消按已启动请求处理。"
     },
     {
       "id": "map-grant",
       "label": "compaction grant",
-      "explanation": "compaction 完成校验后向 CancellationSignal 取得一个带 operation_id 的授权；之后到达的取消不能撤销该次已授权的 Checkpoint commit。"
+      "explanation": "历史压缩校验通过后，从 CancellationSignal 取得绑定 operation_id 的提交授权。之后到达的取消不能撤销这次已授权的 Checkpoint 提交。"
     },
     {
       "id": "map-single-flight",
       "label": "single-flight",
-      "explanation": "两个客户端同时 load 同一个 Conversation 时加入同一次 manager transition；某个等待者断开不会丢弃仍在组合或卸载的任务。"
+      "explanation": "两个客户端同时加载同一 Conversation 时，会等待同一次管理操作。某个等待者断开，不会丢弃仍在组装或卸载的任务。"
     },
     {
       "id": "map-incarnation",
       "label": "runtime incarnation",
-      "explanation": "同一 Conversation 卸载再加载会得到新的 RuntimeIncarnationId；旧 attachment 不能借相同 Session 身份控制新 runtime。"
+      "explanation": "同一 Conversation 卸载再加载后，会取得新的 RuntimeIncarnationId。旧 attachment 不能凭相同 Session 身份控制新 runtime。"
     },
     {
       "id": "map-watermark",
       "label": "watermark",
-      "explanation": "ConversationRuntime 在一次安全输入点只取到固定的 Pending Inbound 位置；随后到达的消息留给后面的采纳机会，不让当前批次无限增长。"
+      "explanation": "ConversationRuntime 在安全输入点固定一个 Pending Inbound 位置，本次只采纳到这里。后来到达的消息留给后续机会，防止当前输入批次无限增长。"
     },
     {
       "id": "map-continuation",
       "label": "continuation",
-      "explanation": "模型完成一次 Tool 批次后，AgentExecution 用已接受的结果继续逻辑步骤；adapter 不得在一次 stream 内偷偷再发一个提供方请求。"
+      "explanation": "Tool 批次结束后，AgentExecution 使用已接受的结果继续逻辑步骤。adapter 不能在一次 stream 内自行增加提供方请求。"
     },
     {
       "id": "map-preparation",
       "label": "preparation",
-      "explanation": "配置发现某个 MCP server 后仍未连接；只有选定的能力需求进入原生准备步骤，成功对象才有资格进入有效 CapabilitySnapshot。"
+      "explanation": "发现 MCP server 配置时尚未连接。只有实际选中的能力才进入准备，准备成功后才有资格进入有效 CapabilitySnapshot。"
     },
     {
       "id": "map-semantic",
       "label": "semantic",
-      "explanation": "Session load 先组合 Conversation 的身份、历史和执行规则，再激活 runtime；这些规则由原生 owner 决定，传输只携带类型化请求。"
+      "explanation": "加载 Session 时，先按领域规则组装 Conversation 身份、历史和执行组件，再激活 runtime。这些规则由对应组件决定，传输只负责携带类型化请求。"
     },
     {
       "id": "map-idempotent",
       "label": "idempotent",
-      "explanation": "同一 request-start 的精确重试返回历史 receipt；Agent 看到 IdempotentReplay 后不再向在线 observer 重发那些已经提交的启动事件。"
+      "explanation": "同一次请求启动的精确重试返回已有回执。Agent 看到 IdempotentReplay 后，不会向在线观察器重复发送回执中已经提交的启动事件。"
     },
     {
       "id": "map-linearization",
       "label": "linearization point",
-      "explanation": "Running 转 Draining 与新 Attempt admission 争用同一个 coordinator lock；谁先成功决定这次新工作能否开始，而不是根据客户端看到状态的先后猜测。"
+      "explanation": "Running → Draining 与新 Attempt 启动共用协调器的同一把锁。谁先成功，就决定这次新工作能否开始，不能根据界面状态显示的先后推测。"
     },
     {
       "id": "map-rollback",
       "label": "rollback",
-      "explanation": "Workflow 的几个并行节点共享 Session 目录；一个节点失败时已经写入的文件仍保留，结果失败不包含文件系统撤销承诺。"
+      "explanation": "Workflow 并行节点共享 Session 目录。某个节点失败时，之前已经完成的文件写入仍会保留；执行失败不包含撤销文件修改的承诺。"
     },
     {
       "id": "map-exactly-once",
       "label": "exactly-once",
-      "explanation": "rustX 可以原子提交一次 ToolResult 批次，但远程 MCP 超时后可能无法知道外部服务是否完成；历史里只有一个结果不保证外部操作只发生一次。"
+      "explanation": "rustX 能原子提交一个 ToolResult 批次，但远程 MCP 超时后仍可能不知道服务端是否完成。历史中只有一个结果，不保证外部操作只发生一次。"
     },
     {
       "id": "map-proposal",
       "label": "Tool proposal",
-      "explanation": "Publication 帧里的 ToolCall 只是模型建议；只有 Agent 接受 canonical Assistant 并完成 Tool Plane 的检查后，才可能获得真实执行身份。"
+      "explanation": "Publication 中的 ToolCall 只是模型建议。Agent 接受 canonical Assistant 并通过 Tool Plane 检查后，才可能为其分配真实执行身份。"
     },
     {
       "id": "map-pending",
       "label": "Pending Inbound",
-      "explanation": "用户输入接受成功后先在 Inbox 持久保存；ConversationRuntime 到安全点提交 adoption 后，它才进入不可变 canonical 对话历史。"
+      "explanation": "输入接受成功后先持久保存在 Inbox。ConversationRuntime 在安全点提交采纳事务后，它才成为不可变的 canonical 对话内容。"
     },
     {
       "id": "map-coalescer",
       "label": "publication coalescer",
-      "explanation": "提供方连续发来很多细碎 delta 时，Publication 按字节、结构和首个 payload 的绝对 deadline 合帧；后来的 delta 不延后最老内容的释放期限。"
+      "explanation": "提供方输出细碎 delta 时，Publication 按字节量、结构和最早 payload 的绝对 deadline 合帧。后来的 delta 不会延长最早内容的等待期限。"
     },
     {
       "id": "map-attachment",
       "label": "attachment",
-      "explanation": "客户端 attach 得到目标身份、snapshot 与 cursor 的同一切面；detach 只移除连接观察关系，不取消 Attempt，也不证明 runtime 已卸载。"
+      "explanation": "客户端 attach 在同一切面取得目标身份、snapshot 和 cursor。detach 只移除连接关系，不取消 Attempt，也不能证明 runtime 已经卸载。"
     },
     {
       "id": "map-settlement-plane",
       "label": "settlement plane",
-      "explanation": "ForegroundInvocation 判定取消胜出后只等待 executor 的清理通道；该通道必须保有本地任务和进程直到 join/reap，不能把停止等待当作清理完成。"
+      "explanation": "取消先发生后，ForegroundInvocation 只等待 executor 的独立清理通道。通道保留本地任务与进程，直到 join 或 reap 完成，停止等待不能当作清理成功。"
     },
     {
       "id": "map-ledger",
       "label": "Message Ledger",
-      "explanation": "adopt_pending_batch 与 canonical Assistant 接受把消息写入不可变 Ledger；Context 压缩、客户端重连和 Trace 读取都不能改写这些事实。"
+      "explanation": "输入采纳和 canonical Assistant 接受会向不可变 Ledger 追加消息。Context 压缩、客户端重连和 Trace 读取都不能改写这些消息事实。"
     },
     {
       "id": "map-journal",
       "label": "Event Journal",
-      "explanation": "ModelRequestStarted、ToolExecutionStarted 等执行事实按自己的序号提交；这个序号不能用作 Checkpoint activation 或客户端 cursor。"
+      "explanation": "ModelRequestStarted、ToolExecutionStarted 等执行事实按 Journal 自己的序号提交。它不同于 Checkpoint 的 activation 顺序，也不同于客户端 cursor。"
     },
     {
       "id": "map-fencing",
       "label": "fencing",
-      "explanation": "旧 runtime 的通知即使晚到，客户端仍要同时匹配 Session、Conversation、incarnation 和 attachment；任何一项过期都不能覆盖当前 projection。"
+      "explanation": "旧通知即使晚到，也必须同时匹配当前 Session、Conversation、incarnation 和 attachment。任一身份过期，就不能覆盖当前客户端视图。"
     },
     {
       "id": "map-quiescence-proof",
       "label": "quiescence proof",
-      "explanation": "runtime shutdown 必须等 Attempt task、Tool、本地后台任务、能力准备、MCP 进程及 admission worker 都到达各自结束点；仅 cancel 返回或 registry 为空都不够。"
+      "explanation": "shutdown 必须等 Attempt task、Tool、本地后台任务、能力准备、MCP 进程和启动 worker 都到达各自结束点。仅取消返回或注册表为空都不够。"
     },
     {
       "id": "map-result-certainty",
       "label": "result certainty",
-      "explanation": "Tool executor 已清理本地执行但远程 MCP 结果无法确认时，返回 Unconfirmed 并形成 OutcomeUnknown；调用者看到显式不确定，不能据此盲目重试。"
+      "explanation": "executor 完成本地清理，但远程 MCP 结果仍不明确时，返回 Unconfirmed，并形成 OutcomeUnknown。调用者必须保留这种不确定性，不能据此盲目重试。"
     },
     {
       "id": "map-puc",
       "label": "P < U < C",
-      "explanation": "提供方完成先提交 P，准备向用户释放的最终帧提交 U，canonical Assistant 接受提交 C；进程在任意两点间崩溃时，恢复仍能分辨输出到达哪一层。"
+      "explanation": "提供方完成提交 P，可释放的最终输出提交 U，canonical Assistant 接受提交 C。三者分开记录，进程中途崩溃后仍能判断输出到达哪一层。"
     },
     {
       "id": "map-model-materialization",
       "label": "materialization",
-      "explanation": "父进程把已经选定的模型协议、endpoint、预算和 credential binding 装入 FrozenModelSpec；child 只据此构造 adapter 和 ResolvedModelInvocation，不再读取可变 rustx.toml 重新选模型。"
+      "explanation": "父进程将选定的模型协议、endpoint、预算和凭据绑定写入 FrozenModelSpec。子进程据此构造 adapter 与 ResolvedModelInvocation，不重读可变 rustx.toml 另选模型。"
     },
     {
       "id": "map-projection-publish",
       "label": "publish",
-      "explanation": "RuntimeClientProjection 在同一个同步点更新 snapshot、分配 cursor 并交付 RuntimeClientEvent；这里更新的是客户端事件流，不提交模型输出的 Publication 帧，也不接受 canonical Assistant。"
+      "explanation": "RuntimeClientProjection 在同一同步点更新 snapshot、分配 cursor 并交付 RuntimeClientEvent。这只更新客户端事件流，不提交 Publication 帧或接受 canonical Assistant。"
     },
     {
       "id": "map-caller-admission",
       "label": "admission",
-      "explanation": "ForegroundInvocation 接手之前，AgentExecution 已决定 canonical Tool 批次中的调用资格，WorkflowRuntime 已决定固定程序节点的调用资格；共享执行器不会代替任一调用方放行新工作。"
+      "explanation": "ForegroundInvocation 接手前，AgentExecution 已检查 canonical Tool 批次的调用资格，WorkflowRuntime 已检查固定节点的调用资格。共享执行器不会替任一调用方放行新工作。"
     },
     {
       "id": "map-caller-publication",
       "label": "publication",
-      "explanation": "ForegroundInvocation 返回执行结果和 InvocationFact 后，由调用方决定如何记录并呈现：AgentExecution 提交 canonical ToolResult 批次，WorkflowRuntime 推进节点并报告节点事实；这不是模型文本的 Publication 输出平面。"
+      "explanation": "调用结束后，AgentExecution 提交 canonical ToolResult 批次，WorkflowRuntime 推进节点并报告事实。各调用者记录自己的结果，这不同于模型文本的 Publication 输出。"
     },
     {
       "id": "map-cancellation-authority",
       "label": "authority",
-      "explanation": "AgentCancellation 保留第一次成功进入 start gate 的语义取消原因；已经启动的 Tool 通过 execution_cancellation 读取这个 owner 当前保存的原因，后来的取消不能改写它。"
+      "explanation": "AgentCancellation 保留首个成功记录的语义取消原因。已启动的 Tool 从只读 execution_cancellation 视图读取该原因，后来的取消不能改写它。"
     },
     {
       "id": "map-attempt-slot",
       "label": "slot",
-      "explanation": "ConversationRuntime 在 coordinator lock 内登记唯一 current Attempt；前一个 Attempt 和其 task 没有完成移交前，新的 Attempt 不能占用这个位置。"
+      "explanation": "ConversationRuntime 持锁登记唯一的当前 Attempt。前一轮 Attempt 及承载它的 task 尚未完成移交时，新 Attempt 不能占用这个位置。"
     },
     {
       "id": "map-residency-slot",
       "label": "slot",
-      "explanation": "unload 尚不能证明旧 runtime 已无写入者时，SessionRuntimeManager 保留原来的 Unloading 条目和分配，阻止同一 Conversation 产生替代 writer。"
+      "explanation": "卸载尚不能证明旧 runtime 已无写入者时，SessionRuntimeManager 保留原 Unloading 条目和资源分配，阻止同一 Conversation 新建替代写入者。"
     },
     {
       "id": "map-physical-terminal",
       "label": "terminal state",
-      "explanation": "执行器必须证明自己管理的进程、worker 或 operation 已到结束点；Unconfirmed 仍要求本地清理完成，但保留远端服务可能已经发生修改的不确定性。"
+      "explanation": "executor 必须给出其管理的进程、worker 或操作已经到达结束点的证据。Unconfirmed 仍要求本地清理完成，但保留远端可能已发生修改的不确定性。"
     },
     {
       "id": "map-invocation-terminal",
       "label": "terminal state",
-      "explanation": "ForegroundInvocation 在自然完成、取消和 deadline 中只选一个 winner；取消或 deadline 获胜后，它仍须等待独立 settlement 通道，不能把 winner 当作外部操作已经停止的证明。"
+      "explanation": "ForegroundInvocation 在自然完成、取消和 deadline 中只确定一个结果。取消或超时先发生后，仍需等待独立清理通道，不能把调用终结当作外部操作已停止。"
     },
     {
       "id": "map-background-publication",
       "label": "publication",
-      "explanation": "background runner 的结果先通过 ConversationInboundMailbox 持久接受为 runtime 输入，再把 registry 记录推进到结束状态；runtime shutdown 要等待这条结果通知路径收束，它不走模型输出的 Publication 帧。"
+      "explanation": "后台执行结果先通过 ConversationInboundMailbox 持久接受为普通输入，再将注册表记录推进为结束状态。shutdown 要等待这条通知路径收束；它不使用 Publication 输出帧。"
     },
     {
       "id": "map-start-event-replay",
       "label": "replay",
-      "explanation": "commit_model_turn_start 的精确重试可能返回 IdempotentReplay 和旧 receipt；AgentExecution 只向在线 observer 报告新提交的启动事件，不把 receipt 里的历史事实再次发送。"
+      "explanation": "请求启动的精确重试可能返回 IdempotentReplay 和旧回执。AgentExecution 只向在线观察器报告本次新提交的启动事件，不重复发送回执中的历史事实。"
     },
     {
       "id": "map-capability-revision",
       "label": "revision",
-      "explanation": "CapabilityCoordinator 只在有效可执行能力集合变化时推进 CapabilityRevision；MCP 不可用原因等诊断文字变化不会生成新执行版本，已有 Attempt 仍保留取得的旧能力集合。"
+      "explanation": "CapabilityCoordinator 只在有效可执行能力集合改变时推进 CapabilityRevision。MCP 不可用原因等诊断文字变化不产生新执行版本，已有 Attempt 也继续保留旧集合。"
     },
     {
       "id": "map-semantic-owner",
       "label": "owner",
-      "explanation": "SessionController 决定持久 Session 身份，ConversationRuntime 决定 Attempt admission 和 lifecycle，RuntimeClientProjection 决定客户端视图的 fold/cursor；同一操作要交给对应组件，连接层不能代替它作领域决定。"
+      "explanation": "SessionController 管持久身份，ConversationRuntime 管 Attempt 启动与生命周期，RuntimeClientProjection 管客户端视图与 cursor。连接层将操作交给对应组件，不替它作领域决定。"
     },
     {
       "id": "map-agent-authority",
       "label": "authority",
-      "explanation": "AgentExecution 负责本次 Attempt 的实际 model-request start、canonical Assistant/Tool 批次和唯一 terminal 候选；Context contributor 与 Tool executor 只能交回提案或执行事实，不能自行推进这些决定。"
+      "explanation": "AgentExecution 决定本轮实际模型请求启动、canonical Assistant 与 Tool 批次，以及唯一最终状态候选。Context contributor 和 Tool executor 只交回提案或事实，不能自行推进这些决定。"
     },
     {
       "id": "map-client-settlement",
       "label": "settlement",
-      "explanation": "AppServerClient 在 transport 结束时逐个结束仍在等待的 JSON-RPC 请求；可能改变服务端状态的请求会留下 UncertainOutcomeError，这只结束客户端等待，不证明 runtime 执行已经停止。"
+      "explanation": "传输结束时，AppServerClient 逐个处理仍在等待的请求。可能改变服务端状态的请求留下 UncertainOutcomeError；客户端等待结束，不代表 runtime 执行已经停止。"
     },
     {
       "id": "map-subagent-authority",
       "label": "authority",
-      "explanation": "创建持久 Agent 时，catalog/resolver 冻结它的能力、模型和 Session execution binding；后续 send_message 只能复用该权限，不能靠改变当前 profile 或父调用配置扩大子 Agent 能力。"
+      "explanation": "创建持久 Agent 时固定能力、模型和 Session execution binding。后续 send_message 只能复用该权限，不能因当前 profile 或父调用配置改变而扩大能力。"
     },
     {
       "id": "map-host-admission",
       "label": "admission",
-      "explanation": "AppServerHost 在处理请求前检查进程是否仍 Accepting，并为 request、attachment 或文件操作保留容量；额度不足或 server drain 会拒绝新操作，这不是 ConversationRuntime 的 Attempt gate。"
+      "explanation": "AppServerHost 先检查进程仍为 Accepting，再为请求、attachment 或文件操作预留容量。容量不足或服务器停机时拒绝新操作；这不同于 ConversationRuntime 的 Attempt 启动检查。"
     },
     {
       "id": "map-invocation-arbitration",
       "label": "arbitration",
-      "explanation": "ForegroundInvocation 同时观察自然完成、Attempt 取消与 deadline，只确定一个 winner；取消或 deadline 获胜后不再轮询 completion，改由独立 settlement 通道证明清理结果。"
+      "explanation": "ForegroundInvocation 同时观察自然完成、Attempt 取消和 deadline，只确定一个结果。取消或超时先发生后，不再轮询 completion，改等独立清理通道提供证据。"
+    },
+    {
+      "id": "map-concept-client-session",
+      "label": "Session",
+      "explanation": "TUI 客户端的 Session 对象负责 attach、安装 snapshot、处理订阅和重新同步。它是远端 Conversation 的本地视图包装，不是保存目录与设置的持久 Session。"
+    },
+    {
+      "id": "map-concept-app-server-client",
+      "label": "AppServerClient",
+      "explanation": "TUI 用它发送 JSON-RPC 请求、关联响应并分发通知。连接结束时，它逐个处理待响应请求；修改操作结果不明时返回 UncertainOutcomeError，不自动重试。"
+    },
+    {
+      "id": "map-concept-app-server-connection",
+      "label": "AppServerConnection",
+      "explanation": "服务端每条连接的协议入口。它检查初始化与请求版本，按请求明确指定的 Session、Conversation 和 runtime 身份路由，不根据界面焦点选择目标。"
+    },
+    {
+      "id": "map-concept-app-server-host",
+      "label": "AppServerHost",
+      "explanation": "同一服务进程中的资源管理组件，持有 SessionRuntimeManager，并为请求、attachment、上传和归档等操作预留容量；额度检查不决定 Attempt 是否能启动。"
+    },
+    {
+      "id": "map-concept-session-runtime-manager",
+      "label": "SessionRuntimeManager",
+      "explanation": "管理 Conversation 在当前进程中的 Loading、Loaded、Unloading 状态。并发操作汇合到同一次转换；卸载证明不足时保留旧 runtime，阻止另建写入者。"
+    },
+    {
+      "id": "map-concept-runtime-client-host",
+      "label": "RuntimeClientHost",
+      "explanation": "把客户端控制与观察接到指定 ConversationRuntime 上，维护一个控制 attachment 和只读观察关系。客户端全部离线时，执行仍由原来的 runtime 继续管理。"
+    },
+    {
+      "id": "map-concept-runtime-client-projection",
+      "label": "RuntimeClientProjection",
+      "explanation": "根据已确定的运行事实维护客户端视图。在一个同步点内更新 snapshot、分配 cursor 并交付事件；它不会自行推测 Agent 结果或启动执行。"
+    },
+    {
+      "id": "map-concept-conversation-store",
+      "label": "ConversationStore",
+      "explanation": "Agent 使用的持久存储接口，提供输入采纳、请求启动、Checkpoint 生效和 Publication 等领域事务。它保证结构与原子性，不替 Agent 决定取消策略。"
+    },
+    {
+      "id": "map-concept-session-controller",
+      "label": "SessionController",
+      "explanation": "维护持久 Session → SessionNode → Conversation 目录图和用户显式设置。加载后的 runtime 注册表由 SessionRuntimeManager 另行管理。"
+    },
+    {
+      "id": "map-concept-runtime-incarnation-id",
+      "label": "RuntimeIncarnationId",
+      "explanation": "每次加载 runtime 都生成的新身份。即使 Session 和 Conversation 没变，旧控制句柄也不能用旧 incarnation 操作后来加载的实例。"
+    },
+    {
+      "id": "map-concept-local-conversation-core",
+      "label": "LocalConversationCore",
+      "explanation": "统一组装 ConversationRuntime、Tool runtime 和能力协调器，先产生 Inactive runtime，完成客户端绑定后再激活；TUI、headless 与子进程共用这套入口。"
+    },
+    {
+      "id": "map-concept-session-config-input",
+      "label": "SessionConfigInput",
+      "explanation": "表示已保存或准备采用的 Session 输入，包括 cwd 和可选模型选择，并将它们交给配置解析流程。未指定的值保持为空；它不负责持久存储，也不保存有效凭据或执行状态。"
+    },
+    {
+      "id": "map-concept-user-config-manager",
+      "label": "UserConfigManager",
+      "explanation": "每次解析都重读当前配置文件，按完整资源定义处理覆盖关系，并精确解析 profile。它提供组装输入与诊断，不直接切换正在执行的 Attempt。"
+    },
+    {
+      "id": "map-concept-capability-coordinator",
+      "label": "CapabilityCoordinator",
+      "explanation": "准备候选可执行能力，并在所有 AttemptCapabilityLease 释放后原子切换 CapabilitySnapshot。已有 Attempt 保留原版本，单纯诊断变化不推进执行版本。"
+    },
+    {
+      "id": "map-concept-attempt-capability-lease",
+      "label": "AttemptCapabilityLease",
+      "explanation": "Attempt 持有的能力租约，用来固定本轮实际可用的能力。租约尚未释放时，CapabilityCoordinator 不能切换有效能力集合。"
+    },
+    {
+      "id": "map-concept-capability-snapshot",
+      "label": "CapabilitySnapshot",
+      "explanation": "已经准备好并可供执行的能力集合。发现一段 MCP 配置不等于它已进入该集合；每个 Attempt 通过租约保留自己取得的版本。"
+    },
+    {
+      "id": "map-concept-conversation-inbound-mailbox",
+      "label": "ConversationInboundMailbox",
+      "explanation": "输入生产者提交普通输入和唤醒 runtime 的入口。输入先持久接受为 Pending Inbound，再由协调器在安全点采纳；生产者不能直接启动 Attempt。"
+    },
+    {
+      "id": "map-concept-conversation-state",
+      "label": "ConversationState",
+      "explanation": "Conversation 在两次 Attempt 之间保留的内存热状态。协调器把它交给当前 AgentExecution，执行收束后再接回，避免同时出现两个执行所有者。"
+    },
+    {
+      "id": "map-concept-session-model-state",
+      "label": "SessionModelState",
+      "explanation": "协调器持有的可变模型选择状态。新 Attempt 启动时取得固定视图，之后的模型更新只影响后续 Attempt。"
+    },
+    {
+      "id": "map-concept-agent-execution",
+      "label": "AgentExecution",
+      "explanation": "获准启动后运行一个 Attempt 的组件，接管热状态，完成模型与 Tool 循环，负责实际请求启动、canonical 批次和唯一最终状态候选。Conversation 生命周期仍由 runtime 管理。"
+    },
+    {
+      "id": "map-concept-execution-state-machine",
+      "label": "ExecutionStateMachine",
+      "explanation": "显式记录一个 Attempt 正在调用模型、等待 Tool，还是已经完成、失败或取消。若最终状态无法持久追加，必须明确返回失败。"
+    },
+    {
+      "id": "map-concept-agent-cancellation",
+      "label": "AgentCancellation",
+      "explanation": "保存 Attempt 的首个语义取消原因，并通过共享启动锁与每次实际请求启动竞争。给模型和 Tool 的子信号只能传递取消要求，不能证明操作已停止或清理完成。"
+    },
+    {
+      "id": "map-concept-model-turn-start-gate",
+      "label": "ModelTurnStartGate",
+      "explanation": "AgentCancellation 内部的共享临界区。取消先进入时不提交启动；启动事务先成功时保留 Started，后来取消不能撤销。初始调用、重试和继续调用都要经过这里。"
+    },
+    {
+      "id": "map-concept-attempt-lifecycle",
+      "label": "AttemptLifecycle",
+      "explanation": "为单次 Attempt 固定的策略与观察器组合，通过 PreStepPolicy、PreToolPolicy 和 ToolResultObserver 参与既有执行阶段，不另外取得消息接受或取消权限。"
+    },
+    {
+      "id": "map-concept-native-agent-extensions",
+      "label": "NativeAgentExtensions",
+      "explanation": "根据 Root 或 named profile 显式组装 Agent Status、Todo、Goal 等内置 Rust 扩展；自主推进 Goal 仅限 Root。扩展集合随配置 generation 固定，默认关闭，不提供动态第三方加载。"
+    },
+    {
+      "id": "map-concept-native-context-composition",
+      "label": "NativeContextComposition",
+      "explanation": "在 ContextAssembly 中注册内置 Context contributor，让 Agent Status 等扩展沿用现有请求组装流程；模型与客户端使用同一份组合观察结果。"
+    },
+    {
+      "id": "map-concept-agent-status-engine",
+      "label": "AgentStatusEngine",
+      "explanation": "在请求准备时读取后台任务与 Todo 等状态，生成 Agent Status 观察结果，交由 ContextAssembly 纳入本次请求；它不单独调度 Agent。"
+    },
+    {
+      "id": "map-concept-goal-domain",
+      "label": "GoalDomain",
+      "explanation": "管理 Goal 当前持久状态的领域组件，包括阶段、预算、轮次和版本。只有 Active 阶段可以授权安全空闲时继续，不能从旧事件推断当前授权。"
+    },
+    {
+      "id": "map-concept-goal-phase",
+      "label": "GoalPhase",
+      "explanation": "Goal 当前的持久阶段。GoalPhase::Active 允许 runtime 在其他条件也满足时继续；Paused 和 Blocked 都不会授权下一轮。"
+    },
+    {
+      "id": "map-concept-goal-ref",
+      "label": "GoalRef",
+      "explanation": "标识 Goal 及其版本的引用，用于对准本次要操作的目标状态，避免把基于旧版本的操作当作当前授权。"
+    },
+    {
+      "id": "map-concept-goal-snapshot",
+      "label": "GoalSnapshot",
+      "explanation": "Goal 的当前持久快照，保存预算、阶段和计数。是否仍允许继续应以它为准，历史事件只是过程记录。"
+    },
+    {
+      "id": "map-concept-goal-round-driver",
+      "label": "GoalRoundDriver",
+      "explanation": "runtime 到达安全空闲点后，原子消耗 Goal 的一轮预算，再把普通 Pending Inbound 送入已有流程。它不另起执行队列或模型调度器。"
+    },
+    {
+      "id": "map-concept-context-engine-class",
+      "label": "ContextEngine",
+      "explanation": "编译有限范围内的历史，按模型窗口估算 token，并规划与验证压缩。它不改写 Message Ledger，也不处理提供方的具体传输协议。"
+    },
+    {
+      "id": "map-concept-context-assembly",
+      "label": "ContextAssembly",
+      "explanation": "汇集 contributor 的类型化 Context 提案，检查兼容性后决定本次纳入哪些输入，并区分 canonical 用户内容与只用于当前请求的 system sections。"
+    },
+    {
+      "id": "map-concept-context-projection",
+      "label": "ContextProjection",
+      "explanation": "本次模型输入的可计量视图，包含有序类型化消息、实际 System Prompt 和 token 计量，用于确定性 fingerprint。它区别于客户端界面的 RuntimeClientProjection。"
+    },
+    {
+      "id": "map-concept-resolved-model-invocation",
+      "label": "ResolvedModelInvocation",
+      "explanation": "已经完成模型选择和提供方绑定的调用配置。子进程根据父进程固定的 FrozenModelSpec 构造它，不再读取可变配置重新选模型。"
+    },
+    {
+      "id": "map-concept-frozen-model-spec",
+      "label": "FrozenModelSpec",
+      "explanation": "父进程交给子进程的固定模型说明，包含协议、endpoint、预算和凭据绑定。子进程只据此构造 adapter，保持创建时确定的模型语义。"
+    },
+    {
+      "id": "map-concept-model-request",
+      "label": "ModelRequest",
+      "explanation": "Agent 交给 adapter 的提供方无关请求，精确包含本次类型化消息、Tool definitions 和 prompt；实际发送前要与 RequestSnapshot 重建结果比较。"
+    },
+    {
+      "id": "map-concept-model-adapter",
+      "label": "ModelAdapter",
+      "explanation": "把 ModelRequest 转成某个提供方协议，再将原始事件规范化为 ModelStreamItem。一次 stream 只做一次提供方请求，重试与继续调用由 Agent 显式发起。"
+    },
+    {
+      "id": "map-concept-model-stream-item",
+      "label": "ModelStreamItem",
+      "explanation": "adapter 返回给 Agent 的统一流项，区分有语义的 ModelEvent 和只表示执行进度的信息；进度不会写成 canonical 对话内容。"
+    },
+    {
+      "id": "map-concept-model-event",
+      "label": "ModelEvent",
+      "explanation": "adapter 规范化后交给 Agent 组装器的语义事件，例如文本、Tool 调用建议和完成事件。事件仍需经过后续接受流程，不代表已经成为 canonical 对话历史。"
+    },
+    {
+      "id": "map-concept-tool-registry",
+      "label": "ToolRegistry",
+      "explanation": "根据精确定义查找 Tool，校验调用 schema 和元数据，形成 PreparedInvocation；检查通过仍不代表真实执行已经开始。"
+    },
+    {
+      "id": "map-concept-prepared-invocation",
+      "label": "PreparedInvocation",
+      "explanation": "执行前固定的完整调用事实，包括选中的 Tool、参数和策略。权限检查只读取这些事实，Approval 不允许临时换一组参数。"
+    },
+    {
+      "id": "map-concept-foreground-invocation",
+      "label": "ForegroundInvocation",
+      "explanation": "Agent 和 Workflow 共用的前台调用状态机。它裁定完成、取消和 deadline 的先后，并在取消或超时后继续等待清理证据，不负责写对话历史或推进图。"
+    },
+    {
+      "id": "map-concept-tool-executor",
+      "label": "ToolExecutor",
+      "explanation": "真实 Tool 执行器接口。start 只构造 handle，实际操作在驱动 handle 后开始；执行器还要提供取消后的本地清理与操作结束证据。"
+    },
+    {
+      "id": "map-concept-tool-execution-handle",
+      "label": "ToolExecutionHandle",
+      "explanation": "持有真实操作和清理资源的执行句柄，提供 completion 与 settlement 两条通道。取消或 deadline 获胜后仍保留清理通道，直到 join 或 reap 等步骤结束。"
+    },
+    {
+      "id": "map-concept-invocation-fact",
+      "label": "InvocationFact",
+      "explanation": "共享调用机制交回的类型化执行事实。Agent 用结果提交有序 ToolResult 批次，Workflow 用结果推进自己的节点；事实本身不授予写历史或调度权限。"
+    },
+    {
+      "id": "map-concept-conversation-tool-runtime",
+      "label": "ConversationToolRuntime",
+      "explanation": "单个 Conversation 长期使用的 Tool 资源集合，稳定绑定工作区、artifact store、mailbox 和后台注册表。配置更新不能用新注册表掩盖已有执行。"
+    },
+    {
+      "id": "map-concept-agent-catalog",
+      "label": "AgentCatalog",
+      "explanation": "创建持久 Agent 时查找 named Agent，并与 resolver 一起固定其能力、模型和 Session execution binding。之后发送消息复用创建时的权限。"
+    },
+    {
+      "id": "map-concept-subagent-registry",
+      "label": "SubagentRegistry",
+      "explanation": "关联稳定 Agent 身份、子 Conversation 和当前 activation，管理输入检查、封闭与精确控制。旧运行仍在停止或缺少结束证明时，不静默启动替代运行。"
+    },
+    {
+      "id": "map-concept-workflow-runtime",
+      "label": "WorkflowRuntime",
+      "explanation": "执行编译好的 Workflow 程序，管理 Root、Parallel、Loop、局部值和结果汇合。Tool 与 Agent 节点复用现有执行机制，图的推进仍由它决定。"
+    },
+    {
+      "id": "map-concept-workflow-program",
+      "label": "WorkflowProgram",
+      "explanation": "编译后的固定 Workflow 程序，包含 block、node、类型化绑定和递归展开上界。它限定本次执行范围，不是模型临时扩展的开放队列。"
+    },
+    {
+      "id": "map-concept-projection-checkpoint",
+      "label": "ProjectionCheckpoint",
+      "explanation": "持久保存的历史选择内容，与 head、activation、completion 和回执通过领域事务提交。它影响后续模型历史，不改写 canonical Ledger。"
+    },
+    {
+      "id": "map-concept-sqlite-conversation-store",
+      "label": "SqliteConversationStore",
+      "explanation": "ConversationStore 的 SQLite 实现，负责具体数据保存与事务原子性；Agent 只依赖领域接口，不接触 SQL 或数据库框架类型。"
+    },
+    {
+      "id": "map-concept-publication-coalescer",
+      "label": "PublicationCoalescer",
+      "explanation": "把细碎模型 delta 合成有限大小的输出帧，按字节、结构和最早 payload 的绝对 deadline 刷出；后来的内容不能延长最早内容的等待时间。"
+    },
+    {
+      "id": "map-concept-publication-frame",
+      "label": "PublicationFrame",
+      "explanation": "Publication 的持久输出单位。每帧先提交、再发送给客户端；已提交表示获准释放，不表示客户端已收到或用户已看到。"
+    },
+    {
+      "id": "map-concept-proposed-tool-call",
+      "label": "ProposedToolCall",
+      "explanation": "流式输出中标明的模型 Tool 调用建议。即使整段建议已展示，仍需 canonical Assistant 接受及 Tool 执行检查才能成为真实调用。"
+    },
+    {
+      "id": "map-concept-prepared-model-turn",
+      "label": "PreparedModelTurn",
+      "explanation": "请求启动前准备好的 Context、本轮语义输入和请求参数，能够构造精确 RequestSnapshot；准备阶段可能失败，不能提前发送提供方请求。"
+    },
+    {
+      "id": "map-concept-resource-read-cut",
+      "label": "ResourceReadCut",
+      "explanation": "读取资源前固定的历史位置集合，用于确定本次编译可见的 Ledger、Journal 和 activation；之后追加的内容不能混入同一次输入。"
+    },
+    {
+      "id": "map-concept-request-history-cut",
+      "label": "RequestHistoryCut",
+      "explanation": "为本次请求历史固定的读取切面，记录选中的 activation 和基准位置。Agent 当前暂存的 Context 在切面之外，稍后再单独纳入。"
+    },
+    {
+      "id": "map-concept-checkpoint-candidate",
+      "label": "CheckpointCandidate",
+      "explanation": "完整描述基准位置之前历史取舍的候选内容，使用 Original 引用和 Derived 值，并保留来源、Tool 配对与结构预算，之后交给编译器验证。"
+    },
+    {
+      "id": "map-concept-compiled-checkpoint",
+      "label": "CompiledCheckpoint",
+      "explanation": "Checkpoint 编译器校验依赖、来源、Tool 配对和顺序之后生成的类型化历史内容。历史中的调用关联不等于一次真实执行身份。"
+    },
+    {
+      "id": "map-concept-unaccepted-publication-audit",
+      "label": "UnacceptedPublicationAudit",
+      "explanation": "输出终结 U 已提交，但 canonical 接受 C 最终未提交时保留的审计。它证明完整输出曾获准释放，不能当作正式 Assistant 消息或 Tool 执行授权。"
+    },
+    {
+      "id": "map-concept-incomplete-publication-audit",
+      "label": "IncompletePublicationAudit",
+      "explanation": "缺少持久输出终结 U 的审计。即使提供方完成 P 已提交，输出仍属于不完整 Publication；它不判断提供方传输是否已经结束。"
+    },
+    {
+      "id": "map-concept-agent-status-display",
+      "label": "Agent Status",
+      "explanation": "内置状态扩展在请求准备时汇集后台执行与 Todo 等观察，供模型与客户端使用；底层 agent_status 接口只报告状态，不因此启动新的 Attempt。"
+    },
+    {
+      "id": "map-concept-todo-display",
+      "label": "Todo",
+      "explanation": "Conversation 的内置任务状态扩展。其当前状态可以作为 Agent Status 的输入进入本次 Context，保存或观察任务状态不会绕开原有 Attempt 启动流程。"
     }
   ],
   "evidence": [
