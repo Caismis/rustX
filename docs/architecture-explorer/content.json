@@ -1,0 +1,1967 @@
+{
+  "title": "rustX Architecture Explorer",
+  "baseline": {
+    "commit": "8cb41624eb2dc2ca87e4409961f42553ceb029cf",
+    "branch": "main",
+    "subject": "Refactor compaction into immutable-history context projections (#466) (#477)"
+  },
+  "intro": "Explore the ownership boundaries of rustX at a fixed main commit. Follow one request, inspect source evidence and compare deterministic teaching scenarios. These are explanatory schedules, not live runtime traces: the explorer makes no model calls, starts no Tools and changes no Session state.",
+  "nodes": [
+    {
+      "id": "clients",
+      "label": "TUI / Web Console",
+      "layer": "Product surface",
+      "summary": "Clients present conversation state and send explicit, addressed user intentions.",
+      "owns": [
+        "TUI interactions, Web conversation surfaces, local drafts and focus.",
+        "Stdio JSONL for an owned local App Server child; WebSocket for externally managed servers."
+      ],
+      "boundaries": [
+        "Client focus is routing state; it does not choose a process-global active Session.",
+        "A disconnected client cannot decide that execution has stopped."
+      ],
+      "evidence": [
+        "topology",
+        "session-residency"
+      ]
+    },
+    {
+      "id": "app-server",
+      "label": "App Server",
+      "layer": "Product surface",
+      "summary": "The transport-neutral external product protocol routes requests to native owners.",
+      "owns": [
+        "Versioned JSON-RPC connection routing and transport framing.",
+        "Explicit Session/runtime addressing and authenticated transport admission."
+      ],
+      "boundaries": [
+        "Host authentication, user/process routing and workspace isolation belong to the higher-level product host.",
+        "The protocol adapts native authority; it does not become the conversation scheduler."
+      ],
+      "evidence": [
+        "app-boundary",
+        "topology",
+        "transport-security"
+      ]
+    },
+    {
+      "id": "projection",
+      "label": "Runtime Client",
+      "layer": "Product surface",
+      "summary": "A deterministic projection presents authoritative runtime facts through snapshots, cursors and bounded replay.",
+      "owns": [
+        "RuntimeClientProjection: the single fold, cursor allocator, replay and subscribers.",
+        "RuntimeClientHost: projection, controls and attachments over ConversationRuntime."
+      ],
+      "boundaries": [
+        "Execution uses the same path with zero attachments.",
+        "Live projection/replay caches and Trace are never recovery authority."
+      ],
+      "evidence": [
+        "client-authority",
+        "client-owners",
+        "trace-owner"
+      ]
+    },
+    {
+      "id": "sessions",
+      "label": "Session / residency owners",
+      "layer": "Local composition",
+      "summary": "SessionController owns durable Session identity; SessionRuntimeManager owns live composition residency.",
+      "owns": [
+        "Session → SessionNode → Conversation catalog graph, explicit settings and revisions.",
+        "Single-flight load/unload, retained allocation and RuntimeIncarnationId."
+      ],
+      "boundaries": [
+        "At most one writable live runtime per Conversation; v1 also permits only one resident node per Session.",
+        "Successful unload proves quiescence and releases composition; it preserves durable Session data."
+      ],
+      "evidence": [
+        "session-identity",
+        "session-residency",
+        "residency-unload"
+      ]
+    },
+    {
+      "id": "config",
+      "label": "Configuration / resources",
+      "layer": "Local composition",
+      "summary": "Native resolution combines explicit Session selections with current sources, then admits finite capabilities.",
+      "owns": [
+        "UserConfigManager resolution, complete resource definitions and exact profile selection.",
+        "One native composition path through LocalConversationCore::compose_with_access."
+      ],
+      "boundaries": [
+        "Discovery does not connect MCP or prepare Python.",
+        "Persisted Session input is not resolved effective configuration, credentials or execution state."
+      ],
+      "evidence": [
+        "composition",
+        "session-config",
+        "source-demand",
+        "residency-load"
+      ]
+    },
+    {
+      "id": "runtime",
+      "label": "ConversationRuntime",
+      "layer": "Execution owners",
+      "summary": "The coordinator owns admission and lifecycle for one Conversation.",
+      "owns": [
+        "One current Attempt slot, model snapshot, between-attempt ConversationState and inbound adoption.",
+        "Running → Draining transition, settlement handoff and proven quiescence."
+      ],
+      "boundaries": [
+        "Producers submit ordinary inbound; only this coordinator admits AgentExecution.",
+        "Cancellation, physical settlement and runtime quiescence are separate facts."
+      ],
+      "evidence": [
+        "runtime-ownership",
+        "runtime-admission",
+        "runtime-drain"
+      ]
+    },
+    {
+      "id": "agent",
+      "label": "Agent kernel",
+      "layer": "Execution owners",
+      "summary": "AgentExecution runs one Attempt and coordinates provider-neutral model turns and canonical Tool batches.",
+      "owns": [
+        "Frozen logical-generation input, actual request starts, retry budgets and cancellation arbitration.",
+        "Canonical Assistant acceptance, sibling Tool slots/order and atomic ToolResult batches."
+      ],
+      "boundaries": [
+        "No provider SDK, MCP SDK, database or HTTP framework type belongs in the kernel contract.",
+        "Executors own physical effects; publication and canonical acceptance remain separate boundaries."
+      ],
+      "evidence": [
+        "layering",
+        "agent-owns",
+        "tool-acceptance",
+        "inward-contracts"
+      ]
+    },
+    {
+      "id": "extensions",
+      "label": "Native Agent Extensions",
+      "layer": "Execution owners",
+      "summary": "Closed native extensions contribute through explicit runtime contracts while keeping their own domain state.",
+      "owns": [
+        "Composed agent_status, todo and goal capabilities.",
+        "GoalDomain durable state and GoalRoundDriver participation at safe idle admission."
+      ],
+      "boundaries": [
+        "Plugins default off; there is no dynamic hook marketplace.",
+        "Goal does not own model execution, Tool execution, request assembly or a second queue."
+      ],
+      "evidence": [
+        "config-selection",
+        "extensions-owner",
+        "goal-runtime",
+        "extensions-code"
+      ]
+    },
+    {
+      "id": "context",
+      "label": "Context Engine",
+      "layer": "Runtime contracts & adapters",
+      "summary": "The historical compiler selects checkpoint Original/Derived items and eligible Tail; the Agent freezes current core input.",
+      "owns": [
+        "Historical validation, token accounting, compaction planning and bounded read-only resources.",
+        "ContextAssembly dynamic proposal admission and exact request input composition."
+      ],
+      "boundaries": [
+        "Compaction never edits the canonical Ledger or creates a canonical summary message.",
+        "Projected Tool calls/results never count as actual executions."
+      ],
+      "evidence": [
+        "context-contract",
+        "context-owners",
+        "context-typed"
+      ]
+    },
+    {
+      "id": "model",
+      "label": "Model contracts / adapters",
+      "layer": "Runtime contracts & adapters",
+      "summary": "ModelAdapter translates one provider-neutral ModelRequest into one ModelStreamItem stream.",
+      "owns": [
+        "OpenAI Chat Completions, OpenAI Responses and Anthropic Messages protocol translation.",
+        "Provider encoding, normalized stream events and opaque continuation handling."
+      ],
+      "boundaries": [
+        "One stream call means one provider attempt, with no hidden retry, reconnect or failover.",
+        "Dispatch follows durable start and reconstruction verification; a start record alone cannot prove provider execution."
+      ],
+      "evidence": [
+        "model-contract",
+        "model-dispatch",
+        "start-meaning",
+        "model-protocols"
+      ]
+    },
+    {
+      "id": "tools",
+      "label": "Tool Plane / executors",
+      "layer": "Runtime contracts & adapters",
+      "summary": "Native Tools, MCP and Managed Python share definitions, schemas, policies and invocation contracts.",
+      "owns": [
+        "ToolRegistry resolution/preflight and ForegroundInvocation lifecycle.",
+        "Physical execution, cancellation, progress, effect-frontier evidence and settlement."
+      ],
+      "boundaries": [
+        "Accepted canonical Tool slots and ordered result commits belong to the Agent Loop.",
+        "Requesting cancellation never proves physical stop; remote uncertainty stays explicit."
+      ],
+      "evidence": [
+        "tool-contract",
+        "tool-acceptance",
+        "tool-evidence",
+        "python-mcp",
+        "native-invocation"
+      ]
+    },
+    {
+      "id": "subagents",
+      "label": "Subagents",
+      "layer": "Runtime contracts & adapters",
+      "summary": "Owned child Conversations reuse the native runtime stack with frozen authority and finite activation identities.",
+      "owns": [
+        "SubagentRegistry identity/admission and exact activation controls.",
+        "Independent child canonical history and physical containment proof."
+      ],
+      "boundaries": [
+        "Agents use the Session shared workspace; writes persist through failure/cancellation.",
+        "Finite Workflow children are owned by their Workflow node and cannot be resumed through durable Agent controls."
+      ],
+      "evidence": [
+        "agents-authority",
+        "agents-workspace",
+        "agent-controls"
+      ]
+    },
+    {
+      "id": "workflows",
+      "label": "WorkflowRuntime",
+      "layer": "Runtime contracts & adapters",
+      "summary": "A selected Workflow is one foreground Tool executing a fixed scoped program.",
+      "owns": [
+        "Compiled block/node instances, typed bindings, local values and scope settlement.",
+        "Agent, Tool, Branch, Parallel, Review, Loop and Return nodes."
+      ],
+      "boundaries": [
+        "Native Tool nodes use real Workflow invocation identity, never fabricated model ToolCalls.",
+        "No workspace rollback or handoff is implied; parallel writers share the Session directory."
+      ],
+      "evidence": [
+        "workflow-program",
+        "workflow-owner",
+        "workflow-workspace",
+        "agent-owns"
+      ]
+    },
+    {
+      "id": "durable",
+      "label": "Canonical / durable authority",
+      "layer": "Durable facts",
+      "summary": "ConversationStore exposes native semantic transactions; SQLite implements the durable backend.",
+      "owns": [
+        "Accepted Pending Inbound, immutable Message Ledger, canonical append bookkeeping and execution Journal facts.",
+        "Typed projection checkpoints, exact request snapshots and atomic semantic commit receipts."
+      ],
+      "boundaries": [
+        "Pending acceptance is different from canonical adoption; the mailbox only coordinates wakeups.",
+        "Historical projection inclusion is selected by checkpoint activation, independently of canonical facts."
+      ],
+      "evidence": [
+        "durable-inbound",
+        "inbound-commit",
+        "canonical-history",
+        "compaction-commit"
+      ]
+    },
+    {
+      "id": "publication",
+      "label": "Publication plane",
+      "layer": "Durable facts",
+      "summary": "Durable user-facing release has its own staging, terminal and settlement boundaries.",
+      "owns": [
+        "Bounded coalescing and durable frames before user-facing release.",
+        "Canonical, UnacceptedPublicationAudit or IncompletePublicationAudit settlement."
+      ],
+      "boundaries": [
+        "Provider outcome P precedes publication terminal U, which precedes canonical acceptance C.",
+        "Committed for release is an upper bound on possible display, never proof the user perceived it."
+      ],
+      "evidence": [
+        "publication-contract",
+        "publication-outcomes",
+        "publication-flush"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "clients",
+      "to": "app-server",
+      "kind": "call",
+      "label": "Addressed JSON-RPC intentions"
+    },
+    {
+      "from": "app-server",
+      "to": "sessions",
+      "kind": "call",
+      "label": "Session controls and runtime attachment"
+    },
+    {
+      "from": "app-server",
+      "to": "projection",
+      "kind": "call",
+      "label": "Attached runtime control and snapshots"
+    },
+    {
+      "from": "sessions",
+      "to": "config",
+      "kind": "call",
+      "label": "Cold resolve and admit sources"
+    },
+    {
+      "from": "sessions",
+      "to": "runtime",
+      "kind": "call",
+      "label": "Compose, activate and explicitly unload"
+    },
+    {
+      "from": "projection",
+      "to": "runtime",
+      "kind": "call",
+      "label": "Forward native control intentions"
+    },
+    {
+      "from": "runtime",
+      "to": "agent",
+      "kind": "call",
+      "label": "Admit one Attempt"
+    },
+    {
+      "from": "runtime",
+      "to": "durable",
+      "kind": "call",
+      "label": "Accept/adopt inbound and recover"
+    },
+    {
+      "from": "agent",
+      "to": "context",
+      "kind": "call",
+      "label": "Compile history and freeze input"
+    },
+    {
+      "from": "agent",
+      "to": "model",
+      "kind": "call",
+      "label": "Invoke provider-neutral ModelAdapter"
+    },
+    {
+      "from": "agent",
+      "to": "tools",
+      "kind": "call",
+      "label": "Resolve and execute accepted calls"
+    },
+    {
+      "from": "agent",
+      "to": "durable",
+      "kind": "call",
+      "label": "Start request and commit canonical facts"
+    },
+    {
+      "from": "agent",
+      "to": "publication",
+      "kind": "call",
+      "label": "Stage and settle release"
+    },
+    {
+      "from": "durable",
+      "to": "context",
+      "kind": "data",
+      "label": "Ledger + checkpoint + bounded Tail"
+    },
+    {
+      "from": "runtime",
+      "to": "projection",
+      "kind": "data",
+      "label": "Native observations, not new authority"
+    },
+    {
+      "from": "publication",
+      "to": "projection",
+      "kind": "data",
+      "label": "Already committed release frames"
+    },
+    {
+      "from": "projection",
+      "to": "app-server",
+      "kind": "data",
+      "label": "Snapshots and cursor events"
+    },
+    {
+      "from": "app-server",
+      "to": "clients",
+      "kind": "data",
+      "label": "Client-neutral wire projections"
+    },
+    {
+      "from": "tools",
+      "to": "subagents",
+      "kind": "call",
+      "label": "Agent control Tool implementations"
+    },
+    {
+      "from": "tools",
+      "to": "workflows",
+      "kind": "call",
+      "label": "Selected Workflow Tool invocation"
+    },
+    {
+      "from": "workflows",
+      "to": "tools",
+      "kind": "call",
+      "label": "Shared native invocation owner"
+    },
+    {
+      "from": "workflows",
+      "to": "subagents",
+      "kind": "call",
+      "label": "Finite Agent node admission"
+    },
+    {
+      "from": "extensions",
+      "to": "runtime",
+      "kind": "call",
+      "label": "Ordinary Pending Inbound through native admission"
+    },
+    {
+      "from": "config",
+      "to": "tools",
+      "kind": "call",
+      "label": "Admit selected finite source demand"
+    },
+    {
+      "from": "agent",
+      "to": "extensions",
+      "kind": "dependency",
+      "label": "Explicit native extension contracts"
+    }
+  ],
+  "request": [
+    {
+      "id": "route",
+      "title": "Address the Session",
+      "actor": "TUI / Web → App Server",
+      "active": [
+        "clients",
+        "app-server",
+        "sessions"
+      ],
+      "description": "The client names a Session/node. Attach loads or reuses that target runtime and acquires an external control attachment; cold load resolves current sources, composes once, binds projection while inert and activates.",
+      "durable": "The Session graph and explicit selections already identify the durable Conversation; an attachment is not a new Session.",
+      "visible": "The client receives an addressed runtime snapshot; focus remains local routing state.",
+      "evidence": [
+        "topology",
+        "session-residency",
+        "residency-load",
+        "client-owners"
+      ]
+    },
+    {
+      "id": "accept",
+      "title": "Commit inbound, then admit",
+      "actor": "ConversationRuntime + ConversationStore",
+      "active": [
+        "runtime",
+        "durable",
+        "projection"
+      ],
+      "description": "Submission first crosses durable Pending Inbound acceptance. At a native admission/safe boundary, current rows are canonically adopted as one finite batch; the coordinator owns the current Attempt slot.",
+      "durable": "accept_inbound allocates the sequence and pending record atomically. adopt_pending_batch commits exact current payload, canonical facts and removal together.",
+      "visible": "An accepted pending item can be presented before it becomes an adopted canonical User message. Notifications observe these transitions.",
+      "evidence": [
+        "inbound-commit",
+        "runtime-admission"
+      ]
+    },
+    {
+      "id": "freeze",
+      "title": "Compile history and freeze current input",
+      "actor": "Context Engine → AgentExecution",
+      "active": [
+        "context",
+        "agent",
+        "durable",
+        "config"
+      ],
+      "description": "Compile the active typed checkpoint plus Tail strictly after its base through the request cut. Add protected Fresh Inbound, admitted Context, prompt, Tool definitions and continuation into one frozen semantic input version.",
+      "durable": "Historical Ledger/checkpoint facts remain unchanged. Staging current request-scoped Context has no durable effect yet.",
+      "visible": "Context/request inspection must label projection content separately from canonical conversation history.",
+      "evidence": [
+        "context-contract",
+        "context-cuts",
+        "frozen-input",
+        "context-start"
+      ]
+    },
+    {
+      "id": "start",
+      "title": "Arbitrate the durable request start",
+      "actor": "AgentCancellation → ConversationStore",
+      "active": [
+        "agent",
+        "durable"
+      ],
+      "description": "arbitrate_model_turn_start holds the Attempt gate across the cancellation check and commit_model_turn_start. If start wins, independently reconstruct and verify the frozen request before any adapter dispatch.",
+      "durable": "One transaction commits request-scoped User context, RequestSnapshot and ModelRequestStarted. A failed transaction leaves none; a committed start is the no-resend boundary.",
+      "visible": "A started record is inspectable execution evidence, not proof that the provider actually received or ran the request.",
+      "evidence": [
+        "cancel-gate",
+        "start-code",
+        "start-meaning"
+      ]
+    },
+    {
+      "id": "stream",
+      "title": "Dispatch one actual provider request",
+      "actor": "AgentExecution → ModelAdapter",
+      "active": [
+        "agent",
+        "model"
+      ],
+      "description": "The adapter receives the neutral request and an Attempt child cancellation signal. It performs one request attempt and returns normalized events; the kernel owns actual-request retries and assembly.",
+      "durable": "The already committed snapshot remains the exact input authority for this request identity. Provider activity does not rewrite it.",
+      "visible": "Only normalized semantic output enters publication; execution-only adapter progress is separate.",
+      "evidence": [
+        "model-contract",
+        "model-dispatch",
+        "frozen-input",
+        "model-items"
+      ]
+    },
+    {
+      "id": "release",
+      "title": "Commit frames before releasing output",
+      "actor": "AgentExecution + publication plane",
+      "active": [
+        "agent",
+        "publication",
+        "projection"
+      ],
+      "description": "The coalescer creates bounded publication frames. flush_publication first stages each frame durably, then releases it to the observation seam. A client can see text or Tool proposals during the request.",
+      "durable": "Publication staging records output committed for release. This is neither a canonical Assistant message nor authorization to execute a proposed Tool.",
+      "visible": "A released proposal is still a proposal. A durable release audit never proves client perception.",
+      "evidence": [
+        "publication-flush",
+        "publication-contract",
+        "publication-outcomes"
+      ]
+    },
+    {
+      "id": "accept-output",
+      "title": "Separate provider, release and canonical completion",
+      "actor": "AgentExecution + durable store",
+      "active": [
+        "agent",
+        "publication",
+        "durable"
+      ],
+      "description": "After structural assembly, commit provider outcome P, then final frame/terminal U. Registry preflight and canonical Assistant acceptance C follow. Only accepted canonical ToolCalls become execution slots.",
+      "durable": "The store enforces P < U < C. Canonical acceptance commits Assistant content and its event; a complete U without C remains UnacceptedPublicationAudit.",
+      "visible": "Already released complete output can remain unaccepted. Publication status must not be confused with canonical history.",
+      "evidence": [
+        "publication-contract",
+        "publication-terminal",
+        "assistant-commit",
+        "tool-acceptance"
+      ]
+    },
+    {
+      "id": "execute-tools",
+      "title": "Execute only accepted Tool slots",
+      "actor": "Agent Loop → Tool Plane",
+      "active": [
+        "agent",
+        "tools"
+      ],
+      "description": "Preflight preserves schema/business rejection as a result slot while rejecting untrustworthy structure. After Assistant acceptance, policy/approval and scheduling govern invocation. A conservative executor-start frontier precedes the actual physical effect frontier.",
+      "durable": "Accepted calls are canonical. Native start/progress observations do not replace permission gates or physical evidence.",
+      "visible": "The client may show genuine Tool progress. A selected Agent or Workflow Tool may delegate through its native owner; those executions share the Session workspace.",
+      "evidence": [
+        "tool-acceptance",
+        "agent-owns",
+        "agents-workspace",
+        "workflow-workspace"
+      ]
+    },
+    {
+      "id": "settle-tools",
+      "title": "Prove physical settlement, commit the whole batch",
+      "actor": "Executors → Agent Loop",
+      "active": [
+        "tools",
+        "agent",
+        "durable"
+      ],
+      "description": "Executors supply known outcome or explicit uncertainty. Cancellation fills unstarted slots and drains started siblings. The Agent Loop orders results by canonical call order and commits all siblings atomically.",
+      "durable": "One atomic ToolResult batch is canonical truth; no partial sibling group commits. A cancellation request alone cannot justify Cancelled or TimedOut.",
+      "visible": "Typed Success, Failed, Denied, Cancelled, TimedOut or OutcomeUnknown explains what is known. Completion order does not reorder the model-visible batch.",
+      "evidence": [
+        "tool-evidence",
+        "tool-acceptance",
+        "tool-batch"
+      ]
+    },
+    {
+      "id": "continue",
+      "title": "Continue within the same Attempt, then settle once",
+      "actor": "AgentExecution → ConversationRuntime",
+      "active": [
+        "agent",
+        "context",
+        "runtime",
+        "durable"
+      ],
+      "description": "A settled Tool batch can lead to another model turn with accepted continuation and current immutable input. Each actual request crosses the same start gate. Finally the Attempt hands state and its one terminal settlement candidate back to the coordinator.",
+      "durable": "Normally one AttemptCompleted, AttemptCancelled or AttemptFailed is committed. If terminal append fails, the state machine is terminal but there is no invented Journal fact or observer event.",
+      "visible": "A new model request is not a new Attempt. Every actual request, including each retry or Tool continuation, has a fresh request identity while its Attempt and frozen logical-generation input may persist.",
+      "evidence": [
+        "continuation",
+        "agent-owns",
+        "attempt-terminal"
+      ]
+    },
+    {
+      "id": "project",
+      "title": "Project facts for attached clients",
+      "actor": "Runtime Client → App Server → clients",
+      "active": [
+        "runtime",
+        "projection",
+        "app-server",
+        "clients"
+      ],
+      "description": "The one RuntimeClientProjection fold updates snapshots, allocates cursors and publishes bounded replay. Canonical transcript/history and frozen request details are read from their native durable authorities.",
+      "durable": "Projection caches, client cursors and Trace do not become recovery input. The runtime executes identically with zero attachments.",
+      "visible": "TUI/Web can reconnect and rebuild presentation from snapshot/replay and bounded history. They observe execution; they do not own it.",
+      "evidence": [
+        "client-authority",
+        "client-owners",
+        "trace-owner"
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "cancellation",
+      "title": "Cancellation versus model request-start",
+      "intro": "Choose which contender crosses the same gate first. These schedules explain deterministic ordering, not wall-clock timing or a live request.",
+      "choices": [
+        {
+          "id": "cancel-first",
+          "label": "Cancellation wins first",
+          "steps": [
+            {
+              "id": "cancel-first-prepared",
+              "title": "Prepared is still transient",
+              "actor": "AgentExecution",
+              "active": [
+                "agent",
+                "context"
+              ],
+              "description": "Context has been staged and the neutral request prepared. Cancellation can still win before any request-scoped durable start.",
+              "durable": "No RequestSnapshot or ModelRequestStarted has been committed for this prepared request. Previously accepted inbound remains its own fact.",
+              "visible": "Preparation alone authorizes no provider output.",
+              "evidence": [
+                "context-start",
+                "cancel-gate"
+              ]
+            },
+            {
+              "id": "cancel-first-gate",
+              "title": "Record the winning cause",
+              "actor": "AgentCancellation.request_cancel",
+              "active": [
+                "agent",
+                "runtime"
+              ],
+              "description": "request_cancel enters the start gate, installs the first semantic cause and cancels the shared signal. A later request cannot relabel that cause.",
+              "durable": "The signal/cause are process-owned cancellation state; this call is not itself the terminal Journal commit.",
+              "visible": "UserRequested or RuntimeShutdown stays the winner chosen by the first cancellation request.",
+              "evidence": [
+                "cancel-cause",
+                "attempt-terminal"
+              ]
+            },
+            {
+              "id": "cancel-first-no-start",
+              "title": "Refuse the durable start",
+              "actor": "AgentCancellation.arbitrate_model_turn_start",
+              "active": [
+                "agent",
+                "durable"
+              ],
+              "description": "Arbitration sees the cancelled signal and returns CancelledBeforeStart without running the commit closure. The adapter cannot be invoked for this request.",
+              "durable": "No request-scoped context commit, RequestSnapshot or ModelRequestStarted exists for this request.",
+              "visible": "There is no new model output to publish. The Attempt follows its cancellation settlement path.",
+              "evidence": [
+                "cancel-gate",
+                "start-code"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "start-first",
+          "label": "Durable start wins first",
+          "steps": [
+            {
+              "id": "start-first-commit",
+              "title": "Commit while holding the gate",
+              "actor": "AgentExecution + ConversationStore",
+              "active": [
+                "agent",
+                "durable"
+              ],
+              "description": "The start closure owns the gate and commits request-scoped context, the exact snapshot and ModelRequestStarted as one transaction.",
+              "durable": "Durability decides before a blocked competing cancellation can enter the gate. A failed transaction leaves no partial start.",
+              "visible": "A successful start is a durable request identity, not evidence the remote provider ran.",
+              "evidence": [
+                "cancel-gate",
+                "start-code",
+                "start-meaning"
+              ]
+            },
+            {
+              "id": "start-first-cancel",
+              "title": "Cancel an already-started request",
+              "actor": "AgentCancellation.request_cancel",
+              "active": [
+                "agent",
+                "runtime"
+              ],
+              "description": "Cancellation enters next. It establishes the first cause if none exists, signals descendants and cannot reclassify this request as never-started.",
+              "durable": "The committed start remains. Cancellation cannot undo the start receipt.",
+              "visible": "The UI must distinguish post-start cancellation from a request that never crossed start.",
+              "evidence": [
+                "cancel-gate",
+                "cancel-cause"
+              ]
+            },
+            {
+              "id": "start-first-child",
+              "title": "Propagate through the adapter contract",
+              "actor": "ModelAdapter",
+              "active": [
+                "agent",
+                "model"
+              ],
+              "description": "After reconstruction verification, an invoked adapter receives model_cancellation(), a child of the Attempt signal. Cancellation terminates its stream through the normalized Failed(Cancelled) contract.",
+              "durable": "A start record still does not prove dispatch occurred; a crash can intervene before adapter invocation. Recovery never silently resends across that boundary.",
+              "visible": "Any committed output keeps its honest publication settlement; cancellation is not a claim that the user saw nothing.",
+              "evidence": [
+                "cancel-child",
+                "model-contract",
+                "model-dispatch",
+                "start-meaning",
+                "publication-outcomes"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "compaction",
+      "title": "Context compaction: projection versus execution",
+      "intro": "The illustrative Ledger is M1…M100. A checkpoint based at L100 deliberately excludes M96…M100. Toggle the historical selection while preserving the same canonical facts.",
+      "choices": [
+        {
+          "id": "before",
+          "label": "Before a new checkpoint",
+          "steps": [
+            {
+              "id": "compact-before-ledger",
+              "title": "Read immutable facts",
+              "actor": "Canonical History",
+              "active": [
+                "durable",
+                "context"
+              ],
+              "description": "Canonical User, Assistant and Tool messages own physical MessageIds and real call/result occurrence identities. The compiler can read only its bounded authorized resources.",
+              "durable": "M1…M100 remain committed Ledger facts. The cut is finite and does not move while the operation runs.",
+              "visible": "Transcript history shows real conversation facts; it does not manufacture a compaction summary message.",
+              "evidence": [
+                "canonical-history",
+                "context-owners",
+                "context-cuts"
+              ]
+            },
+            {
+              "id": "compact-before-projection",
+              "title": "Compile the existing selection",
+              "actor": "Context Engine",
+              "active": [
+                "context",
+                "agent"
+              ],
+              "description": "The active checkpoint, if any, selects Original/Derived items. Tail includes eligible canonical messages strictly after that checkpoint base through this request cut.",
+              "durable": "Compiling does not mutate the Ledger or create ToolExecution events.",
+              "visible": "A historical context panel can show selected context separately from the actual transcript.",
+              "evidence": [
+                "context-contract",
+                "context-typed",
+                "context-cuts"
+              ]
+            },
+            {
+              "id": "compact-before-request",
+              "title": "Freeze one actual request",
+              "actor": "AgentExecution",
+              "active": [
+                "agent",
+                "model",
+                "durable"
+              ],
+              "description": "The Agent combines compiled history with current protected input and freezes the actual request. Each new actual request gets its own request occurrence identities.",
+              "durable": "RequestSnapshot records exact input at durable start; later reconstruction does not rediscover current sources.",
+              "visible": "Inspect the request to see what was actually supplied, rather than guessing from the present context head.",
+              "evidence": [
+                "frozen-input",
+                "context-start"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "after",
+          "label": "After checkpoint L100; then append M101",
+          "steps": [
+            {
+              "id": "compact-after-checkpoint",
+              "title": "Commit a complete inclusion decision",
+              "actor": "Context Engine + durable store",
+              "active": [
+                "context",
+                "durable"
+              ],
+              "description": "Create a typed checkpoint with retained Original references and materialized Derived content, based at L100. Its selection excludes M96…M100. Atomic commit persists content, activation/head, local completion and receipt.",
+              "durable": "M1…M100 are unchanged canonical facts. The checkpoint is a separate historical projection authority, not a new canonical summary.",
+              "visible": "Projected items carry typed provenance; Derived content has no canonical MessageId.",
+              "evidence": [
+                "context-typed",
+                "compaction-commit",
+                "context-cuts"
+              ]
+            },
+            {
+              "id": "compact-after-tail",
+              "title": "Do not resurrect the excluded suffix",
+              "actor": "Context compiler",
+              "active": [
+                "context",
+                "durable"
+              ],
+              "description": "With B=L100 and request L=L100, Tail (B,L] is empty even if the last retained Original precedes M96. Excluded M96…M100 cannot reappear via Tail.",
+              "durable": "The base is the complete inclusion/exclusion frontier; provenance and the last retained Original never move it.",
+              "visible": "The context view omits M96…M100 while canonical history can still read their unchanged addresses.",
+              "evidence": [
+                "context-cuts",
+                "canonical-history"
+              ]
+            },
+            {
+              "id": "compact-after-append",
+              "title": "Allow a genuinely newer Tail item",
+              "actor": "ConversationRuntime → Context compiler",
+              "active": [
+                "runtime",
+                "durable",
+                "context"
+              ],
+              "description": "A real later canonical append M101 advances the request cut to L101. M101 is now eligible through Tail (L100,L101]; the excluded older suffix stays excluded.",
+              "durable": "M101 is a new canonical fact. It neither changes the old checkpoint body nor edits M96…M100.",
+              "visible": "The next request can include checkpoint selection plus M101, with the frozen snapshot documenting that input.",
+              "evidence": [
+                "context-cuts",
+                "frozen-input"
+              ]
+            },
+            {
+              "id": "compact-after-execution",
+              "title": "Keep projected calls distinct from effects",
+              "actor": "AgentExecution + Tool Plane",
+              "active": [
+                "agent",
+                "tools",
+                "context"
+              ],
+              "description": "Projected ToolCall/ToolResult content can describe history, but only real accepted canonical calls reach execution. Default Summary clears active primary continuation and compiles the new projection.",
+              "durable": "No usage, duration or ToolExecution fact is inferred from a projected occurrence. Real execution facts retain their own authority.",
+              "visible": "The context inspector and execution transcript intentionally answer different questions.",
+              "evidence": [
+                "context-typed",
+                "continuation",
+                "tool-acceptance"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lifetimes",
+      "title": "Disconnect, runtime unload and durable Session",
+      "intro": "These are teaching schedules for independent lifetimes. Clicking a choice does not detach a client, stop a real runtime or alter any local Session.",
+      "choices": [
+        {
+          "id": "disconnect",
+          "label": "Client disconnects",
+          "steps": [
+            {
+              "id": "disconnect-link",
+              "title": "Retire the connection attachment",
+              "actor": "App Server connection",
+              "active": [
+                "clients",
+                "app-server",
+                "projection"
+              ],
+              "description": "EOF/close releases this connection’s external attachments. Explicit detach has the same semantic separation.",
+              "durable": "No cancellation, interaction settlement, unload, deletion or server-shutdown fact is fabricated.",
+              "visible": "This client loses its live stream; it has no evidence that native work stopped.",
+              "evidence": [
+                "connection-detach"
+              ]
+            },
+            {
+              "id": "disconnect-runtime",
+              "title": "Keep native ownership independent",
+              "actor": "ConversationRuntime",
+              "active": [
+                "runtime",
+                "agent",
+                "tools"
+              ],
+              "description": "The runtime has the same admission/execution path with zero Runtime Client attachments. In an externally managed server, disconnect does not itself shut down the process.",
+              "durable": "Already accepted inbound and canonical history retain their authorities.",
+              "visible": "Local UI absence does not settle a pending interaction or cancel a Tool. Independent explicit policies may still govern the server.",
+              "evidence": [
+                "client-authority",
+                "client-owners",
+                "connection-detach"
+              ]
+            },
+            {
+              "id": "disconnect-reconnect",
+              "title": "Reattach to current authority",
+              "actor": "Client → App Server",
+              "active": [
+                "clients",
+                "app-server",
+                "sessions",
+                "projection"
+              ],
+              "description": "A reconnect addresses the durable Session and acquires a fresh attachment. Load may reuse an existing incarnation; a cold load follows ordinary configuration resolution and recovery.",
+              "durable": "The durable Session identity is independent of the old connection. Bounded replay remains a projection cache.",
+              "visible": "The new client uses snapshot/cursors and bounded native history to reconstruct its presentation.",
+              "evidence": [
+                "session-residency",
+                "residency-load",
+                "client-owners"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "unload",
+          "label": "Explicitly unload the runtime",
+          "steps": [
+            {
+              "id": "unload-close",
+              "title": "Close semantic admission",
+              "actor": "SessionRuntimeManager → ConversationRuntime",
+              "active": [
+                "sessions",
+                "runtime"
+              ],
+              "description": "Unload installs Unloading, then shutdown serializes Running → Draining under the same coordinator lock as inbound admission. Already accepted work retains its settlement paths.",
+              "durable": "No later inbound can cross the closed runtime gate; a racing acceptance either won first or commits nothing.",
+              "visible": "Unloading is a residency transition, not a durable Session status or proof of immediate stop.",
+              "evidence": [
+                "residency-unload",
+                "runtime-drain"
+              ]
+            },
+            {
+              "id": "unload-prove",
+              "title": "Await all owned settlement",
+              "actor": "ConversationRuntime",
+              "active": [
+                "runtime",
+                "agent",
+                "tools",
+                "subagents"
+              ],
+              "description": "Drain supervises Attempt/task, foreground/background, preparation, MCP process ownership and the admission worker through their native terminal boundaries.",
+              "durable": "Cancellation requested is insufficient. A settlement failure retains the old Unloading composition and diagnostic.",
+              "visible": "Only proven native quiescence can authorize successful residency release.",
+              "evidence": [
+                "runtime-drain",
+                "residency-unload"
+              ]
+            },
+            {
+              "id": "unload-release",
+              "title": "Release composition, retain Session",
+              "actor": "SessionRuntimeManager",
+              "active": [
+                "sessions",
+                "durable",
+                "projection"
+              ],
+              "description": "After shutdown success, release host/core and allocation, remove the resident entry and publish success. Old non-owning handles fail StaleIncarnation.",
+              "durable": "Session and Conversation data remain. A later load performs normal cold recovery with a fresh incarnation.",
+              "visible": "The runtime is absent; the durable Session is still listed and can be reopened.",
+              "evidence": [
+                "residency-unload"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "owned-child",
+          "label": "Local TUI owner exits normally",
+          "steps": [
+            {
+              "id": "owner-explicit",
+              "title": "Request the owned process shutdown",
+              "actor": "Local TUI",
+              "active": [
+                "clients",
+                "app-server"
+              ],
+              "description": "Normal local TUI exit explicitly shuts down its own stdio App Server child through the process lifecycle seam. EOF itself is only detach.",
+              "durable": "An explicit owner shutdown intention is different from transport loss.",
+              "visible": "Persisting execution across TUI exit requires an externally managed App Server.",
+              "evidence": [
+                "connection-detach"
+              ]
+            },
+            {
+              "id": "owner-drain",
+              "title": "Supervise native runtime drain",
+              "actor": "App Server → ConversationRuntime",
+              "active": [
+                "app-server",
+                "sessions",
+                "runtime",
+                "tools"
+              ],
+              "description": "The process shutdown path uses native drain and settlement boundaries rather than treating a vanished stream as completion.",
+              "durable": "Owned work must physically settle before quiescence can be claimed. Durable history remains separate.",
+              "visible": "A process exit request is not an instantaneous guarantee of successful Tool termination.",
+              "evidence": [
+                "connection-detach",
+                "runtime-drain"
+              ]
+            },
+            {
+              "id": "owner-reopen",
+              "title": "Reopen durable state later",
+              "actor": "Session / residency owners",
+              "active": [
+                "sessions",
+                "config",
+                "durable"
+              ],
+              "description": "A later composition resolves current sources using persisted explicit Session input and follows ordinary recovery. Live connections, credentials and effective registries were never Session authority.",
+              "durable": "The durable graph/settings and committed Conversation facts survive runtime residency.",
+              "visible": "A reopened Session is a fresh live composition over existing durable state.",
+              "evidence": [
+                "session-config",
+                "residency-unload"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tool-recovery",
+      "title": "Tool interruption at invocation and commit boundaries",
+      "intro": "Move the interruption point across a real accepted call. Canonical structural settlement is not an exactly-once guarantee for external side effects; recovery uses positive evidence and does not replay ambiguous work.",
+      "choices": [
+        {
+          "id": "before-invocation",
+          "label": "No executor-start evidence",
+          "steps": [
+            {
+              "id": "tool-before-accepted",
+              "title": "Accept the call first",
+              "actor": "Agent Loop",
+              "active": [
+                "agent",
+                "durable",
+                "tools"
+              ],
+              "description": "Structural validation and preflight precede the canonical Assistant commit. An accepted call owns one canonical result slot even if later policy or scheduling prevents invocation.",
+              "durable": "The accepted Assistant ToolCall is canonical; a streamed proposal alone would not suffice.",
+              "visible": "The model proposal can now be shown as an accepted call, distinct from running execution.",
+              "evidence": [
+                "tool-acceptance",
+                "assistant-commit"
+              ]
+            },
+            {
+              "id": "tool-before-cancel",
+              "title": "Stop before physical dispatch",
+              "actor": "ForegroundInvocation + executor",
+              "active": [
+                "tools",
+                "agent"
+              ],
+              "description": "Construction only captures resources. Generic entry and the cooperative handle check cancellation before construction and before first operation poll.",
+              "durable": "In this teaching branch there is no executor-start evidence and no physical effect frontier was crossed.",
+              "visible": "The slot can settle as before-start cancellation; no invocation is replayed.",
+              "evidence": [
+                "tool-acceptance",
+                "tool-recovery"
+              ]
+            },
+            {
+              "id": "tool-before-repair",
+              "title": "Repair the missing canonical result",
+              "actor": "Runtime recovery → ConversationStore",
+              "active": [
+                "runtime",
+                "durable"
+              ],
+              "description": "Recovery repairs only missing results. No start evidence yields before-start cancellation; the repair commit is atomic and idempotent.",
+              "durable": "A single canonical result closes the accepted call. An already committed result would be left unchanged.",
+              "visible": "The repaired transcript reports honest before-start cancellation.",
+              "evidence": [
+                "tool-recovery"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "effect-uncertain",
+          "label": "Started, external outcome unknown",
+          "steps": [
+            {
+              "id": "tool-unknown-frontier",
+              "title": "Cross a conservative start frontier",
+              "actor": "Agent Loop → executor",
+              "active": [
+                "agent",
+                "tools",
+                "durable"
+              ],
+              "description": "The executor-start fact precedes physical work. It is a conservative recovery frontier, distinct from the adapter’s actual effect frontier.",
+              "durable": "Start evidence does not prove whether an external mutation occurred or completed.",
+              "visible": "Running/progress UI cannot certify the final effect.",
+              "evidence": [
+                "tool-acceptance"
+              ]
+            },
+            {
+              "id": "tool-unknown-settle",
+              "title": "Reclaim local ownership first",
+              "actor": "Executor settlement owner",
+              "active": [
+                "tools",
+                "runtime"
+              ],
+              "description": "After a remote transport loss without a correlated terminal result, settle rustX-owned local transport/worker resources. Cancellation intent does not prove remote stop.",
+              "durable": "Unconfirmed becomes OutcomeUnknown only after local ownership is reclaimed; a still-running local worker is a control-plane settlement failure.",
+              "visible": "For MCP, local release proof and unknown remote outcome are different evidence. Managed Python uses the same boundary.",
+              "evidence": [
+                "tool-evidence",
+                "tool-adapters"
+              ]
+            },
+            {
+              "id": "tool-unknown-recover",
+              "title": "Commit uncertainty without replay",
+              "actor": "Runtime recovery + Agent Loop",
+              "active": [
+                "runtime",
+                "agent",
+                "durable"
+              ],
+              "description": "If a result is missing and durable start evidence has no trustworthy terminal outcome, recover OutcomeUnknown. Do not silently retry an ambiguous effect.",
+              "durable": "Recovery is atomic/idempotent and never replaces committed canonical truth. This is no exactly-once external-effect promise.",
+              "visible": "The user sees explicit uncertainty and can investigate the external system before deciding on new work.",
+              "evidence": [
+                "tool-recovery",
+                "tool-evidence"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "known-result",
+          "label": "Known outcome, or result already committed",
+          "steps": [
+            {
+              "id": "tool-known-proof",
+              "title": "Preserve proven completion",
+              "actor": "Executor → Agent Loop",
+              "active": [
+                "tools",
+                "agent"
+              ],
+              "description": "Physical settlement can return a known Success or Failed even after cancellation intent. Known evidence remains immutable rather than being relabelled by a late signal.",
+              "durable": "The evidence is an invocation outcome; the ordered canonical result batch may still be pending.",
+              "visible": "A cancel action need not produce a Cancelled result when completion is already proven.",
+              "evidence": [
+                "tool-evidence"
+              ]
+            },
+            {
+              "id": "tool-known-batch",
+              "title": "Commit siblings together",
+              "actor": "Agent Loop + ConversationStore",
+              "active": [
+                "agent",
+                "durable"
+              ],
+              "description": "Prepare the complete result group and append all sibling Tool messages/events in one transaction in canonical call order.",
+              "durable": "A durable batch failure installs none. Success establishes the canonical results independently of physical completion order.",
+              "visible": "Only committed typed Tool facts authorize durable transcript/delivery presentation.",
+              "evidence": [
+                "tool-batch",
+                "tool-acceptance",
+                "delivery-commit"
+              ]
+            },
+            {
+              "id": "tool-known-recovery",
+              "title": "Repair only what is missing",
+              "actor": "Runtime recovery",
+              "active": [
+                "runtime",
+                "durable"
+              ],
+              "description": "Durable known-outcome evidence can fill a missing result. If the canonical result already exists, it is authoritative and absorbing.",
+              "durable": "No recovery overwrite or ambiguous replay occurs. A completed effect in the shared Session workspace is not rolled back.",
+              "visible": "Recovery explains existing facts; it does not invent a second invocation.",
+              "evidence": [
+                "tool-recovery",
+                "agents-workspace",
+                "workflow-workspace"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "topics": [
+    {
+      "id": "direction",
+      "title": "Dependencies point toward runtime contracts",
+      "summary": "The map distinguishes a call, data flow and a code dependency. Arrows do not imply that an external SDK owns the kernel.",
+      "details": [
+        "The crate publishes separate agent, runtime, model, context, tools, durable, publication, local_runtime, app_server and runtime_client modules. External SDK types terminate at adapters.",
+        "ConversationRuntime coordinates one Conversation. AgentExecution coordinates one Attempt. ModelAdapter and ToolExecutor are provider-neutral boundaries; SQLite and transports implement outer capabilities.",
+        "A data arrow from durable facts into the Context compiler says where input comes from. It is not a dependency from a database framework into the agent kernel. Calls into the shared Tool Plane can reach MCP or Python implementations without exposing their wire protocol to the kernel."
+      ],
+      "nodes": [
+        "agent",
+        "model",
+        "tools",
+        "durable",
+        "app-server",
+        "runtime"
+      ],
+      "evidence": [
+        "layering",
+        "model-contract",
+        "tool-contract",
+        "runtime-ownership",
+        "inward-contracts"
+      ]
+    },
+    {
+      "id": "resources",
+      "title": "Configuration, Skills and selected-demand activation",
+      "summary": "Definitions, visibility, admission and physical preparation are different stages.",
+      "details": [
+        "SessionPersistentState stores explicit cwd and optional whole-model selection. Current provider definitions, credentials, policies, profiles, Skills and resources are resolved again by native owners on cold load; effective state is not persisted Session authority.",
+        "Workspace resources shadow complete User definitions before validation. An invalid higher definition never falls back to a lower valid resource. Selecting an invalid resource fails the typed operation; unused invalid resources produce bounded diagnostics.",
+        "MCP definitions in .agents/mcp.toml and Python package bytes under .agents/tools are inert at discovery. Selection yields finite admitted demand; then the existing lifecycle resolves credentials, connects or prepares, validates and exposes exact capabilities. Merely allowlisting an Agent does not prepare that child’s sources.",
+        "Managed Python prepares frozen package bytes and an isolated uv environment, synthesizes an McpServerBinding and then uses generic MCP machinery. It is not a second runtime protocol.",
+        "Skills are instruction packages with progressive disclosure. Selection controls prompt visibility, not filesystem access. Bodies/supporting files are read through ordinary Tools; child admission carries captured packages rather than rediscovering current files."
+      ],
+      "nodes": [
+        "config",
+        "sessions",
+        "tools",
+        "subagents",
+        "context"
+      ],
+      "evidence": [
+        "session-config",
+        "resources",
+        "source-demand",
+        "python-mcp",
+        "skills-contract"
+      ]
+    },
+    {
+      "id": "children",
+      "title": "Subagents: frozen authority, independent history, shared files",
+      "summary": "An owned child has its own Conversation and activation lifecycle, while file effects happen in the same Session workspace.",
+      "details": [
+        "Root’s explicit named-Agent allowlist authorizes delegation. A named profile owns complete supported capabilities; there is no generic Root Tool/Plugin ceiling. If the child omits model choice, admission inherits the invoking Attempt’s frozen effective model.",
+        "DurableAgentAuthority freezes the resolved model, Tools, Skills, Plugins, resources, policies and workspace at creation. ActivationAdmission supplies new task/context and provenance; later activations do not look up a different profile.",
+        "interrupt_agent targets the reserved/current activation and waits for physical settlement. wait_agent captures one activation; a later one cannot retarget the wait. send_message succeeds only after canonical child inbound acceptance, and lost acknowledgement is explicit unknown delivery rather than permission to retry.",
+        "Every Agent activation uses the Session’s frozen absolute workspace binding. It sees parent uncommitted changes. Success, failure and cancellation leave completed writes in place; no Agent worktree, copy, handoff or disposal operation exists.",
+        "Canonical child history remains child-owned. Workflow-owned finite child runs stay under their concrete Workflow node and are not resumable through ordinary durable Agent controls."
+      ],
+      "nodes": [
+        "subagents",
+        "tools",
+        "runtime",
+        "durable",
+        "config"
+      ],
+      "evidence": [
+        "resources",
+        "agents-authority",
+        "agent-controls",
+        "agents-workspace"
+      ]
+    },
+    {
+      "id": "workflow",
+      "title": "Workflows execute finite scoped programs",
+      "summary": "WorkflowRuntime owns graph/value/scope progression while sharing native execution and settlement machinery.",
+      "details": [
+        "A selected Workflow is one foreground Tool. Static admission freezes required capabilities; blocks do not rediscover them. The closed node vocabulary is Agent, Tool, Branch, Parallel, Review, Loop and Return.",
+        "WorkflowRuntime::execute_block is the common root/branch/body lifecycle entry point. WorkflowRunId, WorkflowBlockInstance and WorkflowNodeInstance identify actual invocations without deriving identity from prose, PID or completion order.",
+        "A native Workflow Tool node has Workflow invocation identity, never a fabricated canonical model ToolCall. The shared ForegroundInvocation owns normalization/approval/deadline/cancellation/physical settlement; only Agent execution owns outer canonical call slots and ordered result batches.",
+        "Parallel joins report keyed results in definition order after branches settle; this does not promise deterministic process timing. All Agent and Tool nodes use the shared Session workspace. Concurrent writes are the author’s responsibility; Review rejection, failed checks or cancellation do not roll back effects.",
+        "Workflow completion does not complete Goal. Recovery creates a fresh native Attempt identity rather than resuming an old Workflow run."
+      ],
+      "nodes": [
+        "workflows",
+        "tools",
+        "subagents",
+        "agent",
+        "extensions"
+      ],
+      "evidence": [
+        "workflow-program",
+        "workflow-owner",
+        "workflow-workspace",
+        "agent-owns",
+        "native-invocation"
+      ]
+    },
+    {
+      "id": "goal",
+      "title": "Goal and extensions keep native domain ownership",
+      "summary": "The closed composition model adds capabilities through existing contracts, not a second agent engine.",
+      "details": [
+        "agent_status, todo and goal default off. A configuration generation freezes composition and admitted work keeps its generation. Todo lists and Goal state remain Conversation domain state; child scope rejects Root-only Goal pursuit.",
+        "GoalPhase::Active is durable authorization to continue when runtime admission becomes eligible. Paused and Blocked remove that authorization; Complete is terminal. A projected lifecycle view never overrides the Goal domain.",
+        "GoalRoundDriver participates synchronously at the coordinator’s existing safe idle boundary and submits ordinary Pending Inbound. The same SQLite transaction accepts the round, advances Goal revision/consumed rounds and writes the bounded admission fact.",
+        "Runtime drain does not rewrite Active to Paused or refund a committed round. Explicit interruption of an autonomous active Goal Attempt durably pauses Goal and requests cancellation before successful acknowledgement.",
+        "Goal owns neither model execution nor Tool execution, canonical history, request assembly or a second queue. A Workflow is finite execution for HOW; Goal owns continued pursuit of WHAT."
+      ],
+      "nodes": [
+        "extensions",
+        "runtime",
+        "durable",
+        "context",
+        "workflows"
+      ],
+      "evidence": [
+        "config-selection",
+        "extensions-code",
+        "goal-authority",
+        "goal-runtime",
+        "extensions-owner",
+        "workflow-program"
+      ]
+    },
+    {
+      "id": "history",
+      "title": "Canonical history, request snapshots, Journal and Trace",
+      "summary": "Different views answer what happened, what the model saw, what was released and what the client currently displays.",
+      "details": [
+        "The immutable Message Ledger owns committed conversational facts. Typed checkpoints and activation coordinates select historical model context without editing those facts. Original references retain canonical identity/digest; Derived context has scoped provenance without a canonical MessageId.",
+        "RequestSnapshot freezes exact provider-neutral input for one actual started request, including immutable dependencies, Derived bodies, context, Tool associations and invocation. Reconstruction performs keyed historical reads and does not rerun discovery, contributors, image selection or compaction.",
+        "Event Journal facts describe actual execution. Projected calls/results create no usage, durations or execution counts. Native Tool Prepared/Started/Progress/Completed observations are not permission gates or another outcome authority; durable interaction approval remains its own explicit gate.",
+        "RuntimeClientProjection owns one live read model, cursor/replay and subscriber fold. Its cache and TraceProjection are read-only presentation, never execution, cancellation, settlement or recovery input.",
+        "The explorer’s request tour and schedules are deterministic teaching scenarios, not recorded live runtime traces. Evidence snippets below pin the contracts to one immutable repository commit."
+      ],
+      "nodes": [
+        "durable",
+        "context",
+        "agent",
+        "projection",
+        "publication"
+      ],
+      "evidence": [
+        "canonical-history",
+        "context-typed",
+        "frozen-input",
+        "tool-evidence",
+        "client-owners",
+        "trace-owner",
+        "native-invocation"
+      ]
+    },
+    {
+      "id": "publication-delivery",
+      "title": "Publication and file delivery have distinct commit boundaries",
+      "summary": "Streaming release, canonical acceptance and a committed file declaration must not be conflated.",
+      "details": [
+        "Model output is coalesced, durably staged and only then released. Provider outcome P, publication terminal U and canonical acceptance C remain distinct and ordered P < U < C. An incomplete or unaccepted stream is not canonical Assistant history.",
+        "PublicationAudit records output committed for possible release. It is an upper bound on what may have appeared, never client perception proof; the runtime has no user-facing ACK contract.",
+        "present is an ordinary native Tool. Successful committed typed Tool deliveries authorize transcript cards. A write, execution-completion observation or prose claiming a file exists is not delivery authority.",
+        "Managed ArtifactId identifies immutable ArtifactStore bytes. SessionFileReference identifies the original Conversation/cwd identity and normalized path to a mutable file. Reopening can observe changes or explicit Missing/Unauthorized/Unavailable results; it is not a content snapshot.",
+        "Committed-delivery access belongs to app_server::delivery_access. Transport-authenticated callers acquire authority; exact attachment/request/publication checks fence response release. The client consumes typed facts and owns its local preview presentation."
+      ],
+      "nodes": [
+        "publication",
+        "agent",
+        "durable",
+        "tools",
+        "app-server",
+        "clients"
+      ],
+      "evidence": [
+        "publication-contract",
+        "publication-outcomes",
+        "delivery-commit",
+        "delivery-access"
+      ]
+    },
+    {
+      "id": "lifetimes-security",
+      "title": "Session, residency, connection and security boundaries",
+      "summary": "Keep durable identity, live writer ownership, attachment routing and host isolation separate.",
+      "details": [
+        "One authenticated user maps to one App Server process/configuration environment/durable root in externally managed deployments. The higher-level host owns user routing, authentication, workspace allocation/isolation, environment injection and restart policy.",
+        "Session cwd is execution and configuration-resolution context, not a filesystem sandbox. Native file Tools can accept ordinary absolute host paths. Process-local single-writer ownership is not a multi-process tenant/lease design.",
+        "SessionRuntimeManager single-flights load/unload and retains the resident composition. In v1 a Session has one resident node; different Sessions can be concurrently resident. Weak ManagedRuntimeClient handles cannot keep an unloaded composition alive.",
+        "Disconnect/EOF and explicit detach release external attachments without cancelling Attempts or settling interactions. Normal local TUI exit explicitly requests owned-child shutdown. Externally managed servers support continued execution across client disconnect.",
+        "Unload succeeds only after shutdown proves native quiescence. Failure retains Unloading with exact diagnostic instead of publishing a new writer. Successful unload leaves durable data and makes old handles StaleIncarnation.",
+        "WebSocket admission uses a dedicated transport token before connection construction. Optional delivery access has separate transport-granted authority. initialize is protocol negotiation rather than an in-server authentication or tenant boundary."
+      ],
+      "nodes": [
+        "clients",
+        "app-server",
+        "sessions",
+        "runtime",
+        "tools",
+        "projection"
+      ],
+      "evidence": [
+        "topology",
+        "tool-contract",
+        "session-residency",
+        "residency-load",
+        "residency-unload",
+        "connection-detach",
+        "transport-security"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "layering",
+      "path": "src/lib.rs",
+      "start": 1,
+      "end": 27,
+      "label": "Runtime contracts and SDK boundary"
+    },
+    {
+      "id": "topology",
+      "path": "docs/architecture.md",
+      "start": 76,
+      "end": 102,
+      "label": "Clients, process topology and independent lifetimes"
+    },
+    {
+      "id": "app-boundary",
+      "path": "src/app_server/mod.rs",
+      "start": 1,
+      "end": 19,
+      "label": "Transport-neutral App Server modules"
+    },
+    {
+      "id": "composition",
+      "path": "src/local_runtime/mod.rs",
+      "start": 1,
+      "end": 24,
+      "label": "Shared local configuration and composition owners"
+    },
+    {
+      "id": "session-identity",
+      "path": "docs/durable-sessions.md",
+      "start": 1,
+      "end": 23,
+      "label": "Session graph and catalog authority"
+    },
+    {
+      "id": "session-residency",
+      "path": "docs/durable-sessions.md",
+      "start": 44,
+      "end": 76,
+      "label": "Explicit Session controls, residency and client focus"
+    },
+    {
+      "id": "session-config",
+      "path": "docs/durable-sessions.md",
+      "start": 79,
+      "end": 106,
+      "label": "Persisted selection versus resolved effective configuration"
+    },
+    {
+      "id": "runtime-ownership",
+      "path": "src/runtime/conversation_runtime.rs",
+      "start": 1,
+      "end": 35,
+      "label": "ConversationRuntime owns semantic coordination"
+    },
+    {
+      "id": "runtime-admission",
+      "path": "src/runtime/conversation_runtime.rs",
+      "start": 48,
+      "end": 74,
+      "label": "One admission lock and one active Attempt"
+    },
+    {
+      "id": "runtime-drain",
+      "path": "src/runtime/conversation_runtime.rs",
+      "start": 76,
+      "end": 111,
+      "label": "Drain, settlement and proven quiescence"
+    },
+    {
+      "id": "residency-load",
+      "path": "docs/runtime-residency.md",
+      "start": 93,
+      "end": 116,
+      "label": "Single-flight cold composition and inert projection binding"
+    },
+    {
+      "id": "residency-unload",
+      "path": "docs/runtime-residency.md",
+      "start": 132,
+      "end": 164,
+      "label": "Unload requires shutdown success and proven writer absence"
+    },
+    {
+      "id": "client-authority",
+      "path": "src/runtime_client/mod.rs",
+      "start": 1,
+      "end": 33,
+      "label": "Projection over runtime authority, including zero attachments"
+    },
+    {
+      "id": "client-owners",
+      "path": "src/runtime_client/mod.rs",
+      "start": 48,
+      "end": 90,
+      "label": "Projection, replay, controls and attachment ownership"
+    },
+    {
+      "id": "canonical-history",
+      "path": "src/conversation/mod.rs",
+      "start": 1,
+      "end": 11,
+      "label": "Immutable Ledger, projection checkpoints and hot state"
+    },
+    {
+      "id": "durable-inbound",
+      "path": "src/durable/mod.rs",
+      "start": 1,
+      "end": 26,
+      "label": "Separate inbound, canonical, journal and publication domains"
+    },
+    {
+      "id": "inbound-commit",
+      "path": "src/durable/mod.rs",
+      "start": 49,
+      "end": 67,
+      "label": "Acceptance and canonical adoption transactions"
+    },
+    {
+      "id": "agent-owns",
+      "path": "docs/agent-loop.md",
+      "start": 44,
+      "end": 83,
+      "label": "Attempt loop, publication and Tool batch ownership"
+    },
+    {
+      "id": "context-contract",
+      "path": "src/context/mod.rs",
+      "start": 1,
+      "end": 12,
+      "label": "Historical compiler and dynamic Context Assembly"
+    },
+    {
+      "id": "context-owners",
+      "path": "docs/context-engine.md",
+      "start": 18,
+      "end": 36,
+      "label": "Context ownership and finite canonical cache"
+    },
+    {
+      "id": "context-cuts",
+      "path": "docs/context-engine.md",
+      "start": 38,
+      "end": 54,
+      "label": "Read cut, checkpoint base, activation and strict Tail"
+    },
+    {
+      "id": "context-typed",
+      "path": "docs/context-engine.md",
+      "start": 56,
+      "end": 82,
+      "label": "Original and Derived identities are not execution identities"
+    },
+    {
+      "id": "compaction-commit",
+      "path": "docs/context-engine.md",
+      "start": 94,
+      "end": 115,
+      "label": "Atomic checkpoint commit, receipts and cancellation grant"
+    },
+    {
+      "id": "frozen-input",
+      "path": "docs/context-engine.md",
+      "start": 267,
+      "end": 300,
+      "label": "Frozen semantic generations, actual requests and exact reconstruction"
+    },
+    {
+      "id": "context-start",
+      "path": "docs/agent-loop.md",
+      "start": 626,
+      "end": 662,
+      "label": "Stage context, freeze request, then fused durable start"
+    },
+    {
+      "id": "start-meaning",
+      "path": "docs/agent-loop.md",
+      "start": 664,
+      "end": 691,
+      "label": "Started is a no-resend boundary, not proof of provider execution"
+    },
+    {
+      "id": "start-code",
+      "path": "src/agent/execution.rs",
+      "start": 3013,
+      "end": 3045,
+      "label": "Actual fused request-start commit under cancellation arbitration"
+    },
+    {
+      "id": "cancel-gate",
+      "path": "src/agent/cancellation.rs",
+      "start": 180,
+      "end": 217,
+      "label": "arbitrate_model_turn_start implementation"
+    },
+    {
+      "id": "cancel-cause",
+      "path": "src/agent/cancellation.rs",
+      "start": 143,
+      "end": 178,
+      "label": "request_cancel preserves the first semantic cause"
+    },
+    {
+      "id": "cancel-child",
+      "path": "src/agent/cancellation.rs",
+      "start": 230,
+      "end": 255,
+      "label": "Child model signal and executor cancellation view"
+    },
+    {
+      "id": "model-contract",
+      "path": "src/model/adapter/traits.rs",
+      "start": 49,
+      "end": 70,
+      "label": "ModelAdapter performs one request per stream call"
+    },
+    {
+      "id": "model-dispatch",
+      "path": "src/agent/execution.rs",
+      "start": 3717,
+      "end": 3744,
+      "label": "Adapter dispatch receives the Attempt child signal"
+    },
+    {
+      "id": "publication-contract",
+      "path": "src/publication/mod.rs",
+      "start": 1,
+      "end": 38,
+      "label": "Publication commits before release; P, U and C differ"
+    },
+    {
+      "id": "publication-outcomes",
+      "path": "src/publication/mod.rs",
+      "start": 47,
+      "end": 76,
+      "label": "Canonical, unaccepted and incomplete publication; no perception ACK"
+    },
+    {
+      "id": "publication-flush",
+      "path": "src/agent/execution.rs",
+      "start": 5568,
+      "end": 5588,
+      "label": "Source implementation stages frames before releasing them"
+    },
+    {
+      "id": "publication-terminal",
+      "path": "src/agent/execution.rs",
+      "start": 5590,
+      "end": 5616,
+      "label": "Source implementation commits U before final release"
+    },
+    {
+      "id": "assistant-commit",
+      "path": "src/agent/execution.rs",
+      "start": 5352,
+      "end": 5387,
+      "label": "Canonical Assistant acceptance commits through publication authority"
+    },
+    {
+      "id": "tool-contract",
+      "path": "src/tools/mod.rs",
+      "start": 1,
+      "end": 14,
+      "label": "Native, MCP and Python use the shared Tool Plane"
+    },
+    {
+      "id": "tool-acceptance",
+      "path": "docs/tool-lifecycle.md",
+      "start": 56,
+      "end": 96,
+      "label": "Preflight, canonical acceptance, physical execution and atomic batch"
+    },
+    {
+      "id": "tool-evidence",
+      "path": "docs/tool-lifecycle.md",
+      "start": 99,
+      "end": 129,
+      "label": "Typed result certainty and physical settlement"
+    },
+    {
+      "id": "tool-adapters",
+      "path": "docs/tool-lifecycle.md",
+      "start": 131,
+      "end": 149,
+      "label": "Process ownership and remote MCP uncertainty"
+    },
+    {
+      "id": "tool-batch",
+      "path": "src/agent/execution.rs",
+      "start": 5390,
+      "end": 5432,
+      "label": "Source implementation atomically appends the whole Tool batch"
+    },
+    {
+      "id": "tool-recovery",
+      "path": "docs/tool-lifecycle.md",
+      "start": 238,
+      "end": 247,
+      "label": "Recovery never replays ambiguous effects or replaces committed results"
+    },
+    {
+      "id": "continuation",
+      "path": "docs/agent-loop.md",
+      "start": 531,
+      "end": 553,
+      "label": "Accepted continuation and immutable frozen input versions"
+    },
+    {
+      "id": "attempt-terminal",
+      "path": "docs/agent-loop.md",
+      "start": 1498,
+      "end": 1509,
+      "label": "One terminal settlement candidate; failed append stays explicit"
+    },
+    {
+      "id": "source-demand",
+      "path": "docs/source-activation.md",
+      "start": 1,
+      "end": 27,
+      "label": "Discovery is inert; selected finite demand authorizes preparation"
+    },
+    {
+      "id": "config-selection",
+      "path": "docs/configuration.md",
+      "start": 296,
+      "end": 320,
+      "label": "Exact Tool selections and closed Rust-owned Plugins"
+    },
+    {
+      "id": "resources",
+      "path": "docs/configuration.md",
+      "start": 394,
+      "end": 419,
+      "label": "Whole-resource shadowing, Skills and complete Agent profiles"
+    },
+    {
+      "id": "python-mcp",
+      "path": "src/tools/python.rs",
+      "start": 1,
+      "end": 19,
+      "label": "Managed Python compiles into the generic MCP runtime"
+    },
+    {
+      "id": "skills-contract",
+      "path": "src/skills/mod.rs",
+      "start": 24,
+      "end": 35,
+      "label": "Skill environment ownership and ordinary Tool access"
+    },
+    {
+      "id": "agents-authority",
+      "path": "docs/jobs-and-agents.md",
+      "start": 139,
+      "end": 153,
+      "label": "Frozen durable Agent authority and finite Workflow children"
+    },
+    {
+      "id": "agents-workspace",
+      "path": "docs/jobs-and-agents.md",
+      "start": 258,
+      "end": 269,
+      "label": "Shared Session workspace and independent physical proof"
+    },
+    {
+      "id": "agent-controls",
+      "path": "docs/jobs-and-agents.md",
+      "start": 101,
+      "end": 132,
+      "label": "Exact activation interruption, waiting and input acceptance"
+    },
+    {
+      "id": "workflow-program",
+      "path": "docs/workflow-programs.md",
+      "start": 15,
+      "end": 28,
+      "label": "Selected Workflow is one Tool with a fixed scoped program"
+    },
+    {
+      "id": "workflow-owner",
+      "path": "docs/workflow-programs.md",
+      "start": 352,
+      "end": 384,
+      "label": "WorkflowRuntime owns scoped values, instances and deterministic joins"
+    },
+    {
+      "id": "workflow-workspace",
+      "path": "docs/workflow-programs.md",
+      "start": 651,
+      "end": 674,
+      "label": "Shared workspace effects persist after Workflow failure or cancellation"
+    },
+    {
+      "id": "goal-authority",
+      "path": "docs/goal-extension.md",
+      "start": 3,
+      "end": 21,
+      "label": "GoalPhase alone authorizes autonomous continuation"
+    },
+    {
+      "id": "goal-runtime",
+      "path": "docs/goal-extension.md",
+      "start": 42,
+      "end": 76,
+      "label": "Goal state, runtime availability and atomic round admission differ"
+    },
+    {
+      "id": "extensions-owner",
+      "path": "docs/architecture.md",
+      "start": 104,
+      "end": 120,
+      "label": "Goal uses the coordinator and ordinary Pending Inbound"
+    },
+    {
+      "id": "delivery-commit",
+      "path": "docs/file-delivery.md",
+      "start": 26,
+      "end": 55,
+      "label": "Delivery is committed typed Tool metadata; Session files stay mutable"
+    },
+    {
+      "id": "delivery-access",
+      "path": "docs/architecture.md",
+      "start": 19,
+      "end": 39,
+      "label": "Transport-granted delivery authority and exact publication checks"
+    },
+    {
+      "id": "connection-detach",
+      "path": "docs/app-server-protocol.md",
+      "start": 255,
+      "end": 271,
+      "label": "Disconnect and explicit owned-child shutdown differ"
+    },
+    {
+      "id": "transport-security",
+      "path": "docs/app-server-protocol.md",
+      "start": 317,
+      "end": 350,
+      "label": "Dedicated transport authentication and delivery access authority"
+    },
+    {
+      "id": "trace-owner",
+      "path": "docs/architecture.md",
+      "start": 6582,
+      "end": 6588,
+      "label": "Trace is a read-only projection, never recovery input"
+    },
+    {
+      "id": "model-items",
+      "path": "src/model/adapter/traits.rs",
+      "start": 18,
+      "end": 44,
+      "label": "Semantic model events versus execution-only progress"
+    },
+    {
+      "id": "extensions-code",
+      "path": "src/extensions.rs",
+      "start": 1,
+      "end": 12,
+      "label": "Closed native composition retains Conversation domain state"
+    },
+    {
+      "id": "inward-contracts",
+      "path": "CONTRIBUTING.md",
+      "start": 28,
+      "end": 41,
+      "label": "Dependencies point inward; forbidden direct kernel dependencies"
+    },
+    {
+      "id": "model-protocols",
+      "path": "src/model/adapter/traits.rs",
+      "start": 1,
+      "end": 7,
+      "label": "Three protocols implement the provider-independent adapter"
+    },
+    {
+      "id": "native-invocation",
+      "path": "docs/tool-lifecycle.md",
+      "start": 1,
+      "end": 28,
+      "label": "Shared ForegroundInvocation and observation versus permission gates"
+    }
+  ]
+}

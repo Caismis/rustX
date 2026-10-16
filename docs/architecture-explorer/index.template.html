@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="An offline, source-backed guide to the rustX architecture.">
+  <title>rustX · Architecture explorer</title>
+  <style>/* EXPLORER_STYLES */</style>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Skip to explorer</a>
+  <div class="page-shell">
+    <header class="masthead">
+      <a class="wordmark" href="#" aria-label="rustX architecture explorer home">rust<span>X</span><span class="wordmark-note">Engineering atlas / 01</span></a>
+      <span class="offline-label"><span aria-hidden="true">●</span> Offline · Source included</span>
+    </header>
+    <section class="introduction" aria-labelledby="page-title">
+      <div><p class="eyebrow">Read the system, follow the boundaries</p><h1 id="page-title">One request.<br>Many responsibilities.</h1></div>
+      <div class="intro-copy"><p id="intro"></p><p class="reading-note">Start with the map, follow a request, then test the boundaries. About 10 minutes.</p></div>
+    </section>
+    <div class="baseline-bar" id="baseline"></div>
+    <nav class="mode-nav" aria-label="Explorer modes">
+      <button type="button" data-mode="map" aria-current="page"><span>01</span> Architecture map</button>
+      <button type="button" data-mode="request"><span>02</span> Request walkthrough</button>
+      <button type="button" data-mode="scenarios"><span>03</span> Boundary scenarios</button>
+      <button type="button" data-mode="topics"><span>04</span> Deep dives</button>
+    </nav>
+    <main id="workspace" tabindex="-1"></main>
+    <noscript><p class="notice">Enable JavaScript to use the interactive explorer. All code and source excerpts are embedded in this file; no network connection is needed.</p></noscript>
+    <footer><span>rustX / Architecture explorer</span><span>Educational simulation · Fixed source snapshot · No runtime execution</span></footer>
+  </div>
+  <script id="explorer-data" type="application/json">/* EXPLORER_DATA */</script>
+  <script>/* EXPLORER_APP */</script>
+</body>
+</html>

@@ -1,5 +1,8 @@
 # Architecture
 
+Explore the [offline architecture explorer](architecture-explorer/index.html), pinned to
+commit `8cb41624`. The owning documents and source remain authoritative.
+
 The current Web conversation/composer lifecycle and subscription boundaries are
 specified in [WEB-16 resident conversation ownership](issue-406/conversation-surface.md).
 Terminal Attempt journal facts have ordered native transcript references;
