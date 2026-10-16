@@ -1849,7 +1849,7 @@ impl PendingObservations {
     pub(crate) fn source_progress_debug(&self) -> String {
         let state = self.state.lock().expect("fixture progress diagnostic");
         format!(
-            "owners={} progress={} reliable={} journal_read={} through={:?} failed={} reports={} matches={}",
+            "owners={} progress={} reliable={} journal_read={} through={:?} failed={} reports={} matches={} pending_head={} unpublished={} activity={} offhead={}",
             state.progress_owners.len(),
             state.latest_progress.len(),
             state.reliable.len(),
@@ -1858,6 +1858,10 @@ impl PendingObservations {
             state.journal_failed,
             state.fixture_progress_counts.0,
             state.fixture_progress_counts.1,
+            state.pending_head.is_some(),
+            state.unpublished.len(),
+            state.latest_activity.len(),
+            state.latest_offhead_activity.is_some(),
         )
     }
 

@@ -305,6 +305,17 @@ impl<'a> CompactionResources<'a> {
         if bytes.len() != length {
             return Err(bound("settled Artifact length changed"));
         }
+        let mut verification = reader.verification();
+        for (index, chunk) in bytes.chunks(65_536).enumerate() {
+            let offset =
+                u64::try_from(index * 65_536).map_err(|_| bound("Artifact offset overflow"))?;
+            reader
+                .verify_chunk(&mut verification, offset, chunk)
+                .map_err(|error| bound(&error.to_string()))?;
+        }
+        reader
+            .finish_verification(verification)
+            .map_err(|error| bound(&error.to_string()))?;
         self.remaining_bytes -= bytes.len();
         self.remaining_items -= 1;
         Ok(bytes)

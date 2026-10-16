@@ -275,7 +275,7 @@ async fn archive_streams_deduplicated_large_artifact_and_rejects_missing_bytes()
         crate::session_archive::SessionArchivePrepareError::ArtifactUnavailable,
         "an unsealed artifact is not historical bytes"
     );
-    drop(writer);
+    writer.finish().unwrap();
     let cut =
         SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
             .unwrap();

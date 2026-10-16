@@ -8,6 +8,8 @@ use crate::model::finish::ModelFinishReason;
 use crate::runtime::identity::{ArtifactId, AttemptId, EventId};
 use crate::tools::ArtifactStore;
 
+mod integrity_tests;
+
 fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId, index: u32) {
     let attempt = AttemptId::new(format!("native-attempt-{index}"));
     let timestamp = Utc

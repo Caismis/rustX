@@ -7,6 +7,32 @@ use crate::model::catalog::ModelRef;
 use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
 use crate::runtime::conversation_runtime::Gate;
 
+struct NoopStage {
+    label: std::cell::Cell<&'static str>,
+    entered: std::cell::Cell<std::time::Instant>,
+    started: std::time::Instant,
+}
+
+impl NoopStage {
+    fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            label: std::cell::Cell::new("fixture"),
+            entered: std::cell::Cell::new(now),
+            started: now,
+        }
+    }
+
+    fn set(&self, label: &'static str) {
+        self.label.set(label);
+        self.entered.set(std::time::Instant::now());
+    }
+
+    fn get(&self) -> &'static str {
+        self.label.get()
+    }
+}
+
 async fn fixture() -> Fixture {
     let f = Fixture::with_session_count(None, 1).await;
     let id = &f.sessions[0].id;
@@ -69,7 +95,7 @@ async fn published_activation(host: &crate::runtime_client::RuntimeClientHost) {
     reader.detach();
 }
 
-async fn assert_noop(f: &Fixture, stage: Option<&std::cell::Cell<&'static str>>) {
+async fn assert_noop(f: &Fixture, stage: Option<&NoopStage>) {
     let mark = |label| {
         if let Some(stage) = stage {
             stage.set(label);
@@ -203,7 +229,7 @@ async fn identical_explicit_selection_is_inert_while_idle() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn identical_explicit_selection_is_inert_during_an_attempt() {
-    let stage = std::cell::Cell::new("fixture");
+    let stage = NoopStage::new();
     let mut diagnostic_host = None;
     let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         let f = fixture().await;
@@ -263,8 +289,10 @@ async fn identical_explicit_selection_is_inert_during_an_attempt() {
         && let Some(host) = diagnostic_host
     {
         eprintln!(
-            "no-op liveness at {}: {}",
+            "no-op liveness at {} (stage {:?}, total {:?}; live state follows cancellation): {}",
             stage.get(),
+            stage.entered.get().elapsed(),
+            stage.started.elapsed(),
             host.inner.projection_source_debug()
         );
     }

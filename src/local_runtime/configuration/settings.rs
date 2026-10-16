@@ -1211,14 +1211,19 @@ impl UserConfigManager {
         // The physical source of this transaction, created when missing and
         // confirmed durable by `publish_locked`. A target redirected since
         // entry is invalid, as at entry.
-        let source = SourceDirectory::create(&path)
-            .map_err(|_| target.validate().err().unwrap_or(SettingsError::Io))?;
+        let source = SourceDirectory::create(&path).map_err(|error| {
+            super::super::settings::report_io_failure("admit_writer_directory", &error);
+            target.validate().err().unwrap_or(SettingsError::Io)
+        })?;
         let name = path.file_name().ok_or(SettingsError::Invalid)?;
         #[cfg(test)]
         self.test_hooks.reach("write_before_lock");
         let committed_revision;
         {
-            let _lock = source.lock(name).map_err(|_| SettingsError::Io)?;
+            let _lock = source.lock(name).map_err(|error| {
+                super::super::settings::report_io_failure("acquire_writer_lock", &error);
+                SettingsError::Io
+            })?;
             let original = source.read(name).map_err(|_| SettingsError::Io)?;
             let actual = revision(original.as_deref());
             if actual != expected {

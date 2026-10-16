@@ -14,10 +14,38 @@ fn failure(message: &str) -> RuntimeClientError {
         message: message.into(),
     }
 }
-fn io_failure(_: impl std::fmt::Debug) -> RuntimeClientError {
+fn io_failure(error: &std::io::Error) -> RuntimeClientError {
+    report_io_failure("read_source", error);
     failure(
         "authored source I/O failed before publication; inspect document permissions and retry after reading its revision",
     )
+}
+
+/// Failure-only diagnostics contain neither source paths nor document bytes.
+pub(super) fn report_io_failure(operation: &'static str, error: &std::io::Error) {
+    tracing::warn!(operation, kind = ?error.kind(), errno = error.raw_os_error(), "authored source I/O failed");
+}
+
+/// Interrupted `flock` waits have not acquired the lock. Continue the same
+/// operation on the same descriptor; never retry a source transaction here.
+fn lock_file(file: &File, shared: bool) -> std::io::Result<()> {
+    loop {
+        #[cfg(test)]
+        let injected = locks::attempt();
+        #[cfg(not(test))]
+        let injected: std::io::Result<()> = Ok(());
+        let result = injected.and_then(|()| {
+            if shared {
+                file.lock_shared()
+            } else {
+                file.lock()
+            }
+        });
+        match result {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
 }
 // Writer artifacts beside a source document have fixed-length names, so
 // every basename the filesystem accepts stays writable. The persistent writer
@@ -55,7 +83,7 @@ pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other("lock is not a regular file"));
     }
-    file.lock()?;
+    lock_file(&file, false)?;
     Ok(file)
 }
 
@@ -87,7 +115,7 @@ pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClien
 /// pathname that no longer names the admitted directory answers nothing.
 pub(super) fn read_source(document: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
     AdmittedSource::admit(document)
-        .map_err(io_failure)?
+        .map_err(|error| io_failure(&error))?
         .reread()
         .map_err(|failure| match failure {
             SourceReread::Unreadable(error) => error,
@@ -217,9 +245,13 @@ fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, Runtime
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(not_regular()),
-        Err(error) => return Err(io_failure(error)),
+        Err(error) => return Err(io_failure(&error)),
     };
-    if !file.metadata().map_err(io_failure)?.is_file() {
+    if !file
+        .metadata()
+        .map_err(|error| io_failure(&error))?
+        .is_file()
+    {
         return Err(not_regular());
     }
     let mut bytes = Vec::new();
@@ -227,7 +259,7 @@ fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, Runtime
         &mut std::io::Read::take(file, crate::bounded_file::MAX_RESOURCE_BYTES + 1),
         &mut bytes,
     )
-    .map_err(io_failure)?;
+    .map_err(|error| io_failure(&error))?;
     if !crate::bounded_file::within_bound(&bytes) {
         return Err(failure("authored source exceeds 1 MiB"));
     }
@@ -402,7 +434,7 @@ impl SourceDirectory {
         if !file.metadata()?.is_file() {
             return Err(std::io::Error::other("lock is not a regular file"));
         }
-        file.lock_shared()?;
+        lock_file(&file, true)?;
         Ok(Some(file))
     }
 
@@ -432,7 +464,7 @@ impl SourceDirectory {
         if !file.metadata()?.is_file() {
             return Err(std::io::Error::other("lock is not a regular file"));
         }
-        file.lock()?;
+        lock_file(&file, false)?;
         Ok(file)
     }
 
@@ -659,6 +691,62 @@ fn identity(directory: &std::os::fd::OwnedFd) -> std::io::Result<(u64, u64)> {
         reason = "dev_t and ino_t are signed or narrower on some platforms"
     )]
     Ok((status.st_dev as u64, status.st_ino as u64))
+}
+
+/// Thread-local syscall fault injection at the real lock acquisition boundary.
+#[cfg(test)]
+pub(super) mod locks {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static NEXT: RefCell<(Option<i32>, usize)> = const { RefCell::new((None, 0)) };
+    }
+
+    pub(crate) fn fail_next(errno: i32) {
+        NEXT.with_borrow_mut(|state| *state = (Some(errno), 0));
+    }
+
+    pub(crate) fn attempts() -> usize {
+        NEXT.with_borrow(|state| state.1)
+    }
+
+    pub(super) fn attempt() -> std::io::Result<()> {
+        NEXT.with_borrow_mut(|state| {
+            state.1 += 1;
+            state.0.take().map_or(Ok(()), |errno| {
+                Err(std::io::Error::from_raw_os_error(errno))
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_shared_and_initialization_locks_continue_but_other_errors_survive() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rustx.toml");
+        locks::fail_next(libc::EINTR);
+        drop(lock_document(&path).unwrap());
+        assert_eq!(locks::attempts(), 2);
+        let source = SourceDirectory::create(&path).unwrap();
+        locks::fail_next(libc::EINTR);
+        drop(
+            source
+                .share_lock(path.file_name().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(locks::attempts(), 2);
+        locks::fail_next(libc::EACCES);
+        assert_eq!(
+            lock_document(&path).unwrap_err().raw_os_error(),
+            Some(libc::EACCES)
+        );
+        assert_eq!(locks::attempts(), 1);
+    }
 }
 
 /// Test-only cross-thread hook right before a source entry is opened relative

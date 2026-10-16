@@ -326,7 +326,8 @@ fn count_conversation_store_open() {
 /// Version 62 gives request fields explicit inline-header or original-span storage.
 /// Version 67 stores child lookup paths rather than duplicate Source Fact payloads.
 /// Version 68 binds canonical binary `ContentRefs` to frozen fixed-chunk digests.
-pub const SQLITE_SCHEMA_VERSION: i64 = 68;
+/// Version 69 requires explicit native artifact settlement evidence.
+pub const SQLITE_SCHEMA_VERSION: i64 = 69;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -19279,7 +19280,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 68);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 69);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19348,7 +19349,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 68);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 69);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

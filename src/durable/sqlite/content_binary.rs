@@ -75,18 +75,24 @@ pub(super) fn index(
     // follows all digests inside the caller's optional-layout savepoint.
     let mut buffer = vec![0; SEGMENT_BYTES];
     let mut offset = 0;
+    let mut verification = reader.verification();
     let mut statement = connection.prepare_cached("INSERT INTO canonical_binary_segments(source_id,block_index,segment,digest) VALUES(?1,?2,?3,?4)").map_err(|error|storage(error.to_string()))?;
     while offset < reader.len {
         let length = usize::try_from((reader.len - offset).min(SEGMENT)).map_err(|_| invalid())?;
         reader
             .read_exact(&mut buffer[..length])
             .map_err(|_| invalid())?;
-        let digest = Sha256::digest(&buffer[..length]);
+        let digest = reader
+            .verify_chunk(&mut verification, offset, &buffer[..length])
+            .map_err(|_| invalid())?;
         statement
             .execute(params![id, block, offset / SEGMENT, digest.as_slice()])
             .map_err(|error| storage(error.to_string()))?;
         offset += u64::try_from(length).map_err(|_| invalid())?;
     }
+    reader
+        .finish_verification(verification)
+        .map_err(|_| invalid())?;
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES('canonical',?1,?2,'binary_bytes',1,?3)",

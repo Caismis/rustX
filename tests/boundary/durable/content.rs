@@ -1558,7 +1558,7 @@ fn t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable
         .collect::<Vec<_>>();
     let mut writer = artifacts.open_writer(&artifact).unwrap();
     writer.write_all(&bytes).unwrap();
-    drop(writer);
+    writer.finish().unwrap();
     let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
     let message = MessageBlock::User(crate::message::types::UserMessageBlock {
         id: MessageId::new("binary-native-owner"),

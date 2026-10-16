@@ -11,6 +11,185 @@ The normative contract is in [invariants](invariants.md), the public methods and
 lock order in [App Server protocol](app-server-protocol.md), and source/read-cut
 semantics in [conversation reading](conversation-reading.md).
 
+## Artifact lineage integrity follow-up (after `fee5d8b7`)
+
+Independent review found a reachable source-authentication gap: `ContentRead`
+rejected an equal-length external artifact overwrite against its frozen digest,
+but Fork/Clone/tree preparation used a length-only physical copy. The destination
+could then index the changed bytes as inherited Original content. Destination
+rehashing is not source authentication. A regression against `fee5d8b7` reproduced the gap: source ContentRead rejected
+the overwrite while Clone preparation still succeeded.
+
+The correction belongs to native Artifact settlement, independently of optional
+Runtime Client display indexing. An explicit fallible `ArtifactWriter::finish()`
+publishes the native integrity seal under the existing exclusive reservation.
+Copying verifies source chunks and writes those same buffers, finishes the
+new artifact, then permits destination initialization/catalog publication.
+Canonical binary indexing must also verify native settlement evidence before
+capturing a source reference. Optional-index rollback preserves the native seal
+and canonical commit; it must not prevent healthy lineage. SQLite 69 refuses
+older development stores rather than adding a format fallback. Existing bounded
+ContentRead and aggregate lineage-copy budgets remain unchanged.
+
+The exact `fee5d8b7061a8843bb3aa706d733e906339de0de` CI run
+[38944322845](https://github.com/Caismis/rustX/actions/runs/38944322845) passed
+Linux boundaries, formatting/Clippy, generated protocol, TUI and macOS Node Host.
+Linux contracts failed one test: `local_runtime::session_runtime_manager::tests::model_selection_noop::identical_explicit_selection_is_inert_during_an_attempt`
+at the existing 30-second guard, stage `no-op baseline publication`. Its retained
+diagnostic reported cursor 4, matching native/published source cuts, empty reliable
+and progress queues, and no source/layout/Journal failure. Library results were
+3,928 passed / one failed / four existing ignores (564.78s). The previously failing
+T15 effective-configuration test passed. The no-op barrier failure is under
+investigation; no timeout increase or passing rerun is treated as its resolution.
+Full Web also passed 2,853 unit tests (four existing skips) and all 317 browser
+cases (21.4m). macOS passed 3,243 in-crate tests (three existing ignores), then
+failed the external `cfg3_catalog::competing_native_writers_have_exactly_one_commit_winner`:
+results were `[Err(Io), Ok(())]` where one success and one revision conflict were
+required; a fresh read succeeded. The job's unit `Io` error does not retain the
+underlying operation/errno, so its cause is still under investigation. Overall,
+seven jobs passed and two failed. These results belong to `fee5d8b7`, not the
+in-progress seal correction.
+
+The first new lineage reproduction ran against `fee5d8b7`: the healthy copy test
+passed for Clone/Fork/tree and the tamper test failed at Clone because preparation
+succeeded after source ContentRead had rejected changed bytes. After the native
+seal correction, the initial lineage group had six passes and two new fixture
+errors (invalid page size and an incorrect deletion-root expectation). Both
+fixtures now follow the actual bounded-page/catalog deletion contracts. The
+current rebuilt source passes strict Clippy, all 17 Artifact owner tests, eight
+lineage tests, eight binary-content tests, the Compaction artifact boundary,
+the worker native-cut regression, six no-op tests, ten interrupted-operation
+tests, and all 26 external configuration catalog tests. The complete four-worker
+Rust run completed with 4,177 passes, seven failures and four existing ignores
+(733.72s). Six failures were the boundary liveness guards; the seventh was
+`large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_execution`
+at its existing two-second guard. Final full validation remains pending. Kernel samples captured physical test processes in
+`jbd2_log_wait_commit` and `folio_wait_bit_common` during high I/O pressure. This
+is evidence of contention, not proof of each failure's cause or a test waiver.
+The revocation fixture timed out while creating its second native Session, before
+App Server/read admission: configuration 2.865s, launch 4.680s, first Session
+13.449s, second Session still running after 9.299s. Three other fixtures reached
+native settlement waits, before display notification consumption; their
+constructors had already consumed 16.279–22.029s of the cumulative 30-second
+guard. These localize observed delays without attributing every stalled call to
+a particular filesystem operation. All assertions and guard durations remain
+unchanged for the exact and full serial reruns.
+
+### Current follow-up validation
+
+With `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`,
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1` and `RUST_TEST_THREADS=1`,
+`cargo test --all-targets --all-features` passed all 20 targets:
+**4,865 passed / zero failed / nine existing ignores** (2,456.27s).
+The library contributed 4,184 passes and four ignores; the complete Subagent
+suite includes the originally failing skill-version identity case. All seven
+four-worker failures also passed exact-selector reruns unchanged before this
+complete run. The previous full four-worker failures remain recorded above;
+serial success does not establish their full cause.
+
+Current-source protocol generation/drift, protocol/Dev/TUI/Web type checks,
+Dev tests (41), TUI tests (1,180; one existing skip), Web tests (2,853; four existing
+skips), production build, i18n, provenance and fake-provider tests (55) passed.
+The original skill-version identity test also passed individually. Both original
+reading scenarios passed independently with 300 Attempts and the 240-second
+fixture limit unchanged: rail/locales reported 2.4m and Fork navigation 2.5m.
+The first complete browser run finished with 316 passes and one failure (21.7m).
+Both original reading scenarios passed again. The failure was
+`artifact-document.spec.ts`: the fixture-only Rust example still dropped its
+writer after flushing, so the new native reader correctly rejected an unfinished
+Artifact. `examples/document_artifact_fixture.rs` now explicitly calls `finish()`;
+all repository `open_writer` callers were audited, retaining intentional abandoned
+writer/lifetime tests. No product logic, browser assertion or timeout changed.
+The exact artifact browser case passed after fresh formatting/strict Clippy
+checks. The four-worker in-crate boundary lane also passed all 237 cases
+(101.82s). The complete browser rerun passed **317 / zero failures** (21.5m), including
+both original reading scenarios and the corrected Artifact fixture. No assertions,
+workloads or fixture deadlines changed. Final pushed-head CI remains pending at
+this pre-push capture; the PR checks must be read against their exact head SHA.
+A final fetch retained main `8cb41624eb2dc2ca87e4409961f42553ceb029cf`, already
+integrated by the existing normal merge.
+
+### Follow-up command results
+
+| Command | Result |
+| --- | --- |
+| `git diff --check` | Passed. |
+| `cargo fmt --all -- --check` | Passed, including the final fixture correction. |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed, including the final fixture correction. |
+| `cargo build --bins` | Passed before full native validation. |
+| `cargo test --all-targets --all-features` | 4,865 passed, nine existing ignores; serial worker qualification above. The later change only finishes the browser-only example's artifact and is covered by fresh Clippy and exact/full browser runs. |
+| `cargo run --all-features --example check_test_lanes` | Passed. |
+| `pnpm --dir protocol/app-server check` | Generated schema/TypeScript/fixture drift check passed. |
+| `pnpm --dir protocol/app-server typecheck` | Passed. |
+| `pnpm --dir dev typecheck`; `pnpm --dir dev test` | Passed; 41 tests. |
+| `pnpm --dir tui typecheck`; `pnpm --dir tui test` | Passed; 1,180 tests, one existing skip. |
+| `pnpm --dir web-console typecheck`; `pnpm --dir web-console test` | Passed; 2,853 tests, four existing skips. |
+| `pnpm --dir web-console build` | Passed. |
+| `pnpm --dir web-console check:i18n`; `pnpm --dir web-console check:provenance` | Passed. |
+| `cargo test --test subagent --all-features definitions::skill_version_identity_is_frozen_across_the_boundary -- --exact` | Passed individually and in all 47 Subagent cases. |
+| `uv run --project test-support/fake-provider --frozen pytest test-support/fake-provider/tests` | 55 passed. |
+| `cargo test --lib --all-features boundary_suites::` with four test workers | 237 passed. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'native distant reading rail, detached/latest follow and measured width in both locales'` | Passed. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'Fork source exact Message landing and cancellation by scrolling, newer navigation and attachment replacement'` | Passed. |
+| `bash web-console/scripts/browser-tests.sh test/e2e/artifact-document.spec.ts` | Passed after explicit fixture settlement. |
+| `pnpm --dir web-console test:e2e` | Final run: 317 passed, zero failed, 21.5m. Initial 316/1 result retained above. |
+
+Only fake/scripted/emulated providers were used. macOS native checks require CI;
+local Linux results do not substitute for them. The existing pinned browser-image
+and filesystem qualification applies to this run as well.
+
+### Follow-up ownership and deterministic coverage
+
+The source seal is stored in the existing native `.reserved` owner file: a fixed
+64-byte header and 32-byte digest per 64 KiB chunk. Explicit finish syncs bytes and
+digest records, publishes the header last, and retains exclusive ownership until
+completion. The fixed header/count/file-length checks allocate no untrusted-size
+buffer. A nonempty reservation cannot be reused even after external deletion of
+its byte file. Copy verifies source buffers, and destination finalization must
+match the captured source aggregate before publishing its own seal. This closes
+both source-before-copy and destination-before-finish reauthentication gaps.
+Native bounded image/model reads and Compaction resource reads verify the same
+returned slices under their existing byte/admission budgets. Inspection archives
+remain inspection-only; this does not introduce an import or restore format.
+
+| Exact regression selector / group | Controlled boundary |
+| --- | --- |
+| `tools::artifacts::integrity_tests::abandoned_writer_and_failed_finish_never_produce_a_successful_settlement` | Active/abandoned writer and injected pre-header failure; no successful native settlement. |
+| `native_artifact_copy_rejects_equal_length_tamper_and_keeps_failed_target_unsealed` | Real equal-length source overwrite; target stays unfinished. |
+| `native_artifact_copy_rejects_later_chunk_changes_after_first_verified_buffer` | Hook after one verified chunk changes a later chunk; copy fails. |
+| `native_artifact_copy_uses_same_verified_buffer_despite_after_read_or_verified_changes` | Changes after source read/verification cannot replace the copied buffer. |
+| `native_artifact_copy_cannot_reseal_changed_destination_as_an_inherited_original` | Last-source-chunk hook changes an earlier destination chunk before finish; destination seal publication fails. |
+| `native_artifact_seal_missing_malformed_and_partial_verification_fail_closed` | Missing/truncated seal, invalid lengths/counts, digest mismatch and incomplete verification. |
+| `native_bounded_artifact_reads_require_finish_and_reject_same_length_changes` | Bounded native reader refuses unfinished/modified bytes across cold reopen. |
+| `settled_artifact_identity_cannot_reseal_after_external_bytefile_removal` | Removing a settled byte file does not permit reopening its existing identity for replacement bytes. |
+| `local_runtime::session::tests::artifact_lineage_tests::integrity_tests` | Actual Clone/Fork/tree preparation and catalog publication; tamper rejection and allocation cleanup, optional-display-index rollback, source artifact removal and ordinary source Session deletion with cold destination reads. |
+| `durable::sqlite::content::binary_tests::canonical_binary_index_cannot_reauthenticate_a_modified_native_artifact` | Mutation after native finish but before canonical indexing cannot publish a replacement reference. |
+| `runtime_client::projection::tests::worker_read_candidate_keeps_native_cut_without_capturing_checkpoint` | Actual SQLite source read and installation retain the exact native cut without preparing the lazy published Trace head; explicit snapshot capture keeps its own behavior. |
+| `interrupted_native_writer_locks_preserve_exactly_one_cas_winner` | Two native settings writers, barrier and syscall-boundary EINTR injection: one commit, one exact revision conflict. |
+| `noninterrupted_native_writer_lock_failure_does_not_retry_or_publish` | Injected EACCES is returned once and leaves authored bytes unchanged. |
+| `interrupted_shared_and_initialization_locks_continue_but_other_errors_survive` | Shared/initialization lock continuation and non-interrupted error preservation. |
+
+The settings correction continues only an Interrupted wait on the same descriptor;
+it does not retry the CAS transaction or replay a mutation. [Rust 1.98.1's Unix lock implementation](https://github.com/rust-lang/rust/blob/1.98.1/library/std/src/sys/fs/unix.rs#L1468-L1516)
+uses `cvt(flock)` without interrupted-call retry, and [Apple's native lock contract](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_lockf.c#L186-L195)
+lists EINTR. These establish the supported-platform gap, but the
+previous CI log does not prove that EINTR caused its generic Io. Failure-only
+operation/ErrorKind/errno tracing now retains that distinction without source paths
+or document contents.
+
+The no-op test passed in isolation (six tests) and under its existing containing
+four-worker group. The latter run is not a valid suite pass: it used a schema-69
+libtest executable with stale schema-68 child binaries, causing eight explicit
+version-mismatch failures (282 passed / eight failed / one existing ignore).
+The combined validation rebuilds all binaries first. Worker scheduling now captures
+only its native ReadDomainCut in both production and libtest. Previously cfg-only
+snapshot fields forced checkpoint capture/fit under the worker locks; that extra
+work/error gate is removed and tested without a retry, extra wake, source repair,
+or changed deadline. This improves production/test equivalence; the earlier CI
+no-op timeout's exact cause remains unproven. Its last failed predicate is now
+captured before timeout cancellation releases the native execution gate, with
+bounded elapsed/cut/queue diagnostics rather than only post-cancellation state.
+
 ## Second-stage review corrections (after `915f6a57`)
 
 The second-stage review was checked against actual source, rather than assumed

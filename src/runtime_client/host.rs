@@ -234,9 +234,11 @@ impl ClientInner {
     /// their existing lock order before checking raw state: an empty queue
     /// alone does not prove its drained observation has been installed.
     pub(crate) async fn projection_settled(&self) {
+        let started = std::time::Instant::now();
+        *self.publication_gate.settlement_wait.lock().unwrap() = None;
         let mut turns = self.worker_turns.subscribe();
         loop {
-            turns.borrow_and_update();
+            let worker_turn = *turns.borrow_and_update();
             {
                 let _preparation = self
                     .publication_gate
@@ -248,12 +250,26 @@ impl ClientInner {
                     .state
                     .lock()
                     .expect("runtime client host lock poisoned");
-                if self.pending.settled()
-                    && guard.projection.read_domain_cut().is_none()
-                    && guard.projection.validate_source_prefix().is_ok()
-                {
+                let pending_settled = self.pending.settled();
+                let read_cut = guard.projection.read_domain_cut();
+                let source_status = match guard.projection.validate_source_prefix() {
+                    Ok(()) => "ready",
+                    Err(RuntimeClientError::ReadCutExpired) => "pending",
+                    Err(RuntimeClientError::ObservationUnavailable { .. }) => "unavailable",
+                    Err(_) => "other error",
+                };
+                if pending_settled && read_cut.is_none() && source_status == "ready" {
                     return;
                 }
+                *self.publication_gate.settlement_wait.lock().unwrap() = Some(SettlementWait {
+                    checked: std::time::Instant::now(),
+                    elapsed: started.elapsed(),
+                    worker_turn,
+                    pending_settled,
+                    read_cut,
+                    source_status,
+                    queue: self.pending.source_progress_debug(),
+                });
             }
             turns
                 .changed()
@@ -760,6 +776,20 @@ struct PublicationGate {
     preparation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     settlement_contention_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    settlement_wait: Mutex<Option<SettlementWait>>,
+}
+
+/// Last failed predicate, retained before cancellation can release native gates.
+#[cfg(test)]
+struct SettlementWait {
+    checked: std::time::Instant,
+    elapsed: std::time::Duration,
+    worker_turn: u64,
+    pending_settled: bool,
+    read_cut: Option<super::projection::ReadDomainCut>,
+    source_status: &'static str,
+    queue: String,
 }
 
 impl PublicationGate {
@@ -1520,8 +1550,16 @@ impl ClientInner {
             .expect("native source diagnostic")
             .projection
             .source_prefix_debug();
+        let last_wait = self.publication_gate.settlement_wait.lock().unwrap();
+        let wait = last_wait.as_ref().map(|wait| {
+            format!(
+                "checked_ago={:?} elapsed={:?} worker_turn={} pending_settled={} read_cut={:?} source={} queue={}",
+                wait.checked.elapsed(), wait.elapsed, wait.worker_turn, wait.pending_settled,
+                wait.read_cut, wait.source_status, wait.queue,
+            )
+        });
         format!(
-            "{projection} queue={}",
+            "{projection} queue={} last_settlement_wait={wait:?}",
             self.pending.source_progress_debug()
         )
     }
@@ -1715,7 +1753,7 @@ impl ClientInner {
                     }
                 };
                 if reading.is_none()
-                    && let Some((cut, candidate)) = cut
+                    && let Some(cut) = cut
                 {
                     let Some(store) = store.upgrade() else {
                         break;
@@ -1733,7 +1771,8 @@ impl ClientInner {
                         {
                             return (cut, Err(error));
                         }
-                        (cut, candidate.read_domains(store.as_ref()))
+                        let domains = cut.read(store.as_ref());
+                        (cut, domains)
                     }));
                 }
                 #[cfg(test)]

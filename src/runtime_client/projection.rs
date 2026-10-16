@@ -1670,15 +1670,14 @@ impl ReadDomainCut {
 }
 
 /// Request-owned copy, independent of the live materializer's installation fence.
+#[cfg(test)]
 pub(crate) struct SnapshotCandidate {
-    #[cfg(test)]
     pub(crate) snapshot: RuntimeClientSnapshot,
-    #[cfg(test)]
     pub(crate) cursor: RuntimeClientCursor,
-    #[cfg(test)]
     pub(crate) trace_through: u64,
     pub(crate) read_cut: ReadDomainCut,
 }
+#[cfg(test)]
 impl SnapshotCandidate {
     pub(crate) fn read_domains(
         &self,
@@ -1687,7 +1686,6 @@ impl SnapshotCandidate {
         self.read_cut.read(store)
     }
 
-    #[cfg(test)]
     pub(crate) fn materialize(
         mut self,
         store: &dyn crate::durable::ConversationStore,
@@ -6918,24 +6916,18 @@ impl RuntimeClientProjection {
         self.capture_candidate()
     }
 
-    pub(crate) fn read_domain_candidate(&self) -> Option<(ReadDomainCut, SnapshotCandidate)> {
-        self.read_domain_cut().and_then(|cut| {
-            self.capture_candidate()
-                .ok()
-                .map(|candidate| (cut, candidate))
-        })
+    pub(crate) fn read_domain_candidate(&self) -> Option<ReadDomainCut> {
+        self.read_domain_cut()
     }
 
+    #[cfg(test)]
     fn capture_candidate(&self) -> Result<SnapshotCandidate, RuntimeClientError> {
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
         Ok(SnapshotCandidate {
-            #[cfg(test)]
             snapshot: self.checkpoint_candidate()?.snapshot,
-            #[cfg(test)]
             cursor: self.cursor,
-            #[cfg(test)]
             trace_through: self.journal_through,
             read_cut: self.read_domain_fence(),
         })
@@ -12735,6 +12727,33 @@ mod tests {
             .unwrap();
         projection.initialize_publication_view();
         (projection, store)
+    }
+
+    #[test]
+    fn worker_read_candidate_keeps_native_cut_without_capturing_checkpoint() {
+        let (mut projection, store) = initialized_source_projection();
+        let published = projection.checkpoint_seed();
+        assert!(!published.trace_head.prepared());
+        projection.request_read_domains_for_test();
+        let candidate = projection.read_domain_candidate().unwrap();
+        assert_eq!(candidate, projection.read_domain_fence());
+        assert!(
+            !published.trace_head.prepared(),
+            "worker admission must not capture or fit a published checkpoint"
+        );
+        let read = candidate.read(&store).unwrap();
+        assert_eq!(
+            read.transcript.source_cut.as_ref(),
+            candidate.source_cut.as_ref()
+        );
+        assert!(projection.install_read_domains(&candidate, Ok(read), false));
+        assert!(!published.trace_head.prepared());
+        assert!(projection.read_domain_candidate().is_none());
+        // The explicit snapshot test API still captures its own published view.
+        let snapshot = projection.snapshot_candidate().unwrap();
+        assert!(published.trace_head.prepared());
+        assert_eq!(snapshot.cursor, published.cursor);
+        assert_eq!(snapshot.read_cut, candidate);
     }
 
     #[test]

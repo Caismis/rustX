@@ -27,7 +27,7 @@ impl BinaryFixture {
             .collect::<Vec<_>>();
         let mut writer = artifacts.open_writer(&artifact).unwrap();
         writer.write_all(&bytes).unwrap();
-        drop(writer);
+        writer.finish().unwrap();
         let store =
             SqliteConversationStore::open(conversation, &directory.path().join("binary.sqlite"))
                 .unwrap();
@@ -392,31 +392,94 @@ fn binary_digest_index_failure_is_optional_and_rolls_back_its_frontier() {
 }
 
 #[test]
-fn binary_integrity_schema_refuses_67_and_relaxed_digest_tables() {
+fn binary_integrity_schema_refuses_68_and_relaxed_digest_tables() {
     let fixture = BinaryFixture::new(17);
     let path = fixture.directory.path().join("binary.sqlite");
     fixture
         .store
         .lock()
         .unwrap()
-        .execute("UPDATE rustx_store SET schema_version=67", [])
+        .execute("UPDATE rustx_store SET schema_version=68", [])
         .unwrap();
     assert!(matches!(
         SqliteConversationStore::open_existing(fixture.reference.conversation_id.clone(), &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 67,
-            expected: 68
+            stored: 68,
+            expected: 69
         })
     ));
     fixture
         .store
         .lock()
         .unwrap()
-        .execute("UPDATE rustx_store SET schema_version=68", [])
+        .execute("UPDATE rustx_store SET schema_version=69", [])
         .unwrap();
     fixture.store.lock().unwrap().execute_batch("DROP TABLE canonical_binary_segments; CREATE TABLE canonical_binary_segments(source_id TEXT,block_index INTEGER,segment INTEGER,digest BLOB)").unwrap();
     assert!(matches!(
         SqliteConversationStore::open_existing(fixture.reference.conversation_id.clone(), &path),
         Err(ConversationStoreError::IncompatibleSchema(_))
     ));
+}
+
+#[test]
+fn canonical_binary_index_cannot_reauthenticate_a_modified_native_artifact() {
+    let fixture = BinaryFixture::new(SEGMENT_BYTES + 17);
+    fixture.overwrite(7, b"changed");
+    assert!(
+        fixture
+            .store
+            .content_read(&fixture.reference, 0, 17)
+            .is_err()
+    );
+    let message = MessageBlock::User(UserMessageBlock {
+        id: MessageId::new("binary-later-binding"),
+        content: vec![UserContentBlock::File(FileReference {
+            artifact_id: fixture.artifact.clone(),
+            name: None,
+            mime_type: None,
+            description: None,
+        })],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: None,
+    });
+    fixture.store.append_canonical(&message).unwrap();
+    assert_eq!(
+        fixture.store.load_head().unwrap().active_message_ids,
+        [
+            MessageId::new("binary-integrity-owner"),
+            MessageId::new("binary-later-binding")
+        ]
+    );
+    let later = Source::CanonicalMessageBlock {
+        component: CanonicalContentComponent::Payload,
+        locator: CanonicalContentLocator::ByLedgerPosition { position: 2 },
+        block_index: ContentBlockIndex::new(0),
+    };
+    assert!(
+        fixture
+            .store
+            .content_descriptor(&later, Rep::BinaryBytes)
+            .unwrap()
+            .is_none(),
+        "a new canonical binding cannot freeze changed bytes as a fresh Original"
+    );
+    let connection = fixture.store.lock().unwrap();
+    for table in [
+        "canonical_binary_sources",
+        "canonical_binary_segments",
+        "content_frontiers",
+    ] {
+        let count: u64 = connection
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE source_id='ledger:2'"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "failed native integrity retires optional index {table}"
+        );
+    }
 }

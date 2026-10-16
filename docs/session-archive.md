@@ -105,8 +105,10 @@ whole lifetime. An archive reader first opens the already-published byte file,
 then attempts shared reservation ownership. A reservation without bytes cannot
 be locked by archive inspection; visible bytes with an active writer are refused.
 Thus inspection can never steal writer admission in the publication window.
-Shared reader admission proves the one-shot writer has ended. Native create-new
-allocation prevents reopening settled identities for writing. Required artifacts that were
+Shared reader admission requires the one-shot writer to have ended and its explicit
+finish to have published a valid bounded settlement-seal header. Dropping an
+uncompleted writer does not publish settlement. Native create-new allocation
+prevents reopening settled identities for writing. Required artifacts that were
 absent or still being written at capture fail subsequent preflight, rather than
 being silently read at a later instant.
 

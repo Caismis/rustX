@@ -2094,6 +2094,76 @@ fn capacity(value: usize) -> super::super::settings::SourceMutation {
     }
 }
 
+/// An interrupted blocking lock continues before reading the CAS revision.
+/// Both actual native writers still compete for the same persistent inode.
+#[test]
+fn interrupted_native_writer_locks_preserve_exactly_one_cas_winner() {
+    use crate::local_runtime::settings::locks;
+    let fixture = Fixture::new();
+    let original = "[subagents]\nmax_concurrent = 2\n";
+    fixture.write(&fixture.workspace, original);
+    let expected = revision_of(original);
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let writers: Vec<_> = [3, 4]
+        .into_iter()
+        .map(|value| {
+            let manager = fixture.manager.clone();
+            let target = fixture.workspace.clone();
+            let expected = expected.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                locks::fail_next(libc::EINTR);
+                barrier.wait();
+                let result = manager.write_source_settings(&target, &expected, capacity(value));
+                assert!(locks::attempts() >= 2, "the same lock must be retried");
+                result
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = writers
+        .into_iter()
+        .map(|writer| writer.join().unwrap())
+        .collect();
+    let committed = revision_of(&fixture.read(&fixture.workspace));
+    assert_eq!(
+        outcomes.iter().filter(|outcome| outcome.is_ok()).count(),
+        1,
+        "{outcomes:?}"
+    );
+    let conflict = outcomes
+        .iter()
+        .find_map(|outcome| match outcome {
+            Err(SettingsError::Conflict {
+                expected, actual, ..
+            }) => Some((expected, actual)),
+            _ => None,
+        })
+        .expect("the losing native writer must report Conflict");
+    assert_eq!(conflict, (&expected, &committed));
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| outcome.as_ref().ok() == Some(&committed))
+    );
+}
+
+#[test]
+fn noninterrupted_native_writer_lock_failure_does_not_retry_or_publish() {
+    use crate::local_runtime::settings::locks;
+    let fixture = Fixture::new();
+    let original = "[subagents]\nmax_concurrent = 2\n";
+    fixture.write(&fixture.workspace, original);
+    locks::fail_next(libc::EACCES);
+    let result = fixture.manager.write_source_settings(
+        &fixture.workspace,
+        &revision_of(original),
+        capacity(3),
+    );
+    assert!(matches!(result, Err(SettingsError::Io)), "{result:?}");
+    assert_eq!(locks::attempts(), 1);
+    assert_eq!(fixture.read(&fixture.workspace), original);
+}
+
 #[test]
 fn ordinary_source_writes_obey_the_same_physical_authority() {
     let text = "[subagents]\nmax_concurrent = 2\n";
