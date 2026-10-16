@@ -428,11 +428,11 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 66 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 67 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 66 stores frozen Request metadata separately from the native
+SQLite schema 67 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -463,6 +463,14 @@ retain the 32-node display budget. Pages retain both item and encoded-byte limit
 The former two-content-row bound described schema 64's copied segments; it does
 not describe these composed reads. Tests account for actual index pages, native
 and Source nodes, metadata bytes, and emitted content separately.
+
+Each field Fact is stored once. A parent/ordinal child index entry contains only
+the canonical child path, which the existing field lookup resolves. Reading that
+reference checks its 4,096-byte encoded bound before parsing, exact parent and
+one-level depth, component bounds and canonical encoding. Page hashes and the
+independent original capture witness still fence replacement; a rehashed child
+path cannot authorize a different native source. This format removes duplicated
+Fact payloads without adding a lookup or changing original content bytes.
 
 Fixed identity columns precede growing payload columns in SQLite records. All
 optional Source creation remains inside its existing savepoint; failure leaves

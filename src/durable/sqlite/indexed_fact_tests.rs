@@ -48,6 +48,41 @@ fn execution_cost(connection: &Connection, query: &FactQuery) -> (usize, i32) {
     (count, steps)
 }
 
+fn freeze_indexed_input(store: &SqliteConversationStore, snapshot: &mut RequestSnapshot) {
+    let history = store.projected_history().unwrap();
+    // Query-cost fixtures use the same certified selection as native request
+    // assembly; cold freeze and reconstruction have dedicated coverage.
+    let (messages, selected) = crate::model::input::assemble_selected_model_input(
+        store.conversation_id(),
+        &history.messages,
+        &history.input_manifest,
+        &[],
+        None,
+        None,
+    )
+    .unwrap();
+    let request = ModelRequest {
+        continuation_source: None,
+        images: crate::model::images::ResolvedImages::new(),
+        invocation: snapshot.invocation.clone(),
+        messages,
+        tools: snapshot.tool_definitions.clone(),
+        effective_system_prompt: snapshot.effective_system_prompt.clone(),
+        continuation: snapshot.continuation.clone(),
+    };
+    snapshot.history_cut = history.cut.clone();
+    snapshot.tool_associations = crate::model::occurrence::freeze_associations(
+        &history,
+        &snapshot.request_id,
+        &request,
+        None,
+    )
+    .unwrap();
+    snapshot
+        .freeze_selected_input(store.conversation_id(), &request, &selected)
+        .unwrap();
+}
+
 fn terminal(store: &SqliteConversationStore, retry: u32, measured: bool) -> RuntimeEventEnvelope {
     let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
     // These are separate native Steps, not thousands of retries in one Step.
@@ -55,7 +90,7 @@ fn terminal(store: &SqliteConversationStore, retry: u32, measured: bool) -> Runt
     snapshot.identity.retry_number = 0;
     snapshot.request_id = snapshot.identity.request_id();
     snapshot.provisional_message_id = snapshot.identity.provisional_message_id();
-    freeze_test_input(store, &mut snapshot, &[]);
+    freeze_indexed_input(store, &mut snapshot);
     store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();

@@ -292,7 +292,7 @@ fn child(
             child.push("provenance_source".into());
             return Ok(child);
         }
-        let fact = fragments::child(connection, &leaf.template.prefix, relative, ordinal)?
+        let child = fragments::child(connection, &leaf.template.prefix, relative, ordinal)?
             .or(fragments::child(
                 connection,
                 &leaf.template.suffix,
@@ -301,12 +301,11 @@ fn child(
             )?)
             .ok_or_else(|| storage("original composed child unavailable"))?;
         let mut path = path[..2].to_vec();
-        path.extend(fact.path);
+        path.extend(child);
         return Ok(path);
     }
-    let fact = fragments::child(connection, &root.scalar, path, ordinal)?
-        .ok_or_else(|| storage("original scalar child unavailable"))?;
-    Ok(fact.path)
+    fragments::child(connection, &root.scalar, path, ordinal)?
+        .ok_or_else(|| storage("original scalar child unavailable"))
 }
 fn preview(
     connection: &Connection,

@@ -34,6 +34,386 @@ The external macOS targets were not reached and a new platform run is required.
 and environment qualification. PR #478 remains open for independent review and
 must not be merged by this task.
 
+### Pre-correction published head and local production comparison (2026-10-16)
+
+The pre-correction PR head was `ee1635479b4ecafe5f7c7b114cfccf8e8b501585`, with
+`origin/main` at `8cb41624eb2dc2ca87e4409961f42553ceb029cf` already integrated.
+Both remote refs were checked again after the comparison. PR #478 remains open,
+non-draft, and unmerged. The subsequent user instruction authorizes a normal
+commit and push after the scoped Source/CI corrections and their local validation;
+new-head CI must then be checked separately. No force-push or merge is authorized.
+
+[CI run 38883956631](https://github.com/Caismis/rustX/actions/runs/38883956631)
+completed with eight successful jobs, including all 317 Full Web conformance
+cases and Linux/macOS boundaries. Linux deterministic contracts were cancelled
+at the existing 25-minute whole-job budget. This is **not green CI**. Preparation
+and compilation consumed about 11 minutes; test execution then ran about 14
+minutes without an assertion failure before cancellation. The exact indexed
+occupancy fixture remained unfinished for at least 12 minutes 48 seconds.
+Its unchanged 2,048-event workload was measured independently; no individual
+test budget, workload, storage exclusion, or query assertion has been weakened.
+The subsequent explicitly approved CI correction raises only the Linux
+`rust-contracts` whole-job limit from 25 to 45 minutes. The observed job began
+09:57:09, finished preparation at 09:58:28 and binary build at 10:02:05, began
+library execution at 10:08:14, and was cancelled at 10:22:24. Thus preparation
+and native builds consumed about 11 minutes before the test phase; the remaining
+contract/provider targets and lane check were never reached. The new finite
+job budget permits complete evidence, while every 30s test guard, 240s browser
+fixture budget, assertion, selection and other lane's job limit stays unchanged.
+A single-test failure still requires investigation; the job budget is not a waiver.
+
+The exact failing-lane fixture is
+`durable::sqlite::tests::indexed_fact_tests::indexed_occupancy_and_message_lookup_cost_does_not_grow_with_irrelevant_history`.
+The cold fixture passed locally in 339.07s, but spent 323.709s in RequestStart
+commits, including 302.498s in optional Request Source construction. The
+actual indexed queries took 672 microseconds. Each additional request
+cold-froze the same nine-message selection with fresh node identities, causing
+18,440 new Source leaves and 2,636,761,896 cumulative Source index bytes.
+Those are constructed metadata counters, not physical-write or retained-size
+measurements. The expensive consequence was inside Source capture, not merely
+the `to_vec` call's own elapsed time.
+
+The local correction is confined to `indexed_fact_tests.rs`: assemble input
+through the existing native selected-root API, preserve the exact history cut,
+seal associations for this request, and call `freeze_selected_input`. The
+shared cold helper remains byte-identical to HEAD, preserving dedicated cold
+reconstruction and rollback coverage. There is no product/runtime behavior or
+protocol change, and no Source validation is bypassed.
+
+The paired exact fixture passed in 33.62s with the same 2,057 actual request
+starts/outcomes, including the original 2,048 added requests, and the same
+2,048 added canonical Assistants. Native RequestStart commits took 18.615s;
+Source construction 9.511s (leaf capture 0.372s versus 293.774s). It created
+nine Source leaves and 1,286,928 Source index bytes. Both indexed lookups
+retained exactly 72 and 29 VM steps across small/large histories; each old
+kind-only scan still required 12,355 steps. Old-cut assertions also passed.
+Native terminal appends and canonical Assistant batch work remained intact.
+Nested durations overlap and must not be summed.
+
+Both versions used freshly Cargo-emitted all-features libtest executables and
+`--exact --nocapture --test-threads=1`, with identical opt-in test and Source
+profiling. Each discovered exactly one test: one passed, zero failed/ignored,
+4,153 filtered out. The temporary instrumentation was then removed; the final
+source patch is 36 added lines and one changed call in this single test file.
+The first uninstrumented full run used `CARGO_INCREMENTAL=0`,
+`CARGO_BUILD_JOBS=4`, `RUST_TEST_THREADS=4`, and
+`RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. `git diff --check`, formatting, strict
+all-target/all-feature Clippy, and `cargo build --bins` passed. The library
+portion of `cargo test --all-targets --all-features` finished in 702.03s:
+4,147 passed, three failed, four existing ignores. The corrected indexed
+fixture, native cancellation/compaction receipts, and residual physical-read
+join regressions passed. The three failures were the existing 30-second
+liveness guard in `boundary_suites::app_server_file_read::{committed_present_reads_exact_native_scope_through_current_authorized_attachment,delivery_cancellation_is_request_scoped_at_every_native_interleaving,delivery_cancellation_is_admitted_as_the_sixteenth_in_flight_request}`.
+Cargo stopped before the remaining targets; this is **not a passing full run**.
+The same five-test containing group then passed at four threads in 3.27s,
+which does not establish the cause of the full-run failures. Bounded,
+failure-only fixture phase timings were added for a full-run reproduction;
+no deadline, native operation, assertion, or scheduling rule was changed.
+The diagnostic follow-up library run passed **4,150 tests, zero failures,
+four existing ignores**, in 603.49s, including all five file-read cases. Its
+fresh containing-group run also passed five tests in 3.26s. No incomplete-phase
+report was emitted. The original three timeouts remain **unlocalized**; later
+passes do not establish a fix or justify calling them infrastructure failures.
+The first diagnostic compilation failed on a missing test-module import; that
+was corrected before these runs, and its log is retained.
+
+The follow-up `cargo test --all-targets --all-features` exited 101 after
+879.58s because `tools::mcp_managed::two_folders_prepare_distinct_environment_identities`
+could not prepare its first environment: `uv sync --frozen` failed downloading
+`keyring==25.7.0` from `files.pythonhosted.org` after three built-in retries in
+127.6s. This is direct external download-failure evidence, not an inferred
+application exemption. The tools target reported 134 passed/one failed;
+all earlier targets passed, including the 47-test subagent target and
+`definitions::skill_version_identity_is_frozen_across_the_boundary`.
+No owned Cargo, test, or uv process remained after exit. An unchanged exact
+rerun passed one test in 38.12s; the complete unchanged tools target then passed
+135 tests, zero failures/ignores, in 88.90s. No package-source override,
+cache-mutation command, timeout increase, or test weakening was applied.
+The remaining seven example targets passed (20 tests). Across the successful
+follow-up targets and the tools rerun, **4,831 distinct Rust tests passed**,
+with nine existing ignores and no filtered-out tests in the full target runs.
+This aggregate is not a claim that the original full Cargo invocation exited
+zero: its wheel-download failure remains above.
+
+Final canonical commands on the retained diagnostic source:
+
+| Command | Result |
+| --- | --- |
+| `git diff --check` | Passed |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `cargo build --bins` | Passed |
+| `cargo test --examples --all-features` | Passed |
+| `cargo run --all-features --example check_test_lanes` | Passed |
+| `pnpm --dir protocol/app-server check` | Passed |
+| `pnpm --dir protocol/app-server typecheck` | Passed |
+| `pnpm --dir dev typecheck` | Passed |
+| `pnpm --dir dev test` | Passed |
+| `pnpm --dir tui typecheck` | Passed |
+| `pnpm --dir tui test` | Passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | Passed |
+| `pnpm --dir web-console build` | Passed |
+| `pnpm --dir web-console check:i18n` | Passed |
+| `pnpm --dir web-console check:provenance` | Passed |
+
+Dev reported 41 passed/zero skipped; TUI 1,163 passed/one existing skip;
+Web 2,828 passed/four existing skips. No failures in these client commands.
+Generated protocol checks produced no tracked changes. No fresh browser or
+macOS run was performed for this test-fixture-only follow-up; the unchanged
+published production/client head has the separately identified 317-case Web
+and macOS CI passes. Those results do not validate unpublished changes on CI.
+All logs and exact commands are preserved in
+`../rustX-pi-performance-20261016/local-validation/`.
+
+The paired local runtime reduction is not a claim that final-head CI has passed.
+Raw logs, both instrumented patches, commands and SHA-256 evidence are retained
+in `../rustX-pi-performance-20261016/ci-fixture/`.
+
+### Final scoped Source index correction (schema 67)
+
+Child-ordinal entries now retain only the canonical child path. The field entry
+remains the sole complete Fact; original bytes, bounded previews, immutable
+input identities, independent capture seats and publication frontiers are
+unchanged. Pagination already followed the field lookup, so this adds no lookup.
+The authenticated page remains at most 64 KiB with bounded depth; path decoding
+checks its 4,096-byte limit before parsing, exact parent/depth and canonical
+encoding. Rehashed replacement of a child path still fails against the original
+independent capture seat. SQLite format 67 explicitly refuses format 66 without
+conversion; App Server 50 and Runtime Client 71 remain unchanged.
+
+Four added deterministic regressions cover these boundaries:
+
+| Selector suffix | Boundary proved |
+| --- | --- |
+| `t08_t15_t20_child_references_keep_one_exact_fact_with_the_original_read_bound` | Independent original-source oracle, exact F bytes/headers/ranges, compact C payload, actual bounded page work and comparison with the former duplicated layout |
+| `t08_t12_t19_authenticated_child_paths_reject_malformed_legacy_and_reparented_metadata` | Valid-page-hash malformed, noncanonical, overbound and wrong-parent references fail closed |
+| `t08_t12_t19_original_child_references_reject_page_tamper_and_recapture_without_the_original_seat` | Actual native RequestStart; corrupt and fully rehashed C-tree replacement cannot replace original capture evidence; rollback preserves native facts and subsequent valid admission |
+| `t10_t19_schema_66_full_child_facts_are_refused_without_conversion` | Real format-66 duplicated-C store is refused without changing its schema or bytes |
+
+With the same four-thread/emulator environment above, `cargo test --lib
+--all-features child_reference` passed three tests; `cargo test --lib
+--all-features observation_request::composed::schema_tests` passed four;
+`cargo test --lib --all-features durable::sqlite::` passed all 353 tests in
+240.06s; and `cargo test --lib --all-features boundary_suites::durable::content`
+passed all 27 in 8.95s. Formatting and diff checks passed.
+
+The new default-feature production build used `CARGO_INCREMENTAL=0
+CARGO_BUILD_JOBS=4 cargo build --release --locked --bins` and binary SHA-256
+`3779ec09f2657abf025a39a437563c187af375ae4e43b76131ec4bfc3d0beb4e`.
+Nine serial fresh-store runs (100/300/1,000, three repetitions each) passed all
+4,200 requests. Every request's input/system/Tools hashes matched the previous
+rustX, default Pi and both real pi-durable baselines. Original physical processes
+joined and exited in every case; no mutation was retried or outlier discarded.
+
+At 1,000 turns the old/new medians were: Source page payload 74.15/44.62 MiB;
+combined Source tables and indexes 118.91/78.76 MiB; complete native database
+204.01/163.86 MiB; runtime `write_bytes` 6,294.39/6,098.14 MiB. Request/root,
+canonical and Journal counts remain N/N, 2N and 8N respectively, and Source node
+counts are unchanged. Source pages fell from 63,010 to 44,021. These are measured
+storage reductions, **not an end-to-end speedup**: CPU was 108.46/108.68 seconds,
+wall time 153.937/154.442 seconds, and RSS 207.85/208.50 MiB. The 100-turn median
+wall time increased from 11.044 to 20.824 seconds; those slow samples are retained
+without an unsupported causal explanation. Historical campaigns are not an
+interleaved paired experiment. No FULL synchronous durability, native history,
+audit, Source authentication, or cold-read bound was weakened.
+
+The first final-source all-target Rust invocation rebuilt its test targets and
+failed after 813.86s of library execution: 4,148 passed, six failed, four ignored.
+The five `boundary_suites::app_server_file_read` cases and
+`boundary_suites::app_server_model_selection::children_created_after_selection_inherit_the_parent_and_running_children_allow_selection`
+reached their existing cumulative 30s guard. For the three instrumented cases,
+fixture construction alone took 16.480–19.625s, followed by 8.580–11.904s waiting
+for native handoff. Observation was serviceable (J=2, no read failure, empty
+observation queues); the measured initialize/attach stage was 0.433s. This
+localizes elapsed time before the actual delivery-read gates, but does not
+identify the physical owner responsible for the slowdown.
+
+A narrow `strace` run of all five file-read cases passed in 5.31s; its 1,688
+measured sync/flock calls peaked at 4.4ms. The exact original 114-test prefix
+(70 Agent, 38 App Server, six boundary cases), using the same emitted library
+binary, four workers and unchanged workloads, then passed in 32.58s. Its 2,648
+measured sync/flock calls peaked at 6.9ms. Neither passing trace reproduces or
+explains the original failure. No guard, assertion, scheduling policy or
+production ownership was changed. The full rerun added only a bounded external
+initial-180s read-only process-wait/I/O-pressure sampler; high aggregate host
+pressure alone is not treated as proof of an infrastructure failure. The six
+initial timeouts remain an explicitly unlocalized intermittent risk.
+
+The unchanged-source full rerun exited zero in 809.85s: **4,835 passed, zero
+failed, nine existing ignores across all 20 targets**, with no full-run filters.
+The library reported 4,154 passed/zero failed/four ignored in 605.70s; all six
+previously timed-out cases passed. The original skill-identity/recomposition
+case passed in the complete 47-test Subagent target and again alone with
+`--exact`. The bounded sampler recorded filesystem journal waits during this
+successful run, which cannot explain the earlier run retrospectively.
+
+Strict Clippy, formatting, binary build, test-lane discovery, App Server
+regeneration/drift and TypeScript passed. Dev passed 41 tests; TUI 1,163 with
+one existing skip; Web 2,828 with four existing skips. Their typechecks, Web
+production build, i18n/provenance and all 55 fake-provider tests passed. Both
+unchanged 300-Attempt reading cases passed independently with the pinned browser
+on the default filesystem (2.5m each; wrapper times 170.10s/150.70s). The complete
+`pnpm --dir web-console test:e2e` then passed **317 tests, zero failures/skips**
+in 21.6m (wrapper 1,302.46s), including both original reading cases again. The
+300-Attempt workload, 240s fixture limit, pinned browser and assertions are
+unchanged. These local results do not assert new-head CI success.
+
+Final-source command ledger (exact commands and logs are retained in
+`../rustX-pi-durable-performance-20261016/source67-validation2/results.json`):
+
+| Command | Final local result |
+| --- | --- |
+| `git diff --check` | Passed |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `cargo build --bins` | Passed |
+| `cargo test --all-targets --all-features` | Passed, 4,835/0/9; earlier failed invocation retained above |
+| `cargo run --all-features --example check_test_lanes` | Passed |
+| `pnpm --dir protocol/app-server check` | Passed, no generated drift |
+| `pnpm --dir protocol/app-server typecheck` | Passed |
+| `pnpm --dir dev typecheck` | Passed |
+| `pnpm --dir dev test` | Passed, 41/0/0 |
+| `pnpm --dir tui typecheck` | Passed |
+| `pnpm --dir tui test` | Passed, 1,163/0/1 |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | Passed, 2,828/0/4 |
+| `pnpm --dir web-console build` | Passed |
+| `pnpm --dir web-console check:i18n` | Passed |
+| `pnpm --dir web-console check:provenance` | Passed |
+| `cargo test --test subagent --all-features definitions::skill_version_identity_is_frozen_across_the_boundary -- --exact` | Passed, one test |
+| `uv run --project test-support/fake-provider --frozen pytest test-support/fake-provider/tests` | Passed, 55 tests |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'native distant reading rail, detached/latest follow and measured width in both locales'` | Passed, one test |
+| `bash web-console/scripts/browser-tests.sh test/e2e/reading.spec.ts --grep 'Fork source exact Message landing and cancellation by scrolling, newer navigation and attachment replacement'` | Passed, one test |
+| `pnpm --dir web-console test:e2e` | Passed, 317/0/0 |
+
+Counts use passed/failed/ignored-or-skipped. No live-provider tests were enabled.
+Native validation retained `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`,
+`RUST_TEST_THREADS=4` and `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. macOS and final-head
+GitHub Actions remain remote checks; the published predecessor's green lanes do
+not validate this commit.
+
+After the explicitly approved workflow-budget edit, `cargo test --all-features
+--example check_test_lanes` passed all 17 tests; `cargo run --all-features --example
+check_test_lanes`, formatting and whitespace checks passed again. Parsing the old
+and new YAML and comparing their complete structures confirmed that only the
+`rust-contracts` whole-job timeout changed (25 to 45). The final pre-publication
+fetch still resolved main to `8cb41624eb2dc2ca87e4409961f42553ceb029cf`, already
+an ancestor of the issue branch; no new merge or unmerged dependency was needed.
+
+Raw runs, exact build/source/supervisor hashes, all-role resource tables,
+closed-store accounting and reproducible reductions are retained under
+`../rustX-pi-durable-performance-20261016/`, especially
+`rustx-schema67-formal-report.md` and `source67-validation/`.
+
+A separate production comparison uses official `earendil-works/pi` at
+`90d863f7c1183b965f099855715d6e88c7b8a52c` (1.3.0), independently cloned to
+`../pi-rustx-benchmark`; the pre-existing `../pi` checkout was untouched. rustX
+was built with `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 cargo build --release
+--locked --bins` (default features), binary SHA-256
+`78ccf74cc45c87ce1a76525ff931d9d98beb0520213151e3d53d42ec24377c92`.
+Pi used `npm ci --ignore-scripts`, documented catalog hydration, and
+`npm run build:offline`; bundle entry SHA-256
+`e79626f2dd6f94aa45d30f3fa63cd84319a6eefcd150b353cfaf274366926774`.
+Catalog hydration fetched metadata only; all inference used the unchanged local
+rustX fake-provider HTTP/SSE engine.
+
+All 18 formal runs (three repetitions per runtime at 100/300/1,000 turns) and
+four supplemental temporary-space runs passed. Each used a fresh persistent
+session, identical ordered text and output, no declared/invoked Tools, and an
+empty system prompt. Every actual provider request's complete history, system,
+and Tool hashes matched across products and workload prefixes. Exact native
+settlement and exactly N requests were required; no semantic retries occurred.
+Separate 10-turn warm-ups warm filesystem caches, not each new Pi process's JIT.
+Runtime affinity was four physical cores; provider, driver, and sampler each
+had a separate core. Affinity is not exclusive host isolation. High host I/O
+pressure and all latency outliers remain recorded.
+
+| Runtime | Turns | Loop seconds, median [range] | Runtime CPU seconds, median | Runtime sampled PSS peak MiB, median | Runtime process write_bytes MiB, median | Final DB/JSONL MiB, median |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| rustX | 100 | 11.04 [11.00, 31.33] | 8.95 | 176.12 | 537.93 | 19.93 |
+| Pi | 100 | 0.28 [0.28, 0.30] | 0.40 | 123.69 | 0.08 | 0.08 |
+| rustX | 300 | 43.83 [33.89, 44.53] | 28.44 | 185.37 | 1767.32 | 60.27 |
+| Pi | 300 | 0.97 [0.96, 1.07] | 1.30 | 180.03 | 0.23 | 0.23 |
+| rustX | 1,000 | 153.94 [153.75, 154.30] | 108.46 | 205.62 | 6294.39 | 204.01 |
+| Pi | 1,000 | 6.61 [6.59, 6.63] | 5.69 | 378.00 | 0.75 | 0.75 |
+
+These are product-cost measurements, **not equal durability or observation
+work**. rustX retains canonical/audit/frozen Source evidence with SQLite
+DELETE/FULL transactions; Pi's default session JSONL uses `appendFileSync`
+without explicit fsync and lacks the same bounded observation contract. The
+1,000-turn rustX database includes approximately 118.91 MiB of Request Source
+and 46.84 MiB of native journal tables plus indexes. Pi's separate approximately
+2.64 MiB shutdown compile cache is excluded from its history JSONL column.
+The no-Tool scenario does not replace the earlier 17-Tool debug measurements or
+the full browser's 300-Attempt correctness fixture.
+
+CPU/IO deltas are measured before child reaping, avoiding double-counting
+waited-child I/O in the driver. Provider, driver, and sampler are separate in
+the raw report. Early/middle/late mean latency at 1,000 turns was
+104.67/126.35/137.58 ms for rustX and 7.32/5.70/10.76 ms for Pi. Sampled
+residency is not heap allocation, and temporary maxima can miss short-lived
+files. All original runtime/provider processes were absent after physical
+shutdown; final files were intentionally retained. Supplemental runs fill the
+earlier sampler's missing temp-only metric without replacing formal samples.
+No sampler caps, dropped records, or request-equality failures were reported.
+
+Raw records, every sample, workload/adapter/source/binary hashes, build logs,
+exact commands, host evidence, and the complete report are retained locally in
+`../rustX-pi-performance-20261016/` (`final-report-v2.md`, `final-report-v2.json`,
+`results/*`; the original report is retained). The report separates sampled
+rollback-journal/WAL/SHM and deleted-FD space from explicit temporary roots,
+without summing potentially overlapping categories. No new product optimization is justified solely by the timing
+ratio; phase ownership must be measured before changing native work.
+
+### Official pi-durable supplement and scoped Source follow-up
+
+The previous 18-run comparison used default pi coding-agent, **not**
+`packages/durable`. Its results and original release binaries remain preserved.
+A separate campaign used the actual official pi-durable 1.3.0 production SDK at
+the same `90d863f7` pin. Its native `Harness`/`Submission.wait`/idle/answer APIs
+ran against the same local fake provider with SQLite and JSONL separately.
+All 18 formal runs (100/300/1,000 turns, three repetitions per storage mode)
+passed; every one of 8,400 requests matched corresponding historical rustX and
+default-pi input/history/system/Tool hashes. No real model API was used, no extra
+model call occurred, and all original runtime/provider/sampler processes exited.
+
+| Native pi-durable storage | Turns | Median loop seconds | Runtime CPU seconds | Runtime sampled PSS peak MiB | Final native DB/JSONL MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SQLite | 100 | 0.458 | 0.57 | 93.47 | 0.234 |
+| SQLite | 300 | 1.159 | 1.47 | 161.23 | 0.520 |
+| SQLite | 1,000 | 4.385 | 3.95 | 312.63 | 1.488 |
+| JSONL | 100 | 0.478 | 0.63 | 91.10 | 0.171 |
+| JSONL | 300 | 1.207 | 1.57 | 162.58 | 0.513 |
+| JSONL | 1,000 | 4.502 | 4.36 | 303.93 | 1.716 |
+
+These are separate campaign measurements, not equal contracts or a schema-67
+rustX performance claim. Pi SQLite configures WAL/NORMAL; JSONL defaults to no
+fsync. rustX retains DELETE/FULL, original request evidence, publication/audit
+ordering and its bounded observation contracts. A new readonly diagnostic
+connection's `synchronous` setting does not establish the original writer's
+setting. Pi's task recovery may reissue committed work and rerun request hooks;
+the timed lane disables both retry layers and does not claim immutable native
+request or crash-recovery equivalence. The package remains experimental.
+
+Exact builds, source/dist hashes, all repetitions/outliers, early/middle/late
+growth, per-table/sidecar storage, temporary/WAL/FD observations and separate
+runtime/provider/driver/sampler CPU and memory are retained in
+`../rustX-pi-durable-performance-20261016/pi-durable-formal-report.{md,json}`.
+This supplements rather than relabels the default-pi baseline.
+
+The selected PR-sized Source optimization removes only duplicate child-index
+Fact payloads. A read-only audit of a retained 100-turn database verified all
+6,298 page hashes: every one of 7,500 `C` values duplicated an existing `F`
+payload. Replacing those values with bounded paths removes 2,243,580 encoded
+value bytes before page repacking, about 29.82% of that database's Source page
+BLOB bytes. This is a layout measurement, not a measured application speedup.
+The actual new binary and final validation must be measured separately.
+`F` payloads, raw fragments, capture witnesses and FULL durability remain intact.
+Broader binary-codec, lazy-preview, small temporary-index and static-configuration
+sharing changes are not included without their own cold-read/equivalence evidence;
+no asynchronous queue or cache lifetime authority is introduced here.
+
 ### Published-head CI and local resource investigation
 
 At published HEAD `831c4010fc7c0c1a8b2f3bb0780b45eb0eb3cc52`,
@@ -389,12 +769,12 @@ by original registration/activation. Real Child Unix recovery preserves activati
 and never falls back to a second Parent projection or semantic replay.
 
 Current independent versions: App Server **50**, WebSocket **rustx.app-server.v50**,
-Runtime Client **71**, SQLite **66**, Runtime Event **1**, Subagent Control **33**,
+Runtime Client **71**, SQLite **67**, Runtime Event **1**, Subagent Control **33**,
 private Product Host **4**, Session catalog **16**. Generated contracts agree.
 
 ### Bounded work and source identity
 
-Schema 65 introduced (and schema 66 retains) the replacement of prior per-Request copied segments and shape packs with
+Schema 65 introduced (and schema 67 retains) the replacement of prior per-Request copied segments and shape packs with
 one native persistent selected-input tree and optional Source augmentation on
 those same nodes. Request metadata binds the exact root; full historical input is
 materialized only by explicit consumers. Publication and terminal checks use a
@@ -424,6 +804,13 @@ serves its own bounded authenticated pages. The scaling evidence must distinguis
 these costs rather than claim constant work for an entire Tool-bearing request.
 
 Source roots retain original capture witnesses and bind exact native identities.
+Schema 67 stores one complete field Fact under its field key. Parent/ordinal
+lookup entries contain only the bounded canonical child path. Pagination already
+loads the field Fact after resolving that path, so this removes duplicate payload
+and parsing without adding a lookup or moving work to a background owner. Original
+fragment bytes, field headers, native selection and capture-witness validation
+remain at their existing owners. Schema 66 stores are refused rather than decoded
+through a compatibility path.
 Fragments are authenticated pages capped at 64 KiB, with fragment depth below 16
 and native path height at most 32. Range reads emit at most 64 pieces and return an
 advancing partial chunk when needed; previews admit at most 512 pieces and retain

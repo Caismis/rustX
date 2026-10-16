@@ -23,6 +23,57 @@ use crate::message::types::UserContentBlock;
 use crate::scripted_suites::common::{FixtureReply, FixtureServer, HeaderGate};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Bounded fixture timings, emitted only when an existing operation is dropped.
+struct FixturePhase {
+    label: &'static str,
+    started: std::time::Instant,
+    entered: std::time::Instant,
+    stage: &'static str,
+    finished: [(&'static str, u128); 32],
+    count: usize,
+    complete: bool,
+}
+impl FixturePhase {
+    fn new(label: &'static str) -> Self {
+        let started = std::time::Instant::now();
+        Self {
+            label,
+            started,
+            entered: started,
+            stage: "start",
+            finished: [("", 0); 32],
+            count: 0,
+            complete: false,
+        }
+    }
+    fn enter(&mut self, stage: &'static str) {
+        let now = std::time::Instant::now();
+        if self.count < self.finished.len() {
+            self.finished[self.count] = (self.stage, now.duration_since(self.entered).as_micros());
+            self.count += 1;
+        }
+        self.stage = stage;
+        self.entered = now;
+    }
+    fn finish(&mut self) {
+        self.complete = true;
+    }
+}
+impl Drop for FixturePhase {
+    fn drop(&mut self) {
+        if !self.complete {
+            eprintln!(
+                "incomplete fixture phases: label={} stage={} elapsed_us={} stage_us={} finished_us={:?}",
+                self.label,
+                self.stage,
+                self.started.elapsed().as_micros(),
+                self.entered.elapsed().as_micros(),
+                &self.finished[..self.count],
+            );
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct AsyncGate {
     entered: watch::Sender<bool>,
@@ -154,6 +205,8 @@ impl Fixture {
         Self::with_session_count(tool, 2).await
     }
     async fn with_session_count(tool: Option<&'static str>, count: usize) -> Self {
+        let mut phases = FixturePhase::new("Session fixture construction");
+        phases.enter("provider listener");
         let gates = [HeaderGate::new(), HeaderGate::new()];
         let server_gates = gates.clone();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
@@ -201,6 +254,7 @@ impl Fixture {
                 "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
                 "data: [DONE]\n\n")).with_header_gate(server_gates[index].clone())
         }).await;
+        phases.enter("workspace and configuration");
         if tool == Some("delivery-child") {
             eprintln!("ChildDelivery Fixture: listener ready; native initialization");
         }
@@ -264,6 +318,7 @@ impl Fixture {
             toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_status"]})).unwrap());
         documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
+        phases.enter("launch analysis");
         let paths = launch::analyze(&LaunchRequest::default(), &host)
             .unwrap()
             .admit(CredentialSnapshot::default)
@@ -274,6 +329,7 @@ impl Fixture {
         let controller = SessionController::open(&paths.runtime_root).unwrap();
         let mut sessions = Vec::new();
         for (ordinal, workspace) in workspaces.iter().take(count).enumerate() {
+            phases.enter("create native Session");
             if tool == Some("delivery-child") {
                 eprintln!("ChildDelivery Fixture: create native Session {ordinal}");
             }
@@ -291,6 +347,7 @@ impl Fixture {
             eprintln!("ChildDelivery Fixture: Sessions created; manager wiring");
         }
         let archive_root = paths.runtime_root.clone();
+        phases.enter("manager construction");
         let manager = SessionRuntimeManager::new(
             controller,
             UserConfigManager::new(paths.sources.clone()).unwrap(),
@@ -313,6 +370,7 @@ impl Fixture {
             },
         )
         .unwrap();
+        phases.finish();
         Self {
             _root: root,
             archive_root,

@@ -8,6 +8,9 @@ use crate::runtime::read_layout::{
 use base64::Engine as _;
 const CHUNK: u64 = 8192;
 #[cfg(test)]
+#[path = "child_reference_tests.rs"]
+mod child_reference_tests;
+#[cfg(test)]
 #[path = "reader_tests.rs"]
 mod reader_tests;
 fn geometry(
@@ -243,15 +246,18 @@ fn persist_part(
 }
 fn persist_fact(connection: &Connection, fact: &Fact) -> Result<(), ConversationStoreError> {
     let bytes = bounded(fact, 40960)?;
+    let field = field_key(&fact.path)?;
     let mut statement = connection
         .prepare_cached("INSERT INTO request_source_fact_spool(key,value) VALUES(?1,?2)")
         .map_err(|error| storage(error.to_string()))?;
     statement
-        .execute(params![field_key(&fact.path)?, bytes])
+        .execute(params![field, bytes])
         .map_err(|error| storage(error.to_string()))?;
     if let (Some(parent), Some(ordinal)) = (&fact.parent, fact.ordinal) {
+        // The field index owns the complete Fact. Pagination needs only its path;
+        // the authenticated child key already owns the parent/ordinal relation.
         statement
-            .execute(params![child_key(parent, ordinal)?, bytes])
+            .execute(params![child_key(parent, ordinal)?, &field.as_bytes()[1..]])
             .map_err(|error| storage(error.to_string()))?;
     }
     Ok(())
@@ -485,12 +491,27 @@ pub(super) fn child(
     fragment: &Fragment,
     path: &[String],
     ordinal: u64,
-) -> Result<Option<Fact>, ConversationStoreError> {
+) -> Result<Option<Vec<String>>, ConversationStoreError> {
     index::get(connection, &fragment.fields, &child_key(path, ordinal)?)?
-        .map(|bytes| {
-            serde_json::from_slice(&bytes).map_err(|_| storage("fragment child metadata malformed"))
-        })
+        .map(|bytes| child_path(&bytes, path))
         .transpose()
+}
+fn child_path(bytes: &[u8], parent: &[String]) -> Result<Vec<String>, ConversationStoreError> {
+    if bytes.len() > 4096 {
+        return Err(storage("fragment child path exceeds bound"));
+    }
+    let path: Vec<String> =
+        serde_json::from_slice(bytes).map_err(|_| storage("fragment child path malformed"))?;
+    if path.len() != parent.len().saturating_add(1)
+        || !path.starts_with(parent)
+        || super::super::field_path(&path)
+            .map_err(|_| storage("fragment child path exceeds bound"))?
+            .as_bytes()
+            != bytes
+    {
+        return Err(storage("fragment child path evidence differs"));
+    }
+    Ok(path)
 }
 pub(super) fn bytes(
     connection: &Connection,

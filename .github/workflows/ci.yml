@@ -108,7 +108,10 @@ jobs:
   rust-contracts:
     name: Deterministic contracts (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Preparation and the two native builds consumed about 11 minutes in
+    # run 38883956631. Budget compilation and complete test execution here;
+    # individual liveness guards and the other lanes retain their bounds.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout

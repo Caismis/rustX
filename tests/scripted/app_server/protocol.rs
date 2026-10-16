@@ -1,6 +1,6 @@
 //! Direct connection contracts. Provider gates prove overlap; no socket timing.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
-use super::{Fixture, bounded, input};
+use super::{Fixture, FixturePhase, bounded, input};
 use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
 use crate::runtime_client::content::CanonicalContentLocator;
@@ -6357,12 +6357,16 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
     use base64::Engine;
     use futures_util::{SinkExt, StreamExt};
     bounded(async {
+        let mut phases = FixturePhase::new("committed present boundary");
+        phases.enter("fixture construction");
         let f = Fixture::with_tool(Some("present")).await;
+        phases.enter("product host listener");
         let path = f.workspaces[0].join("报告 file.md");
         let original = b"# Original\r\n\r\nNative bytes\r\n";
         std::fs::write(&path, original).unwrap();
         let browser = AppServerConnection::new(f.host.clone());
         let product_host = TrustedFileHost::new(&f).await;
+        phases.enter("initialize and attach");
         initialize(&browser).await;
         let target = attach(&browser, &f, 0).await;
         let read = |message_id| crate::app_server::product_host::FileRead {
@@ -6370,6 +6374,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             source: crate::app_server::product_host::ReadSource::SessionFile { agent_id: None, locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id }, delivery_index: 0 },
             roots: vec![f.workspaces[0].clone()],
         };
+        phases.enter("pre-turn file refusal");
         assert_eq!(
             product_host.rejected(
                 read(crate::runtime::identity::MessageId::new("invented"))
@@ -6379,6 +6384,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
                 reason: FileFailure::Unavailable
             }
         );
+        phases.enter("present attempt settlement");
         let completion = AttemptCompletion::capture(&f, &target);
     f.gates[0].release();
         call(
@@ -6391,6 +6397,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         )
         .await;
         completion.observed(&browser, &target).await;
+        phases.enter("committed checkpoint and metadata");
         let MethodResult::Checkpoint { checkpoint: checkpoint_13 } = call(
             &browser,
             4101,
@@ -6414,6 +6421,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         assert_eq!(file.scope.conversation_id, target.conversation_id);
         assert_eq!(file.name, "报告 file.md");
         assert!(tool.result.artifacts.is_empty());
+        phases.enter("original bytes and authority checks");
         let requests = f.provider.request_bodies().len();
         assert_eq!(requests, 2);
         let MethodResult::SessionFileBytes {
@@ -6460,6 +6468,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let older_tool = read_delivery_metadata(&browser, &target, &older_reference.content_ref).await;
         assert_eq!(older_tool.id, tool.id);
         assert_eq!(older_tool.result.deliveries.as_slice(), std::slice::from_ref(&file));
+        phases.enter("fork and inherited bytes");
         let response_boundary = delivery_response_boundary(&browser, &target).await;
         let MethodResult::SessionTransition { session: fork, .. } = call(&browser, 4122, Method::SessionFork {
             session_id: target.session_id.clone(), node_id: Some(f.sessions[0].active_node.clone()),
@@ -6506,6 +6515,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             .await,
             ErrorData::InvalidState
         );
+        phases.enter("mutable file and capacity checks");
         std::fs::write(&path, vec![b'x'; 300 * 1024]).unwrap();
         let MethodResult::SessionFileBytes { data, .. } =
             product_host.success( read(tool.id.clone())).await
@@ -6555,6 +6565,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         std::fs::write(&path, original).unwrap();
         let probe = f.host.file_read_probe();
         for revoked in ["credential", "socket", "attachment"] {
+            phases.enter("revocation open and before-bytes admission");
             let mut completed = probe.completed.subscribe();
             probe.completed.send_replace(None);
             let mut retirement_waiting = probe.retirement_waiting.subscribe();
@@ -6565,6 +6576,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             let gate = probe.before_bytes.clone();
             tokio::task::spawn_blocking(move || gate.wait_entered()).await.unwrap();
             assert_eq!(*completed.borrow(), None, "open descriptor has not published bytes");
+            phases.enter("revoke exact authority");
             if revoked == "credential" {
                 f.host.bind_product_host(None);
                 assert!(product_host.open(FILE_HOST_TOKEN).await.is_err(), "revoked secret admits no later read");
@@ -6587,6 +6599,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             } else {
                 call(&browser, 4193, Method::SessionDetach { target: target.clone() }).await;
             }
+            phases.enter("physical read settlement");
             drop(gate_release);
             completed.wait_for(Option::is_some).await.unwrap();
             assert_eq!(*completed.borrow(), Some(false), "{revoked}: native read publishes no bytes after revocation");
@@ -6596,6 +6609,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
                 assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS, "clean native close is a physical permit retirement witness");
                 assert!(matches!(product_host.success(read(tool.id.clone())).await, MethodResult::SessionFileBytes { .. }), "a replacement read is admitted after the close acknowledgement");
             }
+            phases.enter("socket retirement");
             while let Some(frame) = pending.next().await {
                 if let Ok(tokio_tungstenite::tungstenite::Message::Text(text)) = frame {
                     let reply: Response = serde_json::from_str(&text).unwrap();
@@ -6614,10 +6628,14 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
             requests,
             "all file reads issue zero model requests"
         );
+        phases.enter("close product host");
         browser.close();
         product_host.close().await;
+        phases.enter("unload fork");
         f.manager.unload(&fork.active_conversation_id).await.unwrap();
+        phases.enter("close fixture");
         f.close().await;
+        phases.finish();
     })
     .await;
 }
@@ -7317,8 +7335,12 @@ pub(super) fn failed_with(response: &Response, expected: &ErrorData) {
 pub(crate) async fn delivery_cancellation_scenario() {
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     bounded(async {
+        let mut phases = FixturePhase::new("request-scoped delivery cancellation");
+        phases.enter("fixture construction");
         let f = Fixture::with_tool(Some("present")).await;
+        phases.enter("commit present delivery");
         let tool = committed_delivery(&f).await;
+        phases.enter("initialize trusted connection");
         let authority = tokio_util::sync::CancellationToken::new();
         let trusted = AppServerConnection::with_delivery_access(f.host.clone(), authority);
         initialize(&trusted).await;
@@ -7334,6 +7356,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
             tokio::spawn(async move { trusted.handle_request(request).await })
         };
 
+        phases.enter("cancellation before native admission");
         // 1. Accepted before native admission: nothing is admitted at all.
         probe.completed.send_replace(None);
         probe.before_admission.arm();
@@ -7350,6 +7373,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
         // bytes): the admitted read keeps its permit until it physically
         // settles, publishes nothing, and answers exactly once.
         for gate in [probe.before_open.clone(), probe.before_bytes.clone()] {
+            phases.enter("physical read gate admission");
             probe.completed.send_replace(None);
             let release = gate.arm_scoped();
             let pending = spawn_read(11);
@@ -7357,6 +7381,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
             tokio::task::spawn_blocking(move || entered.wait_entered())
                 .await
                 .unwrap();
+            phases.enter("cancel held physical read");
             assert!(cancel_delivery(&trusted, 11).await);
             assert_eq!(
                 permits.available_permits(),
@@ -7364,6 +7389,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
                 "the parked read still owns its permit"
             );
             assert!(!pending.is_finished(), "no response before settlement");
+            phases.enter("cancelled physical settlement");
             drop(release);
             completed.wait_for(Option::is_some).await.unwrap();
             assert_eq!(*completed.borrow(), Some(false), "no bytes produced");
@@ -7373,6 +7399,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
 
         // 4. Accepted after physical settlement, before the publication
         // commit: the produced bytes and the native path are not published.
+        phases.enter("cancellation before publication");
         for locate in [false, true] {
             probe.completed.send_replace(None);
             let reply = trusted
@@ -7386,6 +7413,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
 
         // 5. After the publication commit the response stands; a late cancel
         // is refused rather than misrepresenting it as unpublished.
+        phases.enter("late and unknown cancellation");
         let published = trusted.handle_request(read(13)).await;
         assert_eq!(delivered_bytes(&published), DELIVERED);
         assert!(!cancel_delivery(&trusted, 13).await);
@@ -7393,6 +7421,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
 
         // 6. Concurrent requests: cancelling one never touches the other,
         // nor can another connection (or an ordinary one) name it.
+        phases.enter("independent request ownership");
         let other = AppServerConnection::with_delivery_access(
             f.host.clone(),
             tokio_util::sync::CancellationToken::new(),
@@ -7435,10 +7464,12 @@ pub(crate) async fn delivery_cancellation_scenario() {
             DELIVERED
         );
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+        phases.enter("close connections and fixture");
         other.close();
         ordinary.close();
         trusted.close();
         f.close().await;
+        phases.finish();
     })
     .await;
 }
@@ -7516,8 +7547,12 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     bounded(async {
+        let mut phases = FixturePhase::new("sixteenth in-flight delivery cancellation");
+        phases.enter("fixture construction");
         let f = Fixture::with_tool(Some("present")).await;
+        phases.enter("commit present delivery");
         let tool = committed_delivery(&f).await;
+        phases.enter("initialize and attach transport");
         let connection = std::sync::Arc::new(AppServerConnection::with_delivery_access(
             f.host.clone(),
             tokio_util::sync::CancellationToken::new(),
@@ -7544,6 +7579,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         let read_probe = f.host.file_read_probe();
         let permits = f.host.file_reads();
 
+        phases.enter("physical read before-bytes gate");
         // A delivery read parked after its leaf open, before its bytes.
         let release_bytes = read_probe.before_bytes.arm_scoped();
         input
@@ -7559,6 +7595,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
             SESSION_FILE_MAX_READS - 1,
             "the read is admitted and holds its native permit"
         );
+        phases.enter("park fourteen native operations");
         // Fourteen unrelated requests across their declared admission lanes.
         let probe = f.manager.probe(&own.conversation_id);
         probe.before_operation.arm();
@@ -7570,6 +7607,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         }
         probe.before_operation.parked(parties.len()).await;
 
+        phases.enter("sixteenth request cancellation response");
         // The sixteenth request in flight: the cancel.
         let cancel = Request {
             jsonrpc: JsonRpcVersion::V2,
@@ -7599,6 +7637,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
             "no unrelated request settled or was dropped"
         );
 
+        phases.enter("cancelled read physical settlement");
         drop(release_bytes);
         let cancelled = next_response().await;
         assert!(matches!(&cancelled, Response::Failure(failure) if failure.id == Some(RequestId::Integer(100))));
@@ -7606,6 +7645,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
         assert_eq!(probe.before_operation.parked_now(), parties.len());
 
+        phases.enter("release and answer fourteen native operations");
         probe.before_operation.release();
         let mut answered = Vec::new();
         for _ in &parties {
@@ -7617,6 +7657,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         assert_eq!(answered, expected, "each retained request answered exactly once");
         probe.before_operation.parked(0).await;
 
+        phases.enter("post-cancellation checkpoint");
         // Back to baseline, and the same connection still serves requests.
         let after = Request {
             jsonrpc: JsonRpcVersion::V2,
@@ -7632,9 +7673,12 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         };
         assert_eq!(snapshot.id, RequestId::Integer(300));
         assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
+        phases.enter("transport EOF and join");
         drop(input);
         serving.await.unwrap().unwrap();
+        phases.enter("close fixture");
         f.close().await;
+        phases.finish();
     })
     .await;
 }

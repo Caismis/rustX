@@ -127,7 +127,7 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
         SqliteConversationStore::open_existing(conversation, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 65,
-            expected: 66
+            expected: 67
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -150,5 +150,78 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
             )
             .unwrap(),
         LEGACY_PAGES
+    );
+}
+
+#[test]
+fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
+    use base64::Engine as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("old-child-facts.sqlite");
+    let conversation = ConversationId::generate();
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    let fact = super::Fact {
+        path: vec!["legacy".into()],
+        parent: Some(Vec::new()),
+        ordinal: Some(0),
+        start: 1,
+        end: 2,
+        children: 0,
+        nodes: 1,
+        object: false,
+        container: false,
+        header: base64::engine::general_purpose::STANDARD.encode(b"0"),
+        key: None,
+        name: Some("legacy".into()),
+    };
+    let legacy = serde_json::to_vec(&serde_json::json!({"type":"leaf","entries":[[
+        "C[]:00000000000000000000",
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&fact).unwrap())
+    ]]}))
+    .unwrap();
+    let digest = hash(&legacy);
+    {
+        let connection = store.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO request_source_pages(hash,bytes) VALUES(?1,?2)",
+                params![digest.as_slice(), legacy],
+            )
+            .unwrap();
+        connection
+            .execute("UPDATE rustx_store SET schema_version=66 WHERE id=1", [])
+            .unwrap();
+    }
+    drop(store);
+    assert!(matches!(
+        SqliteConversationStore::open_existing(conversation, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 66,
+            expected: 67
+        })
+    ));
+    let connection = Connection::open(path).unwrap();
+    let retained: Vec<u8> = connection
+        .query_row(
+            "SELECT bytes FROM request_source_pages WHERE hash=?1",
+            [digest.as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        retained, legacy,
+        "refusal never rewrites the old child payload"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT schema_version FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get::<_, u32>(0)
+            )
+            .unwrap(),
+        66
     );
 }
