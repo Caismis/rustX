@@ -69,20 +69,35 @@ pub(super) fn is_writer_artifact(name: &OsStr) -> bool {
     name.starts_with(LOCK_PREFIX.as_bytes()) || name.starts_with(STAGE_PREFIX.as_bytes())
 }
 
-/// Shared with create-only initialization. Never unlink the lock inode.
-pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
-    let lock = lock_path(target)?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(lock)?;
+/// Open the persistent writer lock inode, creating it when missing.
+///
+/// The inode is created once and never unlinked, so creation is exclusive:
+/// open the existing lock; when it is missing, create it with `O_EXCL`; a
+/// creator that loses that race opens the inode the winner created. A
+/// non-exclusive `O_CREAT` is never used: on macOS two concurrent
+/// non-exclusive creators of one new name can see the loser fail with
+/// `ENOENT`, which would report a lost creation race as an I/O failure.
+fn open_lock(open: impl Fn(OFlag) -> nix::Result<File>) -> std::io::Result<File> {
+    let flags = OFlag::O_RDWR | OFlag::O_NONBLOCK | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    let file = match open(flags) {
+        Err(nix::errno::Errno::ENOENT) => match open(flags | OFlag::O_CREAT | OFlag::O_EXCL) {
+            Err(nix::errno::Errno::EEXIST) => open(flags),
+            created => created,
+        },
+        opened => opened,
+    }?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other("lock is not a regular file"));
     }
+    Ok(file)
+}
+
+/// Shared with create-only initialization. Never unlink the lock inode.
+pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
+    let lock = lock_path(target)?;
+    let file = open_lock(|flags| {
+        nix::fcntl::open(&lock, flags, Mode::S_IRUSR | Mode::S_IWUSR).map(File::from)
+    })?;
     lock_file(&file, false)?;
     Ok(file)
 }
@@ -456,14 +471,10 @@ impl SourceDirectory {
     /// [`lock_document`] locks while this directory holds. Advisory: it
     /// serializes rustX writers, never an external rename.
     pub(super) fn lock(&self, name: &OsStr) -> std::io::Result<File> {
-        let file = self.open_file(
-            OsStr::new(&lock_name(name)),
-            OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_NONBLOCK,
-            Mode::S_IRUSR | Mode::S_IWUSR,
-        )?;
-        if !file.metadata()?.is_file() {
-            return Err(std::io::Error::other("lock is not a regular file"));
-        }
+        let lock = lock_name(name);
+        let file = open_lock(|flags| {
+            self.open_file(OsStr::new(&lock), flags, Mode::S_IRUSR | Mode::S_IWUSR)
+        })?;
         lock_file(&file, false)?;
         Ok(file)
     }
@@ -723,6 +734,69 @@ pub(super) mod locks {
 #[cfg(test)]
 mod lock_tests {
     use super::*;
+
+    /// The exact losing-creator interleaving on a real filesystem: the lock is
+    /// missing when first opened, another creator wins before this one's
+    /// exclusive create, and this one then opens the winner's inode. No
+    /// attempt is a non-exclusive create.
+    #[test]
+    fn a_creator_that_loses_the_lock_creation_race_opens_the_winners_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(".rustx-lock-race.lock");
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let winner = std::cell::Cell::new(None);
+        let file = open_lock(|flags| {
+            attempts.borrow_mut().push(flags);
+            let opened = nix::fcntl::open(&path, flags, Mode::S_IRUSR | Mode::S_IWUSR);
+            if attempts.borrow().len() == 1 {
+                // The concurrent creator commits right after the first lookup.
+                let created = File::create_new(&path).unwrap();
+                winner.set(Some(created.metadata().unwrap().ino()));
+            }
+            opened.map(File::from)
+        })
+        .unwrap();
+        let attempts = attempts.into_inner();
+        assert_eq!(attempts.len(), 3, "open, exclusive create, open");
+        assert!(!attempts[0].contains(OFlag::O_CREAT));
+        assert!(attempts[1].contains(OFlag::O_CREAT | OFlag::O_EXCL));
+        assert!(!attempts[2].contains(OFlag::O_CREAT));
+        assert_eq!(Some(file.metadata().unwrap().ino()), winner.get());
+    }
+
+    /// Writers that race to create a document's first lock all hold the same
+    /// inode, one at a time. On macOS a non-exclusive create failed the loser
+    /// with ENOENT (CI run 38988313366).
+    #[test]
+    fn concurrent_first_writers_all_lock_the_same_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("rustx.toml");
+        let source = SourceDirectory::create(&path).unwrap();
+        for round in 0..32 {
+            let document = std::ffi::OsString::from(format!("rustx-{round}.toml"));
+            let barrier = std::sync::Barrier::new(8);
+            let inodes: Vec<_> = std::thread::scope(|threads| {
+                let workers: Vec<_> = (0..8)
+                    .map(|_| {
+                        threads.spawn(|| {
+                            barrier.wait();
+                            source
+                                .lock(&document)
+                                .map(|lock| lock.metadata().unwrap().ino())
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().unwrap())
+                    .collect()
+            });
+            let inodes: Result<std::collections::BTreeSet<_>, _> = inodes.into_iter().collect();
+            assert_eq!(inodes.unwrap().len(), 1, "round {round}");
+        }
+    }
 
     #[test]
     fn interrupted_shared_and_initialization_locks_continue_but_other_errors_survive() {
