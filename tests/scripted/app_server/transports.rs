@@ -2761,7 +2761,10 @@ async fn t16_physical_acceptance_wins_before_replacement_no_lock_cycle() {
         let (registration, _) = slot.following().unwrap();
         let guard = registration.event(checkpoint.cursor);
         let mut blocked = slot.install_wait_probe();
-        let (read, write) = nix::unistd::pipe().unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (release, release_rx) = std::sync::mpsc::channel();
         let accepting = tokio::task::spawn_blocking(move || {
@@ -2891,7 +2894,10 @@ async fn t17_partial_os_pipe_record_finishes_after_registration_replacement() {
             })
             .await;
         let mut outbound = transport::Outbound::reply(r1).unwrap();
-        let (read, write) = nix::unistd::pipe().unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (release, release_rx) = tokio::sync::oneshot::channel();
         let mut writer = FirstByteGate {
@@ -2971,7 +2977,10 @@ async fn t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_reco
         // The malformed record produces a bounded native error immediately,
         // before the initial source notification can become the writer head.
         input.write_all(b"{\n").await.unwrap();
-        let (read, write) = nix::unistd::pipe().unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (release, release_rx) = tokio::sync::oneshot::channel();
         let writer = FirstByteGate {
@@ -3189,7 +3198,10 @@ async fn t17_stdio_input_eof_finishes_the_physically_accepted_output_record() {
             panic!("checkpoint");
         };
         let (input, mut incoming) = tokio::io::duplex(65_536);
-        let (read, write) = nix::unistd::pipe().unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (release, release_rx) = tokio::sync::oneshot::channel();
         let writer = FirstByteGate {
@@ -3313,7 +3325,10 @@ async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
             Some(registration.event(cursor)),
         ))
         .unwrap();
-        let (read, write) = nix::unistd::pipe().unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
         let sender = tokio::net::unix::pipe::Sender::from_owned_fd(write).unwrap();
         sender.writable().await.unwrap();
         let fill = [b'x'; 8192];
@@ -3438,7 +3453,10 @@ async fn t17_partial_event_disconnect_replays_from_locally_applied_cursor() {
         let delivered_event = event.clone();
         assert_eq!(delivered_cursor.get(), applied.get() + 1);
         let mut outbound = transport::Outbound::notification(candidate).unwrap();
-        let (read, write) = nix::unistd::pipe().unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (_release, release_rx) = tokio::sync::oneshot::channel();
         let mut writer = FirstByteGate {

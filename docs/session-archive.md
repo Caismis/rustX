@@ -94,8 +94,13 @@ ownership admission or snapshot. Deletion preview also releases its snapshot
 before managed writer retirement; neither snapshot reader waits on registry
 commit locks.
 
-For this finite membership, capture opens each database read-only, establishes a
-rollback-journal SQLite SHARED barrier and reads its immutable append frontiers.
+For this finite membership, capture opens each existing bound WAL database with
+read-write access solely to acquire `BEGIN IMMEDIATE` writer exclusion. It never
+creates, converts, initializes or repairs application state. The lock order is
+ProductRoot ownership freeze, allocation lifetime pins, then SQLite barriers in
+ConversationId order. Every legitimate writer, including another process, crosses
+SQLite's writer lock. Contention fails immediately; cancellation is checked around
+each acquisition. Failure drops every acquired connection and lifetime pin.
 Previously acquired barriers remain held until all members have been captured.
 It also captures each store's bounded artifact identity/settled-length inventory
 (at most 256 native identities per Conversation), without reading artifact bodies.

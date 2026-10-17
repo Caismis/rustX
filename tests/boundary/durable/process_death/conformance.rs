@@ -481,6 +481,16 @@ fn accepted_inbound_survives_as_pending_only() {
     let lab = Lab::new();
     let mut process = lab.spawn(child::TEXT_TURN, Some("after:accept_inbound"));
     process.wait_reached("after:accept_inbound");
+    assert_eq!(&std::fs::read(lab.database()).unwrap()[18..20], &[2, 2]);
+    assert!(
+        lab.database()
+            .with_file_name("conversation.sqlite-wal")
+            .metadata()
+            .unwrap()
+            .len()
+            > 32,
+        "the killed writer must have real WAL frames"
+    );
     process.sigkill();
 
     let durable = lab.durable();

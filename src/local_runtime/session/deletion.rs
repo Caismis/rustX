@@ -202,7 +202,7 @@ impl CleanupWork {
 impl SessionCatalog {
     pub(crate) fn confirm_catalog_durability(&self) -> std::io::Result<()> {
         File::open(&self.path)?.sync_all()?;
-        super::sync_directory_ancestry(&self.root)
+        super::sync_directory(&self.root)
     }
     fn existing_deletion(&self, id: &SessionId) -> Option<SessionDeleteResult> {
         self.document.deletions.get(id).map(|record| {

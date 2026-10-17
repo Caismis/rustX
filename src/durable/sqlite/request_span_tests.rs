@@ -298,7 +298,7 @@ fn t08_t15_t19_original_span_raw_ranges_preserve_original_bytes_without_material
     let (store, snapshot, sequence) = request_span_fixture();
     let oracle = request_span_oracle(&store, &snapshot, sequence);
     let connection = store.lock().unwrap();
-    connection.authorizer(Some(deny_request_span_headers));
+    connection.authorizer(Some(deny_request_span_headers)).unwrap();
     assert!(
         connection
             .query_row(
@@ -349,5 +349,5 @@ fn t08_t15_t19_original_span_raw_ranges_preserve_original_bytes_without_material
     }
     assert_span_work(0);
     connection
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
 }

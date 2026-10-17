@@ -24,7 +24,7 @@ fn native_initialization_state_distinguishes_fresh_empty_and_inherited_without_p
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_bootstrap_payloads));
+        .authorizer(Some(deny_bootstrap_payloads)).unwrap();
     for sql in [
         "SELECT occupancy_json FROM bootstrap_identity WHERE id=1",
         "SELECT message_json FROM message_ledger WHERE position=1",
@@ -40,12 +40,12 @@ fn native_initialization_state_distinguishes_fresh_empty_and_inherited_without_p
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     store.initialize(&[]).unwrap();
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_bootstrap_payloads));
+        .authorizer(Some(deny_bootstrap_payloads)).unwrap();
     assert!(
         store.is_initialized().unwrap(),
         "initialized empty is not fresh"
@@ -53,7 +53,7 @@ fn native_initialization_state_distinguishes_fresh_empty_and_inherited_without_p
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     let inherited = super::store();
     inherited
         .initialize_lineage(&LineageSeed::history(vec![user_message(
@@ -64,7 +64,7 @@ fn native_initialization_state_distinguishes_fresh_empty_and_inherited_without_p
     inherited
         .lock()
         .unwrap()
-        .authorizer(Some(deny_bootstrap_payloads));
+        .authorizer(Some(deny_bootstrap_payloads)).unwrap();
     assert!(inherited.is_initialized().unwrap());
 }
 #[test]
@@ -88,12 +88,12 @@ fn native_initialization_state_reopens_the_same_committed_bootstrap_identity() {
     reopened
         .lock()
         .unwrap()
-        .authorizer(Some(deny_bootstrap_payloads));
+        .authorizer(Some(deny_bootstrap_payloads)).unwrap();
     assert!(reopened.is_initialized().unwrap());
     reopened
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(reopened.load_bootstrap_history().unwrap(), messages);
 }
 #[test]

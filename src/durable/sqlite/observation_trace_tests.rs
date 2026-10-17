@@ -174,7 +174,7 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns));
+        .authorizer(Some(deny_trace_original_columns)).unwrap();
     let query = |kinds| TraceFactQuery {
         scope: TraceFactScope::All,
         kinds,
@@ -208,7 +208,7 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(store.load_request_snapshot(&next.request_id).unwrap(), next);
 }
 fn trace_raw_publication_frames(
@@ -341,7 +341,7 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns));
+        .authorizer(Some(deny_trace_original_columns)).unwrap();
     let proposal = store
         .observation_trace_tool_proposal(&cut, &trace_raw_occurrence())
         .unwrap();
@@ -371,7 +371,7 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='raw_json_utf8'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
@@ -584,7 +584,7 @@ fn t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_b
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns));
+        .authorizer(Some(deny_trace_original_columns)).unwrap();
     let facts = store
         .observation_trace_facts(
             &cut,
@@ -654,7 +654,7 @@ fn t08_t14_t15_t19_trace_headers_and_scalar_ranges_never_read_growing_original_b
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -833,7 +833,7 @@ fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sou
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_trace_original_columns));
+        .authorizer(Some(deny_trace_original_columns)).unwrap();
     assert_eq!(
         store.observation_execution_at(&before, started).unwrap(),
         frozen
@@ -854,7 +854,7 @@ fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sou
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -982,7 +982,7 @@ fn t08_t14_t15_t19_request_acceptance_compares_original_scalar_in_finite_windows
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_original_request_body));
+        .authorizer(Some(deny_original_request_body)).unwrap();
     observation_trace::accepted_compare_work();
     assert!(
         observation_trace::accepted_identity_equal(
@@ -1048,7 +1048,7 @@ fn t08_t14_t15_t19_request_acceptance_compares_original_scalar_in_finite_windows
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot

@@ -29,7 +29,7 @@ fn connection() -> Connection {
 #[test]
 fn native_manifest_rollback_never_certifies_absent_or_reused_row_ids() {
     let mut connection = connection();
-    let owner = Owner::install(&connection);
+    let owner = Owner::install(&connection).unwrap();
     let scope = ConversationId::generate();
     let selected = SelectedInputManifest::from_messages(&scope, &[message(1)]);
     let discarded = {
@@ -64,7 +64,7 @@ fn native_manifest_rollback_never_certifies_absent_or_reused_row_ids() {
 #[test]
 fn native_manifest_append_persists_only_delta_paths_and_retains_old_roots() {
     let mut connection = connection();
-    let owner = Owner::install(&connection);
+    let owner = Owner::install(&connection).unwrap();
     let scope = ConversationId::generate();
     let mut selected = SelectedInputManifest::default();
     let mut retained = Vec::new();
@@ -99,7 +99,7 @@ fn native_mutation_certificate_covers_trigger_replace_delete_and_external_commit
     let connection = Connection::open(&path).unwrap();
     connection.execute_batch("CREATE TABLE message_ledger(position INTEGER PRIMARY KEY,message_id TEXT,message_json TEXT,observation_header TEXT); CREATE TABLE projection_head(id INTEGER PRIMARY KEY,activation INTEGER); CREATE TABLE projection_checkpoints(checkpoint_id TEXT); INSERT INTO message_ledger VALUES(1,'one','original',NULL); CREATE TABLE start_probe(id INTEGER); CREATE TRIGGER mutate_original AFTER INSERT ON start_probe BEGIN UPDATE message_ledger SET message_json='changed' WHERE position=1; END;").unwrap();
     create_schema(&connection).unwrap();
-    let owner = Owner::install(&connection);
+    let owner = Owner::install(&connection).unwrap();
     owner.frontier.store(1, Ordering::Release);
     let before = owner.capture(&connection).unwrap();
     connection
@@ -134,7 +134,7 @@ fn native_mutation_certificate_covers_trigger_replace_delete_and_external_commit
 #[test]
 fn native_selected_leaf_corruption_and_logical_byte_limit_are_explicit() {
     let mut connection = connection();
-    let owner = Owner::install(&connection);
+    let owner = Owner::install(&connection).unwrap();
     let selected = SelectedInputManifest::from_messages(&ConversationId::generate(), &[message(1)]);
     let transaction = connection.transaction().unwrap();
     let selection = persist(&transaction, &selected, &owner).unwrap();
@@ -181,7 +181,7 @@ fn native_manifest_schema_missing_or_replaced_table_is_rejected_before_owner_ins
 fn native_journal_certificate_distinguishes_new_append_from_old_fact_or_auxiliary_update() {
     let connection = connection();
     connection.execute_batch("CREATE TABLE events(sequence INTEGER PRIMARY KEY,event_id TEXT,event_json TEXT,observation_witness BLOB); INSERT INTO events VALUES(1,'original','original',NULL);").unwrap();
-    let owner = Owner::install(&connection);
+    let owner = Owner::install(&connection).unwrap();
     owner.journal_frontier.store(1, Ordering::Release);
     let before = owner.capture(&connection).unwrap();
     connection
@@ -216,7 +216,7 @@ fn native_journal_certificate_distinguishes_new_append_from_old_fact_or_auxiliar
 #[test]
 fn actual_only_model_input_is_rejected_before_native_sql_persistence() {
     let connection = connection();
-    let owner = Owner::install(&connection);
+    let owner = Owner::install(&connection).unwrap();
     let input: crate::model::SelectedModelInput = vec![message(1)].into();
     super::take_node_read_work();
     assert!(matches!(
@@ -230,5 +230,35 @@ fn actual_only_model_input_is_rejected_before_native_sql_persistence() {
                 .get::<_, u64>(0))
             .unwrap(),
         0
+    );
+}
+
+#[test]
+fn wal_external_invalidation_tracks_the_pinned_snapshot() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("snapshot.sqlite");
+    drop(crate::durable::SqliteConversationStore::open(ConversationId::generate(), &path).unwrap());
+    let mut connection = Connection::open(&path).unwrap();
+    connection.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES(1)").unwrap();
+    let owner = Owner::install(&connection).unwrap();
+    let before = owner.capture(&connection).unwrap();
+    let transaction = connection.transaction().unwrap();
+    assert_eq!(owner.capture(&transaction).unwrap(), before);
+    let writer = Connection::open(&path).unwrap();
+    writer.execute("UPDATE probe SET value=2", []).unwrap();
+    assert_eq!(
+        transaction
+            .query_row("SELECT value FROM probe", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(owner.capture(&transaction).unwrap(), before);
+    transaction.rollback().unwrap();
+    assert!(owner.capture(&connection).unwrap() > before);
+    assert_eq!(
+        connection
+            .query_row("SELECT value FROM probe", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
     );
 }

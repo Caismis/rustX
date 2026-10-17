@@ -165,7 +165,7 @@ fn t08_t12_t14_t19_giant_local_outline_and_window_keep_the_original_cut() {
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_outline_original_bodies));
+        .authorizer(Some(deny_outline_original_bodies)).unwrap();
     let after = store.observation_turns(Some(0), 64).unwrap();
     assert_eq!((after.total, after.turns.len()), (64, 64));
     assert_eq!(after.turns[0].response, "Final native answer");
@@ -189,7 +189,7 @@ fn t08_t12_t14_t19_giant_local_outline_and_window_keep_the_original_cut() {
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(store.read_window_headers(&at, 32).unwrap(), window);
     assert!(matches!(
         store.observation_turns(Some(9_007_199_254_740_992), 64),

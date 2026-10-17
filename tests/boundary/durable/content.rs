@@ -2337,10 +2337,9 @@ fn assert_tool_committed_before_terminal(
 #[test]
 fn t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch() {
     use crate::runtime_client::content::{CanonicalContentComponent, CanonicalContentLocator};
-    let store = SqliteConversationStore::open(
-        ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8c9"),
-        std::path::Path::new(":memory:"),
-    )
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_601cccec-75c7-703d-af18-cdf2cb42a8c9",
+    ))
     .unwrap();
     store.initialize(&[]).unwrap();
     let mut fields = serde_json::Map::new();
@@ -2417,10 +2416,9 @@ fn t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch()
 #[test]
 fn t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8() {
     use crate::runtime_client::content::{CanonicalContentComponent, CanonicalContentLocator};
-    let store = SqliteConversationStore::open(
-        ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8c9"),
-        std::path::Path::new(":memory:"),
-    )
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_601cccec-75c7-703d-af18-cdf2cb42a8c9",
+    ))
     .unwrap();
     store.initialize(&[]).unwrap();
     let prefix = format!("{}\0\n\\\"🙂", "水".repeat(24_000));
@@ -2508,10 +2506,9 @@ fn t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources(
             bytes: raw.as_bytes().to_vec(),
         }])
         .unwrap();
-    let store = SqliteConversationStore::open(
-        ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8c9"),
-        std::path::Path::new(":memory:"),
-    )
+    let store = SqliteConversationStore::in_memory(ConversationId::new(
+        "conv_601cccec-75c7-703d-af18-cdf2cb42a8c9",
+    ))
     .unwrap();
     store.initialize_lineage(&seed).unwrap();
     let cut = store.observation_read_cut().unwrap();

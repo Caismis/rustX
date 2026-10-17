@@ -59,7 +59,7 @@ pub(crate) fn admit_agent(
 /// Admits one durable native Agent child bound to the shared Session
 /// workspace `<root>/external-project`. A `settled` child also publishes its
 /// physically proven terminal, so it holds no deletion barrier.
-pub(super) fn child(
+pub(crate) fn child(
     root: &std::path::Path,
     parent: &SqliteConversationStore,
     ordinal: u64,
@@ -396,11 +396,12 @@ fn deletion_process_writer_gate() {
     )
     .unwrap();
     child(root, &child_store, 1, false);
+    drop((store, child_store));
     let _dirty = if std::env::var_os("RUSTX_254_HOT_JOURNAL").is_some() {
         let connection =
             rusqlite::Connection::open(catalog.database_path(&session, &node.conversation_id))
                 .unwrap();
-        connection.execute_batch("PRAGMA cache_size=1; BEGIN IMMEDIATE; UPDATE events SET event_json=json_set(event_json, '$.hot_journal_test', hex(zeroblob(1000000)));").unwrap();
+        connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA cache_size=1; BEGIN IMMEDIATE; UPDATE events SET event_json=json_set(event_json, '$.hot_journal_test', hex(zeroblob(1000000)));").unwrap();
         Some(connection)
     } else {
         None
@@ -561,35 +562,28 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
 }
 
 #[test]
-fn deletion_wal_metadata_is_rejected_before_sqlite_can_create_sidecars() {
+fn deletion_wal_management_reads_preserve_application_state() {
     let (root, catalog, _) = open_catalog();
-    let (session, node, _) = catalog
-        .lineage(&first_session(&catalog), None)
-        .map(|(node, state)| (first_session(&catalog), node, state))
-        .unwrap();
+    let session = first_session(&catalog);
+    let (node, _) = catalog.lineage(&session, None).unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
-    let connection = rusqlite::Connection::open(&database).unwrap();
-    connection
-        .execute_batch("PRAGMA journal_mode=WAL;")
-        .unwrap();
-    drop(connection);
-    let before = std::fs::read(&database).unwrap();
-    let entries = || {
-        let mut names: Vec<_> = std::fs::read_dir(database.parent().unwrap())
+    let writer = store_for(&catalog, &session, &node.conversation_id);
+    activity(&writer, 480);
+    let head = writer.load_head().unwrap();
+    let journal = writer.read_events(None, 100).unwrap();
+    // Include committed, uncheckpointed WAL frames while the writer stays open.
+    assert!(
+        database
+            .with_file_name("conversation.sqlite-wal")
+            .metadata()
             .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        names.sort();
-        names
-    };
-    let before_names = entries();
-    assert_eq!(
-        before_names,
-        [std::ffi::OsString::from("conversation.sqlite")]
+            .len()
+            > 0
     );
-    assert!(DeletionTargetSnapshot::inspect(root.path(), &session).is_err());
-    assert_eq!(before_names, entries());
-    assert_eq!(before, std::fs::read(database).unwrap());
+    let snapshot = DeletionTargetSnapshot::inspect(root.path(), &session).unwrap();
+    assert_eq!(snapshot.conversations().len(), 1);
+    assert_eq!(writer.load_head().unwrap(), head);
+    assert_eq!(writer.read_events(None, 100).unwrap(), journal);
 }
 
 fn revision(root: &std::path::Path, session: &SessionId) -> [u8; 32] {

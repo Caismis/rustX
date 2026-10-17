@@ -1,5 +1,5 @@
 //! Opt-in offline measurement through the production composition and provider boundary.
-//! Run in a fresh process with RUSTX_BENCH_CASE and RUSTX_BENCH_OUTPUT.
+//! Run in a fresh process with `RUSTX_BENCH_CASE` and `RUSTX_BENCH_OUTPUT`.
 use super::*;
 use serde_json::json;
 use std::time::Instant;
@@ -130,6 +130,8 @@ async fn measure_runtime() {
             _ => None,
         })
         .collect();
+    // Keep the frozen BEFORE oracle identical; this allocation is outside turn timing.
+    #[allow(clippy::format_collect)]
     let expected = match case.as_str() {
         "large" => "L".repeat(32768),
         "stream" => (0..128).map(|i| format!("stream-delta-{i:04} ")).collect(),
@@ -162,6 +164,9 @@ async fn measure_runtime() {
     let cid = driver.access.node.conversation_id.clone();
     let began = Instant::now();
     driver.shutdown().await.unwrap();
+    if let Err(error) = (&mut driver.relay).await {
+        assert!(error.is_cancelled(), "event relay failed: {error}");
+    }
     let shutdown_us = began.elapsed().as_micros();
     let root_path = driver.root.path().to_owned();
     driver.root.disable_cleanup(true);
@@ -170,6 +175,17 @@ async fn measure_runtime() {
     drop(driver);
     let close_us = began.elapsed().as_micros();
     let closed_footprint = footprint(&root_path);
+    let began = Instant::now();
+    // A final read-only owner can leave committed WAL frames after shutdown.
+    // Include a normal writable open/close before deleting the allocation.
+    drop(SqliteConversationStore::open(cid.clone(), &database).unwrap());
+    let final_writer_close_us = began.elapsed().as_micros();
+    let checkpoint_footprint = footprint(&root_path);
+    let wal = std::path::PathBuf::from(format!("{}-wal", database.display()));
+    match std::fs::metadata(wal) {
+        Ok(info) => assert_eq!(info.len(), 0, "checkpoint left WAL frames"),
+        Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+    }
     let began = Instant::now();
     let reopened = SqliteConversationStore::open_existing(cid, &database).unwrap();
     assert_eq!(reopened.load_canonical().unwrap(), history_messages);
@@ -187,6 +203,7 @@ async fn measure_runtime() {
             "requests":expected_requests,"open_us":open_us,"samples":samples,
             "initial_process":initial,"final_process":final_sample,
             "shutdown_us":shutdown_us,"reopen_us":reopen_us,
+            "final_writer_close_us":final_writer_close_us,"checkpoint_footprint":checkpoint_footprint,
             "before_close":before_close,"closed_footprint":closed_footprint,"close_us":close_us,"cleanup_us":cleanup_us,
             "oracle":"passed","sql_statements":null,"allocations":null
         }))
