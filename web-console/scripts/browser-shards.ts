@@ -141,8 +141,9 @@ export function assign(tests: { file: string }[], weights: Record<string, number
 /**
  * Measured seconds per spec file from Playwright JSON reports of complete
  * one-worker runs: each test's wall span until the next test of its run
- * starts, so the time between tests (fixture teardown, worker restarts)
- * counts toward the file that caused it.
+ * starts. A test's expensive fixture lies outside its reported duration but
+ * directly after its start (reading.spec.ts spends about 200 s on 300
+ * durable Attempts per test), so that time counts toward its own file.
  */
 export function weightsOf(reports: Pick<JSONReport, 'suites'>[]): Record<string, number> {
   const weights: Record<string, number> = {};
