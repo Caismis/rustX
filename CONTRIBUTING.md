@@ -126,7 +126,7 @@ cargo build --bins --all-features
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
 
 # The CI lanes' selectors against Cargo discovery on this platform.
-cargo run --example check_test_lanes
+cargo run --all-features --example check_test_lanes
 
 # TUI's locked pnpm workflow.
 nvm install --lts

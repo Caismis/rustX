@@ -357,7 +357,7 @@ summarizes them and the lane check below verifies them against Cargo:
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
 second copy of it. Each Rust test lane ends with
-`cargo run --example check_test_lanes -- --job <job id>`, which reads the
+`cargo run --all-features --example check_test_lanes -- --job <job id>`, which reads the
 workflow's executing `cargo test` steps and asks libtest, through `--list`,
 what each one selects — so filters, `--skip`, features and `cfg` are
 Cargo's and libtest's own semantics. It fails for:
@@ -535,9 +535,10 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
   --skip local_runtime::session_runtime_manager::tests::
 # plus the seven external boundary targets above.
 
-# Lane coverage for one CI job on its own platform, or every target here:
-cargo run --example check_test_lanes -- --job rust-contracts
-cargo run --example check_test_lanes
+# Lane coverage for one CI job on its own platform, or every target here
+# (--all-features reuses the library the test targets already compiled):
+cargo run --all-features --example check_test_lanes -- --job rust-contracts
+cargo run --all-features --example check_test_lanes
 
 # Everything, the safety net (it does not prove the CI lanes' selection):
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features

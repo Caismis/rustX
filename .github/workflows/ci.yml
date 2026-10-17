@@ -244,9 +244,12 @@ jobs:
           --test cfg3_managed_output
 
       # See the same step in `rust-contracts`; this lane's targets are the
-      # lib test harness and the external boundary targets.
+      # lib test harness and the external boundary targets. With
+      # --all-features the checker links the library unit the external
+      # targets already compiled (dev-dependency features included); without
+      # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --all-features --example check_test_lanes -- --job rust-boundaries
 
   # Rust platform coverage is intentional, not duplicated by habit. This macOS
   # job runs the classes below; desktop-macos separately executes Node boundaries:
