@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import type { JSONReport, JSONReportSuite, JSONReportTest } from '@playwright/test/reporter';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXECUTABLES, INSTALLED_MANIFEST, check, fileErrors, identityErrors, install, record, type Identity, type Manifest } from '../scripts/browser-artifact.ts';
-import { verify, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
+import { assign, verify, weightsOf, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
 
 const identity: Identity = {
   commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.98.1',
@@ -15,7 +15,7 @@ const identity: Identity = {
 
 describe('sharded browser coverage', () => {
   const prepared = 'p'.repeat(64);
-  const inventory = (...ids: string[]): Inventory => ({ commit: identity.commit, prepared, tests: ids.map(id => ({ id: `${id}@`, title: `title ${id}` })) });
+  const inventory = (...ids: string[]): Inventory => ({ commit: identity.commit, prepared, tests: ids.map(id => ({ id: `${id}@`, title: `title ${id}`, file: 'spec.ts' })), shards: [['spec.ts'], []] });
   type Ran = { id: string; status?: JSONReportTest['status']; result?: 'passed' | 'failed' | 'skipped'; expected?: JSONReportTest['expectedStatus']; skip?: boolean; repeats?: number };
   /** Playwright's JSON report of one shard that ran `ran`, each spec's id being `id`. */
   function report(...ran: Ran[]): Pick<JSONReport, 'suites'> {
@@ -64,6 +64,26 @@ describe('sharded browser coverage', () => {
   });
   it('fails an empty inventory instead of treating zero tests as coverage', () => {
     expect(verify(inventory(), [shard(1, report()), shard(2, report())], 2).errors).toEqual(expect.arrayContaining(['the inventory discovered no browser tests']));
+  });
+});
+
+describe('shard assignment', () => {
+  const tests = (counts: Record<string, number>) => Object.entries(counts).flatMap(([file, count]) => Array.from({ length: count }, () => ({ file })));
+  it('places every file exactly once, heaviest first onto the lightest shard', () => {
+    const shards = assign(tests({ 'a.spec.ts': 1, 'b.spec.ts': 1, 'c.spec.ts': 1, 'd.spec.ts': 1 }), { 'a.spec.ts': 60, 'b.spec.ts': 50, 'c.spec.ts': 40, 'd.spec.ts': 30 }, 2);
+    expect(shards).toEqual([['a.spec.ts', 'd.spec.ts'], ['b.spec.ts', 'c.spec.ts']]);
+    expect(shards.flat().sort()).toEqual(['a.spec.ts', 'b.spec.ts', 'c.spec.ts', 'd.spec.ts']);
+  });
+  it('weighs an unmeasured file by its test count at the measured mean, deterministically', () => {
+    const input = tests({ 'measured.spec.ts': 2, 'new.spec.ts': 10, 'small.spec.ts': 1 });
+    const shards = assign(input, { 'measured.spec.ts': 20, 'small.spec.ts': 10 }, 2);
+    // 30 s over 3 measured tests: the new file weighs 100 s and takes a shard alone.
+    expect(shards).toEqual([['new.spec.ts'], ['measured.spec.ts', 'small.spec.ts']]);
+    expect(assign([...input].reverse(), { 'measured.spec.ts': 20, 'small.spec.ts': 10 }, 2)).toEqual(shards);
+  });
+  it('derives weights from reported durations per file', () => {
+    const report = { suites: [{ title: 'a.spec.ts', file: 'a.spec.ts', line: 0, column: 0, specs: [1500, 2500].map((duration, index) => ({ id: String(index), title: 't', tags: [], ok: true, file: 'a.spec.ts', line: 1, column: 1, tests: [{ timeout: 1, annotations: [], expectedStatus: 'passed' as const, projectName: '', projectId: '', status: 'expected' as const, results: [{ workerIndex: 0, parallelIndex: 0, status: 'passed' as const, duration, error: undefined, errors: [], stdout: [], stderr: [], retry: 0, startTime: '', attachments: [], annotations: [] }] }] })) }] };
+    expect(weightsOf([report])).toEqual({ 'a.spec.ts': 4 });
   });
 });
 

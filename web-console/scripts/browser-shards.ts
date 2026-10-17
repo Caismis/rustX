@@ -23,17 +23,17 @@ const repository = resolve(web, '..');
 /** What one shard, or the inventory, ran or was taken against. */
 export interface RunIdentity { commit: string; prepared: string }
 export interface ShardIdentity extends RunIdentity { shard: number; total: number }
-export interface Inventory extends RunIdentity { tests: { id: string; title: string }[] }
+export interface Inventory extends RunIdentity { tests: { id: string; title: string; file: string }[]; shards: string[][] }
 /** One shard's evidence: its identity and Playwright's own report of its run. */
 export interface ShardRun { identity: ShardIdentity; report?: Pick<JSONReport, 'suites'> }
 
-export interface Case { id: string; title: string; test: JSONReportTest }
+export interface Case { id: string; title: string; file: string; test: JSONReportTest }
 /** Every test of a report, keyed by Playwright's spec id and project. */
 export function cases(report: Pick<JSONReport, 'suites'>): Case[] {
   const found: Case[] = [];
   const visit = (suite: JSONReportSuite, path: string[]) => {
     const titles = suite.title ? [...path, suite.title] : path;
-    for (const spec of suite.specs) for (const test of spec.tests) found.push({ id: `${spec.id}@${test.projectName}`, title: [...titles, spec.title].join(' › '), test });
+    for (const spec of suite.specs) for (const test of spec.tests) found.push({ id: `${spec.id}@${test.projectName}`, title: [...titles, spec.title].join(' › '), file: spec.file, test });
     for (const child of suite.suites ?? []) visit(child, titles);
   };
   for (const suite of report.suites) visit(suite, []);
@@ -117,6 +117,34 @@ export function verify(inventory: Inventory, runs: ShardRun[], total: number): C
   return { errors, total: discovered.size, passed, skipped, shards: summary };
 }
 
+/**
+ * Whole spec files for each of `total` shards: heaviest first onto the
+ * lightest shard, by measured seconds (test/e2e/shard-weights.json). A file
+ * without a measurement weighs its test count at the measured mean per test.
+ * Weights steer balance only; coverage is verified independently of them.
+ */
+export function assign(tests: { file: string }[], weights: Record<string, number>, total: number): string[][] {
+  const counts = new Map<string, number>();
+  for (const { file } of tests) counts.set(file, (counts.get(file) ?? 0) + 1);
+  const measured = [...counts].filter(([file]) => weights[file] !== undefined);
+  const perTest = measured.length ? measured.reduce((sum, [file]) => sum + weights[file], 0) / measured.reduce((sum, [, count]) => sum + count, 0) : 1;
+  const weighted = [...counts].map(([file, count]) => ({ file, weight: weights[file] ?? count * perTest }))
+    .sort((a, b) => b.weight - a.weight || a.file.localeCompare(b.file));
+  const shards = Array.from({ length: total }, () => ({ files: [] as string[], load: 0 }));
+  for (const { file, weight } of weighted) {
+    const lightest = shards.reduce((best, shard) => shard.load < best.load ? shard : best);
+    lightest.files.push(file); lightest.load += weight;
+  }
+  return shards.map(shard => shard.files.sort());
+}
+
+/** Measured seconds per spec file from Playwright JSON reports of complete runs. */
+export function weightsOf(reports: Pick<JSONReport, 'suites'>[]): Record<string, number> {
+  const weights: Record<string, number> = {};
+  for (const report of reports) for (const { file, test } of cases(report)) for (const result of test.results) weights[file] = (weights[file] ?? 0) + result.duration / 1000;
+  return Object.fromEntries(Object.entries(weights).sort(([a], [b]) => a.localeCompare(b)).map(([file, seconds]) => [file, Math.round(seconds * 10) / 10]));
+}
+
 function markdown(coverage: Coverage, inventory: Inventory) {
   const minutes = (ms: number) => `${(ms / 60_000).toFixed(1)} min`;
   return [
@@ -138,11 +166,21 @@ function playwrightList(): JSONReport {
 
 if (import.meta.main) {
   const [command, ...rest] = process.argv.slice(2);
-  if (command === 'inventory' && rest.length === 2) {
-    const inventory: Inventory = { ...currentIdentity(resolve(rest[0])), tests: cases(playwrightList()).map(({ id, title }) => ({ id, title })) };
-    if (inventory.tests.length === 0) throw new Error('Playwright discovered no browser tests');
-    writeFileSync(rest[1], `${JSON.stringify(inventory, null, 2)}\n`);
-    console.log(`Inventory: ${inventory.tests.length} browser tests at ${inventory.commit}`);
+  if (command === 'inventory' && rest.length === 3) {
+    // The inventory and each shard's --test-list, for `total` shards.
+    const [manifest, directory, total] = [resolve(rest[0]), resolve(rest[1]), Number(rest[2])];
+    const tests = cases(playwrightList()).map(({ id, title, file }) => ({ id, title, file }));
+    if (tests.length === 0) throw new Error('Playwright discovered no browser tests');
+    const shards = assign(tests, JSON.parse(readFileSync(join(web, 'test/e2e/shard-weights.json'), 'utf8')) as Record<string, number>, total);
+    if (shards.some(files => files.length === 0)) throw new Error(`${tests.length} tests cannot fill ${total} shards`);
+    const inventory: Inventory = { ...currentIdentity(manifest), tests, shards };
+    writeFileSync(join(directory, 'browser-inventory.json'), `${JSON.stringify(inventory, null, 2)}\n`);
+    shards.forEach((files, index) => writeFileSync(join(directory, `shard-${index + 1}.txt`), `${files.join('\n')}\n`));
+    console.log(`Inventory: ${tests.length} browser tests at ${inventory.commit}; ${shards.map((files, index) => `shard ${index + 1}: ${files.length} files`).join(', ')}`);
+  } else if (command === 'weights' && rest.length >= 1) {
+    const weights = weightsOf(rest.map(file => JSON.parse(readFileSync(file, 'utf8')) as JSONReport));
+    writeFileSync(join(web, 'test/e2e/shard-weights.json'), `${JSON.stringify(weights, null, 2)}\n`);
+    console.log(`Weighed ${Object.keys(weights).length} spec files`);
   } else if (command === 'identity' && rest.length === 2) {
     const [shard, total] = rest[0].split('/').map(Number);
     const identity: ShardIdentity = { ...currentIdentity(), shard, total };
@@ -164,6 +202,6 @@ if (import.meta.main) {
     if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMARY, text, { flag: 'a' });
     if (coverage.errors.length) process.exit(1);
   } else {
-    throw new Error('usage: browser-shards.ts inventory <staged-manifest> <out> | identity <i/n> <out> | verify <inventory> <shard-dir> <total>');
+    throw new Error('usage: browser-shards.ts inventory <staged-manifest> <out-dir> <total> | weights <report.json>... | identity <i/n> <out> | verify <inventory> <shard-dir> <total>');
   }
 }

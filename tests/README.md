@@ -357,7 +357,14 @@ summarizes them and the lane check below verifies them against Cargo:
   compiler matched, the Cargo command, Node version and ABI, pnpm,
   Playwright, and checksums of the Cargo and pnpm manifests and lockfiles —
   and a checksum and mode per file, and takes Playwright's own `--list`
-  inventory of the suite. Node native addons are not shared: `pnpm install`
+  inventory of the suite. It assigns whole spec files to the two shards,
+  heaviest first onto the lighter shard, by their measured seconds in
+  `web-console/test/e2e/shard-weights.json` (a file without a measurement
+  weighs its test count at the measured mean); Playwright's own `--shard`
+  splits by test count, which put 1,298 s on one shard and 397 s on the other
+  in run 39026668816. Refresh the weights from a complete run's shard reports
+  with `node scripts/browser-shards.ts weights <report.json>...`. Weights
+  only steer balance: coverage is verified independently of them. Node native addons are not shared: `pnpm install`
   rebuilds them from the lockfile in every job. `web-client` (launcher
   `typecheck`/`test`, Web `typecheck`, Vitest `pnpm test` with the
   `*.measurement.tsx` counters excluded, `check:i18n`, `check:provenance`)
@@ -365,8 +372,8 @@ summarizes them and the lane check below verifies them against Cargo:
   `browser-artifact.ts install` verifies the identity against their own
   checkout and runner and every checksum, into a checkout holding no build
   output; any mismatch fails, and nothing is rebuilt in its place. Each
-  shard runs `browser-tests.sh --shard=<i>/2` with one worker and
-  Playwright's file-level split, after the script re-verifies the installed
+  shard runs `browser-tests.sh --test-list shard-<i>.txt` with one worker,
+  after the script re-verifies the installed
   inputs (`RUSTX_BROWSER_PREPARED=1` selects that path instead of
   `cargo build`) and `provenance.ts --artifact` re-checks the installed
   bundle. `browser-report` ("Full Web conformance", the one browser verdict)

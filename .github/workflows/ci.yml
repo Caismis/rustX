@@ -658,10 +658,14 @@ jobs:
         working-directory: web-console
         run: node scripts/browser-artifact.ts pack "$RUNNER_TEMP/browser-prepared"
       # Playwright's own discovery of the checked-out suite, bound to these
-      # inputs: the coverage gate compares every shard's run against it.
-      - name: Discover the browser test inventory
+      # inputs: the coverage gate compares every shard's run against it. Whole
+      # spec files go to the two shards by their measured cost
+      # (test/e2e/shard-weights.json), each shard's Playwright --test-list.
+      - name: Discover the browser test inventory and assign the shards
         working-directory: web-console
-        run: node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory.json"
+        run: |
+          mkdir "$RUNNER_TEMP/browser-inventory"
+          node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory" 2
       - name: Package the prepared inputs
         run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
       - uses: actions/upload-artifact@v4
@@ -674,7 +678,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: browser-inventory
-          path: ${{ runner.temp }}/browser-inventory.json
+          path: ${{ runner.temp }}/browser-inventory/
           retention-days: 14
           if-no-files-found: error
 
@@ -726,8 +730,8 @@ jobs:
         working-directory: web-console
         run: pnpm check:provenance
 
-  # Two runners, one Playwright worker each, Playwright's default file-level
-  # split. Each shard runs against the prepared inputs only after
+  # Two runners, one Playwright worker each, each running whole spec files
+  # from its assigned list. Each shard runs against the prepared inputs only after
   # browser-tests.sh re-verifies them, re-checks the installed production
   # bundle's provenance, and drives Chromium in the digest-pinned Playwright
   # container (fonts and rasterization included), exactly as `pnpm test:e2e`.
@@ -768,6 +772,10 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
       - uses: ./.github/actions/browser-inputs
+      - uses: actions/download-artifact@v4
+        with:
+          name: browser-inventory
+          path: ${{ runner.temp }}/inventory
       - name: Record the shard's identity
         working-directory: web-console
         run: |
@@ -780,7 +788,8 @@ jobs:
         working-directory: web-console
         env:
           RUSTX_BROWSER_PREPARED: "1"
-        run: bash scripts/browser-tests.sh --shard=${{ matrix.shard }}/2
+          PLAYWRIGHT_BLOB_OUTPUT_NAME: report-${{ matrix.shard }}.zip
+        run: bash scripts/browser-tests.sh --test-list "$RUNNER_TEMP/inventory/shard-${{ matrix.shard }}.txt"
       - name: Shard report
         if: always()
         uses: actions/upload-artifact@v4
