@@ -79,6 +79,7 @@ class Planning(unittest.TestCase):
                 self.assertEqual(planned["profile"], "full")
                 self.assertTrue(all(planned["run"][job] for job in v.FULL_JOBS))
                 self.assertFalse(planned["run"]["rust-fast"])
+                self.assertTrue(planned["run"]["rust-platform-core"] and planned["run"]["rust-platform-boundaries"])
 
     def test_a_pull_request_runs_fast_until_promoted(self):
         self.assertEqual(v.plan("pull_request", [], ["src/lib.rs"])["profile"], "fast")
@@ -89,7 +90,7 @@ class Planning(unittest.TestCase):
         self.assertEqual({job for job, selected in run.items() if selected},
                          {"desktop-macos", "browser-prepare", "web-client", "browser-shard", "browser-report"})
         run = v.plan("pull_request", [], ["src/lib.rs"])["run"]
-        self.assertTrue(run["rust-fast"] and run["web-client"])
+        self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
         self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"] or run["browser-shard"])
         run = v.plan("pull_request", [], ["README.md"])["run"]
         self.assertFalse(any(run.values()))
@@ -144,15 +145,22 @@ class Gate(unittest.TestCase):
 
     def test_full_without_macos_full_fails(self):
         planned = v.plan("push", [], [])
-        for result in ("skipped", "cancelled", "failure", None):
-            with self.subTest(result=result):
-                results = passing(planned)
-                if result is None:
-                    del results["rust-platform-boundaries"]
-                else:
-                    results["rust-platform-boundaries"] = result
-                self.assertEqual(v.gate(planned, results, None, None),
-                                 [f"rust-platform-boundaries: selected for FULL but {result or 'missing'}"])
+        for job in ("rust-platform-boundaries", "rust-platform-core"):
+            for result in ("skipped", "cancelled", "failure", None):
+                with self.subTest(job=job, result=result):
+                    results = passing(planned)
+                    if result is None:
+                        del results[job]
+                    else:
+                        results[job] = result
+                    self.assertEqual(v.gate(planned, results, None, None),
+                                     [f"{job}: selected for FULL but {result or 'missing'}"])
+
+    def test_a_promoted_pull_request_cannot_pass_on_macos_core_alone(self):
+        planned = v.plan("pull_request", [v.PROMOTION_LABEL], ["src/runtime/process_runner.rs"])
+        results = {**passing(planned), "rust-platform-boundaries": "skipped"}
+        self.assertEqual(v.gate(planned, results, "abc", "abc"),
+                         ["rust-platform-boundaries: selected for FULL but skipped"])
 
     def test_a_job_that_ran_without_being_selected_fails(self):
         planned = v.plan("pull_request", [], ["web-console/src/presentation/a.tsx"])
@@ -194,8 +202,8 @@ class Workflow(unittest.TestCase):
 
     def test_rust_profiles_match_the_lane_check_declarations(self):
         jobs = self.jobs()
-        for job in ("rust-fast",):
-            self.assertIn("VERIFICATION_PROFILE: fast", jobs[job])
+        self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-fast"])
+        self.assertIn("VERIFICATION_PROFILE: fast full\n", jobs["rust-platform-core"])
         for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
 

@@ -62,7 +62,21 @@ const REQUIREMENTS: &[Requirement] = &[
     // FULL executes the whole capacity suite (Linux completeness covers it
     // too; this names it so an emptied or renamed suite fails).
     Requirement::new(Profile::Full, Platform::Linux, "lib", SCALE_SUITE),
+    // macOS full: the lib test binary's in-crate boundary suites.
     Requirement::new(Profile::Full, Platform::Macos, "lib", "boundary_suites::"),
+    // macOS core, in both profiles: every external boundary target.
+    Requirement::new(Profile::Fast, Platform::Macos, "test durable", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test process", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test subagent", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test tools", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test conformance", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test cfg3_catalog", ""),
+    Requirement::new(
+        Profile::Fast,
+        Platform::Macos,
+        "test cfg3_managed_output",
+        "",
+    ),
     Requirement::new(Profile::Full, Platform::Macos, "test durable", ""),
     Requirement::new(Profile::Full, Platform::Macos, "test process", ""),
     Requirement::new(Profile::Full, Platform::Macos, "test subagent", ""),

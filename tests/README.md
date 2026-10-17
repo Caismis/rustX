@@ -351,8 +351,10 @@ also runs in FAST when the change touches its owner:
 | `local_runtime::session_runtime_manager::tests::`, `local_runtime::session::` | `src/app_server/`, `src/local_runtime/`, `tests/scripted/app_server/`, `tests/support/` |
 | `runtime_client::response::` | `src/runtime_client/` |
 
-The in-crate boundary suites, the other external boundary targets, the
-`contracts`/`provider` targets and macOS run in FULL only. This is a
+On Linux the in-crate boundary suites, the other external boundary targets
+and the `contracts`/`provider` targets run in FULL only. macOS core (the
+seven external boundary targets) runs on every push that touches Rust;
+macOS full (unit tests and in-crate boundary suites) runs in FULL. This is a
 deliberate scheduling tradeoff: before #479 every pull request push ran
 everything; now a high-risk change gets that complete verification once, on
 its promoted head, and its intermediate pushes get FAST feedback. A
@@ -376,13 +378,13 @@ summarizes them and the lane check below verifies them against Cargo:
 
 | Suite / group | Class | Linux lane | macOS |
 | --- | --- | --- | --- |
-| source-module unit tests (`src/**`) | unit | rust-contracts | yes |
+| source-module unit tests (`src/**`) | unit | rust-contracts | full |
 | `scripted_suites::` | deterministic contracts | rust-contracts | skipped |
 | `local_runtime::session_runtime_manager::tests::` | deterministic contracts | rust-contracts | skipped |
-| `boundary_suites::` | boundary conformance | rust-boundaries | yes (required) |
+| `boundary_suites::` | boundary conformance | rust-boundaries | full (required) |
 | bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts | bins only |
 | `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts | no |
-| `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | yes (required) |
+| `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core (required) |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
 - **quality** (ubuntu) — fmt, clippy, whitespace.
@@ -409,20 +411,33 @@ summarizes them and the lane check below verifies them against Cargo:
   separate `cargo build --bins` would compile another complete library
   (without dev-dependency features) that no test in the lane links. Both
   test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
-- **rust-platform-boundaries** (macos) — only platform-sensitive classes,
-  natively: the seven external boundary targets are compiled first (which,
-  as in rust-boundaries, places the real executables at `target/debug/`),
-  then `cargo test --lib --bins --all-features -- --skip scripted_suites::
-  --skip local_runtime::session_runtime_manager::tests::`
+- **rust-platform-core** (macos; FAST and FULL) — the seven external
+  boundary targets, natively: compiled first (which, as in rust-boundaries,
+  places the real executables at `target/debug/`), then run with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Real process start and termination,
+  signals, PTY, stdio and WebSocket transports, the native configuration
+  writer lock race (`cfg3_catalog`), SQLite and filesystem durability and
+  cleanup. It never compiles the library test harness, which was about half
+  of the old single macOS lane's compilation (721 s of about 1,450 s in run
+  39015122730).
+- **rust-platform-boundaries** (macos; FULL) — on its own runner, in
+  parallel with core: `cargo build --bins --all-features` (the lib tests
+  exec the real executables), then `cargo test --lib --bins --all-features
+  -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
-  primitives differ across OSes — plus the in-crate boundary suites) and the
-  seven external boundary targets run, both with
-  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The `--no-run` compile steps
-  separate native compile timing from execution and execute nothing.
+  primitives differ across OSes — plus the in-crate boundary suites) with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Building its own executables costs
+  one more ordinary library compilation instead of serializing behind core.
+  The `--no-run` compile steps separate native compile timing from execution
+  and execute nothing. Both macOS jobs keep `CARGO_BUILD_JOBS=1`.
   `contracts`/`provider` and the deterministic contract majority are
   Linux-only: they carry no process or filesystem semantics. Overlap with
   Linux is intentional: a macOS boundary test is native proof, not a
-  duplicate.
+  duplicate. A pull request push that touches Rust runs macOS core; the
+  in-crate boundary suites and macOS unit tests run on its promoted FULL
+  head, on `main` and nightly. A low-risk change (presentation,
+  documentation) runs no macOS Rust lane at all; that is the deliberate
+  tradeoff of the FAST profile.
 - **tui** — independent Node/pnpm lane. `pnpm test` includes the real-child
   integration suite, which drives the actual `rustx` binary (built by
   `cargo build --bin rustx` in that lane) over the real stdio and WebSocket
@@ -745,12 +760,12 @@ cargo test --all-features --no-run $BOUNDARY_TARGETS
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features $BOUNDARY_TARGETS
 
-# Platform-sensitive classes on macOS (CI: rust-platform-boundaries), after
-# the same external-target compilation:
+# macOS core (CI: rust-platform-core): the seven external boundary targets
+# above. macOS full (CI: rust-platform-boundaries):
+cargo build --bins --all-features
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
   --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
-# plus the seven external boundary targets above.
 
 # Lane coverage for one CI job on its own platform, or every target here
 # (--all-features reuses the library the test targets already compiled):

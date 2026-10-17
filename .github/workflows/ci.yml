@@ -398,45 +398,48 @@ jobs:
       - name: Check test lane coverage
         run: cargo run --all-features --example check_test_lanes -- --job rust-boundaries
 
-  # Rust platform coverage is intentional, not duplicated by habit. This macOS
-  # job runs the classes below; desktop-macos separately executes Node boundaries:
+  # Rust platform coverage is intentional, not duplicated by habit. macOS
+  # runs only platform-sensitive classes, natively, in two jobs;
+  # desktop-macos separately executes Node boundaries.
   #
-  # - from the lib test binary: the source-module unit tests plus the
-  #   in-crate boundary conformance suites (`boundary_suites::` — real
-  #   SIGKILL process death, bash supervision, staged subagent children,
-  #   MCP stdio fixture children). The deterministic scripted contract
+  # - rust-platform-core (FAST and FULL): the seven external targets —
+  #   durable (SQLite/filesystem), process (spawned binary, signals,
+  #   stdio/WebSocket), subagent (child process/control socket), tools
+  #   (shell, PTY, filesystem, executable discovery), conformance (external
+  #   emulator process), cfg3_catalog (configuration source files and the
+  #   native writer lock race) and cfg3_managed_output (managed Tool output
+  #   storage). They link the ordinary rustX library, so core never compiles
+  #   the library test harness, the lane's dominant compilation (about 12
+  #   of its 24 compile minutes in run 39015122730).
+  # - rust-platform-boundaries (FULL): from the lib test binary, the
+  #   source-module unit tests plus the in-crate boundary conformance suites
+  #   (`boundary_suites::` — real SIGKILL process death, bash supervision,
+  #   staged subagent children, MCP stdio fixture children), on its own
+  #   runner in parallel with core. The deterministic scripted contract
   #   suites are selected OUT by their `scripted_suites::` prefix: they are
   #   pure state-machine/planning/manual-clock contracts whose invariants
   #   carry no OS semantics, so rerunning them on macOS would be duplication
   #   without platform value.
-  # - external targets: durable (SQLite/filesystem), process (spawned
-  #   binary, stdio/IPC), subagent (child process/control socket), tools
-  #   (shell, filesystem, executable discovery), conformance (external
-  #   emulator process), cfg3_catalog (configuration source resolution over
-  #   real files) and cfg3_managed_output (managed Tool output storage).
   #
   # The contracts and provider targets assert deterministic JSON/SSE
   # translation with no process or filesystem semantics, so they are
   # Linux-only.
-  rust-platform-boundaries:
-    name: Platform-sensitive boundaries (macOS)
+  rust-platform-core:
+    name: Platform-sensitive external boundaries (macOS core)
     needs: plan
-    if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
+    if: fromJSON(needs.plan.outputs.run)['rust-platform-core']
     runs-on: macos-latest
-    # Keep the same native selectors. See docs/pr-424-validation.md for the
-    # audited cold-build cancellation, the pending native comparison and the
-    # measured warm-cache lane that set this budget (PR #465).
-    timeout-minutes: 70
+    timeout-minutes: 45
     env:
-      VERIFICATION_PROFILE: full
+      VERIFICATION_PROFILE: fast full
       # Job-local build metadata only: assertions, overflow checks, unwind,
       # optimization and release profiles retain their Cargo defaults.
       # rust-cache hashes the CARGO prefix, including these settings.
       CARGO_PROFILE_DEV_DEBUG: "1"
       CARGO_PROFILE_TEST_DEBUG: "1"
-      # Ordinary and cfg(test) rustX units overlap in Cargo's native timing
-      # report. Serialize compiler processes on this runner; libtest keeps
-      # its existing concurrency, assertions, selectors, and deadlines.
+      # One rustX compilation peaks near 3.5 GB RSS on this runner
+      # (/usr/bin/time -l), so compiler processes stay serialized; libtest
+      # keeps its existing concurrency, assertions, selectors and deadlines.
       CARGO_BUILD_JOBS: "1"
 
     steps:
@@ -450,9 +453,120 @@ jobs:
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
-      # One lineage per lane; see the policy note in the `quality` job. This is
-      # the macOS lineage: it shares nothing with any Linux lane, because the
-      # action's key carries the runner OS, architecture and host triple.
+      # One lineage per lane; see the policy note in the `quality` job. The
+      # macOS lineages share nothing with any Linux lane: the action's key
+      # carries the runner OS, architecture and host triple.
+      - name: Cache Rust dependencies
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-platform-core
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Record native build environment
+        shell: bash
+        run: |
+          {
+            echo '## macOS native build measurement'
+            sw_vers
+            uname -m
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Memory bytes: $(sysctl -n hw.memsize)"
+            rustc -vV
+            cargo -V
+            echo "Rust cache exact hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+            echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+            echo "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG"
+            echo "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG"
+            echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The conformance target and the in-crate boundary suites launch the
+      # provider emulator with `uv run`.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+
+      # Compiling the external targets also builds every real executable
+      # against the same all-feature library and places it at target/debug/.
+      - name: Compile the external boundary targets and the real executables
+        run: >-
+          /usr/bin/time -l cargo test --all-features --no-run --timings
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
+      - name: Run the external boundary targets
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: >-
+          /usr/bin/time -l cargo test --all-features
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
+      # Native macOS discovery: every required external target (see
+      # REQUIREMENTS in the checker) must execute here, in both profiles.
+      - name: Check test lane coverage
+        run: cargo run --all-features --example check_test_lanes -- --job rust-platform-core
+
+      - name: Native Cargo timing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-core-cargo-timings
+          path: target/cargo-timings/*.html
+          retention-days: 7
+          if-no-files-found: warn
+
+  rust-platform-boundaries:
+    name: Platform-sensitive unit and in-crate boundaries (macOS full)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      VERIFICATION_PROFILE: full
+      # Job-local build metadata only: assertions, overflow checks, unwind,
+      # optimization and release profiles retain their Cargo defaults.
+      # rust-cache hashes the CARGO prefix, including these settings.
+      CARGO_PROFILE_DEV_DEBUG: "1"
+      CARGO_PROFILE_TEST_DEBUG: "1"
+      # One rustX compilation peaks near 3.5 GB RSS on this runner
+      # (/usr/bin/time -l), so compiler processes stay serialized; libtest
+      # keeps its existing concurrency, assertions, selectors and deadlines.
+      CARGO_BUILD_JOBS: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      # One lineage per lane; see the policy note in the `quality` job. The
+      # macOS lineages share nothing with any Linux lane: the action's key
+      # carries the runner OS, architecture and host triple.
       - name: Cache Rust dependencies
         id: rust-cache
         uses: Swatinem/rust-cache@v2
@@ -476,11 +590,10 @@ jobs:
             echo "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG"
             echo "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG"
             echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
-            echo 'Cargo HTML reports separate build units; /usr/bin/time -l records wall time and peak RSS per phase.'
-            echo 'Ordinary libraries, cfg(test) libraries, real binaries and binary test harnesses remain distinct Cargo units.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # The conformance target launches the provider emulator with `uv run`.
+      # The conformance target and the in-crate boundary suites launch the
+      # provider emulator with `uv run`.
       - name: Install Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -493,25 +606,11 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      # Compiling the external targets first also builds every real
-      # executable against the same all-feature library the tests link and
-      # places it at `target/debug/`, where the lib tests (bash/uv
-      # boundary-owning modules, in-crate boundary suites) exec
-      # `bash-supervisor`; `cargo test --lib --bins` alone does not place it
-      # there. A separate `cargo build --bins --all-features` compiled one more
-      # complete rustX library (no dev-dependency features) that no test
-      # links. Default-feature real binaries are still built by the Linux
-      # contracts and TUI lanes and by desktop-macos.
-      - name: Compile the external boundary targets and the real executables
-        run: >-
-          /usr/bin/time -l cargo test --all-features --no-run --timings
-          --test durable
-          --test process
-          --test subagent
-          --test tools
-          --test conformance
-          --test cfg3_catalog
-          --test cfg3_managed_output
+      # The lib tests (bash/uv boundary-owning modules, in-crate boundary
+      # suites) exec the real executables at target/debug/; this runner
+      # builds its own instead of waiting for core's.
+      - name: Build the real executables the unit and in-crate boundary tests exec
+        run: /usr/bin/time -l cargo build --bins --all-features --timings
 
       # App Server scripted contracts live under the manager's cfg(test) module
       # to reach its private owner gates; their physical test class is still
@@ -520,12 +619,7 @@ jobs:
       # `--bins` executes zero tests today and removing it was measured, but it
       # is retained so Cargo's normal target discovery picks up any future test
       # added to a binary. Binary test harnesses are not the real executables
-      # the tests exec; those come from the external-target compilation above.
-      #
-      # Lib test binary: source-module unit tests (including the bash/uv
-      # boundary-owning modules, whose OS primitives are platform-sensitive)
-      # + the in-crate boundary conformance suites; the deterministic
-      # scripted contract suites are skipped by prefix.
+      # the tests exec; those come from the build above.
       - name: Compile unit and in-crate boundary test harnesses
         run: /usr/bin/time -l cargo test --lib --bins --all-features --no-run --timings
 
@@ -534,23 +628,8 @@ jobs:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: '/usr/bin/time -l cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
-      - name: Run the external boundary targets
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: >-
-          /usr/bin/time -l cargo test --all-features
-          --test durable
-          --test process
-          --test subagent
-          --test tools
-          --test conformance
-          --test cfg3_catalog
-          --test cfg3_managed_output
-
       # Native macOS discovery: both --skip selectors must still exclude
-      # tests, and every required boundary suite (see REQUIREMENTS in the
-      # checker) must execute here. The feature set matches the targets
-      # built above, so no library is rebuilt for the checker.
+      # tests, and `boundary_suites::` must execute here entirely.
       - name: Check test lane coverage
         run: cargo run --all-features --example check_test_lanes -- --job rust-platform-boundaries
 
@@ -1020,6 +1099,7 @@ jobs:
       - rust-fast
       - rust-contracts
       - rust-boundaries
+      - rust-platform-core
       - rust-platform-boundaries
       - tui
       - app-server-protocol
