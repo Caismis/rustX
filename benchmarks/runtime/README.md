@@ -39,29 +39,67 @@ executes native Read and verifies the real result in request two. `cancel`
 cancels at an observed provider gate and proves the connection closes and the
 attempt settles without another request. No timing threshold judges correctness.
 
-Every case asserts terminal ownership/uniqueness/order through the shared driver,
-exact output, actual request count, paginated exact frozen request reconstruction,
-and original canonical read-back after shutdown/reopen. Provider expectations
-also assert ordered current inputs and prior replies. Failures retain logs and
-process results and make the command fail; never drop a slow or failed sample.
+Every case asserts terminal ownership/uniqueness/order, exact output and request
+count. Oracle version 2 independently constructs the **complete ordered input**
+for every request from the bounded workload: all prior user/reply pairs, the
+first generated time context, and the Read call/result when present. The pinned
+`expected_tools.json` is a normative fixture for the seven declared native tool
+definitions, rather than an expected value learned from the current run.
 
-Recorded windows: initialization, per-turn inbound acceptance, first consumed
-publication, settlement, runtime unload, connection close, final writable
-open/close, reopen with canonical validation, and filesystem cleanup. Historical
-correctness reads are included in process wall time and the final process sample;
-they have no separate wall-time field. The stream/cancel driver controls provider
-gates before draining notifications, so its first-consumed-publication measurement
-is **not** first emission latency. It must not be compared with short-response
-publication latency. Process samples bracket the entire execution and verification;
-per-turn CPU deltas distinguish seeded/measured work from final exact read-back.
-`stat` ticks, `io` and `smaps_rollup` belong to runtime plus driver only, excluding
-the provider process. Missing proc files are null, not zero. RSS/PSS are sampled,
-not peaks. Files record both logical length and allocated blocks; WAL and SHM are
-explicit files. The relay is joined after abort before driver drop. A read-only owner can leave
+The oracle compares captured HTTP bodies with an independent projection of the
+reconstructed provider-neutral request, without calling the production adapter
+translator. Wire/frozen equality preserves timestamps and workspace paths exactly;
+only JSON argument spelling is canonicalized. Comparison to the independent
+workload normalizes the strictly parsed generated UTC time and the one exact
+fixture workspace path. It never drops history, messages, roles, tool schemas,
+call/result linkage, model configuration or other semantic content. The bounded
+workload expects one initial time contribution (the product refresh interval is
+30 minutes). A second contribution fails rather than being silently removed.
+
+Each frozen snapshot's identity, provisional Assistant ID, semantic fingerprint,
+ordered Original references and Journal request-start fact must agree. After all
+runtime owners close, reopening repeats the complete wire/expected/frozen checks
+and compares the exact serialized snapshots and reconstructed requests with the
+live values. Five negative regressions prove omitted/reordered old history,
+frozen-content/time mismatch, changed tool schemas and wrong identity/reference
+linkage fail. The server's cheap per-step substring guards are not the acceptance
+oracle. All providers remain local scripted/faux processes.
+
+The runner requires exactly one passing named measurement test plus a valid
+version-2 sample, successful live/reopened oracle counts and every lifecycle
+endpoint. Exit zero with no matching test, missing/malformed output or an invalid
+oracle is a failed run. Logs, exit codes and validation errors are retained.
+Run focused Python regressions with:
+
+```sh
+python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
+cargo test --test conformance --all-features --locked request_oracle
+```
+
+Recorded wall windows include initialization, per-turn acceptance/publication/
+settlement, unload, driver drop, final writable open/close, reopened validation,
+and cleanup. Ordinary process CPU/I/O endpoints now start **before fixture/runtime
+initialization** and follow initialization, all turns, exact verification, shutdown,
+driver drop, final writer open/close, reopened verification, cleanup and provider
+teardown. Adjacent deltas expose each phase; first-to-last and post-turn deltas
+account for the entire measured lifecycle and deferred maintenance. They exclude
+OS/test-runtime startup and final result serialization/writing. Provider child CPU
+and I/O are excluded; waiting for that child is part of wall time. Missing counters
+remain null, not zero. The turn-only counters remain separately labeled.
+
+The earlier Stage C CPU/I/O window began after initialization and ended before
+shutdown. It did **not** cover the whole lifecycle. Its wall windows and separate
+short-small syscall trace already included deferred close/checkpoint work; the
+version-2 correction supplies the missing ordinary phase CPU/I/O across all cases.
+Old evidence is retained and identified as pre-review, not relabeled as complete.
+
+The relay is joined after abort before driver drop. A read-only owner can leave
 WAL frames after the writer closes, so a measured final writable open/close
 completes checkpointing before cleanup; the harness asserts no WAL frames remain.
-This maintenance step is identical in the corrected BEFORE and AFTER binaries.
-The original Stage A binary and results remain preserved separately.
+The same harness, oracle module and pinned tool fixture overlay both revisions.
+Stream/cancel gates are controlled before notification draining, so their first-
+consumed-publication figure is not first emission latency. RSS/PSS are sampled,
+not peaks. Inventories record both logical length and allocated blocks.
 
 Strace observes OS system calls, not physical-media traffic. `pwrite64` arguments
 and filenames distinguish SQLite, WAL and other files; `fsync`/`fdatasync` distinguish

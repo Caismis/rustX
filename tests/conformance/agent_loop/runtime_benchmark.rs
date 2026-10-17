@@ -4,6 +4,8 @@ use super::*;
 use serde_json::json;
 use std::time::Instant;
 
+mod request_oracle;
+
 fn footprint(root: &std::path::Path) -> serde_json::Value {
     fn visit(root: &std::path::Path, files: &mut Vec<serde_json::Value>) {
         use std::os::unix::fs::MetadataExt;
@@ -38,6 +40,82 @@ fn process_sample() -> serde_json::Value {
     })
 }
 
+fn lifecycle_sample(samples: &mut Vec<serde_json::Value>, phase: &str, began: Instant) {
+    let process = process_sample();
+    samples.push(json!({"phase":phase,"elapsed_us":began.elapsed().as_micros(),"process":process}));
+}
+
+fn verify_requests(
+    store: Arc<SqliteConversationStore>,
+    case: &str,
+    workspace: &std::path::Path,
+    requests: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    use rustx::durable::presentation::{FactQuery, FactScope};
+    let starts = store
+        .read_presentation_events(&FactQuery {
+            scope: FactScope::All,
+            kinds: vec!["model_request_started"],
+            before: None,
+            after: 0,
+            ascending: true,
+            through: store.presentation_frontier().unwrap(),
+            limit: 128,
+        })
+        .unwrap();
+    let conversation = store.conversation_id().clone();
+    let history = rustx::runtime::RequestHistory::new(store);
+    let snapshots = crate::common::request_snapshots(&history);
+    assert_eq!(snapshots.len(), requests.len());
+    assert_eq!(starts.len(), requests.len());
+    let mut identities = std::collections::BTreeSet::new();
+    snapshots
+        .into_iter()
+        .zip(&starts)
+        .zip(requests)
+        .enumerate()
+        .map(|(index, ((snapshot, start), wire))| {
+            assert!(identities.insert(snapshot.request_id.clone()));
+            assert_eq!(snapshot.request_id, snapshot.identity.request_id());
+            assert_eq!(
+                snapshot.provisional_message_id,
+                snapshot.identity.provisional_message_id()
+            );
+            assert_eq!(
+                history.get(&snapshot.identity).unwrap().as_ref(),
+                Some(&snapshot)
+            );
+            assert_eq!(wire["index"], index);
+            assert_eq!(wire["method"], "POST");
+            assert_eq!(wire["path"], "/v1/chat/completions");
+            assert_eq!(wire["protocol"], "openai_chat_completions");
+            assert_eq!(wire["model"], "chat-model");
+            let reconstructed = history.reconstruct(&snapshot.identity).unwrap();
+            assert_eq!(
+                reconstructed.semantic_input_fingerprint(),
+                snapshot.semantic_input_fingerprint
+            );
+            let request = serde_json::to_value(reconstructed).unwrap();
+            let snapshot = serde_json::to_value(snapshot).unwrap();
+            request_oracle::assert_identity(
+                &snapshot,
+                &request,
+                &serde_json::to_value(start).unwrap(),
+                conversation.as_str(),
+            );
+            request_oracle::assert_bodies(
+                case,
+                index,
+                workspace.to_str().unwrap(),
+                &wire["body"],
+                &request_oracle::reconstructed_body(&request),
+            );
+            // Retain plain values, never a Source/store owner across final close.
+            json!({"snapshot":snapshot,"request":request})
+        })
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "offline performance measurement; no timing gate"]
 async fn measure_runtime() {
@@ -49,6 +127,9 @@ async fn measure_runtime() {
         "stream" | "large" | "tool" | "cancel" => (0, 1),
         _ => panic!("unknown benchmark case"),
     };
+    let lifecycle_began = Instant::now();
+    let mut lifecycle = Vec::new();
+    lifecycle_sample(&mut lifecycle, "before_initialization", lifecycle_began);
     let root = tempfile::tempdir_in(output.parent().unwrap()).unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
@@ -61,6 +142,7 @@ async fn measure_runtime() {
     let mut driver = Driver::start_in(root, &emulator, &Setup::new("emulator/chat-model")).await;
     let open_us = began.elapsed().as_micros();
     let initial = process_sample();
+    lifecycle_sample(&mut lifecycle, "after_initialization", lifecycle_began);
     let mut samples = Vec::new();
     for turn in 0..history + measured {
         let began = Instant::now();
@@ -114,6 +196,7 @@ async fn measure_runtime() {
             "notification_records":events.records.len(),"process":process_sample(),
             "footprint":footprint(driver.root.path())}));
     }
+    lifecycle_sample(&mut lifecycle, "after_turns", lifecycle_began);
     let requests = emulator.requests().await;
     let expected_requests = history + measured + usize::from(case == "tool");
     assert_eq!(requests.len(), expected_requests);
@@ -142,24 +225,8 @@ async fn measure_runtime() {
             .collect(),
     };
     assert_eq!(text, expected);
-    let mut cursor = None;
-    let mut snapshot_count = 0;
-    loop {
-        let page = driver.request_history().page(cursor, 32).unwrap();
-        if page.snapshots.is_empty() {
-            break;
-        }
-        assert_ne!(page.next_sequence, cursor);
-        cursor = page.next_sequence;
-        snapshot_count += page.snapshots.len();
-        for snapshot in page.snapshots {
-            driver
-                .reconstruct_request(&snapshot.identity)
-                .expect("frozen exact request remains reconstructable");
-        }
-    }
-    assert_eq!(snapshot_count, expected_requests);
-    let final_sample = process_sample();
+    let verified_requests = verify_requests(driver.store.clone(), &case, &workspace, &requests);
+    lifecycle_sample(&mut lifecycle, "after_verification", lifecycle_began);
     let database = driver.access.database_path.clone();
     let cid = driver.access.node.conversation_id.clone();
     let began = Instant::now();
@@ -168,6 +235,7 @@ async fn measure_runtime() {
         assert!(error.is_cancelled(), "event relay failed: {error}");
     }
     let shutdown_us = began.elapsed().as_micros();
+    lifecycle_sample(&mut lifecycle, "after_shutdown", lifecycle_began);
     let root_path = driver.root.path().to_owned();
     driver.root.disable_cleanup(true);
     let before_close = footprint(&root_path);
@@ -175,6 +243,7 @@ async fn measure_runtime() {
     drop(driver);
     let close_us = began.elapsed().as_micros();
     let closed_footprint = footprint(&root_path);
+    lifecycle_sample(&mut lifecycle, "after_driver_drop", lifecycle_began);
     let began = Instant::now();
     // A final read-only owner can leave committed WAL frames after shutdown.
     // Include a normal writable open/close before deleting the allocation.
@@ -186,22 +255,41 @@ async fn measure_runtime() {
         Ok(info) => assert_eq!(info.len(), 0, "checkpoint left WAL frames"),
         Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
     }
+    lifecycle_sample(&mut lifecycle, "after_final_writer_close", lifecycle_began);
     let began = Instant::now();
-    let reopened = SqliteConversationStore::open_existing(cid, &database).unwrap();
+    let reopened = Arc::new(SqliteConversationStore::open_existing(cid, &database).unwrap());
     assert_eq!(reopened.load_canonical().unwrap(), history_messages);
+    let reopened_requests = verify_requests(reopened.clone(), &case, &workspace, &requests);
+    assert_eq!(
+        reopened_requests, verified_requests,
+        "exact frozen identities and input survive reopen"
+    );
     let reopen_us = began.elapsed().as_micros();
-    drop(reopened);
+    let verified_live_requests = verified_requests.len();
+    let verified_reopened_requests = reopened_requests.len();
+    drop((
+        reopened,
+        verified_requests,
+        reopened_requests,
+        requests,
+        history_messages,
+    ));
+    lifecycle_sample(&mut lifecycle, "after_reopen_verification", lifecycle_began);
     let began = Instant::now();
     std::fs::remove_dir_all(&root_path).unwrap();
     let cleanup_us = began.elapsed().as_micros();
+    lifecycle_sample(&mut lifecycle, "after_cleanup", lifecycle_began);
     emulator.finish().await;
+    lifecycle_sample(&mut lifecycle, "after_provider_teardown", lifecycle_began);
     std::fs::write(
         output,
         serde_json::to_vec_pretty(&json!({
             "case":case,"schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION,
             "protocol":APP_SERVER_PROTOCOL_VERSION,"history":history,"measured":measured,
             "requests":expected_requests,"open_us":open_us,"samples":samples,
-            "initial_process":initial,"final_process":final_sample,
+            "initial_process":initial,"lifecycle":lifecycle,"measurement_version":2,
+            "oracle_version":2,"verified_live_requests":verified_live_requests,
+            "verified_reopened_requests":verified_reopened_requests,
             "shutdown_us":shutdown_us,"reopen_us":reopen_us,
             "final_writer_close_us":final_writer_close_us,"checkpoint_footprint":checkpoint_footprint,
             "before_close":before_close,"closed_footprint":closed_footprint,"close_us":close_us,"cleanup_us":cleanup_us,

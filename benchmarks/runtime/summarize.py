@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
+from run import PHASES
 
 
 def cpu_ticks(sample):
@@ -24,6 +25,26 @@ def proc_value(sample, source, key):
     return None
 
 
+def process_delta(start, end, ticks_per_second):
+    before, after = cpu_ticks(start), cpu_ticks(end)
+    result = {"cpu_us": None if before is None or after is None else (after-before)*1e6/ticks_per_second}
+    for key in ("read_bytes", "write_bytes", "cancelled_write_bytes", "rchar", "wchar", "syscr", "syscw"):
+        before, after = (proc_value(p, "io", key) for p in (start, end))
+        result[key] = None if before is None or after is None else after-before
+    return result
+
+
+def lifecycle_totals(points, ticks_per_second):
+    assert [p["phase"] for p in points] == PHASES, "incomplete lifecycle cannot be reported as whole"
+    def delta(start, end):
+        return dict(process_delta(start["process"], end["process"], ticks_per_second),
+                    wall_us=end["elapsed_us"]-start["elapsed_us"])
+    return {"phases": {end["phase"].removeprefix("after_"): delta(start, end)
+                       for start, end in zip(points, points[1:])},
+            "whole_measured_lifecycle": delta(points[0], points[-1]),
+            "post_turn": delta(points[2], points[-1])}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
@@ -33,12 +54,12 @@ def main():
     failed = []
     for path in sorted(args.directory.glob("*.process.json")):
         process = json.loads(path.read_text())
-        if process["returncode"]:
+        if not process["accepted"]:
             failed.append(process)
             continue
         sample_path = path.with_name(path.name.replace(".process.json", ".json"))
         sample = json.loads(sample_path.read_text())
-        assert sample["oracle"] == "passed"
+        assert sample["oracle"] == "passed" and sample["measurement_version"] == 2
         measured = [s for s in sample["samples"] if s["measured"]]
         starting = sample["samples"][sample["history"] - 1]["process"] if sample["history"] else sample["initial_process"]
         ending = measured[-1]["process"]
@@ -48,6 +69,7 @@ def main():
         pss = [proc_value(s["process"], "smaps_rollup", "Pss") for s in sample["samples"]]
         publications = [s["first_consumed_publication_us"] for s in measured if s["first_consumed_publication_us"] is not None]
         grouped.setdefault((sample["case"], process["label"]), []).append({
+            "lifecycle": lifecycle_totals(sample["lifecycle"], ticks_per_second),
             "measured_cpu_us_per_turn":None if ticks_start is None or ticks_end is None else (ticks_end-ticks_start)*1e6/ticks_per_second/len(measured),
             "measured_process_write_bytes":None if writes_start is None or writes_end is None else writes_end-writes_start,
             "sampled_max_rss_kib":max((v for v in rss if v is not None), default=None),
