@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "strace",
+    "-f",
+    "-yy",
+    "-T",
+    "-e",
+    "trace=write,pwrite64,fsync,fdatasync,fcntl,unlink,rename",
+    "-o",
+    "/tmp/rustx-480-evidence/before-trace/0-short-small-before.strace",
+    "/tmp/rustx-480-evidence/before-conformance",
+    "agent_loop::runtime_benchmark::measure_runtime",
+    "--exact",
+    "--ignored",
+    "--nocapture"
+  ],
+  "returncode": 101,
+  "elapsed_seconds": 14.051540760789067,
+  "pair": 0,
+  "case": "short-small",
+  "label": "before"
+}

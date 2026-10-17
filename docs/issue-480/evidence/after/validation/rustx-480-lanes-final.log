@@ -1,0 +1,13 @@
+   Compiling rustx v0.1.0 (/home/capi/Documents/codes/rustX-issue-480)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.72s
+     Running `target/debug/examples/check_test_lanes --job rust-boundaries`
+linux FULL job `rust-contracts` step `Run unit tests and the in-crate contract suites`: lib: 3970 runnable, 4 ignored selected
+linux FULL job `rust-boundaries` step `Run the in-crate boundary suites`: lib: 243 runnable, 0 ignored selected
+linux FULL job `rust-boundaries` step `Run the external boundary targets`: test cfg3_catalog: 26 runnable, 0 ignored selected
+linux FULL job `rust-boundaries` step `Run the external boundary targets`: test cfg3_managed_output: 5 runnable, 0 ignored selected
+linux FULL job `rust-boundaries` step `Run the external boundary targets`: test conformance: 29 runnable, 1 ignored selected
+linux FULL job `rust-boundaries` step `Run the external boundary targets`: test durable: 147 runnable, 0 ignored selected
+linux FULL job `rust-boundaries` step `Run the external boundary targets`: test process: 63 runnable, 0 ignored selected
+linux FULL job `rust-boundaries` step `Run the external boundary targets`: test subagent: 47 runnable, 0 ignored selected
+linux FULL job `rust-boundaries` step `Run the external boundary targets`: test tools: 135 runnable, 0 ignored selected
+test lane coverage holds on linux

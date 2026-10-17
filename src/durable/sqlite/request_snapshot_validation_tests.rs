@@ -285,7 +285,7 @@ fn normalized_request_metadata_publication_never_hydrates_selected_input_bodies(
     assert!(encoded.len() < serde_json::to_vec(&snapshot).unwrap().len());
     {
         let mut connection = store.lock().unwrap();
-        connection.authorizer(Some(deny_selected_input_bodies));
+        connection.authorizer(Some(deny_selected_input_bodies)).unwrap();
         let transaction = connection.transaction().unwrap();
         let (metadata, _, _) =
             require_started_request_tx(&transaction, store.conversation_id(), &snapshot.request_id)
@@ -307,7 +307,7 @@ fn normalized_request_metadata_publication_never_hydrates_selected_input_bodies(
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
         snapshot
@@ -479,7 +479,7 @@ fn normalized_request_digest_guards_every_reader_before_materializing_malformed_
 fn archived_normalized_request_preserves_the_exact_original_flat_snapshot() {
     let (store, snapshot) = selected_snapshot_fixture();
     store.archive_barrier().unwrap();
-    let through = store.archive_frontiers().unwrap().requests;
+    let through = store.archive_frontiers().unwrap().0.requests;
     let (ordinal, json) = store
         .archive_record(archive::Authority::Requests, 0, through)
         .unwrap()

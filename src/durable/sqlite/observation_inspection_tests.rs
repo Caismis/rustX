@@ -143,7 +143,7 @@ fn t08_t12_t15_t19_trace_definition_uses_exact_original_retry_catalog_without_bo
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_inspection_original_columns));
+        .authorizer(Some(deny_inspection_original_columns)).unwrap();
     assert!(matches!(
         store.observation_trace_tool_definition(&before, &first_occurrence),
         Err(ConversationStoreError::InvalidReference(_))
@@ -207,7 +207,7 @@ fn t08_t12_t15_t19_trace_definition_uses_exact_original_retry_catalog_without_bo
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(
         store.load_request_snapshot(&first.request_id).unwrap(),
         first
@@ -368,7 +368,7 @@ fn t08_t12_t15_t19_trace_adoption_advances_and_validates_only_selected_native_me
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_inspection_original_columns));
+        .authorizer(Some(deny_inspection_original_columns)).unwrap();
     assert!(
         store
             .observation_trace_adoption(&before, sequence, 0, 8)
@@ -410,7 +410,7 @@ fn t08_t12_t15_t19_trace_adoption_advances_and_validates_only_selected_native_me
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     store.lock().unwrap().execute("UPDATE trace_adoption_members SET ledger_position=10 WHERE source_sequence=?1 AND ordinal=8",[sequence]).unwrap();
     assert!(matches!(
         store.observation_trace_adoption(&cut, sequence, 8, 1),
@@ -507,7 +507,7 @@ fn t12_t19_trace_definition_rejects_another_real_request_and_later_matching_ordi
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_inspection_original_columns));
+        .authorizer(Some(deny_inspection_original_columns)).unwrap();
     store.lock().unwrap().execute("UPDATE canonical_tool_calls SET observation_definition_start=?2 WHERE observation_ledger=?1",params![occurrence.ledger_position,second_start]).unwrap();
     assert!(matches!(
         store.observation_trace_tool_definition(&cut, &occurrence),

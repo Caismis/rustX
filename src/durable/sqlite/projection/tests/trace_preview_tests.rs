@@ -86,7 +86,8 @@ fn t08_t14_t19_compaction_trace_preview_stays_with_original_completed_j_after_ne
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_checkpoint_payload));
+        .authorizer(Some(deny_checkpoint_payload))
+        .unwrap();
     let current_first = inspected_compaction(&store, &current_cut, first_start);
     let current_second = inspected_compaction(&store, &current_cut, second_start);
     assert_eq!(current_first.record.preview, old.record.preview);
@@ -101,7 +102,8 @@ fn t08_t14_t19_compaction_trace_preview_stays_with_original_completed_j_after_ne
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
     assert_eq!(
         store.load_canonical().unwrap(),
         canonical,

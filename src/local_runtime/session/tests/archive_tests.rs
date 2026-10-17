@@ -159,8 +159,8 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
         writer.bytes
     });
     wait_reached.await.unwrap();
-    // These synchronous native commits would fail with SQLITE_BUSY if any
-    // capture read barrier survived preparation. ZIP writing is parked at its first write.
+    // ZIP writing is parked at its first write. Writers must progress, and a
+    // TRUNCATE checkpoint below proves no capture read snapshot survives either.
     store
         .append_canonical(&user("after", "EXCLUDED_AFTER_CUT"))
         .unwrap();
@@ -198,6 +198,16 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
         }),
     };
     store.append_event(later_terminal).unwrap();
+    for database in [catalog.database_path(&session, &conversation), child_path] {
+        let checkpoint = rusqlite::Connection::open(database).unwrap();
+        checkpoint.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let result: (i64, i64, i64) = checkpoint
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(result, (0, 0, 0), "slow ZIP must not pin a WAL snapshot");
+    }
     release.send(()).unwrap();
     let files = decode_bytes(producing.await.unwrap());
     let manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();

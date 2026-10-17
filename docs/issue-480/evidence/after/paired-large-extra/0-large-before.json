@@ -1,0 +1,170 @@
+{
+  "case": "large",
+  "schema": 69,
+  "protocol": 50,
+  "history": 0,
+  "measured": 1,
+  "requests": 1,
+  "open_us": 152336,
+  "samples": [
+    {
+      "turn": 0,
+      "measured": true,
+      "accepted_us": 10245,
+      "settled_us": 553953,
+      "first_consumed_publication_us": 90993,
+      "notification_records": 142,
+      "process": {
+        "stat": "986597 (before-correcte) S 986571 986570 986570 0 -1 4194304 27039 0 0 0 35 10 0 0 20 0 9 0 351258569 726798336 39360 18446744073709551615 105022172259008 105022248495200 140731136059840 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 105022251773920 105022251804728 105022920904704 140731136069299 140731136069429 140731136069429 140731136073667 0\n",
+        "io": "rchar: 6605643\nwchar: 19826218\nsyscr: 8513\nsyscw: 9250\nread_bytes: 0\nwrite_bytes: 20934656\ncancelled_write_bytes: 282624\n",
+        "smaps_rollup": "5f845fee9000-7ffe8577b000 ---p 00000000 00:00 0                          [rollup]\nRss:              159952 kB\nPss:              157708 kB\nPss_Dirty:        104436 kB\nPss_Anon:         104436 kB\nPss_File:          53272 kB\nPss_Shmem:             0 kB\nShared_Clean:       2324 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53192 kB\nPrivate_Dirty:    104436 kB\nReferenced:       159952 kB\nAnonymous:        104436 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/conversation-reservations/conv_01a14b45-aa05-75a0-b30e-3556691199b0",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/ses_01a14b45-aa05-75a0-b30e-353a8cbdc7a7/conversations/conv_01a14b45-aa05-75a0-b30e-3556691199b0/conversation.sqlite",
+          "logical": 1699840,
+          "allocated": 1695744
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/catalog.json",
+          "logical": 1221,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    }
+  ],
+  "initial_process": {
+    "stat": "986597 (before-correcte) S 986571 986570 986570 0 -1 4194304 24545 0 0 0 9 5 0 0 20 0 7 0 351258569 588353536 35136 18446744073709551615 105022172259008 105022248495200 140731136059840 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 105022251773920 105022251804728 105022920904704 140731136069299 140731136069429 140731136069429 140731136073667 0\n",
+    "io": "rchar: 5607557\nwchar: 869762\nsyscr: 5035\nsyscw: 254\nread_bytes: 0\nwrite_bytes: 909312\ncancelled_write_bytes: 20480\n",
+    "smaps_rollup": "5f845fee9000-7ffe8577b000 ---p 00000000 00:00 0                          [rollup]\nRss:              142380 kB\nPss:              140198 kB\nPss_Dirty:         94864 kB\nPss_Anon:          94864 kB\nPss_File:          45334 kB\nPss_Shmem:             0 kB\nShared_Clean:       2260 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     45256 kB\nPrivate_Dirty:     94864 kB\nReferenced:       142380 kB\nAnonymous:         94864 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+  },
+  "final_process": {
+    "stat": "986597 (before-correcte) S 986571 986570 986570 0 -1 4194304 27099 0 0 0 35 11 0 0 20 0 9 0 351258569 726798336 39488 18446744073709551615 105022172259008 105022248495200 140731136059840 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 105022251773920 105022251804728 105022920904704 140731136069299 140731136069429 140731136069429 140731136073667 0\n",
+    "io": "rchar: 6737317\nwchar: 19826314\nsyscr: 8770\nsyscw: 9254\nread_bytes: 0\nwrite_bytes: 20934656\ncancelled_write_bytes: 282624\n",
+    "smaps_rollup": "5f845fee9000-7ffe8577b000 ---p 00000000 00:00 0                          [rollup]\nRss:              160292 kB\nPss:              158048 kB\nPss_Dirty:        104520 kB\nPss_Anon:         104520 kB\nPss_File:          53528 kB\nPss_Shmem:             0 kB\nShared_Clean:       2324 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53448 kB\nPrivate_Dirty:    104520 kB\nReferenced:       160292 kB\nAnonymous:        104520 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+  },
+  "shutdown_us": 1384,
+  "reopen_us": 2661,
+  "final_writer_close_us": 4369,
+  "checkpoint_footprint": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/conversation-reservations/conv_01a14b45-aa05-75a0-b30e-3556691199b0",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/ses_01a14b45-aa05-75a0-b30e-353a8cbdc7a7/conversations/conv_01a14b45-aa05-75a0-b30e-3556691199b0/conversation.sqlite",
+      "logical": 1699840,
+      "allocated": 1695744
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/catalog.json",
+      "logical": 1221,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "before_close": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/conversation-reservations/conv_01a14b45-aa05-75a0-b30e-3556691199b0",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/ses_01a14b45-aa05-75a0-b30e-353a8cbdc7a7/conversations/conv_01a14b45-aa05-75a0-b30e-3556691199b0/conversation.sqlite",
+      "logical": 1699840,
+      "allocated": 1695744
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/catalog.json",
+      "logical": 1221,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "closed_footprint": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/conversation-reservations/conv_01a14b45-aa05-75a0-b30e-3556691199b0",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/ses_01a14b45-aa05-75a0-b30e-353a8cbdc7a7/conversations/conv_01a14b45-aa05-75a0-b30e-3556691199b0/conversation.sqlite",
+      "logical": 1699840,
+      "allocated": 1695744
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/private/sessions/catalog.json",
+      "logical": 1221,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-large-extra/.tmpIP4Ak4/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "close_us": 176,
+  "cleanup_us": 442,
+  "oracle": "passed",
+  "sql_statements": null,
+  "allocations": null
+}

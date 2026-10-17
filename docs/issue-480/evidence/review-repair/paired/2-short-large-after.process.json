@@ -1,0 +1,16 @@
+{
+  "validation_errors": [],
+  "accepted": true,
+  "argv": [
+    "/tmp/rustx-480-evidence/after-review-final-conformance",
+    "agent_loop::runtime_benchmark::measure_runtime",
+    "--exact",
+    "--ignored",
+    "--nocapture"
+  ],
+  "returncode": 0,
+  "elapsed_seconds": 14.024066023062915,
+  "pair": 2,
+  "case": "short-large",
+  "label": "after"
+}

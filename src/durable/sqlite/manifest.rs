@@ -450,25 +450,27 @@ impl Owner {
     pub(super) fn uninstalled() -> Arc<Self> {
         Self::new()
     }
-    pub fn install(connection: &Connection) -> Arc<Self> {
+    pub fn install(connection: &Connection) -> Result<Arc<Self>, ConversationStoreError> {
         let owner = Self::new();
         let watched = owner.clone();
         let columns = MutationColumns::read(connection);
-        connection.preupdate_hook(Some(
-            move |_: rusqlite::hooks::Action,
-                  db: &str,
-                  table: &str,
-                  change: &rusqlite::hooks::PreUpdateCase| {
-                if db != "main" {
-                    return;
-                }
-                let invalidates = columns.invalidates(&watched, table, change);
-                if invalidates {
-                    watched.invalidate();
-                }
-            },
-        ));
-        owner
+        connection
+            .preupdate_hook(Some(
+                move |_: rusqlite::hooks::Action,
+                      db: &str,
+                      table: &str,
+                      change: &rusqlite::hooks::PreUpdateCase| {
+                    if db != "main" {
+                        return;
+                    }
+                    let invalidates = columns.invalidates(&watched, table, change);
+                    if invalidates {
+                        watched.invalidate();
+                    }
+                },
+            ))
+            .map_err(|error| storage(format!("install native input observer: {error}")))?;
+        Ok(owner)
     }
     fn invalidate(&self) {
         let _ = self
@@ -477,9 +479,9 @@ impl Owner {
     }
     pub fn capture(&self, connection: &Connection) -> Result<u64, ConversationStoreError> {
         // The caller's native read/write transaction must own its SQLite snapshot
-        // before sampling the external-connection invalidation token. Production
-        // uses DELETE/MEMORY journals, so this shared read lock also prevents a
-        // different connection from committing between the token and validation.
+        // before sampling the external-connection invalidation token. In WAL,
+        // data_version follows the pinned read snapshot; a concurrent commit is
+        // observed after that transaction ends, at the next snapshot capture.
         connection
             .query_row("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
                 row.get::<_, i64>(0)

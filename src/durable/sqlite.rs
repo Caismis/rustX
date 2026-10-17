@@ -291,7 +291,7 @@ fn count_conversation_store_open() {
 /// framing are independent version domains and are unchanged by this: the
 /// envelope shape did not move, only the semantic vocabulary stored inside
 /// `events.event_json`.
-/// Version 33 requires rollback journaling for non-creating management reads
+/// Version 33 originally required rollback journaling for non-creating management reads
 /// and the separated local product workspace allocation contract.
 /// Version 34 adds native revisioned Goal state and atomic Goal/inbound accounting.
 /// Version 36 records Session upload facts and request-time path projection.
@@ -637,7 +637,9 @@ fn journal_prefix(connection: &Connection) -> Result<u64, ConversationStoreError
 impl Drop for StoreGuard<'_> {
     fn drop(&mut self) {
         if self.presentation {
-            self.connection.progress_handler(0, None::<fn() -> bool>);
+            self.connection
+                .progress_handler(0, None::<fn() -> bool>)
+                .expect("restore SQLite progress policy");
             writer_busy_policy(&self.connection).expect("restore SQLite busy policy");
         }
         if self.connection.total_changes() == self.changes || !self.connection.is_autocommit() {
@@ -751,6 +753,7 @@ impl SqliteConversationStore {
         if has_table(&connection, "rustx_store")? {
             register_integrity_function(&connection)?;
             validate_existing_schema(&connection)?;
+            validate_existing_identity(&connection, &conversation_id)?;
         }
         configure_connection(&mut connection, false)?;
         Self::from_connection(conversation_id, connection)
@@ -772,7 +775,8 @@ impl SqliteConversationStore {
     }
 
     /// Startup recovery is an explicit writer operation, never a management read.
-    /// It may roll back a hot journal, but cannot create or initialize a store.
+    /// It may recover WAL or convert a compatible rollback journal, but cannot
+    /// create, initialize, or migrate a store.
     pub(crate) fn recover_existing(
         conversation_id: ConversationId,
         path: &Path,
@@ -788,12 +792,13 @@ impl SqliteConversationStore {
             )
             .map_err(|e| storage(e.to_string()))?,
         );
-        Self::open_bound_existing(
+        let store = Self::open_bound_existing(
             conversation_id,
             &path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
-        )
-        .map(|store| store.with_lifecycle(access))
+        )?;
+        configure_connection(&mut *store.lock()?, false)?;
+        Ok(store.with_lifecycle(access))
     }
 
     fn open_bound_existing(
@@ -803,18 +808,15 @@ impl SqliteConversationStore {
     ) -> Result<Self, ConversationStoreError> {
         use std::io::Read as _;
         count_conversation_store_open();
-        // READ_ONLY alone can create WAL sidecars, even while querying the
-        // journal mode. Reject that format before entering SQLite at all.
-        // SQLite's documented header offsets 18/19 are the write/read format
-        // versions: both must be 1 for rollback journaling.
-        // https://www.sqlite.org/fileformat.html#file_format_version_numbers
+        // Reject unsupported file formats before SQLite access. WAL readers may
+        // create/rebuild physical sidecars; that is not application-state repair.
         let mut header = [0; 20];
         std::fs::File::open(path)
             .and_then(|mut file| file.read_exact(&mut header))
             .map_err(|error| storage(format!("read existing database header: {error}")))?;
-        if &header[..16] != b"SQLite format 3\0" || header[18..20] != [1, 1] {
+        if &header[..16] != b"SQLite format 3\0" || !matches!(&header[18..20], [1, 1] | [2, 2]) {
             return Err(storage(
-                "existing-only access requires rollback-journal SQLite format",
+                "existing-only access requires a supported SQLite file format",
             ));
         }
         let connection = Connection::open_with_flags(path, flags)
@@ -822,29 +824,20 @@ impl SqliteConversationStore {
         let mode: String = connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .map_err(|error| storage(format!("read journal mode: {error}")))?;
-        if mode != "delete" {
-            return Err(storage(
-                "existing-only management requires rollback-journal storage",
-            ));
+        if mode != "wal"
+            && !(mode == "delete" && flags.contains(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE))
+        {
+            return Err(storage("existing-only management requires WAL storage"));
         }
         writer_busy_policy(&connection)
             .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
         register_integrity_function(&connection)?;
         validate_existing_schema(&connection)?;
-        let stored: String = connection
-            .query_row(
-                "SELECT conversation_id FROM rustx_store WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(format!("read existing identity: {error}")))?;
-        if stored != conversation_id.as_str() {
-            return Err(ConversationStoreError::ConversationIdMismatch {
-                stored: ConversationId::parse(stored).map_err(storage)?,
-                requested: conversation_id,
-            });
-        }
-        Ok(Self::from_validated_connection(conversation_id, connection))
+        validate_existing_identity(&connection, &conversation_id)?;
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+            .map_err(|error| storage(format!("configure existing SQLite: {error}")))?;
+        Self::from_validated_connection(conversation_id, connection)
     }
 
     /// Creates an in-memory store for tests and headless ephemeral runs.
@@ -872,12 +865,15 @@ impl SqliteConversationStore {
             create_schema(&mut connection)?;
         }
         bind_identity(&mut connection, &conversation_id)?;
-        Ok(Self::from_validated_connection(conversation_id, connection))
+        Self::from_validated_connection(conversation_id, connection)
     }
 
-    fn from_validated_connection(conversation_id: ConversationId, connection: Connection) -> Self {
-        let manifest = manifest::Owner::install(&connection);
-        Self::from_connection_owner(
+    fn from_validated_connection(
+        conversation_id: ConversationId,
+        connection: Connection,
+    ) -> Result<Self, ConversationStoreError> {
+        let manifest = manifest::Owner::install(&connection)?;
+        Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
                 available: Mutex::new(Some(connection)),
@@ -885,7 +881,7 @@ impl SqliteConversationStore {
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
             }),
-        )
+        ))
     }
 
     fn from_connection_owner(conversation_id: ConversationId, conn: Arc<ConnectionOwner>) -> Self {
@@ -961,16 +957,21 @@ impl SqliteConversationStore {
             let cancel = cancel.clone();
             #[cfg(test)]
             let mut entered = self.read_progress_entered.lock().unwrap().take();
-            connection.progress_handler(
-                1000,
-                Some(move || {
-                    #[cfg(test)]
-                    if let Some(entered) = entered.take() {
-                        let _ = entered.send(());
-                    }
-                    cancel.load(Ordering::Acquire)
-                }),
-            );
+            connection
+                .progress_handler(
+                    1000,
+                    Some(move || {
+                        #[cfg(test)]
+                        if let Some(entered) = entered.take() {
+                            let _ = entered.send(());
+                        }
+                        cancel.load(Ordering::Acquire)
+                    }),
+                )
+                .map_err(|error| {
+                    writer_busy_policy(&connection).expect("restore SQLite busy policy");
+                    storage(format!("install SQLite cancellation: {error}"))
+                })?;
         }
         let changes = connection.total_changes();
         Ok(StoreGuard {
@@ -4004,7 +4005,22 @@ impl ConversationStore for SqliteConversationStore {
     }
 
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
-        load_head(&*self.lock()?)
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        #[cfg(test)]
+        if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
+            transaction
+                .query_row(
+                    "SELECT schema_version FROM rustx_store WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|error| storage(error.to_string()))?;
+            probe();
+        }
+        load_head(&transaction)
     }
 
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
@@ -4750,7 +4766,10 @@ impl ConversationStore for SqliteConversationStore {
         limit: usize,
     ) -> Result<TranscriptPage, ConversationStoreError> {
         let connection = self.lock()?;
-        load_transcript_page(&connection, before, limit)
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(error.to_string()))?;
+        load_transcript_page(&transaction, before, limit)
     }
 
     fn commit_model_turn_start(
@@ -5211,7 +5230,7 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<u64, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(error.to_string()))?;
         let through = journal_prefix(&transaction)?;
         // A newly installed Runtime owns recovery of already committed history.
@@ -5241,7 +5260,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark(&transaction, first, last)?;
             transaction
@@ -5270,7 +5289,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark_direct(&transaction, first, last)?;
             transaction
@@ -5303,7 +5322,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark_transcript(&transaction, cursor)?;
             transaction
@@ -5329,7 +5348,7 @@ impl ConversationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|error| storage(error.to_string()))?;
             observation_readiness::mark_canonical(&transaction, first_ledger, last_ledger)?;
             transaction
@@ -8155,14 +8174,37 @@ fn configure_connection(
 ) -> Result<(), ConversationStoreError> {
     register_integrity_function(connection)?;
     connection
-        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;")
+        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
         .map_err(|error| storage(format!("configure SQLite: {error}")))?;
     writer_busy_policy(connection)
         .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
     if !in_memory {
-        connection
-            .execute_batch("PRAGMA journal_mode = DELETE;")
+        let mode: String = connection
+            .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
             .map_err(|error| storage(format!("configure SQLite journal: {error}")))?;
+        if mode != "wal" {
+            return Err(storage(format!("SQLite refused WAL journal mode: {mode}")));
+        }
+    }
+    Ok(())
+}
+
+fn validate_existing_identity(
+    connection: &Connection,
+    conversation_id: &ConversationId,
+) -> Result<(), ConversationStoreError> {
+    let stored: String = connection
+        .query_row(
+            "SELECT conversation_id FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("read existing identity: {error}")))?;
+    if stored != conversation_id.as_str() {
+        return Err(ConversationStoreError::ConversationIdMismatch {
+            stored: ConversationId::parse(stored).map_err(storage)?,
+            requested: conversation_id.clone(),
+        });
     }
     Ok(())
 }
@@ -14852,31 +14894,30 @@ mod tests {
     }
 
     #[test]
-    fn existing_management_head_read_excludes_cross_connection_commit_until_snapshot_ends() {
+    fn wal_management_head_is_one_snapshot_while_another_writer_commits() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("conversation.sqlite");
-        let id = ConversationId::new("conv_4d5a6b2b-74d8-71a9-8041-37c01c71550c");
-        let writer = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let id = ConversationId::generate();
+        let writer = Arc::new(SqliteConversationStore::open(id.clone(), &path).unwrap());
         let reader = SqliteConversationStore::open_existing(id, &path).unwrap();
-        let competing = Connection::open(&path).unwrap();
-        competing.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let initial = reader.load_head().unwrap();
+        let observed = Arc::new(AtomicBool::new(false));
+        let committed = observed.clone();
+        let competing = writer.clone();
         *reader.head_read_probe.lock().unwrap() = Some(Box::new(move || {
-            let transaction = competing.unchecked_transaction().unwrap();
-            transaction
-                .execute(
-                    "UPDATE rustx_store SET next_inbound_sequence=next_inbound_sequence+1",
-                    [],
-                )
+            let accepted = competing
+                .accept_inbound(draft("during read snapshot"))
                 .unwrap();
-            let error = transaction.commit().unwrap_err();
-            assert_eq!(
-                error.sqlite_error_code(),
-                Some(rusqlite::ErrorCode::DatabaseBusy)
-            );
+            competing
+                .adopt_pending_batch(accepted.sequence, None)
+                .unwrap();
+            committed.store(true, Ordering::SeqCst);
         }));
-        assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
-        let accepted = writer.accept_inbound(draft("after snapshot")).unwrap();
-        writer.adopt_pending_batch(accepted.sequence, None).unwrap();
+        assert_eq!(reader.load_head().unwrap(), initial);
+        assert!(
+            observed.load(Ordering::SeqCst),
+            "the interleaving gate must execute"
+        );
         assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
         assert_eq!(reader.load_head().unwrap().active_message_ids.len(), 1);
     }
@@ -19047,7 +19088,7 @@ mod tests {
     }
 
     #[test]
-    fn new_schema_birth_rolls_back_late_ddl_and_commits_once_with_full_durability() {
+    fn new_schema_birth_rolls_back_late_ddl_and_commits_once_with_wal_normal() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("schema-birth.sqlite");
         let mut connection = Connection::open(&path).unwrap();
@@ -19086,10 +19127,12 @@ mod tests {
             .unwrap();
         let commits = Arc::new(AtomicUsize::new(0));
         let observed = commits.clone();
-        connection.commit_hook(Some(move || {
-            observed.fetch_add(1, Ordering::SeqCst);
-            false
-        }));
+        connection
+            .commit_hook(Some(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                false
+            }))
+            .unwrap();
         create_schema(&mut connection).unwrap();
         assert_eq!(
             commits.load(Ordering::SeqCst),
@@ -19101,13 +19144,13 @@ mod tests {
             connection
                 .query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            2
+            1
         );
         assert_eq!(
             connection
                 .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
                 .unwrap(),
-            "delete"
+            "wal"
         );
         let conversation = ConversationId::new("conv_00000000-0000-7000-8000-000000000467");
         bind_identity(&mut connection, &conversation).unwrap();
@@ -19129,26 +19172,30 @@ mod tests {
         configure_connection(&mut connection, true).unwrap();
         let verification = Arc::new(AtomicBool::new(false));
         let observed = verification.clone();
-        connection.authorizer(Some(move |context: AuthContext<'_>| {
-            if matches!(
-                context.action,
-                AuthAction::Pragma {
-                    pragma_name: "table_info",
-                    pragma_value: Some("inherited_turn_provenance")
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Pragma {
+                        pragma_name: "table_info",
+                        pragma_value: Some("inherited_turn_provenance")
+                    }
+                ) {
+                    observed.store(true, Ordering::SeqCst);
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
                 }
-            ) {
-                observed.store(true, Ordering::SeqCst);
-                Authorization::Deny
-            } else {
-                Authorization::Allow
-            }
-        }));
+            }))
+            .unwrap();
         assert!(create_schema(&mut connection).is_err());
         assert!(
             verification.load(Ordering::SeqCst),
             "the failure occurred during final shape validation"
         );
-        connection.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
         assert!(connection.is_autocommit());
         let objects: u64 = connection
             .query_row(

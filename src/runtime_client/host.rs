@@ -10564,6 +10564,14 @@ mod tests {
             .unwrap()
             .position
             .clone();
+        // Isolate native terminal publication from the separate root-attempt
+        // admission. Adopting the terminal notice removes Pending Inbox rows
+        // and invalidates the historical cut this test deliberately holds.
+        let admission_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        fixture
+            .runtime
+            .install_admission_gate(admission_gate.clone());
+        let _release_admission = admission_gate.arm_scoped();
         let terminal_hook =
             Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
         let _release_terminal = ReleaseOnDrop(terminal_hook.clone());
@@ -10579,7 +10587,13 @@ mod tests {
         let inner = fixture.host.weak_inner().upgrade().unwrap();
         let during_checkpoint = inner
             .checkpoint_with_trace(std::slice::from_ref(&position))
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "terminal publication checkpoint: {error:?}; prior={after_cut:?}; durable={:?}; published_cursor={:?}",
+                    fixture.store.as_ref().unwrap().observation_read_cut(),
+                    host_projection_snapshot(&inner).1,
+                )
+            });
         let terminal_cursor = during_checkpoint.cursor;
         assert_eq!(during_checkpoint.read_cut, after_cut);
         let during_terminal = during_checkpoint.snapshot;

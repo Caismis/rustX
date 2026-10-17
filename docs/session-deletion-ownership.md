@@ -182,17 +182,17 @@ parent physical lease also blocks destructive exclusion until its exact proof.
 ## Development storage boundary
 
 Catalog schema **4 -> 5** establishes separated workspace allocation semantics.
-SQLite development schema **32 -> 33** uses rollback journaling (`DELETE`),
-`synchronous=FULL`, and the same canonical linear Conversation tables. Read-only
-WAL can create shared-memory sidecars; existing-only management instead requires
-rollback-journal storage and never initializes, binds an identity, checkpoints,
-or recovers a database. A hot journal requiring recovery is an explicit read
-failure; ordinary runtime startup owns recovery. Startup explicitly traverses
-known graph lineages and typed child ownership, opening existing stores with
-read/write authority to recover journals before any read-only Session selection.
-`recover_existing` requires and retains the product writer guard and never uses
-SQLite CREATE flags. This recovery is not part of management or preflight. There is no migration or
-compatibility reader. Child IPC **20 -> 22** (after integrating Issue #256) carries canonical product identity and an incarnation name instead of an independent absolute child runtime path. Obsolete wire shapes are rejected.
+Issue #480 replaces the original schema-33 rollback-journal policy with WAL/NORMAL
+without changing logical schema. Existing-only management validates bound WAL
+stores and never initializes, converts journal mode or repairs application state.
+SQLite can create/rebuild physical WAL/SHM sidecars even on read-only access;
+management therefore makes no no-sidecar promise. A compatible DELETE store or
+hot rollback journal requires explicit writer-owned startup recovery first.
+Startup traverses known graph lineages and typed child ownership before read-only
+Session selection. `recover_existing` retains the product writer and allocation
+guards, never uses CREATE, validates the current schema/identity, and establishes
+WAL/NORMAL. There is no obsolete-schema migration or compatibility reader.
+See [the fault and lifetime contract](issue-480/durability.md). Child IPC **20 -> 22** (after integrating Issue #256) carries canonical product identity and an incarnation name instead of an independent absolute child runtime path. Obsolete wire shapes are rejected.
 
 Authoritative layout:
 

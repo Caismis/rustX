@@ -1,0 +1,275 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (target/debug/deps/rustx-020f8f968f05fb14)
+
+running 243 tests
+test boundary_suites::background::text_spill::a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model ... ok
+test boundary_suites::background::text_spill::genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound ... ok
+test boundary_suites::background::text_spill::adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_model ... ok
+test boundary_suites::background::text_spill::oversized_background_bash_publishes_a_text_only_terminal_inbound ... ok
+test boundary_suites::durable::content::t08_t12_canonical_locator_namespaces_preserve_literal_ids_and_full_inline_id_budget ... ok
+test boundary_suites::background::text_spill::the_background_live_output_path_reaches_the_provider_before_completion ... ok
+test boundary_suites::app_server_file_read::delivery_cancellation_is_admitted_as_the_sixteenth_in_flight_request ... ok
+test boundary_suites::app_server_file_read::delivery_revocation_before_publication_commit_suppresses_sensitive_responses ... ok
+test boundary_suites::app_server_file_read::delivery_cancellation_is_request_scoped_at_every_native_interleaving ... ok
+test boundary_suites::durable::content::t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers ... ok
+test boundary_suites::durable::content::t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources ... ok
+test boundary_suites::durable::content::t08_t12_t15_t20_giant_canonical_identity_uses_finite_native_ledger_locator ... ok
+test boundary_suites::durable::content::t08_t14_t19_response_decoration_keeps_one_frozen_native_journal_cut ... ok
+test boundary_suites::durable::content::t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources ... FAILED
+test boundary_suites::durable::content::t08_t12_t15_t20_pending_sequence_reads_giant_identity_without_body_deserialization ... ok
+test boundary_suites::durable::content::t08_t14_t15_tool_observation_headers_preserve_c_j_distinctions_without_body_reads ... ok
+test boundary_suites::durable::content::t08_t15_native_schema_initializes_all_bounded_read_indexes_before_reopen ... ok
+test boundary_suites::durable::content::t08_t15_t20_missing_middle_descriptor_never_skips_native_history ... ok
+test boundary_suites::durable::content::t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable ... ok
+test boundary_suites::durable::content::t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch ... FAILED
+test boundary_suites::durable::content::t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8 ... FAILED
+test boundary_suites::app_server_file_read::transport_granted_delivery_access_reads_and_locates_only_through_own_attachment ... ok
+test boundary_suites::app_server_file_read::committed_present_reads_exact_native_scope_through_current_authorized_attachment ... ok
+test boundary_suites::durable::content::t09_t12_pending_edits_never_alias_immutable_canonical_content ... ok
+test boundary_suites::durable::content::t08_t15_tool_result_headers_never_deserialize_historical_result_json ... ok
+test boundary_suites::app_server_model_selection::children_created_after_selection_inherit_the_parent_and_running_children_allow_selection ... ok
+test boundary_suites::durable::content::t14_t15_t20_canonical_todo_receipt_preserves_exact_bounded_head_and_allocator ... ok
+test boundary_suites::durable::content::t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages ... ok
+test boundary_suites::durable::content::t08_t15_t20_surface_boundary_pages_read_native_headers_without_surface_or_message_bodies ... ok
+test boundary_suites::durable::content::t08_t20_content_range_reads_touch_at_most_two_finite_sqlite_rows ... ok
+test boundary_suites::durable::content::t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit ... ok
+test boundary_suites::durable::content::t12_t14_t19_source_cut_provenance_rejects_old_journal_with_new_canonical_frontier ... ok
+test boundary_suites::durable::content::t14_t19_complete_canonical_replacement_carries_earlier_native_effects ... ok
+test boundary_suites::durable::content::t15_t19_canonical_block_pages_advance_and_binary_does_not_alias_artifacts ... ok
+test boundary_suites::durable::content::t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_model ... ok
+test boundary_suites::durable::content::t08_t15_t20_native_state_sources_survive_large_cache_eviction_and_reject_stale_goal ... ok
+test boundary_suites::durable::content::t15_t20_journal_family_headers_use_indexed_finite_native_columns ... ok
+test boundary_suites::durable::content::t15_t20_message_and_transcript_headers_advance_without_source_body_reads ... ok
+test boundary_suites::durable::process_death::conformance::a_pending_interaction_leaves_a_requested_audit_and_nothing_else ... ok
+test boundary_suites::durable::process_death::conformance::a_deleted_skill_leaves_history_by_value_and_reads_as_an_error ... ok
+test boundary_suites::durable::process_death::conformance::a_publication_audit_carryover_stays_request_only ... ok
+test boundary_suites::durable::process_death::conformance::a_reopened_runtime_never_relaunches_a_dead_background_execution ... ok
+test boundary_suites::durable::process_death::conformance::a_reopened_runtime_never_readopts_a_dead_subagent ... ok
+test boundary_suites::durable::process_death::conformance::a_branched_lineage_cuts_the_history_and_inherits_no_durable_ownership ... ok
+test boundary_suites::durable::process_death::conformance::a_forked_lineage_cuts_the_history_and_inherits_no_durable_ownership ... ok
+test boundary_suites::durable::process_death::conformance::a_turn_drained_into_a_live_attempt_continues ... ok
+test boundary_suites::durable::process_death::conformance::accepted_inbound_survives_as_pending_only ... ok
+test boundary_suites::durable::process_death::conformance::accepted_inbound_is_never_adopted_by_a_dead_process ... ok
+test boundary_suites::durable::process_death::conformance::a_settled_approval_never_authorizes_a_later_execution ... ok
+test boundary_suites::durable::process_death::conformance::a_turn_adopted_after_a_settled_attempt_continues ... ok
+test boundary_suites::durable::process_death::conformance::adopted_inbound_is_canonical_and_no_longer_pending ... ok
+test boundary_suites::durable::process_death::conformance::an_answered_turn_is_not_continued_after_reopen ... ok
+test boundary_suites::durable::process_death::conformance::a_cut_lineage_never_resolves_the_copied_source_identities ... ok
+test boundary_suites::durable::process_death::conformance::background_capable_turn_and_streaming_publication_compose ... ok
+test boundary_suites::durable::process_death::conformance::an_unaccepted_proposal_never_becomes_an_execution ... ok
+test boundary_suites::durable::process_death::conformance::background_terminal_publication_is_atomic ... ok
+test boundary_suites::durable::process_death::conformance::approval_settlement_and_the_tool_start_boundary_compose ... ok
+test boundary_suites::durable::process_death::conformance::an_adopted_turn_survives_the_recovery_terminal_of_a_second_death ... ok
+test boundary_suites::durable::process_death::conformance::assistant_canonical_commit_is_atomic ... ok
+test boundary_suites::durable::process_death::conformance::c_committed_settles_canonically_without_an_audit ... ok
+test boundary_suites::durable::process_death::conformance::committed_subagent_ownership_terminalizes_exactly_once ... ok
+test boundary_suites::durable::process_death::conformance::committed_background_ownership_terminalizes_exactly_once ... ok
+test boundary_suites::durable::process_death::conformance::client_presence_at_crash_time_changes_no_durable_result ... ok
+test boundary_suites::durable::process_death::conformance::cold_resume_uses_current_resources_and_preserves_history ... ok
+test boundary_suites::durable::process_death::conformance::compaction_never_refreshes_resource_derived_authority ... ok
+test boundary_suites::durable::process_death::conformance::death_before_projection_observation_leaves_none_and_repairs_exactly ... ok
+test boundary_suites::durable::process_death::conformance::compaction_checkpoint_receipt_and_activation_are_atomic ... ok
+test boundary_suites::durable::process_death::conformance::committed_todo_suppression_survives_process_death ... ok
+test boundary_suites::durable::process_death::conformance::death_before_the_first_request_leaves_no_resource_record ... ok
+test boundary_suites::durable::process_death::conformance::death_inside_the_projection_commit_is_atomic_and_repairs_exactly ... ok
+test boundary_suites::durable::process_death::conformance::death_after_the_branch_visibility_commit_publishes_the_whole_lineage ... ok
+test boundary_suites::durable::process_death::conformance::goal350_disabled_recovery_interrupt_stays_paused_after_reenable ... ok
+test boundary_suites::durable::process_death::conformance::goal350_process_death_after_adoption_interrupt_pauses_without_refund ... ok
+test boundary_suites::durable::process_death::conformance::goal350_recovered_human_interrupt_does_not_pause_unrelated_goal ... ok
+test boundary_suites::durable::process_death::conformance::death_before_the_branch_visibility_commit_keeps_the_source_active ... ok
+test boundary_suites::durable::process_death::conformance::inbound_acceptance_is_atomic ... ok
+test boundary_suites::durable::process_death::conformance::goal350_recovered_stale_goal_ref_cannot_pause_newer_authority ... ok
+test boundary_suites::durable::process_death::conformance::goal84_process_death_cannot_split_round_accounting_from_ordinary_pending_work ... ok
+test boundary_suites::durable::process_death::conformance::death_after_the_fork_visibility_commit_publishes_the_whole_lineage ... ok
+test boundary_suites::durable::process_death::conformance::invalid_current_resources_fail_runtime_creation ... ok
+test boundary_suites::durable::process_death::conformance::kill_before_p_with_released_frames_is_incomplete ... ok
+test boundary_suites::durable::process_death::conformance::kill_before_tool_execution_start_authorizes_nothing ... ok
+test boundary_suites::durable::process_death::conformance::death_before_the_fork_visibility_commit_keeps_the_source_active ... ok
+test boundary_suites::durable::process_death::conformance::known_tool_outcome_is_preserved_into_the_canonical_slot ... ok
+test boundary_suites::durable::process_death::conformance::kill_during_the_compaction_summary_keeps_the_old_surface ... ok
+test boundary_suites::durable::process_death::conformance::historical_status_and_history_never_revive_background_ownership ... ok
+test boundary_suites::durable::process_death::conformance::live_external_edits_never_expose_a_new_generation ... ok
+test boundary_suites::durable::process_death::conformance::p_committed_and_u_missing_is_incomplete ... ok
+test boundary_suites::durable::process_death::conformance::pending_adoption_is_atomic ... ok
+test boundary_suites::durable::process_death::conformance::streaming_output_and_pending_inbound_compose ... ok
+test boundary_suites::durable::process_death::conformance::settled_tool_result_and_new_inbound_compose_with_an_indeterminate_request ... ok
+test boundary_suites::durable::process_death::conformance::post_tool_batch_marker_is_not_recovered_after_external_side_effect_blocks_continuation ... ok
+test boundary_suites::durable::process_death::conformance::started_tool_with_unknown_outcome_stays_unknown ... ok
+test boundary_suites::durable::process_death::conformance::structural_finish_failure_is_incomplete_without_p ... ok
+test boundary_suites::durable::process_death::conformance::subagent_terminal_publication_is_atomic ... ok
+test boundary_suites::durable::process_death::conformance::u_committed_and_c_missing_is_unaccepted ... ok
+test boundary_suites::durable::process_death::fnd06_child_runtime_process ... ok
+test boundary_suites::durable::process_death::conformance::terminal_only_publication_reaches_u_atomically ... ok
+test boundary_suites::durable::process_death::harness::native_control_paths_are_bounded_and_independently_owned ... ok
+test boundary_suites::durable::process_death::conformance::tool_result_batch_commit_is_atomic ... ok
+test boundary_suites::durable::process_death::conformance::uncommitted_todo_emission_does_not_survive_process_death ... ok
+test boundary_suites::durable::process_death::conformance::unresolved_output_carryover_recovery_reuses_the_same_audit_across_second_crash ... ok
+test boundary_suites::durable::wal_archive::wal_archive_cancel_after_first_frontier_releases_barriers_and_pins ... ok
+test boundary_suites::durable::wal_archive::wal_archive_excludes_ordered_writes_across_conversations ... ok
+test boundary_suites::durable::wal_archive::wal_archive_partial_failure_releases_prior_barriers_and_pins ... ok
+test boundary_suites::durable::wal_archive::wal_archive_preflight_validates_captured_head_after_later_activation ... ok
+test boundary_suites::durable::wal_archive::wal_existing_management_does_not_convert_and_writer_transition_validates_identity ... ok
+test boundary_suites::durable::wal_archive::wal_fork_installs_frozen_uncheckpointed_source_and_survives_source_removal ... ok
+test boundary_suites::durable::process_death::conformance::recovery_of_internal_retry_success_does_not_install_old_carryover ... ok
+test boundary_suites::mcp_mrtr::a_background_mcp_execution_advertises_nothing_and_settles_once ... ok
+test boundary_suites::durable::process_death::physical_settlement::clean_native_settlement_survives_abandoned_parent_terminal_publication ... ok
+test boundary_suites::mcp_mrtr::a_continuation_that_wins_the_frontier_keeps_ordinary_mcp_semantics ... ok
+test boundary_suites::mcp_mrtr::a_mixed_typed_form_round_trips_every_supported_scalar_kind ... ok
+test boundary_suites::durable::process_death::physical_settlement::clean_native_settlement_survives_parent_death_before_terminal_commit ... ok
+test boundary_suites::mcp_mrtr::a_routed_child_coordinator_still_owns_the_mrtr_questionnaire ... ok
+test boundary_suites::mcp_mrtr::a_state_only_round_continues_without_any_interaction ... ok
+test boundary_suites::mcp_mrtr::an_execution_without_interaction_authority_advertises_nothing_and_refuses ... ok
+test boundary_suites::mcp_mrtr::an_explicit_decline_reaches_the_server_as_a_protocol_decline ... ok
+test boundary_suites::mcp_mrtr::an_ordinary_one_round_tool_publishes_no_interaction ... ok
+test boundary_suites::mcp_mrtr::cancellation_before_the_first_dispatch_sends_no_round ... ok
+test boundary_suites::mcp_mrtr::cancellation_while_the_interaction_is_pending_sends_no_continuation ... ok
+test boundary_suites::mcp_mrtr::cancellation_winning_the_continuation_frontier_dispatches_nothing ... ok
+test boundary_suites::mcp_mrtr::exact_scalars_reach_a_real_server_without_rounding ... ok
+test boundary_suites::mcp_mrtr::multi_select_cardinality_is_enforced_before_any_continuation ... ok
+test boundary_suites::mcp_mrtr::no_capable_interaction_client_uses_the_existing_coordinator_contract ... ok
+test boundary_suites::mcp_mrtr::no_mrtr_protocol_state_escapes_into_any_published_fact ... ok
+test boundary_suites::mcp_mrtr::one_round_past_the_bound_fails_before_publishing_an_interaction ... ok
+test boundary_suites::mcp_mrtr::one_supported_elicitation_drives_exactly_one_interaction_and_one_result ... ok
+test boundary_suites::durable::process_death::conformance::the_transcript_pages_every_durable_owner_after_process_death ... ok
+test boundary_suites::mcp_mrtr::progress_from_every_round_belongs_to_one_invocation ... ok
+test boundary_suites::mcp_mrtr::several_input_requests_in_one_round_stay_one_questionnaire ... ok
+test boundary_suites::mcp_mrtr::several_rounds_are_still_exactly_one_executor_start ... ok
+test boundary_suites::mcp_mrtr::unsupported_input_requests_fail_without_publishing_anything ... ok
+test boundary_suites::mcp_mrtr::the_round_bound_admits_the_maximum_and_refuses_one_more ... ok
+test boundary_suites::durable::process_death::conformance::no_boundary_creates_u_without_p_or_c_without_u ... ok
+test boundary_suites::mcp_recovery::a_changed_binding_never_publishes_the_previous_bindings_executors ... ok
+test boundary_suites::mcp_recovery::a_failed_capability_refresh_keeps_the_last_known_good_generation ... ok
+test boundary_suites::mcp_recovery::a_correlated_response_never_deletes_progress_the_caller_has_not_claimed ... ok
+test boundary_suites::mcp_recovery::a_remote_response_that_won_arbitration_survives_a_later_cancellation ... ok
+test boundary_suites::mcp_recovery::a_failed_reconnect_is_a_pre_frontier_failure_and_never_replays_the_ambiguous_call ... ok
+test boundary_suites::mcp_recovery::a_policy_change_failure_preserves_the_published_generation ... ok
+test boundary_suites::mcp_recovery::a_poisoned_generation_fails_closed_and_is_replaced_without_replay ... ok
+test boundary_suites::mcp_recovery::a_replacement_connection_generation_keeps_the_sdk_response_cache_disabled ... ok
+test boundary_suites::mcp_recovery::a_streamable_http_response_that_won_arbitration_survives_a_later_cancellation ... ok
+test boundary_suites::mcp_recovery::a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send ... ok
+test boundary_suites::mcp_recovery::a_successful_refresh_atomically_replaces_the_previous_generation ... ok
+test boundary_suites::mcp_recovery::a_streamable_http_request_cancelled_before_dispatch_never_reaches_the_server ... ok
+test boundary_suites::mcp_recovery::a_silent_streamable_http_call_settles_inside_the_mcp_settlement_plane ... ok
+test boundary_suites::mcp_recovery::cancellation_without_a_remote_response_is_exactly_one_outcome_unknown ... ok
+test boundary_suites::mcp_recovery::drain_terminates_every_streamable_http_request_the_generation_still_owns ... ok
+test boundary_suites::mcp_recovery::an_unanswered_mcp_call_is_bounded_by_the_generic_hard_deadline ... ok
+test boundary_suites::mcp_recovery::drain_closes_every_connection_generation_and_refuses_reconnection ... ok
+test boundary_suites::mcp_recovery::mcp_progress_refreshes_idle_liveness_and_never_extends_the_hard_deadline ... ok
+test boundary_suites::mcp_recovery::remote_progress_delivered_just_before_the_response_is_never_discarded ... ok
+test boundary_suites::mcp_recovery::same_binding_failure_preserves_the_published_generation ... ok
+test boundary_suites::mcp_recovery::successful_streamable_http_requests_leave_no_request_lifecycle_state ... ok
+test boundary_suites::mcp_recovery::tool_admission_never_observes_a_candidate_under_construction ... ok
+test boundary_suites::mcp_tasks::a_background_execution_drives_the_task_through_its_existing_owner ... ok
+test boundary_suites::mcp_recovery::concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_router_bound ... ok
+test boundary_suites::mcp_recovery::transport_loss_after_dispatch_is_unknown_and_reconnect_never_replays_it ... ok
+test boundary_suites::mcp_tasks::a_contradictory_input_required_task_fails_deterministically ... ok
+test boundary_suites::mcp_tasks::a_continuation_round_may_materialize_the_task ... ok
+test boundary_suites::mcp_tasks::a_created_task_does_not_settle_the_invocation ... ok
+test boundary_suites::mcp_tasks::a_foreign_task_snapshot_fails_without_poisoning_the_server ... ok
+test boundary_suites::mcp_tasks::a_foreground_invocation_advertises_tasks_and_elicitation ... ok
+test boundary_suites::mcp_tasks::a_genuinely_new_input_request_is_still_processed ... ok
+test boundary_suites::mcp_tasks::a_legacy_peer_receives_no_per_request_capabilities ... ok
+test boundary_suites::mcp_tasks::a_remote_cancelled_task_invents_no_local_cancellation ... ok
+test boundary_suites::mcp_tasks::a_remote_failed_task_is_one_bounded_failure ... ok
+test boundary_suites::mcp_tasks::a_stale_input_request_creates_no_duplicate_interaction_or_update ... ok
+test boundary_suites::mcp_tasks::a_task_asking_a_detached_execution_for_a_human_fails_honestly ... ok
+test boundary_suites::mcp_tasks::an_invocation_without_interaction_authority_still_advertises_tasks ... ok
+test boundary_suites::mcp_tasks::an_unadvertised_task_result_is_refused_without_being_driven ... ok
+test boundary_suites::mcp_tasks::cancellation_before_completing_poll_frontier_prevents_dispatch ... ok
+test boundary_suites::mcp_tasks::cancellation_before_the_next_poll_dispatches_no_further_get ... ok
+test boundary_suites::mcp_tasks::cancellation_before_the_update_frontier_dispatches_no_update ... ok
+test boundary_suites::mcp_tasks::cancellation_releases_the_in_flight_http_task_request ... ok
+test boundary_suites::durable::process_death::physical_settlement::reserved_crash_prefixes_recover_exact_identity_without_reuse ... ok
+test boundary_suites::mcp_tasks::invalid_creation_metadata_still_cancels_the_trusted_task ... ok
+test boundary_suites::mcp_tasks::connection_loss_after_task_creation_never_replays_the_tool_call ... ok
+test boundary_suites::mcp_tasks::correlated_completion_after_frontier_outranks_cancellation ... ok
+test boundary_suites::mcp_tasks::task_sampling_is_refused_without_publishing_anything ... ok
+test boundary_suites::mcp_tasks::task_input_uses_the_existing_questionnaire_owner ... ok
+test boundary_suites::mcp_tasks::no_remote_task_state_escapes_into_any_published_fact ... ok
+test boundary_suites::mcp_tasks::tasks_cancel_rejects_an_unrelated_success ... ok
+test boundary_suites::runtime_client::mcp_capability::capability_projection_carries_mcp_origin_metadata ... ok
+test boundary_suites::mcp_tasks::tasks_update_rejects_an_unrelated_success ... ok
+test boundary_suites::runtime_client::mcp_capability::projection_covers_mcp_origins::direct ... ok
+test boundary_suites::mcp_tasks::working_working_completed_produces_exactly_one_result ... ok
+test boundary_suites::runtime_client::mcp_capability::projection_covers_mcp_origins::stdio_jsonl ... ok
+test boundary_suites::mcp_recovery::progress_that_beats_every_subscription_still_refreshes_every_idle_watchdog ... ok
+test boundary_suites::subagent::conformance::a_fresh_request_after_a_retry_projects_retry_zero ... ok
+test boundary_suites::runtime_client::observation::t04_native_unix_initialize_and_checkpoint_never_carry_an_eight_mib_snapshot ... ok
+test boundary_suites::subagent::conformance::a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop ... ok
+test boundary_suites::subagent::conformance::a_transient_retry_projects_retrying_model_then_the_retried_request ... ok
+test boundary_suites::subagent::conformance::accepted_steers_are_observed_in_their_durable_acceptance_order ... ok
+test boundary_suites::subagent::conformance::a_stalled_parent_projection_coalesces_activity_and_converges ... ok
+test boundary_suites::subagent::conformance::cancellation_after_terminalization_cannot_rewrite_the_result ... ok
+test boundary_suites::subagent::conformance::activity_frames_commit_no_parent_journal_facts ... ok
+test boundary_suites::subagent::conformance::cancellation_and_drain_have_exactly_one_winning_cause ... ok
+test boundary_suites::subagent::conformance::child_activity_never_enters_the_parent_model_context ... ok
+test boundary_suites::subagent::conformance::child_approval_allow_routes_to_child_and_runs_exact_invocation ... ok
+test boundary_suites::subagent::conformance::child_approval_deny_routes_to_child_and_never_starts_executor ... ok
+test boundary_suites::subagent::conformance::child_carryover_never_enters_parent_conversation_or_requests ... ok
+test boundary_suites::subagent::conformance::child_process_loss_during_backoff_is_terminal_and_never_relaunched ... ok
+test boundary_suites::subagent::conformance::child_death_removes_only_its_routed_interactions ... ok
+test boundary_suites::subagent::conformance::child_questionnaire_fails_closed_without_root_provider ... ok
+test boundary_suites::mcp_mrtr_managed::a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction ... ok
+test boundary_suites::subagent::conformance::child_transient_retries_settle_one_parent_success ... ok
+test boundary_suites::subagent::conformance::child_questionnaire_routes_through_root_without_parent_mediation ... ok
+test boundary_suites::subagent::conformance::failed_attempt_publication_stays_child_local ... ok
+test boundary_suites::subagent::conformance::foreground_tool_progress_projects_live_and_returns_to_neutral ... ok
+test boundary_suites::subagent::conformance::model_activity_projects_while_lifecycle_stays_running ... ok
+test boundary_suites::subagent::conformance::goal350_subagent_terminal_publication_wakes_next_continuation ... ok
+test boundary_suites::subagent::conformance::mixed_child_interactions_route_by_full_identity_without_cross_talk ... ok
+test boundary_suites::subagent::conformance::observation::t18_child_source_failure_recovers_over_unix_at_the_same_activation_without_native_work ... ok
+test boundary_suites::subagent::conformance::observation::t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_cut ... ok
+test boundary_suites::mcp_recovery::repeated_ambiguous_http_calls_release_progress_on_one_live_generation ... ok
+test boundary_suites::subagent::conformance::observation::t20_real_unix_listener_bounds_and_reaps_its_physical_workset ... ok
+test boundary_suites::subagent::conformance::observation::t20_real_unix_shutdown_joins_admitted_physical_source_worker ... ok
+test boundary_suites::subagent::conformance::observation::t18_live_durable_only_and_reactivation_preserve_source_and_execution_identity ... ok
+test boundary_suites::subagent::conformance::observation::t20_real_unix_shutdown_retires_the_exact_pending_observe_before_its_deadline ... ok
+test boundary_suites::subagent::conformance::parent_cancellation_during_retry_backoff_cancels_the_child ... ok
+test boundary_suites::subagent::conformance::observation::t11_t12_t20_nested_pending_reads_follow_authenticated_direct_routes_over_two_unix_peers ... ok
+test boundary_suites::subagent::conformance::parent_runtime_drain_during_child_retry_backoff_reaches_quiescence ... ok
+test boundary_suites::subagent::conformance::parallel_tool_group_never_projects_neutral_while_a_sibling_runs ... ok
+test boundary_suites::subagent::conformance::retry_is_activity_never_lifecycle ... ok
+test boundary_suites::subagent::conformance::retry_exhaustion_publishes_one_bounded_failure_without_child_content ... ok
+test boundary_suites::subagent::conformance::observation::t18_stopping_real_unix_source_is_unavailable_without_a_false_execution_outcome ... ok
+test boundary_suites::subagent::conformance::the_child_spec_carries_the_frozen_timeout_policy ... ok
+test boundary_suites::subagent::conformance::root_detach_preserves_headless_child_publication_and_routed_cancellation ... ok
+test boundary_suites::subagent::conformance::snapshot_repair_serves_the_latest_subagent_observation ... ok
+test boundary_suites::subagent::conformance::routed_interaction_survives_root_detach_and_reconnect ... ok
+test boundary_suites::subagent::conformance::the_snapshot_projects_only_the_frozen_execution_profile ... ok
+test boundary_suites::subagent::conformance::the_successful_answer_never_enters_the_observation_plane ... ok
+test boundary_suites::subagent::conformance::tool_activity_projects_identity_scoped_progress_and_counts_executions ... ok
+test boundary_suites::subagent::conformance::tool_inspection::t08_t12_t18_t19_tool_inspection_uses_real_child_live_and_cold_original_sources ... ok
+test boundary_suites::tool_deadline::issue204_bash_hard_deadline_settles_proven_timed_out ... ok
+test boundary_suites::subagent::conformance::the_observation_consumer_topology_never_changes_child_execution ... ok
+test boundary_suites::runtime_client::python_capability::capability_projection_covers_native_python_and_skills ... ok
+test boundary_suites::runtime_client::python_capability::capability_projection_covers_python_origins ... ok
+test boundary_suites::mcp_tasks_managed::a_real_managed_fastmcp_task_completes_through_one_tool_result ... ok
+test boundary_suites::managed_selection::fastmcp4_availability_selection_request_and_invocation_share_one_authority ... ok
+
+failures:
+
+---- boundary_suites::durable::content::t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources stdout ----
+
+thread 'boundary_suites::durable::content::t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources' (903610) panicked at src/../tests/boundary/durable/content.rs:2515:6:
+called `Result::unwrap()` on an `Err` value: Storage("SQLite refused WAL journal mode: memory")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- boundary_suites::durable::content::t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch stdout ----
+
+thread 'boundary_suites::durable::content::t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch' (903766) panicked at src/../tests/boundary/durable/content.rs:2344:6:
+called `Result::unwrap()` on an `Err` value: Storage("SQLite refused WAL journal mode: memory")
+
+---- boundary_suites::durable::content::t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8 stdout ----
+
+thread 'boundary_suites::durable::content::t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8' (903767) panicked at src/../tests/boundary/durable/content.rs:2424:6:
+called `Result::unwrap()` on an `Err` value: Storage("SQLite refused WAL journal mode: memory")
+
+
+failures:
+    boundary_suites::durable::content::t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources
+    boundary_suites::durable::content::t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch
+    boundary_suites::durable::content::t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8
+
+test result: FAILED. 240 passed; 3 failed; 0 ignored; 0 measured; 3974 filtered out; finished in 141.62s
+
+error: test failed, to rerun pass `--lib`

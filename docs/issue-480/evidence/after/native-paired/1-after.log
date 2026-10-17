@@ -1,0 +1,28 @@
+
+running 1 test
+native encoding turns=25 elapsed_ms=1489 records=240 bytes=5154655 seed_us=19290 capture_us=102014 fit_us=126284 probe_us=48007 encode_us=26045 content_metadata_max=51
+native agent phase turns=25 phase=prepare calls=25 inclusive_us=99535
+native agent phase turns=25 phase=start calls=25 inclusive_us=528989
+native agent phase turns=25 phase=commit calls=25 inclusive_us=516001
+native agent phase turns=25 phase=commit_evidence calls=25 inclusive_us=625
+native agent phase turns=25 phase=context_projection calls=25 inclusive_us=12061
+native agent phase turns=25 phase=source calls=25 inclusive_us=427050
+native agent phase turns=25 phase=source_capture calls=25 inclusive_us=187910
+native agent phase turns=25 phase=source_authenticate calls=113 inclusive_us=15625
+native agent phase turns=25 phase=source_leaf calls=51 inclusive_us=153646
+native agent phase turns=25 phase=source_scalar calls=25 inclusive_us=228334
+native agent phase turns=25 phase=source_paths calls=25 inclusive_us=5148
+native agent phase turns=25 phase=source_length calls=25 inclusive_us=4239
+native agent phase turns=25 phase=context_observe calls=25 inclusive_us=672
+native agent phase turns=25 phase=context_measure calls=75 inclusive_us=1071
+native agent phase turns=25 phase=input_assembly calls=75 inclusive_us=24
+native source work turns=25 scope=request inclusive=SourceWork { samples: 25, native_header_queries: 3232, native_node_queries: 1146, index_pages: 4131, index_bytes: 7716222, metadata_blobs: 1069, metadata_bytes: 1267493, new_leaves: 51, new_nodes: 190, new_fragment_bytes: 405789, header_decodes: 0 }
+native source work turns=25 scope=authenticate inclusive=SourceWork { samples: 113, native_header_queries: 984, native_node_queries: 328, index_pages: 0, index_bytes: 0, metadata_blobs: 441, metadata_bytes: 503284, new_leaves: 0, new_nodes: 0, new_fragment_bytes: 0, header_decodes: 0 }
+native source work turns=25 scope=new_leaf inclusive=SourceWork { samples: 51, native_header_queries: 0, native_node_queries: 0, index_pages: 4131, index_bytes: 7716222, metadata_blobs: 0, metadata_bytes: 0, new_leaves: 51, new_nodes: 0, new_fragment_bytes: 44957, header_decodes: 0 }
+native context work turns=25 delta=ContextWork { anchor_roots: 25, token_bytes: 974813, estimator_calls: 75, materialized_items: 0 }
+native input work turns=25 delta=NativeWork { preparation_items: 50, old_items: 0, new_items: 53, index_queries: 4978, hash_bytes: 13834 }
+native publication encoding25 elapsed_ms=1490 PublicationEncodingProfile { records: 240, bytes: 5154655, seed_us: 19394, content_metadata_max: 51, capture_us: 102014, fit_us: 126284, probe_us: 48007, encode_us: 26045 } agent_inclusive=AgentRequestProfile { prepare: PhaseProfile { calls: 25, total_us: 99535 }, start: PhaseProfile { calls: 25, total_us: 528989 }, commit: PhaseProfile { calls: 25, total_us: 516001 }, commit_evidence: PhaseProfile { calls: 25, total_us: 625 }, context_projection: PhaseProfile { calls: 25, total_us: 12061 }, source: PhaseProfile { calls: 25, total_us: 427050 }, source_capture: PhaseProfile { calls: 25, total_us: 187910 }, source_authenticate: PhaseProfile { calls: 113, total_us: 15625 }, source_leaf: PhaseProfile { calls: 51, total_us: 153646 }, source_scalar: PhaseProfile { calls: 25, total_us: 228334 }, source_paths: PhaseProfile { calls: 25, total_us: 5148 }, source_length: PhaseProfile { calls: 25, total_us: 4239 }, context_observe: PhaseProfile { calls: 25, total_us: 672 }, context_measure: PhaseProfile { calls: 75, total_us: 1071 }, input_assembly: PhaseProfile { calls: 75, total_us: 24 }, source_work: SourceWork { samples: 25, native_header_queries: 3232, native_node_queries: 1146, index_pages: 4131, index_bytes: 7716222, metadata_blobs: 1069, metadata_bytes: 1267493, new_leaves: 51, new_nodes: 190, new_fragment_bytes: 405789, header_decodes: 0 }, source_auth_work: SourceWork { samples: 113, native_header_queries: 984, native_node_queries: 328, index_pages: 0, index_bytes: 0, metadata_blobs: 441, metadata_bytes: 503284, new_leaves: 0, new_nodes: 0, new_fragment_bytes: 0, header_decodes: 0 }, source_leaf_work: SourceWork { samples: 51, native_header_queries: 0, native_node_queries: 0, index_pages: 4131, index_bytes: 7716222, metadata_blobs: 0, metadata_bytes: 0, new_leaves: 51, new_nodes: 0, new_fragment_bytes: 44957, header_decodes: 0 }, context_work: ContextWork { anchor_roots: 25, token_bytes: 974813, estimator_calls: 75, materialized_items: 0 }, native_work: NativeWork { preparation_items: 50, old_items: 0, new_items: 53, index_queries: 4978, hash_bytes: 13834 } }
+test runtime_client::host::tests::t19_native_publication_encoding_profile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4101 filtered out; finished in 1.59s
+

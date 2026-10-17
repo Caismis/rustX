@@ -47,7 +47,7 @@ fn t08_t12_t14_t19_giant_native_membership_witness_binds_exact_numeric_c() {
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_selected_original_columns));
+        .authorizer(Some(deny_selected_original_columns)).unwrap();
     let process = store
         .observation_transcript_process(&cut, 2)
         .unwrap()
@@ -65,7 +65,7 @@ fn t08_t12_t14_t19_giant_native_membership_witness_binds_exact_numeric_c() {
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     let connection = store.lock().unwrap();
     let error = connection.execute("UPDATE inherited_message_membership SET assistant_ledger_position=3 WHERE assistant_ledger_position=2",[]).unwrap_err();
     assert!(
@@ -133,7 +133,7 @@ fn corrupt_selected_membership_metadata(
         connection
             .execute_batch("PRAGMA ignore_check_constraints=OFF")
             .unwrap();
-        connection.authorizer(Some(deny_selected_original_columns));
+        connection.authorizer(Some(deny_selected_original_columns)).unwrap();
         let plan = connection
             .prepare(&format!(
                 "EXPLAIN QUERY PLAN {}",
@@ -190,7 +190,7 @@ fn t08_t14_t19_membership_sql_bounds_reject_corruption_before_metadata_allocatio
             let connection = store.lock().unwrap();
             connection.authorizer(
                 None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
-            );
+            ).unwrap();
             connection
                 .execute(
                     &format!("UPDATE {table} SET {column}=?1 WHERE {key}=2"),
@@ -274,7 +274,7 @@ fn t08_t12_t14_t19_selected_delivery_uses_numeric_giant_c_without_body_reads() {
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_selected_original_columns));
+        .authorizer(Some(deny_selected_original_columns)).unwrap();
     let locator = CanonicalContentLocator::ByLedgerPosition { position: 2 };
     let selected = store.observation_file_delivery(&locator, 0).unwrap();
     assert_eq!(selected.cut, cut);
@@ -289,7 +289,7 @@ fn t08_t12_t14_t19_selected_delivery_uses_numeric_giant_c_without_body_reads() {
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(store.load_canonical().unwrap()[1], message);
     store
         .lock()
@@ -597,7 +597,7 @@ fn t08_t12_t14_t19_giant_delivery_alias_is_rejected_before_original_id_lookup() 
     store
         .lock()
         .unwrap()
-        .authorizer(Some(deny_selected_original_columns));
+        .authorizer(Some(deny_selected_original_columns)).unwrap();
     for error in [
         store.observation_file_delivery(&alias, 0).unwrap_err(),
         store
@@ -620,6 +620,6 @@ fn t08_t12_t14_t19_giant_delivery_alias_is_rejected_before_original_id_lookup() 
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(store.load_canonical().unwrap()[1], message);
 }

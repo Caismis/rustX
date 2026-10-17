@@ -26,18 +26,40 @@ pub(crate) fn error(e: impl std::fmt::Display) -> io::Error {
 }
 
 impl SqliteConversationStore {
-    /// Establish a rollback-journal SHARED lock. All included databases retain
-    /// these barriers until the last frontier has been observed.
+    /// Existing, bound WAL access solely for short archive writer exclusion.
+    /// No creation, journal conversion or application recovery is permitted.
+    pub(crate) fn open_for_archive(
+        conversation_id: crate::runtime::identity::ConversationId,
+        path: &std::path::Path,
+    ) -> Result<Self, super::ConversationStoreError> {
+        let store = Self::open_bound_existing(
+            conversation_id,
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )?;
+        let mode: String = store
+            .lock()?
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .map_err(|error| super::storage(error.to_string()))?;
+        if mode != "wal" {
+            return Err(super::storage(
+                "archive capture requires writer-established WAL storage",
+            ));
+        }
+        Ok(store)
+    }
+
+    /// Exclude every SQLite writer, including other processes. Acquire in
+    /// `ConversationId` order and retain all barriers through the final frontier.
+    /// Contention fails immediately, allowing cancellation/partial cleanup
+    /// without an unbounded wait while earlier databases remain excluded.
     pub(crate) fn archive_barrier(&self) -> io::Result<()> {
         let conn = self.lock().map_err(error)?;
-        conn.execute_batch("BEGIN DEFERRED").map_err(error)?;
-        conn.query_row(
-            "SELECT schema_version FROM rustx_store WHERE id=1",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .map_err(error)?;
-        Ok(())
+        conn.busy_timeout(std::time::Duration::ZERO)
+            .map_err(error)?;
+        let acquired = conn.execute_batch("BEGIN IMMEDIATE").map_err(error);
+        let restored = super::writer_busy_policy(&conn).map_err(error);
+        acquired.and(restored)
     }
 
     pub(crate) fn archive_release(&self) -> io::Result<()> {
@@ -47,10 +69,13 @@ impl SqliteConversationStore {
             .map_err(error)
     }
 
-    pub(crate) fn archive_frontiers(&self) -> io::Result<ConversationArchiveFrontiers> {
+    pub(crate) fn archive_frontiers(
+        &self,
+    ) -> io::Result<(
+        ConversationArchiveFrontiers,
+        crate::context::resources::ResourceReadCut,
+    )> {
         let conn = self.lock().map_err(error)?;
-        super::provenance::turns(&conn).map_err(error)?;
-        super::provenance::responses(&conn).map_err(error)?;
         let max = |table: &str, key: &str| {
             conn.query_row(
                 &format!("SELECT COALESCE(MAX({key}),0) FROM {table}"),
@@ -59,23 +84,45 @@ impl SqliteConversationStore {
             )
             .map_err(error)
         };
-        let projection_head = super::projection::head(&conn).map_err(error)?;
-        // Current dependency closure is independently checked; historical snapshots
-        // may be deliberately exported lossily without contaminating active execution.
-        super::projection::history(&conn, &self.conversation_id).map_err(error)?;
-        Ok(ConversationArchiveFrontiers {
-            journal: max("events", "sequence")?,
-            messages: max("message_ledger", "position")?,
-            surface: max("surface_ops", "revision")?,
-            requests: max("request_snapshots", "rowid")?,
-            projections: max("projection_activations", "activation")?,
-            projection_head: projection_head.map(|checkpoint| checkpoint.candidate.checkpoint_id),
-            publication_audits: max("publication_audits", "rowid")?,
-            bootstrap: max("bootstrap_identity", "id")?,
-        })
+        let projection_head = super::projection::current_checkpoint_id(&conn).map_err(error)?;
+        let read_cut =
+            super::compaction_resources::cut(&conn, &self.conversation_id).map_err(error)?;
+        Ok((
+            ConversationArchiveFrontiers {
+                journal: max("events", "sequence")?,
+                messages: max("message_ledger", "position")?,
+                surface: max("surface_ops", "revision")?,
+                requests: max("request_snapshots", "rowid")?,
+                projections: max("projection_activations", "activation")?,
+                projection_head,
+                publication_audits: max("publication_audits", "rowid")?,
+                bootstrap: max("bootstrap_identity", "id")?,
+            },
+            read_cut,
+        ))
     }
 
-    /// Fetch one immutable logical record; the database cursor/SHARED lock is
+    /// Expensive integrity/dependency work belongs after capture, in a scoped
+    /// reader which ends before ZIP delivery. It selects the captured head/Tail.
+    pub(crate) fn archive_validate(
+        &self,
+        frontiers: &ConversationArchiveFrontiers,
+        read_cut: &crate::context::resources::ResourceReadCut,
+    ) -> io::Result<()> {
+        let conn = self.lock().map_err(error)?;
+        let transaction = conn.unchecked_transaction().map_err(error)?;
+        super::provenance::turns(&transaction).map_err(error)?;
+        super::provenance::responses(&transaction).map_err(error)?;
+        super::projection::archive_history(
+            &transaction,
+            &self.conversation_id,
+            read_cut,
+            frontiers.projection_head.as_ref(),
+        )
+        .map_err(error)
+    }
+
+    /// Fetch one immutable logical record; the database cursor/read snapshot is
     /// gone before the consumer sees it or waits on downstream backpressure.
     pub(crate) fn archive_record(
         &self,

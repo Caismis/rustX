@@ -1,0 +1,3315 @@
+{
+  "revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+  "scenario": "short-large",
+  "node": "v24.19.0",
+  "open_ms": 13.823532,
+  "history": 64,
+  "measured": 32,
+  "initial_cpu": {
+    "user": 382925,
+    "system": 46111
+  },
+  "initial_memory": {
+    "rss": 120266752,
+    "heapTotal": 35549184,
+    "heapUsed": 23922840,
+    "external": 11287562,
+    "arrayBuffers": 490784
+  },
+  "samples": [
+    {
+      "turn": 0,
+      "measured": false,
+      "accepted_ms": 1.8226620000000366,
+      "settled_ms": 10.395868000000007,
+      "cpu": {
+        "user": 392629,
+        "system": 46955
+      },
+      "memory": {
+        "rss": 121315328,
+        "heapTotal": 36073472,
+        "heapUsed": 25317984,
+        "external": 11287602,
+        "arrayBuffers": 490784
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 383192,
+          "allocated": 385024
+        }
+      ]
+    },
+    {
+      "turn": 1,
+      "measured": false,
+      "accepted_ms": 0.6278669999999806,
+      "settled_ms": 3.702118999999982,
+      "cpu": {
+        "user": 398966,
+        "system": 47756
+      },
+      "memory": {
+        "rss": 123936768,
+        "heapTotal": 38432768,
+        "heapUsed": 22667304,
+        "external": 11288434,
+        "arrayBuffers": 342263
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 597432,
+          "allocated": 598016
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "measured": false,
+      "accepted_ms": 0.4088279999999713,
+      "settled_ms": 3.212996999999973,
+      "cpu": {
+        "user": 400890,
+        "system": 48864
+      },
+      "memory": {
+        "rss": 124198912,
+        "heapTotal": 38694912,
+        "heapUsed": 23376856,
+        "external": 11139913,
+        "arrayBuffers": 343095
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 811672,
+          "allocated": 815104
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "measured": false,
+      "accepted_ms": 0.40920099999999593,
+      "settled_ms": 3.097295000000031,
+      "cpu": {
+        "user": 403621,
+        "system": 48866
+      },
+      "memory": {
+        "rss": 124198912,
+        "heapTotal": 38694912,
+        "heapUsed": 24007896,
+        "external": 11140745,
+        "arrayBuffers": 343927
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 1025912,
+          "allocated": 1028096
+        }
+      ]
+    },
+    {
+      "turn": 4,
+      "measured": false,
+      "accepted_ms": 0.3650599999999713,
+      "settled_ms": 3.0793939999999793,
+      "cpu": {
+        "user": 406561,
+        "system": 48947
+      },
+      "memory": {
+        "rss": 124198912,
+        "heapTotal": 38694912,
+        "heapUsed": 24739976,
+        "external": 11141577,
+        "arrayBuffers": 344759
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 1240152,
+          "allocated": 1241088
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "measured": false,
+      "accepted_ms": 0.3876860000000306,
+      "settled_ms": 3.0217949999999973,
+      "cpu": {
+        "user": 408140,
+        "system": 50017
+      },
+      "memory": {
+        "rss": 124198912,
+        "heapTotal": 38694912,
+        "heapUsed": 25554208,
+        "external": 11142409,
+        "arrayBuffers": 345591
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 1454392,
+          "allocated": 1458176
+        }
+      ]
+    },
+    {
+      "turn": 6,
+      "measured": false,
+      "accepted_ms": 0.3341060000000198,
+      "settled_ms": 2.8344579999999837,
+      "cpu": {
+        "user": 410423,
+        "system": 50051
+      },
+      "memory": {
+        "rss": 124461056,
+        "heapTotal": 38694912,
+        "heapUsed": 25949448,
+        "external": 11143241,
+        "arrayBuffers": 346423
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 1668632,
+          "allocated": 1671168
+        }
+      ]
+    },
+    {
+      "turn": 7,
+      "measured": false,
+      "accepted_ms": 0.3409910000000309,
+      "settled_ms": 2.8289159999999924,
+      "cpu": {
+        "user": 412484,
+        "system": 50180
+      },
+      "memory": {
+        "rss": 124461056,
+        "heapTotal": 38694912,
+        "heapUsed": 26535320,
+        "external": 11144073,
+        "arrayBuffers": 347255
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 1895232,
+          "allocated": 1896448
+        }
+      ]
+    },
+    {
+      "turn": 8,
+      "measured": false,
+      "accepted_ms": 0.366895999999997,
+      "settled_ms": 2.962296999999978,
+      "cpu": {
+        "user": 415884,
+        "system": 50227
+      },
+      "memory": {
+        "rss": 124723200,
+        "heapTotal": 38957056,
+        "heapUsed": 27334816,
+        "external": 11144905,
+        "arrayBuffers": 348087
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 2109472,
+          "allocated": 2113536
+        }
+      ]
+    },
+    {
+      "turn": 9,
+      "measured": false,
+      "accepted_ms": 0.38414600000004384,
+      "settled_ms": 2.9168559999999957,
+      "cpu": {
+        "user": 417136,
+        "system": 52017
+      },
+      "memory": {
+        "rss": 124723200,
+        "heapTotal": 38957056,
+        "heapUsed": 27989096,
+        "external": 11145737,
+        "arrayBuffers": 348919
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 2323712,
+          "allocated": 2326528
+        }
+      ]
+    },
+    {
+      "turn": 10,
+      "measured": false,
+      "accepted_ms": 0.3729720000000043,
+      "settled_ms": 2.778255999999999,
+      "cpu": {
+        "user": 421899,
+        "system": 52018
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 23325464,
+        "external": 11146569,
+        "arrayBuffers": 342263
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 2537952,
+          "allocated": 2539520
+        }
+      ]
+    },
+    {
+      "turn": 11,
+      "measured": false,
+      "accepted_ms": 0.32619099999999435,
+      "settled_ms": 2.6199159999999893,
+      "cpu": {
+        "user": 424018,
+        "system": 52018
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 23922448,
+        "external": 11139913,
+        "arrayBuffers": 343095
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 2752192,
+          "allocated": 2752512
+        }
+      ]
+    },
+    {
+      "turn": 12,
+      "measured": false,
+      "accepted_ms": 0.36214599999999564,
+      "settled_ms": 2.6801250000000323,
+      "cpu": {
+        "user": 426146,
+        "system": 52018
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 24526496,
+        "external": 11140745,
+        "arrayBuffers": 343927
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 2966432,
+          "allocated": 2969600
+        }
+      ]
+    },
+    {
+      "turn": 13,
+      "measured": false,
+      "accepted_ms": 0.3160359999999969,
+      "settled_ms": 2.731207999999981,
+      "cpu": {
+        "user": 428262,
+        "system": 52031
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 25126888,
+        "external": 11141577,
+        "arrayBuffers": 344759
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 3193032,
+          "allocated": 3194880
+        }
+      ]
+    },
+    {
+      "turn": 14,
+      "measured": false,
+      "accepted_ms": 0.3293899999999894,
+      "settled_ms": 2.6737600000000157,
+      "cpu": {
+        "user": 429269,
+        "system": 53033
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 25737776,
+        "external": 11142409,
+        "arrayBuffers": 345591
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 3415512,
+          "allocated": 3416064
+        }
+      ]
+    },
+    {
+      "turn": 15,
+      "measured": false,
+      "accepted_ms": 0.3193270000000439,
+      "settled_ms": 2.638522000000023,
+      "cpu": {
+        "user": 430373,
+        "system": 53921
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 26339920,
+        "external": 11143241,
+        "arrayBuffers": 346423
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 3629752,
+          "allocated": 3633152
+        }
+      ]
+    },
+    {
+      "turn": 16,
+      "measured": false,
+      "accepted_ms": 0.32281399999999394,
+      "settled_ms": 2.6116759999999886,
+      "cpu": {
+        "user": 432511,
+        "system": 53939
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 26949960,
+        "external": 11144073,
+        "arrayBuffers": 347255
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 3843992,
+          "allocated": 3846144
+        }
+      ]
+    },
+    {
+      "turn": 17,
+      "measured": false,
+      "accepted_ms": 0.3076920000000314,
+      "settled_ms": 2.7068720000000326,
+      "cpu": {
+        "user": 433151,
+        "system": 55890
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 27574816,
+        "external": 11144905,
+        "arrayBuffers": 348087
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4058232,
+          "allocated": 4059136
+        }
+      ]
+    },
+    {
+      "turn": 18,
+      "measured": false,
+      "accepted_ms": 3.7790539999999737,
+      "settled_ms": 6.749136999999962,
+      "cpu": {
+        "user": 434576,
+        "system": 57678
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 28189888,
+        "external": 11145737,
+        "arrayBuffers": 348919
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 19,
+      "measured": false,
+      "accepted_ms": 0.28962300000000596,
+      "settled_ms": 2.491047999999978,
+      "cpu": {
+        "user": 436300,
+        "system": 57774
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 28798792,
+        "external": 11146569,
+        "arrayBuffers": 349751
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 20,
+      "measured": false,
+      "accepted_ms": 0.3086319999999887,
+      "settled_ms": 2.584754999999973,
+      "cpu": {
+        "user": 438146,
+        "system": 57776
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 29409000,
+        "external": 11147401,
+        "arrayBuffers": 350583
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 21,
+      "measured": false,
+      "accepted_ms": 0.3239810000000034,
+      "settled_ms": 2.829295000000002,
+      "cpu": {
+        "user": 440410,
+        "system": 57791
+      },
+      "memory": {
+        "rss": 126296064,
+        "heapTotal": 57569280,
+        "heapUsed": 30025120,
+        "external": 11148233,
+        "arrayBuffers": 351415
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 22,
+      "measured": false,
+      "accepted_ms": 0.35517199999998184,
+      "settled_ms": 3.0226789999999824,
+      "cpu": {
+        "user": 442800,
+        "system": 57973
+      },
+      "memory": {
+        "rss": 126820352,
+        "heapTotal": 57569280,
+        "heapUsed": 30650800,
+        "external": 11149065,
+        "arrayBuffers": 352247
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 23,
+      "measured": false,
+      "accepted_ms": 0.3626560000000154,
+      "settled_ms": 2.8821340000000077,
+      "cpu": {
+        "user": 445434,
+        "system": 58056
+      },
+      "memory": {
+        "rss": 127606784,
+        "heapTotal": 57569280,
+        "heapUsed": 31280912,
+        "external": 11149897,
+        "arrayBuffers": 353079
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 24,
+      "measured": false,
+      "accepted_ms": 0.31190499999996746,
+      "settled_ms": 2.6668409999999767,
+      "cpu": {
+        "user": 446357,
+        "system": 59047
+      },
+      "memory": {
+        "rss": 128131072,
+        "heapTotal": 57569280,
+        "heapUsed": 31899192,
+        "external": 11150729,
+        "arrayBuffers": 353911
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 25,
+      "measured": false,
+      "accepted_ms": 0.31347999999997,
+      "settled_ms": 2.8433469999999943,
+      "cpu": {
+        "user": 448903,
+        "system": 59119
+      },
+      "memory": {
+        "rss": 128655360,
+        "heapTotal": 57569280,
+        "heapUsed": 32535472,
+        "external": 11151561,
+        "arrayBuffers": 354743
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 26,
+      "measured": false,
+      "accepted_ms": 0.3089659999999981,
+      "settled_ms": 2.7071860000000356,
+      "cpu": {
+        "user": 450557,
+        "system": 59941
+      },
+      "memory": {
+        "rss": 129441792,
+        "heapTotal": 57569280,
+        "heapUsed": 33162352,
+        "external": 11152393,
+        "arrayBuffers": 355575
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 27,
+      "measured": false,
+      "accepted_ms": 0.31423999999998387,
+      "settled_ms": 2.6538209999999935,
+      "cpu": {
+        "user": 451483,
+        "system": 60930
+      },
+      "memory": {
+        "rss": 129966080,
+        "heapTotal": 57569280,
+        "heapUsed": 33780640,
+        "external": 11153225,
+        "arrayBuffers": 356407
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 28,
+      "measured": false,
+      "accepted_ms": 0.311429999999973,
+      "settled_ms": 2.6608739999999784,
+      "cpu": {
+        "user": 453462,
+        "system": 60931
+      },
+      "memory": {
+        "rss": 130490368,
+        "heapTotal": 57569280,
+        "heapUsed": 34402136,
+        "external": 11154057,
+        "arrayBuffers": 357239
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 29,
+      "measured": false,
+      "accepted_ms": 0.3215720000000033,
+      "settled_ms": 2.681586999999979,
+      "cpu": {
+        "user": 455584,
+        "system": 60944
+      },
+      "memory": {
+        "rss": 131276800,
+        "heapTotal": 57569280,
+        "heapUsed": 35030928,
+        "external": 11154889,
+        "arrayBuffers": 358071
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 30,
+      "measured": false,
+      "accepted_ms": 0.31513000000001057,
+      "settled_ms": 2.7144569999999817,
+      "cpu": {
+        "user": 459343,
+        "system": 60946
+      },
+      "memory": {
+        "rss": 131801088,
+        "heapTotal": 57569280,
+        "heapUsed": 35740784,
+        "external": 11155721,
+        "arrayBuffers": 358903
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 31,
+      "measured": false,
+      "accepted_ms": 0.3077729999999974,
+      "settled_ms": 2.9229310000000055,
+      "cpu": {
+        "user": 460774,
+        "system": 61969
+      },
+      "memory": {
+        "rss": 132587520,
+        "heapTotal": 57569280,
+        "heapUsed": 36369240,
+        "external": 11156553,
+        "arrayBuffers": 359735
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 32,
+      "measured": false,
+      "accepted_ms": 0.322022000000004,
+      "settled_ms": 3.1305980000000204,
+      "cpu": {
+        "user": 462561,
+        "system": 62940
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 57831424,
+        "heapUsed": 23787328,
+        "external": 11157385,
+        "arrayBuffers": 342263
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 33,
+      "measured": false,
+      "accepted_ms": 0.30069099999997206,
+      "settled_ms": 2.6233649999999784,
+      "cpu": {
+        "user": 465594,
+        "system": 63080
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 24454440,
+        "external": 11139913,
+        "arrayBuffers": 343095
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 34,
+      "measured": false,
+      "accepted_ms": 0.2947149999999965,
+      "settled_ms": 2.5907700000000204,
+      "cpu": {
+        "user": 467566,
+        "system": 63940
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 25107616,
+        "external": 11140745,
+        "arrayBuffers": 343927
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 35,
+      "measured": false,
+      "accepted_ms": 0.2808599999999615,
+      "settled_ms": 2.5132559999999557,
+      "cpu": {
+        "user": 469065,
+        "system": 65148
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 25779480,
+        "external": 11141577,
+        "arrayBuffers": 344759
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 36,
+      "measured": false,
+      "accepted_ms": 0.27297599999997146,
+      "settled_ms": 2.505722999999989,
+      "cpu": {
+        "user": 470208,
+        "system": 66170
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 26421424,
+        "external": 11142409,
+        "arrayBuffers": 345591
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 139264,
+          "allocated": 139264
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4128272,
+          "allocated": 4128768
+        }
+      ]
+    },
+    {
+      "turn": 37,
+      "measured": false,
+      "accepted_ms": 0.2913209999999822,
+      "settled_ms": 5.531632999999999,
+      "cpu": {
+        "user": 472209,
+        "system": 67172
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 27081736,
+        "external": 11143241,
+        "arrayBuffers": 346423
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 38,
+      "measured": false,
+      "accepted_ms": 0.3124610000000416,
+      "settled_ms": 2.521940000000029,
+      "cpu": {
+        "user": 474301,
+        "system": 67184
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 27723912,
+        "external": 11144073,
+        "arrayBuffers": 347255
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 39,
+      "measured": false,
+      "accepted_ms": 0.2746890000000235,
+      "settled_ms": 2.4467650000000276,
+      "cpu": {
+        "user": 475892,
+        "system": 67267
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 28361048,
+        "external": 11144905,
+        "arrayBuffers": 348087
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 40,
+      "measured": false,
+      "accepted_ms": 0.32358499999998,
+      "settled_ms": 2.6070290000000114,
+      "cpu": {
+        "user": 477789,
+        "system": 67269
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 29000160,
+        "external": 11145737,
+        "arrayBuffers": 348919
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 41,
+      "measured": false,
+      "accepted_ms": 0.29292700000002014,
+      "settled_ms": 2.626888000000008,
+      "cpu": {
+        "user": 478930,
+        "system": 68132
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 29642144,
+        "external": 11146569,
+        "arrayBuffers": 349751
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 42,
+      "measured": false,
+      "accepted_ms": 0.33499899999998206,
+      "settled_ms": 3.044144000000017,
+      "cpu": {
+        "user": 481515,
+        "system": 68214
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 30289008,
+        "external": 11147401,
+        "arrayBuffers": 350583
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 43,
+      "measured": false,
+      "accepted_ms": 0.4078440000000114,
+      "settled_ms": 3.71396900000002,
+      "cpu": {
+        "user": 485335,
+        "system": 68217
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 30950864,
+        "external": 11148233,
+        "arrayBuffers": 351415
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 44,
+      "measured": false,
+      "accepted_ms": 0.565262999999959,
+      "settled_ms": 4.154156,
+      "cpu": {
+        "user": 488689,
+        "system": 68815
+      },
+      "memory": {
+        "rss": 133373952,
+        "heapTotal": 58093568,
+        "heapUsed": 31618248,
+        "external": 11149065,
+        "arrayBuffers": 352247
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 45,
+      "measured": false,
+      "accepted_ms": 0.5011680000000069,
+      "settled_ms": 3.736214000000018,
+      "cpu": {
+        "user": 491668,
+        "system": 68818
+      },
+      "memory": {
+        "rss": 133636096,
+        "heapTotal": 58093568,
+        "heapUsed": 32265752,
+        "external": 11149897,
+        "arrayBuffers": 353079
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 46,
+      "measured": false,
+      "accepted_ms": 0.41694799999999077,
+      "settled_ms": 3.38358199999999,
+      "cpu": {
+        "user": 494260,
+        "system": 69036
+      },
+      "memory": {
+        "rss": 134422528,
+        "heapTotal": 58093568,
+        "heapUsed": 32920368,
+        "external": 11150729,
+        "arrayBuffers": 353911
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 47,
+      "measured": false,
+      "accepted_ms": 0.3549960000000283,
+      "settled_ms": 2.861459000000025,
+      "cpu": {
+        "user": 496321,
+        "system": 69044
+      },
+      "memory": {
+        "rss": 134946816,
+        "heapTotal": 58093568,
+        "heapUsed": 33571672,
+        "external": 11151561,
+        "arrayBuffers": 354743
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 48,
+      "measured": false,
+      "accepted_ms": 0.3390590000000202,
+      "settled_ms": 2.8524750000000267,
+      "cpu": {
+        "user": 499134,
+        "system": 70159
+      },
+      "memory": {
+        "rss": 135733248,
+        "heapTotal": 58093568,
+        "heapUsed": 34285704,
+        "external": 11152393,
+        "arrayBuffers": 355575
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 49,
+      "measured": false,
+      "accepted_ms": 0.30237499999998363,
+      "settled_ms": 1.5862739999999462,
+      "cpu": {
+        "user": 500948,
+        "system": 70160
+      },
+      "memory": {
+        "rss": 136257536,
+        "heapTotal": 58093568,
+        "heapUsed": 34940296,
+        "external": 11153225,
+        "arrayBuffers": 356407
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 50,
+      "measured": false,
+      "accepted_ms": 0.29682100000002265,
+      "settled_ms": 2.858410000000049,
+      "cpu": {
+        "user": 503353,
+        "system": 71191
+      },
+      "memory": {
+        "rss": 137043968,
+        "heapTotal": 58093568,
+        "heapUsed": 35638208,
+        "external": 11154057,
+        "arrayBuffers": 357239
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 51,
+      "measured": false,
+      "accepted_ms": 0.32237099999997554,
+      "settled_ms": 2.9541580000000067,
+      "cpu": {
+        "user": 506630,
+        "system": 71370
+      },
+      "memory": {
+        "rss": 137568256,
+        "heapTotal": 58355712,
+        "heapUsed": 36340080,
+        "external": 11154889,
+        "arrayBuffers": 358071
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 52,
+      "measured": false,
+      "accepted_ms": 0.3414210000000253,
+      "settled_ms": 2.8144169999999917,
+      "cpu": {
+        "user": 508703,
+        "system": 71379
+      },
+      "memory": {
+        "rss": 138354688,
+        "heapTotal": 58355712,
+        "heapUsed": 37021096,
+        "external": 11155721,
+        "arrayBuffers": 358903
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 53,
+      "measured": false,
+      "accepted_ms": 0.2950649999999655,
+      "settled_ms": 1.9464330000000132,
+      "cpu": {
+        "user": 511166,
+        "system": 71442
+      },
+      "memory": {
+        "rss": 139141120,
+        "heapTotal": 58617856,
+        "heapUsed": 24214384,
+        "external": 11156553,
+        "arrayBuffers": 342263
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 54,
+      "measured": false,
+      "accepted_ms": 0.27019800000005034,
+      "settled_ms": 2.6265319999999974,
+      "cpu": {
+        "user": 512770,
+        "system": 71525
+      },
+      "memory": {
+        "rss": 139141120,
+        "heapTotal": 58617856,
+        "heapUsed": 24877992,
+        "external": 11139913,
+        "arrayBuffers": 343095
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 55,
+      "measured": false,
+      "accepted_ms": 0.2559039999999868,
+      "settled_ms": 2.558152000000007,
+      "cpu": {
+        "user": 514409,
+        "system": 71527
+      },
+      "memory": {
+        "rss": 139141120,
+        "heapTotal": 58617856,
+        "heapUsed": 25544248,
+        "external": 11140745,
+        "arrayBuffers": 343927
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 155648,
+          "allocated": 155648
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 56,
+      "measured": false,
+      "accepted_ms": 0.2980009999999993,
+      "settled_ms": 5.765963999999997,
+      "cpu": {
+        "user": 517187,
+        "system": 72729
+      },
+      "memory": {
+        "rss": 139141120,
+        "heapTotal": 58617856,
+        "heapUsed": 26235392,
+        "external": 11141577,
+        "arrayBuffers": 344759
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 57,
+      "measured": false,
+      "accepted_ms": 0.25967800000000807,
+      "settled_ms": 2.5138170000000173,
+      "cpu": {
+        "user": 519023,
+        "system": 72845
+      },
+      "memory": {
+        "rss": 139141120,
+        "heapTotal": 58617856,
+        "heapUsed": 26909088,
+        "external": 11142409,
+        "arrayBuffers": 345591
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 58,
+      "measured": false,
+      "accepted_ms": 0.2611229999999978,
+      "settled_ms": 2.448104999999998,
+      "cpu": {
+        "user": 519785,
+        "system": 73821
+      },
+      "memory": {
+        "rss": 139141120,
+        "heapTotal": 58617856,
+        "heapUsed": 27579904,
+        "external": 11143241,
+        "arrayBuffers": 346423
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 59,
+      "measured": false,
+      "accepted_ms": 0.24859200000003057,
+      "settled_ms": 2.4849190000000476,
+      "cpu": {
+        "user": 522677,
+        "system": 73823
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 28297184,
+        "external": 11144073,
+        "arrayBuffers": 347255
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 60,
+      "measured": false,
+      "accepted_ms": 0.2600100000000225,
+      "settled_ms": 2.4234670000000165,
+      "cpu": {
+        "user": 524188,
+        "system": 73872
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 28970664,
+        "external": 11144905,
+        "arrayBuffers": 348087
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 61,
+      "measured": false,
+      "accepted_ms": 0.24578900000000203,
+      "settled_ms": 2.468213999999989,
+      "cpu": {
+        "user": 525033,
+        "system": 74860
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 29679288,
+        "external": 11145737,
+        "arrayBuffers": 348919
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 62,
+      "measured": false,
+      "accepted_ms": 0.2554810000000316,
+      "settled_ms": 2.4422539999999913,
+      "cpu": {
+        "user": 526749,
+        "system": 74960
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 30359928,
+        "external": 11146569,
+        "arrayBuffers": 349751
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 63,
+      "measured": false,
+      "accepted_ms": 0.2702210000000491,
+      "settled_ms": 2.566468000000043,
+      "cpu": {
+        "user": 528684,
+        "system": 75091
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 31041232,
+        "external": 11147401,
+        "arrayBuffers": 350583
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 64,
+      "measured": true,
+      "accepted_ms": 0.27901199999996606,
+      "settled_ms": 2.5291489999999612,
+      "cpu": {
+        "user": 531431,
+        "system": 75093
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 31750456,
+        "external": 11148233,
+        "arrayBuffers": 351415
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 65,
+      "measured": true,
+      "accepted_ms": 0.24713100000002441,
+      "settled_ms": 2.4355790000000184,
+      "cpu": {
+        "user": 532994,
+        "system": 75126
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 32431840,
+        "external": 11149065,
+        "arrayBuffers": 352247
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 66,
+      "measured": true,
+      "accepted_ms": 0.2651950000000056,
+      "settled_ms": 2.4792190000000005,
+      "cpu": {
+        "user": 535207,
+        "system": 75152
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 33168408,
+        "external": 11149897,
+        "arrayBuffers": 353079
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 67,
+      "measured": true,
+      "accepted_ms": 0.2406230000000278,
+      "settled_ms": 2.4883889999999838,
+      "cpu": {
+        "user": 536769,
+        "system": 75229
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 33886704,
+        "external": 11150729,
+        "arrayBuffers": 353911
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 68,
+      "measured": true,
+      "accepted_ms": 0.2707359999999994,
+      "settled_ms": 2.4882989999999836,
+      "cpu": {
+        "user": 537939,
+        "system": 76123
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 34581376,
+        "external": 11151561,
+        "arrayBuffers": 354743
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 69,
+      "measured": true,
+      "accepted_ms": 0.2399639999999863,
+      "settled_ms": 2.4828660000000013,
+      "cpu": {
+        "user": 538990,
+        "system": 76998
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 35291976,
+        "external": 11152393,
+        "arrayBuffers": 355575
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 70,
+      "measured": true,
+      "accepted_ms": 0.2507150000000138,
+      "settled_ms": 2.4181930000000307,
+      "cpu": {
+        "user": 539470,
+        "system": 78081
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 35982664,
+        "external": 11153225,
+        "arrayBuffers": 356407
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 71,
+      "measured": true,
+      "accepted_ms": 0.26783100000000104,
+      "settled_ms": 2.4927830000000313,
+      "cpu": {
+        "user": 541394,
+        "system": 78082
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 36681792,
+        "external": 11154057,
+        "arrayBuffers": 357239
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 72,
+      "measured": true,
+      "accepted_ms": 0.24416800000000194,
+      "settled_ms": 2.467238000000009,
+      "cpu": {
+        "user": 543278,
+        "system": 78082
+      },
+      "memory": {
+        "rss": 139403264,
+        "heapTotal": 58617856,
+        "heapUsed": 37384416,
+        "external": 11154889,
+        "arrayBuffers": 358071
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 73,
+      "measured": true,
+      "accepted_ms": 0.25475099999999884,
+      "settled_ms": 2.925922000000014,
+      "cpu": {
+        "user": 546122,
+        "system": 78162
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58617856,
+        "heapUsed": 24615920,
+        "external": 11155721,
+        "arrayBuffers": 342263
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 74,
+      "measured": true,
+      "accepted_ms": 0.25718100000000277,
+      "settled_ms": 2.4450429999999983,
+      "cpu": {
+        "user": 547717,
+        "system": 78163
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58617856,
+        "heapUsed": 25313672,
+        "external": 11139913,
+        "arrayBuffers": 343095
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 184320,
+          "allocated": 184320
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4136512,
+          "allocated": 4136960
+        }
+      ]
+    },
+    {
+      "turn": 75,
+      "measured": true,
+      "accepted_ms": 0.23666799999995192,
+      "settled_ms": 5.581901999999957,
+      "cpu": {
+        "user": 549396,
+        "system": 78918
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58617856,
+        "heapUsed": 26019856,
+        "external": 11140745,
+        "arrayBuffers": 343927
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 76,
+      "measured": true,
+      "accepted_ms": 0.25628299999999626,
+      "settled_ms": 2.5190259999999967,
+      "cpu": {
+        "user": 551992,
+        "system": 79146
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 26759032,
+        "external": 11141577,
+        "arrayBuffers": 344759
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 77,
+      "measured": true,
+      "accepted_ms": 0.251480000000015,
+      "settled_ms": 2.4073769999999968,
+      "cpu": {
+        "user": 553483,
+        "system": 79214
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 27461528,
+        "external": 11142409,
+        "arrayBuffers": 345591
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 78,
+      "measured": true,
+      "accepted_ms": 0.26237700000001496,
+      "settled_ms": 2.5116949999999747,
+      "cpu": {
+        "user": 555757,
+        "system": 79215
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 28216544,
+        "external": 11143241,
+        "arrayBuffers": 346423
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 79,
+      "measured": true,
+      "accepted_ms": 0.2392370000000028,
+      "settled_ms": 2.433661000000029,
+      "cpu": {
+        "user": 557323,
+        "system": 79215
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 28923304,
+        "external": 11144073,
+        "arrayBuffers": 347255
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 80,
+      "measured": true,
+      "accepted_ms": 0.24780100000003813,
+      "settled_ms": 2.496457000000021,
+      "cpu": {
+        "user": 558432,
+        "system": 80211
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 29633336,
+        "external": 11144905,
+        "arrayBuffers": 348087
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 81,
+      "measured": true,
+      "accepted_ms": 0.24654400000008536,
+      "settled_ms": 2.508057000000008,
+      "cpu": {
+        "user": 560191,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 30344136,
+        "external": 11145737,
+        "arrayBuffers": 348919
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 82,
+      "measured": true,
+      "accepted_ms": 0.24591099999997823,
+      "settled_ms": 2.433426999999938,
+      "cpu": {
+        "user": 561746,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 31086520,
+        "external": 11146569,
+        "arrayBuffers": 349751
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 83,
+      "measured": true,
+      "accepted_ms": 0.24151099999994585,
+      "settled_ms": 2.5144689999999628,
+      "cpu": {
+        "user": 563857,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 58880000,
+        "heapUsed": 31811088,
+        "external": 11147401,
+        "arrayBuffers": 350583
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 84,
+      "measured": true,
+      "accepted_ms": 0.339745999999991,
+      "settled_ms": 2.6627260000000206,
+      "cpu": {
+        "user": 566782,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 32561480,
+        "external": 11148233,
+        "arrayBuffers": 351415
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 85,
+      "measured": true,
+      "accepted_ms": 0.2639969999999039,
+      "settled_ms": 2.589285999999902,
+      "cpu": {
+        "user": 569018,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 33291960,
+        "external": 11149065,
+        "arrayBuffers": 352247
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 86,
+      "measured": true,
+      "accepted_ms": 0.2446989999999687,
+      "settled_ms": 2.488183000000049,
+      "cpu": {
+        "user": 570781,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 34042952,
+        "external": 11149897,
+        "arrayBuffers": 353079
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 87,
+      "measured": true,
+      "accepted_ms": 0.25006699999994453,
+      "settled_ms": 2.4397729999999456,
+      "cpu": {
+        "user": 572639,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 34767096,
+        "external": 11150729,
+        "arrayBuffers": 353911
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 88,
+      "measured": true,
+      "accepted_ms": 0.260263000000009,
+      "settled_ms": 2.4584100000000717,
+      "cpu": {
+        "user": 574242,
+        "system": 80212
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 35488304,
+        "external": 11151561,
+        "arrayBuffers": 354743
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 89,
+      "measured": true,
+      "accepted_ms": 0.24625200000002678,
+      "settled_ms": 2.534817999999973,
+      "cpu": {
+        "user": 576803,
+        "system": 81097
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 36237360,
+        "external": 11152393,
+        "arrayBuffers": 355575
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 90,
+      "measured": true,
+      "accepted_ms": 0.24030000000004748,
+      "settled_ms": 2.4445709999999963,
+      "cpu": {
+        "user": 578310,
+        "system": 81166
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 36980656,
+        "external": 11153225,
+        "arrayBuffers": 356407
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 91,
+      "measured": true,
+      "accepted_ms": 0.2683959999999388,
+      "settled_ms": 2.531398999999965,
+      "cpu": {
+        "user": 580247,
+        "system": 81167
+      },
+      "memory": {
+        "rss": 139927552,
+        "heapTotal": 59142144,
+        "heapUsed": 37698680,
+        "external": 11154057,
+        "arrayBuffers": 357239
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 92,
+      "measured": true,
+      "accepted_ms": 0.23039400000004662,
+      "settled_ms": 2.8183290000000625,
+      "cpu": {
+        "user": 582540,
+        "system": 81167
+      },
+      "memory": {
+        "rss": 140189696,
+        "heapTotal": 59666432,
+        "heapUsed": 24913808,
+        "external": 11154889,
+        "arrayBuffers": 342263
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 93,
+      "measured": true,
+      "accepted_ms": 0.23854100000005474,
+      "settled_ms": 2.4428709999999683,
+      "cpu": {
+        "user": 584114,
+        "system": 81167
+      },
+      "memory": {
+        "rss": 140189696,
+        "heapTotal": 59666432,
+        "heapUsed": 25628264,
+        "external": 11139913,
+        "arrayBuffers": 343095
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 208896,
+          "allocated": 208896
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 94,
+      "measured": true,
+      "accepted_ms": 0.25017800000000534,
+      "settled_ms": 5.559146000000055,
+      "cpu": {
+        "user": 585700,
+        "system": 82079
+      },
+      "memory": {
+        "rss": 140189696,
+        "heapTotal": 59666432,
+        "heapUsed": 26370032,
+        "external": 11140745,
+        "arrayBuffers": 343927
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 233472,
+          "allocated": 233472
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    },
+    {
+      "turn": 95,
+      "measured": true,
+      "accepted_ms": 0.23488699999995788,
+      "settled_ms": 2.4395600000000286,
+      "cpu": {
+        "user": 587201,
+        "system": 82147
+      },
+      "memory": {
+        "rss": 140189696,
+        "heapTotal": 59666432,
+        "heapUsed": 27087520,
+        "external": 11141577,
+        "arrayBuffers": 344759
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 233472,
+          "allocated": 233472
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 4144752,
+          "allocated": 4145152
+        }
+      ]
+    }
+  ],
+  "requests": 96,
+  "before_close": [
+    {
+      "name": "conversation.db",
+      "logical": 233472,
+      "allocated": 233472
+    },
+    {
+      "name": "conversation.db-shm",
+      "logical": 32768,
+      "allocated": 32768
+    },
+    {
+      "name": "conversation.db-wal",
+      "logical": 4144752,
+      "allocated": 4145152
+    }
+  ],
+  "closed_footprint": [
+    {
+      "name": "conversation.db",
+      "logical": 233472,
+      "allocated": 233472
+    }
+  ],
+  "close_ms": 2.2375030000000606,
+  "cleanup_ms": 0.6499550000000909,
+  "oracle": "passed",
+  "provider": "local faux (no HTTP)",
+  "allocations": null
+}

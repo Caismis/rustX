@@ -3628,7 +3628,7 @@ fn atomic_write(
     }
     profile_stage!(
         |times: &mut create_profile::StageTimes| &mut times.dir_fsync_ns,
-        sync_directory_ancestry(parent)
+        sync_directory(parent)
     )
     .map_err(
         |error| CatalogCommitError::CommittedButDurabilityUncertain {
@@ -3639,15 +3639,11 @@ fn atomic_write(
     Ok(())
 }
 
-// Startup can have created the catalog directory and product-root ancestors in
-// this process. Persist the directory entries naming them too; syncing only the
-// catalog's immediate parent would not prove that a newly created parent survives.
-fn sync_directory_ancestry(path: &Path) -> std::io::Result<()> {
-    for directory in path.ancestors() {
-        crate::runtime::local_storage::logical_operations::record_catalog_directory_sync();
-        File::open(directory)?.sync_all()?;
-    }
-    Ok(())
+// Preserve fallible publication of the owned directory and post-rename error
+// classification. Ancestor power-loss persistence is outside this contract.
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    crate::runtime::local_storage::logical_operations::record_catalog_directory_sync();
+    File::open(path)?.sync_all()
 }
 
 fn validate_page_limit(limit: usize, maximum: usize) -> Result<(), SessionError> {
