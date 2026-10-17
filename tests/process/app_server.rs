@@ -784,6 +784,84 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
     .await;
 }
 
+/// A peer that ends the transport while a request is pending fails that
+/// request promptly with the transport's own cause, never stranding it until
+/// an outer guard. The pending point is the peer's receipt of the request.
+#[tokio::test]
+async fn driver_fails_pending_requests_with_the_transport_cause() {
+    use rustx::app_server::protocol::{JsonRpcVersion, Method, Request, RequestId};
+    use tokio_tungstenite::tungstenite::handshake::server::{Request as Upgrade, Response};
+    Box::pin(bounded(async {
+        for reset in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}", listener.local_addr().unwrap());
+            let (received, request_received) = tokio::sync::oneshot::channel();
+            let (end, ended) = tokio::sync::oneshot::channel::<()>();
+            let peer = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                #[allow(clippy::result_large_err)] // tungstenite's handshake callback type.
+                let mut socket = tokio_tungstenite::accept_hdr_async(
+                    stream,
+                    |_: &Upgrade, mut response: Response| {
+                        response.headers_mut().insert(
+                            "sec-websocket-protocol",
+                            "rustx.app-server.v50".parse().unwrap(),
+                        );
+                        Ok(response)
+                    },
+                )
+                .await
+                .unwrap();
+                let request = socket.next().await.unwrap().unwrap();
+                received
+                    .send(request.into_text().unwrap().to_string())
+                    .unwrap();
+                ended.await.unwrap();
+                if reset {
+                    // An abortive close: the client observes a reset.
+                    socket.get_ref().set_zero_linger().unwrap();
+                    drop(socket);
+                } else {
+                    socket.close(None).await.unwrap();
+                }
+            });
+            let client = driver::websocket(&url).await;
+            let cause = {
+                let pending = client.try_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(7),
+                    call: Method::ServerDiagnostics {},
+                });
+                tokio::pin!(pending);
+                tokio::select! {
+                    outcome = &mut pending => panic!("answered without a peer reply: {outcome:?}"),
+                    request = request_received => assert!(request.unwrap().contains("\"id\":7")),
+                }
+                end.send(()).unwrap();
+                pending.await.unwrap_err().0
+            };
+            if reset {
+                assert!(cause.contains("Connection reset"), "{cause}");
+            } else {
+                assert_eq!(cause, "end of input");
+            }
+            // Later requests fail at once with the same recorded cause.
+            let later = client
+                .try_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(8),
+                    call: Method::ServerDiagnostics {},
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(later.0, cause);
+            peer.await.unwrap();
+            client.close().await;
+        }
+    }))
+    .await;
+}
+
 // The injection seam is absent from optimized production binaries.
 #[cfg(debug_assertions)]
 #[tokio::test]
@@ -1875,22 +1953,20 @@ fn stdio_with_eof_gate(
     mut writer: tokio::process::ChildStdin,
 ) -> (driver::Driver, tokio::sync::oneshot::Sender<()>) {
     let (close_input, mut eof) = tokio::sync::oneshot::channel();
-    let incoming =
-        futures_util::stream::unfold(BufReader::new(reader).lines(), |mut lines| async move {
-            lines.next_line().await.unwrap().map(|line| (line, lines))
-        });
+    let incoming = driver::lines(BufReader::new(reader));
     let client = driver::Driver::new(incoming, |mut records| async move {
         loop {
             tokio::select! {
                 _ = &mut eof => break,
                 record = records.recv() => {
                     let Some(record) = record else { break };
-                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
-                    writer.flush().await.unwrap();
+                    writer.write_all(format!("{record}\n").as_bytes()).await.map_err(|error| error.to_string())?;
+                    writer.flush().await.map_err(|error| error.to_string())?;
                 }
             }
         }
         // Drop only the actual ChildStdin. The driver still owns stdout.
+        Ok(())
     });
     (client, close_input)
 }

@@ -8,55 +8,116 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-type Pending = Arc<Mutex<BTreeMap<String, oneshot::Sender<Response>>>>;
+/// Why the client side of a transport ended: the first physical cause
+/// observed, an orderly end of input, or a malformed record, retained
+/// verbatim for diagnosis.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransportEnded(pub String);
+
+/// Correlation state and the transport's terminal cause share one lock:
+/// a request either registers before termination, and termination then
+/// fails it, or observes termination and never registers. Nothing waits on
+/// a transport that has already ended.
+#[derive(Default)]
+struct Correlation {
+    pending: BTreeMap<String, oneshot::Sender<Response>>,
+    ended: Option<TransportEnded>,
+}
+impl Correlation {
+    /// Record the first terminal cause and fail every pending request with it.
+    fn end(&mut self, cause: String) {
+        self.ended.get_or_insert(TransportEnded(cause));
+        // Dropping each sender completes its waiter with the recorded cause.
+        self.pending.clear();
+    }
+}
+type Shared = Arc<Mutex<Correlation>>;
+
 pub struct Driver {
     outgoing: mpsc::Sender<String>,
-    pending: Pending,
+    correlation: Shared,
     notifications: tokio::sync::Mutex<mpsc::Receiver<Notification>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Driver {
+    /// `incoming` yields complete records or the transport's own failure;
+    /// its end is an orderly end of input. `writer` drains outbound records
+    /// and reports its own transport failure.
     pub fn new<S, W, F>(incoming: S, writer: W) -> Self
     where
-        S: Stream<Item = String> + Send + 'static,
+        S: Stream<Item = Result<String, String>> + Send + 'static,
         W: FnOnce(mpsc::Receiver<String>) -> F,
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = Result<(), String>> + Send + 'static,
     {
         let (outgoing, receiver) = mpsc::channel(64);
         let (notifications, events) = mpsc::channel(256);
-        let pending: Pending = Arc::default();
-        let routing = pending.clone();
+        let correlation: Shared = Arc::default();
+        let routing = correlation.clone();
         let reader = tokio::spawn(async move {
             tokio::pin!(incoming);
-            while let Some(record) = incoming.next().await {
-                assert!(
-                    record.len() <= rustx::app_server::transport::MAX_MESSAGE_BYTES,
-                    "complete physical App Server record exceeds the encoded byte limit"
-                );
-                let value: serde_json::Value = serde_json::from_str(&record).unwrap();
-                if let Some(id) = value.get("id") {
-                    let sender = routing
-                        .lock()
-                        .unwrap()
-                        .remove(&id.to_string())
-                        .expect("correlated response");
-                    let _ = sender.send(serde_json::from_str(&record).unwrap());
-                } else {
-                    notifications
-                        .send(serde_json::from_str(&record).unwrap())
-                        .await
-                        .unwrap();
+            let cause = loop {
+                let record = match incoming.next().await {
+                    Some(Ok(record)) => record,
+                    Some(Err(error)) => break error,
+                    None => break "end of input".into(),
+                };
+                if let Err(error) = route(&routing, &notifications, record).await {
+                    break error;
                 }
+            };
+            routing.lock().unwrap().end(cause);
+        });
+        let ending = correlation.clone();
+        let writing = writer(receiver);
+        let writer = tokio::spawn(async move {
+            if let Err(error) = writing.await {
+                ending.lock().unwrap().end(format!("write failed: {error}"));
             }
         });
-        let writer = tokio::spawn(writer(receiver));
         Self {
             outgoing,
-            pending,
+            correlation,
             notifications: tokio::sync::Mutex::new(events),
             tasks: vec![reader, writer],
         }
     }
+
+    /// Send `request` and wait for its correlated response, or for the
+    /// transport's terminal cause when it ends first.
+    /// # Errors
+    /// The transport ended before the response arrived.
+    pub async fn try_request(&self, request: Request) -> Result<Response, TransportEnded> {
+        let (sender, receiver) = oneshot::channel();
+        {
+            let mut correlation = self.correlation.lock().unwrap();
+            if let Some(ended) = &correlation.ended {
+                return Err(ended.clone());
+            }
+            assert!(
+                correlation
+                    .pending
+                    .insert(serde_json::to_string(&request.id).unwrap(), sender)
+                    .is_none(),
+                "request ids are unique while pending"
+            );
+        }
+        // A closed outbox means the writer ended; its cause is recorded.
+        let _ = self
+            .outgoing
+            .send(serde_json::to_string(&request).unwrap())
+            .await;
+        receiver.await.map_err(|_| self.ended())
+    }
+
+    fn ended(&self) -> TransportEnded {
+        self.correlation
+            .lock()
+            .unwrap()
+            .ended
+            .clone()
+            .expect("a pending request fails only after the transport ended")
+    }
+
     pub async fn close(mut self) {
         for task in &self.tasks {
             task.abort();
@@ -73,26 +134,56 @@ impl Drop for Driver {
         }
     }
 }
+
+/// Deliver one complete record to its waiter or the notification queue.
+async fn route(
+    correlation: &Shared,
+    notifications: &mpsc::Sender<Notification>,
+    record: String,
+) -> Result<(), String> {
+    if record.len() > rustx::app_server::transport::MAX_MESSAGE_BYTES {
+        return Err("complete physical App Server record exceeds the encoded byte limit".into());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&record).map_err(|error| format!("malformed record: {error}"))?;
+    if let Some(id) = value.get("id") {
+        let response = serde_json::from_str(&record)
+            .map_err(|error| format!("malformed response: {error}"))?;
+        let sender = correlation
+            .lock()
+            .unwrap()
+            .pending
+            .remove(&id.to_string())
+            .ok_or_else(|| format!("uncorrelated response id {id}"))?;
+        let _ = sender.send(response);
+    } else {
+        let notification = serde_json::from_str(&record)
+            .map_err(|error| format!("malformed notification: {error}"))?;
+        // A dropped notification consumer is not a transport failure.
+        let _ = notifications.send(notification).await;
+    }
+    Ok(())
+}
+
 impl AppServerConformanceDriver for Driver {
     fn request(&self, request: Request) -> BoxFuture<'_, Response> {
         Box::pin(async move {
-            let (sender, receiver) = oneshot::channel();
-            assert!(
-                self.pending
-                    .lock()
-                    .unwrap()
-                    .insert(serde_json::to_string(&request.id).unwrap(), sender)
-                    .is_none()
-            );
-            self.outgoing
-                .send(serde_json::to_string(&request).unwrap())
-                .await
-                .unwrap();
-            receiver.await.unwrap()
+            let id = request.id.clone();
+            self.try_request(request).await.unwrap_or_else(|ended| {
+                panic!("request {id:?} unanswered: transport ended: {}", ended.0)
+            })
         })
     }
     fn next_notification(&self) -> BoxFuture<'_, Notification> {
-        Box::pin(async move { self.notifications.lock().await.recv().await.unwrap() })
+        Box::pin(async move {
+            match self.notifications.lock().await.recv().await {
+                Some(notification) => notification,
+                None => panic!(
+                    "no further notification: transport ended: {}",
+                    self.ended().0
+                ),
+            }
+        })
     }
 }
 
@@ -101,18 +192,31 @@ where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let incoming =
-        futures_util::stream::unfold(BufReader::new(reader).lines(), |mut lines| async move {
-            lines.next_line().await.unwrap().map(|line| (line, lines))
-        });
-    Driver::new(incoming, |mut receiver| async move {
+    use tokio::io::{AsyncWriteExt, BufReader};
+    Driver::new(lines(BufReader::new(reader)), |mut receiver| async move {
         while let Some(record) = receiver.recv().await {
             writer
                 .write_all(format!("{record}\n").as_bytes())
                 .await
-                .unwrap();
-            writer.flush().await.unwrap();
+                .map_err(|error| error.to_string())?;
+            writer.flush().await.map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })
+}
+
+/// JSONL records of `reader`, ending after its first read failure.
+pub fn lines<R>(reader: R) -> impl Stream<Item = Result<String, String>> + Send + 'static
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncBufReadExt;
+    futures_util::stream::unfold(Some(reader.lines()), |lines| async move {
+        let mut lines = lines?;
+        match lines.next_line().await {
+            Ok(Some(line)) => Some((Ok(line), Some(lines))),
+            Ok(None) => None,
+            Err(error) => Some((Err(error.to_string()), None)),
         }
     })
 }
@@ -152,22 +256,47 @@ pub async fn websocket(url: &str) -> Driver {
 pub async fn websocket_offering(url: &str, offered: &str) -> Driver {
     use futures_util::SinkExt;
     let (mut writer, reader) = try_socket(url, offered).await.unwrap().split();
-    let incoming = reader.filter_map(|message| async move {
-        use tokio_tungstenite::tungstenite::{Error, Message, error::ProtocolError};
-        match message {
-            Ok(Message::Text(text)) => Some(text.to_string()),
-            Ok(_)
-            | Err(
-                Error::ConnectionClosed
-                | Error::AlreadyClosed
-                | Error::Protocol(ProtocolError::ResetWithoutClosingHandshake),
-            ) => None,
-            Err(error) => panic!("unexpected socket failure: {error}"),
-        }
-    });
-    Driver::new(incoming, |mut receiver| async move {
+    Driver::new(frames(reader), |mut receiver| async move {
         while let Some(record) = receiver.recv().await {
-            writer.send(record.into()).await.unwrap();
+            writer
+                .send(record.into())
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })
+}
+
+/// Text records of a WebSocket, ending at its close or first failure. A
+/// completed close handshake and a peer that vanished without one (for
+/// example a process that exited) both end input; any other failure, such as
+/// a reset, is that end's recorded cause. Polling continues through a Close
+/// frame so tungstenite completes the handshake.
+pub fn frames<S>(reader: S) -> impl Stream<Item = Result<String, String>> + Send + 'static
+where
+    S: Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Send
+        + Unpin
+        + 'static,
+{
+    use tokio_tungstenite::tungstenite::{Error, Message, error::ProtocolError};
+    futures_util::stream::unfold(Some(reader), |reader| async move {
+        let mut reader = reader?;
+        loop {
+            return match reader.next().await? {
+                Ok(Message::Text(text)) => Some((Ok(text.to_string()), Some(reader))),
+                Err(
+                    Error::ConnectionClosed
+                    | Error::AlreadyClosed
+                    | Error::Protocol(ProtocolError::ResetWithoutClosingHandshake),
+                ) => None,
+                Ok(_) => continue,
+                Err(error) => Some((Err(error.to_string()), None)),
+            };
         }
     })
 }

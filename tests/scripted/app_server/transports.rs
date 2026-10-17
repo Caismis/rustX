@@ -1422,14 +1422,20 @@ fn frame_payload(frame: &[u8]) -> &[u8] {
 /// A driver whose every received record carrying an id is also kept, in
 /// order, so a test can count terminal responses per id.
 type Received = Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
-fn recording<S>(incoming: S) -> (impl futures_util::Stream<Item = String>, Received)
+fn recording<S>(
+    incoming: S,
+) -> (
+    impl futures_util::Stream<Item = Result<String, String>>,
+    Received,
+)
 where
-    S: futures_util::Stream<Item = String>,
+    S: futures_util::Stream<Item = Result<String, String>>,
 {
     use futures_util::StreamExt;
     let received = Received::default();
     let kept = received.clone();
     let incoming = incoming.inspect(move |record| {
+        let Ok(record) = record else { return };
         let value: serde_json::Value = serde_json::from_str(record).unwrap();
         if value.get("id").is_some() {
             kept.lock().unwrap().push(value);
@@ -1474,7 +1480,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
@@ -1511,15 +1517,16 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
                 shutdown.clone(),
             ));
             let (reader, mut writer) = tokio::io::split(client);
-            let lines = futures_util::stream::unfold(
-                tokio::io::BufReader::new(reader).lines(),
-                |mut lines| async move { lines.next_line().await.unwrap().map(|line| (line, lines)) },
-            );
+            let lines = driver::lines(tokio::io::BufReader::new(reader));
             let (incoming, received) = recording(lines);
             let client = driver::Driver::new(incoming, |mut outgoing| async move {
                 while let Some(record) = outgoing.recv().await {
-                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
+                    writer
+                        .write_all(format!("{record}\n").as_bytes())
+                        .await
+                        .map_err(|error| error.to_string())?;
                 }
+                Ok(())
             });
             initialize(&client).await;
             let target = attach(&client, &f).await;
@@ -1529,17 +1536,20 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
             if case == "shutdown" {
                 valve.grant(0);
                 {
-                    let request = client.request(read());
+                    let request = client.try_request(read());
                     tokio::pin!(request);
                     tokio::select! {
                         biased;
-                        _ = &mut request => panic!("no response after shutdown"),
-                        () = async {
-                            valve.refused(success_30).await;
-                            shutdown.cancel();
-                            serving.await.unwrap().unwrap();
-                        } => {}
+                        outcome = &mut request => panic!("no outcome before shutdown: {outcome:?}"),
+                        _ = valve.refused(success_30) => {}
                     }
+                    shutdown.cancel();
+                    serving.await.unwrap().unwrap();
+                    // The carrier's end fails the waiter instead of answering it.
+                    assert_eq!(
+                        request.await,
+                        Err(driver::TransportEnded("end of input".into()))
+                    );
                 }
                 answered_once(&received, 30, 0);
                 // The transport's end closed the connection; its undecided
@@ -1568,9 +1578,16 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
                     // The writer is stuck offering an earlier record.
                     valve.grant(0);
                     let (earlier, outcome) = tokio::join!(client.request(server_info(29)), async {
-                        valve.refused(|offer| response(offer, 29) == Some(true)).await;
+                        valve
+                            .refused(|offer| response(offer, 29) == Some(true))
+                            .await;
                         let (outcome, ()) = tokio::join!(client.request(read()), async {
-                            probe.completed.subscribe().wait_for(Option::is_some).await.unwrap();
+                            probe
+                                .completed
+                                .subscribe()
+                                .wait_for(Option::is_some)
+                                .await
+                                .unwrap();
                             assert_eq!(*probe.completed.borrow(), Some(true), "produced");
                             assert!(
                                 !valve.offered(|offer| response(offer, 30).is_some()),
@@ -1683,7 +1700,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
@@ -1710,15 +1727,16 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                 CancellationToken::new(),
             ));
             let (reader, mut writer) = tokio::io::split(client);
-            let lines = futures_util::stream::unfold(
-                tokio::io::BufReader::new(reader).lines(),
-                |mut lines| async move { lines.next_line().await.unwrap().map(|line| (line, lines)) },
-            );
+            let lines = driver::lines(tokio::io::BufReader::new(reader));
             let (incoming, received) = recording(lines);
             let client = driver::Driver::new(incoming, |mut outgoing| async move {
                 while let Some(record) = outgoing.recv().await {
-                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
+                    writer
+                        .write_all(format!("{record}\n").as_bytes())
+                        .await
+                        .map_err(|error| error.to_string())?;
                 }
+                Ok(())
             });
             initialize(&client).await;
             let target = attach(&client, &f).await;
@@ -1734,7 +1752,10 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                     // is held inside the pipe.
                     valve.writes.arm();
                     valve.grant(usize::MAX);
-                    assert!(success_30(&valve.writes.entered().await), "decided as produced");
+                    assert!(
+                        success_30(&valve.writes.entered().await),
+                        "decided as produced"
+                    );
                     let handle = tokio::runtime::Handle::current();
                     let revoking = tokio::task::spawn_blocking({
                         let (connection, target) = (connection.clone(), target.clone());
@@ -1761,9 +1782,17 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                     tokio::pin!(revoking);
                     let waited = async {
                         if case == "cancel" {
-                            let _ = probe.cancel_waited.subscribe().wait_for(|waited| *waited).await;
+                            let _ = probe
+                                .cancel_waited
+                                .subscribe()
+                                .wait_for(|waited| *waited)
+                                .await;
                         } else {
-                            let _ = revocations.waited.subscribe().wait_for(|waited| *waited > 0).await;
+                            let _ = revocations
+                                .waited
+                                .subscribe()
+                                .wait_for(|waited| *waited > 0)
+                                .await;
                         }
                     };
                     tokio::select! {
@@ -1982,17 +2011,15 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
                 .await
                 .unwrap();
             let (mut sink, stream) = socket.split();
-            let texts = stream.filter_map(|message| async move {
-                match message {
-                    Ok(Message::Text(text)) => Some(text.to_string()),
-                    _ => None,
-                }
-            });
+            let texts = driver::frames(stream);
             let (incoming, received) = recording(texts);
             let client = driver::Driver::new(incoming, |mut outgoing| async move {
                 while let Some(record) = outgoing.recv().await {
-                    sink.send(Message::Text(record.into())).await.unwrap();
+                    sink.send(Message::Text(record.into()))
+                        .await
+                        .map_err(|error| error.to_string())?;
                 }
+                Ok(())
             });
             initialize(&client).await;
             let target = attach(&client, &f).await;
@@ -2131,17 +2158,15 @@ async fn delivery_websocket(
         .await
         .unwrap();
     let (mut sink, stream) = socket.split();
-    let texts = stream.filter_map(|message| async move {
-        match message {
-            Ok(Message::Text(text)) => Some(text.to_string()),
-            _ => None,
-        }
-    });
+    let texts = driver::frames(stream);
     let (incoming, received) = recording(texts);
     let client = driver::Driver::new(incoming, |mut outgoing| async move {
         while let Some(record) = outgoing.recv().await {
-            sink.send(Message::Text(record.into())).await.unwrap();
+            sink.send(Message::Text(record.into()))
+                .await
+                .map_err(|error| error.to_string())?;
         }
+        Ok(())
     });
     initialize(&client).await;
     let target = attach(&client, f).await;

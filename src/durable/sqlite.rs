@@ -487,12 +487,95 @@ impl ConnectionOwner {
                     owner: self,
                 });
             }
-            slot = self
-                .wake
-                .wait(slot)
+            slot = blocking_wait(|| self.wake.wait(slot))
                 .map_err(|_| storage("connection poisoned"))?;
         }
     }
+}
+
+/// Run a wait for another thread's progress — the connection owner's
+/// release, or another SQLite writer's lock — without parking the Tokio
+/// worker that called into this synchronous store. On a multi-thread runtime
+/// the worker's core is handed to another thread first, so protocol
+/// admission, transport and drain supervision keep running while a durable
+/// write waits. Elsewhere (current-thread runtimes, plain threads) the wait
+/// simply runs here.
+fn blocking_wait<T>(wait: impl FnOnce() -> T) -> T {
+    if tokio::runtime::Handle::try_current()
+        .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+    {
+        tokio::task::block_in_place(wait)
+    } else {
+        wait()
+    }
+}
+
+/// The store's writer budget for a database another connection has locked.
+const BUSY_TIMEOUT_MS: i32 = 5000;
+
+/// SQLite's own busy-timeout schedule (`sqliteDefaultBusyCallback`) under
+/// [`BUSY_TIMEOUT_MS`]: the same delays and the same total budget as
+/// `busy_timeout`, but each sleep is a [`blocking_wait`]. `count` is the
+/// number of earlier invocations for this lock attempt.
+fn writer_busy(count: i32) -> bool {
+    let Some(delay) = writer_busy_delay(count) else {
+        return false;
+    };
+    #[cfg(test)]
+    busy_probe::invoked(count);
+    blocking_wait(|| std::thread::sleep(delay));
+    true
+}
+
+/// The sleep before retry `count`, or `None` once the budget is spent.
+fn writer_busy_delay(count: i32) -> Option<std::time::Duration> {
+    const DELAYS: [i32; 12] = [1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50, 100];
+    const TOTALS: [i32; 12] = [0, 1, 3, 8, 18, 33, 53, 78, 103, 128, 178, 228];
+    let (delay, prior) = usize::try_from(count)
+        .ok()
+        .and_then(|index| Some((*DELAYS.get(index)?, TOTALS[index])))
+        .unwrap_or_else(|| {
+            (
+                100,
+                228_i32.saturating_add(100_i32.saturating_mul(count.saturating_sub(11))),
+            )
+        });
+    let delay = u64::try_from(delay.min(BUSY_TIMEOUT_MS.saturating_sub(prior))).ok()?;
+    (delay > 0).then(|| std::time::Duration::from_millis(delay))
+}
+
+/// Thread-local observation of [`writer_busy`] for deterministic contention
+/// tests: SQLite invokes the handler on the waiting writer's own thread.
+#[cfg(test)]
+pub(crate) mod busy_probe {
+    use std::cell::RefCell;
+    type Probe = Box<dyn FnMut(i32)>;
+    thread_local! {
+        static PROBE: RefCell<Option<Probe>> = const { RefCell::new(None) };
+    }
+    /// Observe this thread's writer busy waits until the returned guard drops.
+    pub(crate) fn observe(probe: impl FnMut(i32) + 'static) -> Guard {
+        PROBE.with(|slot| *slot.borrow_mut() = Some(Box::new(probe)));
+        Guard
+    }
+    pub(crate) struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PROBE.with(|slot| slot.borrow_mut().take());
+        }
+    }
+    pub(super) fn invoked(count: i32) {
+        PROBE.with(|slot| {
+            if let Some(probe) = slot.borrow_mut().as_mut() {
+                probe(count);
+            }
+        });
+    }
+}
+
+/// Install the store's writer busy policy ([`writer_busy`]) on `connection`.
+fn writer_busy_policy(connection: &Connection) -> rusqlite::Result<()> {
+    connection.busy_handler(Some(writer_busy))
 }
 struct ConnectionLease<'a> {
     connection: Option<Connection>,
@@ -555,9 +638,7 @@ impl Drop for StoreGuard<'_> {
     fn drop(&mut self) {
         if self.presentation {
             self.connection.progress_handler(0, None::<fn() -> bool>);
-            self.connection
-                .busy_timeout(std::time::Duration::from_secs(5))
-                .expect("restore SQLite busy policy");
+            writer_busy_policy(&self.connection).expect("restore SQLite busy policy");
         }
         if self.connection.total_changes() == self.changes || !self.connection.is_autocommit() {
             return;
@@ -746,6 +827,8 @@ impl SqliteConversationStore {
                 "existing-only management requires rollback-journal storage",
             ));
         }
+        writer_busy_policy(&connection)
+            .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
         register_integrity_function(&connection)?;
         validate_existing_schema(&connection)?;
         let stored: String = connection
@@ -8072,10 +8155,10 @@ fn configure_connection(
 ) -> Result<(), ConversationStoreError> {
     register_integrity_function(connection)?;
     connection
-        .execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;",
-        )
+        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;")
         .map_err(|error| storage(format!("configure SQLite: {error}")))?;
+    writer_busy_policy(connection)
+        .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
     if !in_memory {
         connection
             .execute_batch("PRAGMA journal_mode = DELETE;")
@@ -21171,6 +21254,108 @@ mod reading;
 mod reading_tests;
 
 #[cfg(test)]
+mod executor_wait_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const LIVENESS: Duration = Duration::from_secs(60);
+
+    /// One worker: anything that parks it stops every other task.
+    fn one_worker() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    /// Another task on the same runtime runs to completion.
+    fn executor_progresses(runtime: &tokio::runtime::Runtime) {
+        let (sender, receiver) = mpsc::channel();
+        runtime.spawn(async move { sender.send(()).unwrap() });
+        receiver
+            .recv_timeout(LIVENESS)
+            .expect("the runtime must keep running other tasks");
+    }
+
+    #[test]
+    fn writer_busy_schedule_is_sqlites_own_with_the_store_budget() {
+        let delays: Vec<_> = (0..)
+            .map_while(writer_busy_delay)
+            .map(|delay| delay.as_millis())
+            .collect();
+        assert_eq!(delays[..12], [1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50, 100]);
+        assert!(delays[12..].iter().all(|delay| *delay <= 100));
+        assert_eq!(delays.iter().sum::<u128>(), 5000);
+        assert_eq!(writer_busy_delay(i32::MAX), None);
+    }
+
+    /// A store write waiting for another connection's lock leaves the
+    /// executor running; releasing the lock then lets the same write commit.
+    #[test]
+    fn a_busy_store_writer_does_not_park_its_tokio_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("store.sqlite");
+        let mut writer = Connection::open(&path).unwrap();
+        configure_connection(&mut writer, false).unwrap();
+        writer
+            .execute_batch("CREATE TABLE contended (value INTEGER)")
+            .unwrap();
+        let competitor = Connection::open(&path).unwrap();
+        competitor.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let runtime = one_worker();
+        let (busy, waiting) = mpsc::channel();
+        let write = runtime.spawn(async move {
+            let _probe = busy_probe::observe(move |count| {
+                if count == 0 {
+                    busy.send(()).unwrap();
+                }
+            });
+            // No await: the whole write is one synchronous poll, as in the store.
+            writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO contended VALUES (1); COMMIT")
+        });
+        // SQLite itself reports the contention from the writer's handler.
+        waiting.recv_timeout(LIVENESS).unwrap();
+        executor_progresses(&runtime);
+        competitor.execute_batch("ROLLBACK").unwrap();
+        runtime.block_on(write).unwrap().unwrap();
+        let committed: i64 = competitor
+            .query_row("SELECT count(*) FROM contended", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(committed, 1);
+    }
+
+    /// Waiting for the connection another store operation holds likewise
+    /// leaves the executor running.
+    #[test]
+    fn a_connection_wait_does_not_park_its_tokio_worker() {
+        let owner = Arc::new(ConnectionOwner {
+            manifest: manifest::Owner::uninstalled(),
+            available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
+            wake: Condvar::new(),
+            poisoned: AtomicBool::new(false),
+        });
+        // Declared first so a failing assertion still releases the lease
+        // before the runtime waits for its worker on unwind.
+        let runtime = one_worker();
+        let held = owner.lock().unwrap();
+        let waiter = owner.clone();
+        let (started, running) = mpsc::channel();
+        let wait = runtime.spawn(async move {
+            started.send(()).unwrap();
+            waiter.lock().map(|_| ())
+        });
+        running.recv_timeout(LIVENESS).unwrap();
+        // The waiter's poll continues synchronously into the held connection,
+        // so another task can run only if that wait hands the worker off.
+        executor_progresses(&runtime);
+        drop(held);
+        runtime.block_on(wait).unwrap().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod presentation_cancellation_tests {
     use super::*;
 
@@ -21204,10 +21389,12 @@ mod presentation_cancellation_tests {
             matches!(task.join().unwrap(), Err(rusqlite::Error::SqliteFailure(error, _)) if error.code == rusqlite::ErrorCode::OperationInterrupted)
         );
         let conn = owner.lock().unwrap();
+        // The zero-wait presentation policy is gone: the writer handler is
+        // back, and SQLite's own timeout no longer governs this connection.
         assert_eq!(
             conn.query_row("PRAGMA busy_timeout", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5000
+            0
         );
         conn.execute_batch(
             "CREATE TABLE normal_write (value INTEGER); INSERT INTO normal_write VALUES (1)",
