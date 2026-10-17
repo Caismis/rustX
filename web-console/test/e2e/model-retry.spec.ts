@@ -1,7 +1,16 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
+
+/** Both elements sit in the same anchored transcript seat. */
+async function expectSharedAnchor(reply: Locator, notice: Locator) {
+  const anchor = (element: Locator) => element.evaluate(el => el.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key') ?? null);
+  await expect.poll(async () => {
+    const seat = await anchor(reply);
+    return seat !== null && seat === await anchor(notice);
+  }).toBe(true);
+}
 
 for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'] as const) {
   test(`native timeout retry disclosure ${locale} ${theme}`, async ({ page }) => {
@@ -41,9 +50,10 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       // Disclosure state belongs to the retry chain when its native publication
       // moves from the pending seat into the final message stream.
       await expect(notices.first()).toHaveAttribute('open');
+      // The reply is first visible in its streaming seat; its durable message
+      // seat, which the retry notice joins, follows. Wait for that placement.
       const recovered = page.getByText('Recovered after timeout.', { exact: true });
-      const recoveredAnchor = await recovered.evaluate(el => el.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key'));
-      expect(await notices.first().evaluate(el => el.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key'))).toBe(recoveredAnchor);
+      await expectSharedAnchor(recovered, notices.first());
       expect(await notices.first().evaluate(el => {
         const reply = el.closest('[data-chat-anchor-key]')?.querySelector('article');
         return !!reply && !!(el.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -67,8 +77,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
         await expect(page.getByText('Recovered after timeout.', { exact: true })).toBeVisible();
         await expect(notices).toHaveCount(2);
         await expect(page.locator('[data-model-retry][data-active], [data-model-retry][open]')).toHaveCount(0);
-        const reloadedAnchor = await page.getByText('Recovered after timeout.', { exact: true }).evaluate(el => el.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key'));
-        expect(await notices.first().evaluate(el => el.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key'))).toBe(reloadedAnchor);
+        await expectSharedAnchor(page.getByText('Recovered after timeout.', { exact: true }), notices.first());
       }
       expect(errors).toEqual([]); passed = true;
     } finally { await fixture.stop(passed); }
