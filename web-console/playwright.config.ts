@@ -7,6 +7,9 @@ const wsEndpoint = process.env.RUSTX_BROWSER_WS_ENDPOINT;
 if (!wsEndpoint) throw new Error('Use pnpm test:e2e or pnpm test:e2e:update: references require the pinned browser container.');
 export default defineConfig({
   testDir: './test/e2e', testMatch: '*.spec.ts', workers: 1, timeout: 120_000,
+  // CI keeps the default dot progress and records per-test durations in the
+  // uploaded browser evidence (test-results/), for verification-cost reports.
+  reporter: process.env.CI ? [['dot'], ['json', { outputFile: 'test-results/timings.json' }]] : 'list',
   updateSnapshots: 'none',
   // Every browser reference goes through expectStableScreenshot (test/e2e/screenshot.ts)
   // and the exact pixel contract in test/screenshot-comparator.ts. The settings below are
