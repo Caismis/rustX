@@ -12,7 +12,11 @@ async function expectSharedAnchor(reply: Locator, notice: Locator) {
   }).toBe(true);
 }
 
-for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'] as const) {
+// One native retry workflow per locale, each locale on the other theme and
+// width: English light desktop (plus reload) and Chinese dark narrow. Both
+// locales' retry copy across every theme and width is pinned by
+// test/model-retry.test.tsx; the retry semantics do not vary by presentation.
+for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
   test(`native timeout retry disclosure ${locale} ${theme}`, async ({ page }) => {
     const fixture = await startDogfood('web_timeout_retry');
     let passed = false;

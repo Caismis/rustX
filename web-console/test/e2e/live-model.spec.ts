@@ -138,7 +138,11 @@ max_output_tokens = { mode = "limit", tokens = 333 }
   });
 }
 
-for (const width of [1440, 390]) for (const acknowledgement of ['received', 'lost'] as const) {
+// Each acknowledgement outcome once, each at the other width: a received
+// acknowledgement on desktop and a lost one, recovered through reconnect, in
+// the narrow layout. Neither the width-specific placement nor the lost-ACK
+// recovery depends on the other.
+for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as const) {
   test(`live same-model profile selection (${width}, acknowledgement ${acknowledgement})`, async ({ page }) => {
     // Reuse the shared two-request provider scenario. Its first stream is held
     // at an explicit gate until the profile mutation and recovery are proven.

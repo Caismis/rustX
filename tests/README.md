@@ -379,6 +379,31 @@ summarizes them and the lane check below verifies them against Cargo:
   `pnpm test:e2e` stays self-contained: `pnpm build && bash
   scripts/browser-tests.sh`, which runs `cargo build` itself.
 
+### Browser presentation matrices
+
+A native browser workflow (a real App Server, provider emulator and Agent
+execution per test) proves business semantics once per distinct failure
+boundary. Locale, theme and width are presentation dimensions: each value
+stays covered, by a retained native run or by a stable fixture or component
+test that asserts the same UI, but not every combination re-executes the
+Agent. Distinct runtime boundaries — lost acknowledgement, reconnect, Stop
+and late output, compaction ownership, retry transitions, model adoption —
+are never merged into one run.
+
+| Removed native run | Invariant | Retained or replacement proof | Saved (CI run 39015122730) |
+| --- | --- | --- | --- |
+| `model-retry` en dark, zh light | timeout retry disclosure, recovery placement, Stop during retry, late output hidden | the same workflow in en light 1440 (plus reload) and zh dark 390; both locales' timeout, active and settled retry copy in `test/model-retry.test.tsx` | 8.4 s + 8.8 s |
+| `compaction` en dark, zh light | failed and held manual compaction, reconnect, automatic compaction after a questionnaire, projection history, Stop and late output | the same workflow in en light 1440 (plus reconnect and reload) and zh dark 390; the Context summary card in en and zh, light and dark, 1440 and 390 in `compaction-summary.spec.ts` (fixture) | 9.5 s + 9.9 s |
+| `live-model` profile selection (1440, lost), (390, received) | same-model profile mutation with a received or lost acknowledgement, frozen admission, reload without replay, provider request parameters | (1440, received) and (390, lost): each acknowledgement outcome and each width once; neither the placement nor the lost-ACK recovery depends on the other | 7.1 s + 6.6 s |
+
+None of the removed runs held a screenshot reference; their captures went to
+`/tmp`. Each replacement was checked against a deliberate violation: a wrong
+Chinese retry label fails `model-retry.test.tsx`, and a wrong English
+projection description fails the four English `compaction-summary` cases.
+The suite shrank by six native runs (about 50 s of test time) and gained four
+fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
+`shell`, `settings-presentation`) start no Agent and were left unchanged.
+
 ### The lane check
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
