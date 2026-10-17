@@ -638,6 +638,11 @@ jobs:
           corepack enable
           corepack install
           pnpm install --frozen-lockfile
+      # The Web build and the Playwright inventory load the shared TUI
+      # protocol decoder, so the TUI's own dependencies must be present.
+      - name: Install the TUI protocol decoder dependencies
+        working-directory: tui
+        run: pnpm install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
@@ -689,6 +694,9 @@ jobs:
           corepack enable
           corepack install
           pnpm install --frozen-lockfile
+      - name: Install the TUI protocol decoder dependencies
+        working-directory: tui
+        run: pnpm install --frozen-lockfile
       - name: Install and check development launchers
         working-directory: dev
         run: |
