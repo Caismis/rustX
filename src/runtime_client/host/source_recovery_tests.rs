@@ -249,3 +249,62 @@ async fn unix_checkpoint_source_repair_keeps_the_current_thread_executor_service
     fixture.runtime.shutdown().await.unwrap();
     fixture.host.inner.drain_projection().await.unwrap();
 }
+
+/// An explicit checkpoint that requests a Source repair returns only after the
+/// repair's publication is installed. The worker folds the repaired read under
+/// the state lock, then encodes and installs its publication outside it; a
+/// checkpoint that found the domains clean inside that window used to return
+/// the previous published cursor (CI run 39032890413).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_source_repair_waits_for_its_publication_install() {
+    #[derive(Debug)]
+    enum Step {
+        Settling,
+        Returned(Result<u64, String>),
+    }
+    let (_model, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+    fixture.host.projection_settled().await;
+    let before = fixture.host.checkpoint().unwrap();
+    fixture
+        .host
+        .fail_projection_read_for_test("held original Source fault");
+    let gate = &fixture.host.inner.publication_gate;
+    let (steps, step) = std::sync::mpsc::channel();
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    // Hold the repair's publication between its fold and its install.
+    *gate.encoding_hook.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap();
+        released.recv().unwrap();
+    }));
+    // Decide completion only once the fold is held inside that window.
+    *gate.repair_request_hook.lock().unwrap() = Some(Box::new(move || {
+        entered.recv().unwrap();
+    }));
+    let settling = steps.clone();
+    *gate.repair_settle_hook.lock().unwrap() = Some(Box::new(move || {
+        settling.send(Step::Settling).unwrap();
+    }));
+    let host = fixture.host.clone();
+    let checkpoint = std::thread::spawn(move || {
+        let result = host
+            .checkpoint()
+            .map(|checkpoint| checkpoint.cursor.get())
+            .map_err(|error| format!("{error:?}"));
+        steps.send(Step::Returned(result)).unwrap();
+    });
+    let guard = std::time::Duration::from_secs(30);
+    let first = step.recv_timeout(guard).unwrap();
+    assert!(
+        matches!(first, Step::Settling),
+        "the checkpoint returned while its repair publication was held: {first:?}"
+    );
+    release.send(()).unwrap();
+    let Step::Returned(cursor) = step.recv_timeout(guard).unwrap() else {
+        panic!("one settlement step only");
+    };
+    assert_eq!(cursor, Ok(before.cursor.get() + 1));
+    checkpoint.join().unwrap();
+    fixture.runtime.shutdown().await.unwrap();
+    fixture.host.inner.drain_projection().await.unwrap();
+}

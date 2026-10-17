@@ -778,6 +778,12 @@ struct PublicationGate {
     settlement_contention_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     settlement_wait: Mutex<Option<SettlementWait>>,
+    /// Runs after a checkpoint requested its Source repair read.
+    #[cfg(test)]
+    repair_request_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Runs before a checkpoint settles its repair's publication.
+    #[cfg(test)]
+    repair_settle_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     diagnostics: Mutex<ProjectionDiagnostics>,
 }
@@ -3862,6 +3868,16 @@ impl ClientInner {
             self.pending
                 .push(ConversationObservation::JournalSourceReady);
         }
+        #[cfg(test)]
+        if let Some(hook) = self
+            .publication_gate
+            .repair_request_hook
+            .lock()
+            .unwrap()
+            .take()
+        {
+            hook();
+        }
         loop {
             let progress = self.publication_gate.generation();
             {
@@ -3870,6 +3886,29 @@ impl ClientInner {
                     return Err(RuntimeClientError::ReadCutExpired);
                 }
                 if state.projection.read_domain_cut().is_none() {
+                    drop(state);
+                    // The read is folded once the domains are clean, but its
+                    // publication is encoded outside the state lock and
+                    // installed afterwards. commit_display holds the
+                    // publication order through that install, so waiting for
+                    // the order settles it: the checkpoint this repair serves
+                    // includes the repaired publication.
+                    #[cfg(test)]
+                    if let Some(hook) = self
+                        .publication_gate
+                        .repair_settle_hook
+                        .lock()
+                        .unwrap()
+                        .take()
+                    {
+                        hook();
+                    }
+                    drop(
+                        self.publication_gate
+                            .order
+                            .lock()
+                            .expect("native display publication gate"),
+                    );
                     return Ok(());
                 }
                 if self.pending.is_closed()
