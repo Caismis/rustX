@@ -139,23 +139,29 @@ export function assign(tests: { file: string }[], weights: Record<string, number
 }
 
 /**
- * Measured seconds per spec file from Playwright JSON reports of complete
- * one-worker runs: each test's wall span until the next test of its run
+ * Mean measured seconds per spec file from Playwright JSON reports of
+ * complete one-worker runs: each test's wall span until the next test of its run
  * starts. A test's expensive fixture lies outside its reported duration but
  * directly after its start (reading.spec.ts spends about 200 s on 300
  * durable Attempts per test), so that time counts toward its own file.
  */
 export function weightsOf(reports: Pick<JSONReport, 'suites'>[]): Record<string, number> {
-  const weights: Record<string, number> = {};
+  // Each file's mean over the reports that ran it: one per complete run.
+  const totals = new Map<string, { seconds: number; reports: number }>();
   for (const report of reports) {
     const runs = cases(report).flatMap(({ file, test }) => test.results.map(result => ({ file, start: Date.parse(result.startTime), duration: result.duration })))
       .sort((a, b) => a.start - b.start);
+    const spans = new Map<string, number>();
     runs.forEach((run, index) => {
       const span = index + 1 < runs.length ? runs[index + 1].start - run.start : run.duration;
-      weights[run.file] = (weights[run.file] ?? 0) + span / 1000;
+      spans.set(run.file, (spans.get(run.file) ?? 0) + span / 1000);
     });
+    for (const [file, seconds] of spans) {
+      const total = totals.get(file) ?? { seconds: 0, reports: 0 };
+      totals.set(file, { seconds: total.seconds + seconds, reports: total.reports + 1 });
+    }
   }
-  return Object.fromEntries(Object.entries(weights).sort(([a], [b]) => a.localeCompare(b)).map(([file, seconds]) => [file, Math.round(seconds * 10) / 10]));
+  return Object.fromEntries([...totals].sort(([a], [b]) => a.localeCompare(b)).map(([file, { seconds, reports: count }]) => [file, Math.round(seconds / count * 10) / 10]));
 }
 
 function markdown(coverage: Coverage, inventory: Inventory) {

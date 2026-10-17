@@ -465,9 +465,12 @@ summarizes them and the lane check below verifies them against Cargo:
   `web-console/test/e2e/shard-weights.json` (a file without a measurement
   weighs its test count at the measured mean); Playwright's own `--shard`
   splits by test count, which put 1,298 s on one shard and 397 s on the other
-  in run 39026668816. Refresh the weights from a complete run's shard reports
-  with `node scripts/browser-shards.ts weights <report.json>...`. Weights
-  only steer balance: coverage is verified independently of them. Node native addons are not shared: `pnpm install`
+  in run 39026668816. Refresh the weights from complete runs' shard
+  reports with `node scripts/browser-shards.ts weights <report.json>...`;
+  each file's weight is its mean wall span (until the next test starts, so
+  fixture time outside a test's reported duration counts) over the runs
+  given. Runner speed varies, so several runs balance better than one.
+  Weights only steer balance: coverage is verified independently of them. Node native addons are not shared: `pnpm install`
   rebuilds them from the lockfile in every job. `web-client` (launcher
   `typecheck`/`test`, Web `typecheck`, Vitest `pnpm test` with the
   `*.measurement.tsx` counters excluded, `check:i18n`, `check:provenance`)

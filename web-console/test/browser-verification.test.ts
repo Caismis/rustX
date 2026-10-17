@@ -88,6 +88,9 @@ describe('shard assignment', () => {
     // a: 1.5 s test, then 2.5 s until b starts; b: last test, its own 3 s.
     const report = { suites: [suite('b.spec.ts', [spec('b.spec.ts', '2', '2026-01-01T00:00:04.000Z', 3000)]), suite('a.spec.ts', [spec('a.spec.ts', '1', '2026-01-01T00:00:00.000Z', 1500)])] };
     expect(weightsOf([report])).toEqual({ 'a.spec.ts': 4, 'b.spec.ts': 3 });
+    // Two runs of the same file average; a file only one run measured keeps its value.
+    const again = { suites: [suite('a.spec.ts', [spec('a.spec.ts', '1', '2026-01-02T00:00:00.000Z', 2000)])] };
+    expect(weightsOf([report, again])).toEqual({ 'a.spec.ts': 3, 'b.spec.ts': 3 });
   });
 });
 
