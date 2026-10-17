@@ -217,14 +217,29 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
+      # Compiling the external targets first also builds every real
+      # executable (`rustx`, `bash-supervisor`, `interactive-supervisor`)
+      # against the same all-feature library the tests link, and places them
+      # at `target/debug/`. The in-crate text_spill suite execs
+      # `bash-supervisor` there by path; `cargo test --lib` alone does not
+      # build it. A separate `cargo build --bins` would compile one more
+      # complete rustX library (no dev-dependency features) that no test in
+      # this lane links. Default-feature real binaries are still built by the
+      # contracts and TUI lanes.
+      - name: Compile the external boundary targets and the real executables
+        run: >-
+          cargo test --all-features --no-run
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
       # The in-crate boundary conformance suites (real process death, real
       # bash supervision, staged subagent children, real MCP stdio fixture
-      # children), selected by their stable name prefix. `cargo build --bins`
-      # comes first: the text_spill suite execs the `bash-supervisor` binary
-      # by path and `cargo test --lib` does not build it.
-      - name: Build the binaries the in-crate boundary suites exec
-        run: cargo build --bins
-
+      # children), selected by their stable name prefix.
       - name: Run the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
@@ -343,36 +358,16 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      # Lib test binary: source-module unit tests (including the bash/uv
-      # boundary-owning modules, whose OS primitives are platform-sensitive)
-      # + the in-crate boundary conformance suites; the deterministic
-      # scripted contract suites are skipped by prefix. The explicit bin
-      # build is required: `cargo test --bins` alone does not place
-      # `bash-supervisor` at `target/debug/` where the tests look for it.
-      - name: Build the binaries the boundary tests exec
-        # Match the test feature set for the actual target/debug executables.
-        # Default-feature real binary builds still run in the Linux contract,
-        # boundary and TUI lanes; their validation is not replaced by harnesses.
-        run: /usr/bin/time -l cargo build --bins --all-features --timings
-
-      # App Server scripted contracts live under the manager's cfg(test) module
-      # to reach its private owner gates; their physical test class is still
-      # deterministic and Linux-only, despite this different name prefix.
-      #
-      # `--bins` executes zero tests today and removing it was measured, but it
-      # is retained so Cargo's normal target discovery picks up any future test
-      # added to a binary. It is not a substitute for the explicit
-      # `cargo build --bins` step above, which serves a different contract:
-      # placing the real executables at `target/debug/` for tests to exec.
-      - name: Compile unit and in-crate boundary test harnesses
-        run: /usr/bin/time -l cargo test --lib --bins --all-features --no-run --timings
-
-      - name: Run unit tests and the in-crate boundary suites
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: '/usr/bin/time -l cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
-
-      - name: Compile the external boundary targets
+      # Compiling the external targets first also builds every real
+      # executable against the same all-feature library the tests link and
+      # places it at `target/debug/`, where the lib tests (bash/uv
+      # boundary-owning modules, in-crate boundary suites) exec
+      # `bash-supervisor`; `cargo test --lib --bins` alone does not place it
+      # there. A separate `cargo build --bins --all-features` compiled one more
+      # complete rustX library (no dev-dependency features) that no test
+      # links. Default-feature real binaries are still built by the Linux
+      # contracts and TUI lanes and by desktop-macos.
+      - name: Compile the external boundary targets and the real executables
         run: >-
           /usr/bin/time -l cargo test --all-features --no-run --timings
           --test durable
@@ -382,6 +377,27 @@ jobs:
           --test conformance
           --test cfg3_catalog
           --test cfg3_managed_output
+
+      # App Server scripted contracts live under the manager's cfg(test) module
+      # to reach its private owner gates; their physical test class is still
+      # deterministic and Linux-only, despite this different name prefix.
+      #
+      # `--bins` executes zero tests today and removing it was measured, but it
+      # is retained so Cargo's normal target discovery picks up any future test
+      # added to a binary. Binary test harnesses are not the real executables
+      # the tests exec; those come from the external-target compilation above.
+      #
+      # Lib test binary: source-module unit tests (including the bash/uv
+      # boundary-owning modules, whose OS primitives are platform-sensitive)
+      # + the in-crate boundary conformance suites; the deterministic
+      # scripted contract suites are skipped by prefix.
+      - name: Compile unit and in-crate boundary test harnesses
+        run: /usr/bin/time -l cargo test --lib --bins --all-features --no-run --timings
+
+      - name: Run unit tests and the in-crate boundary suites
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
@@ -398,7 +414,7 @@ jobs:
 
       # Native macOS discovery: both --skip selectors must still exclude
       # tests, and every required boundary suite (see REQUIREMENTS in the
-      # checker) must execute here. The feature set matches the binaries
+      # checker) must execute here. The feature set matches the targets
       # built above, so no library is rebuilt for the checker.
       - name: Check test lane coverage
         run: cargo run --all-features --example check_test_lanes -- --job rust-platform-boundaries

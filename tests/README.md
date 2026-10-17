@@ -312,22 +312,27 @@ summarizes them and the lane check below verifies them against Cargo:
   and `check_test_lanes` (the lane checker's own tests) do. Bins and
   examples stay selected so Cargo's own target discovery picks up a future
   test; the lane check allows their harnesses to be empty.
-- **rust-boundaries** (ubuntu) — the emulator's pytest suite,
-  `cargo build --bins` (the text_spill suite execs `bash-supervisor`),
-  `cargo test --lib --all-features -- boundary_suites::`, then
+- **rust-boundaries** (ubuntu) — the emulator's pytest suite, then
+  `cargo test --all-features --no-run` over the seven external boundary
+  targets, then `cargo test --lib --all-features -- boundary_suites::`, then
   `cargo test --all-features --test durable --test process --test subagent
   --test tools --test conformance --test cfg3_catalog --test
-  cfg3_managed_output`. Both test steps set
-  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
+  cfg3_managed_output`. Compiling an integration target also builds every
+  real executable against the library the tests link and places it at
+  `target/debug/`, where the text_spill suite execs `bash-supervisor`; a
+  separate `cargo build --bins` would compile another complete library
+  (without dev-dependency features) that no test in the lane links. Both
+  test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
 - **rust-platform-boundaries** (macos) — only platform-sensitive classes,
-  natively: `cargo build --bins --all-features`, then
-  `cargo test --lib --bins --all-features -- --skip scripted_suites::
+  natively: the seven external boundary targets are compiled first (which,
+  as in rust-boundaries, places the real executables at `target/debug/`),
+  then `cargo test --lib --bins --all-features -- --skip scripted_suites::
   --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
   primitives differ across OSes — plus the in-crate boundary suites) and the
-  seven external boundary targets, both with
-  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The `--no-run` compile steps before
-  them exist for native timing measurement and execute nothing.
+  seven external boundary targets run, both with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The `--no-run` compile steps
+  separate native compile timing from execution and execute nothing.
   `contracts`/`provider` and the deterministic contract majority are
   Linux-only: they carry no process or filesystem semantics. Overlap with
   Linux is intentional: a macOS boundary test is native proof, not a
@@ -519,17 +524,17 @@ cargo build --bins   # unit tests exec target/debug/{bash,interactive}-superviso
 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features
 
-# In-crate boundary conformance (CI: rust-boundaries); uv is mandatory:
-cargo build --bins   # text_spill execs the bash-supervisor binary by path
+# Boundary lanes (CI: rust-boundaries); uv is mandatory. Compiling the
+# external targets first also places the real executables at target/debug/,
+# where the text_spill suite execs bash-supervisor:
+BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
+  --test conformance --test cfg3_catalog --test cfg3_managed_output'
+cargo test --all-features --no-run $BOUNDARY_TARGETS
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features $BOUNDARY_TARGETS
 
-# External boundary targets (CI: rust-boundaries); the emulator is mandatory:
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features \
-  --test durable --test process --test subagent --test tools --test conformance \
-  --test cfg3_catalog --test cfg3_managed_output
-
-# Platform-sensitive classes on macOS (CI: rust-platform-boundaries):
-cargo build --bins --all-features
+# Platform-sensitive classes on macOS (CI: rust-platform-boundaries), after
+# the same external-target compilation:
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
   --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
