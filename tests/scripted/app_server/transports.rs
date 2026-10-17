@@ -11,6 +11,8 @@ use std::{io, sync::Arc};
 use tokio_util::sync::CancellationToken;
 #[path = "../../support/app_server_driver.rs"]
 mod driver;
+#[path = "driver_lifecycle.rs"]
+mod driver_lifecycle;
 #[path = "oversized_notification.rs"]
 mod oversized_notification;
 use app_server_conformance::AppServerConformanceDriver;
@@ -1480,7 +1482,6 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    use tokio::io::AsyncWriteExt;
     bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
@@ -1516,18 +1517,10 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
                 },
                 shutdown.clone(),
             ));
-            let (reader, mut writer) = tokio::io::split(client);
+            let (reader, writer) = tokio::io::split(client);
             let lines = driver::lines(tokio::io::BufReader::new(reader));
             let (incoming, received) = recording(lines);
-            let client = driver::Driver::new(incoming, |mut outgoing| async move {
-                while let Some(record) = outgoing.recv().await {
-                    writer
-                        .write_all(format!("{record}\n").as_bytes())
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-                Ok(())
-            });
+            let client = driver::Driver::new(incoming, driver::jsonl_sink(writer));
             initialize(&client).await;
             let target = attach(&client, &f).await;
             probe.completed.send_replace(None);
@@ -1700,7 +1693,6 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    use tokio::io::AsyncWriteExt;
     bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
@@ -1726,18 +1718,10 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                 },
                 CancellationToken::new(),
             ));
-            let (reader, mut writer) = tokio::io::split(client);
+            let (reader, writer) = tokio::io::split(client);
             let lines = driver::lines(tokio::io::BufReader::new(reader));
             let (incoming, received) = recording(lines);
-            let client = driver::Driver::new(incoming, |mut outgoing| async move {
-                while let Some(record) = outgoing.recv().await {
-                    writer
-                        .write_all(format!("{record}\n").as_bytes())
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-                Ok(())
-            });
+            let client = driver::Driver::new(incoming, driver::jsonl_sink(writer));
             initialize(&client).await;
             let target = attach(&client, &f).await;
             revocations.waited.send_replace(0);
@@ -1973,7 +1957,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     bounded(Box::pin(async {
         const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
         let f = Fixture::with_tool(Some("present")).await;
@@ -2010,17 +1994,10 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             let (socket, _) = tokio_tungstenite::client_async(request, client)
                 .await
                 .unwrap();
-            let (mut sink, stream) = socket.split();
+            let (sink, stream) = socket.split();
             let texts = driver::frames(stream);
             let (incoming, received) = recording(texts);
-            let client = driver::Driver::new(incoming, |mut outgoing| async move {
-                while let Some(record) = outgoing.recv().await {
-                    sink.send(Message::Text(record.into()))
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-                Ok(())
-            });
+            let client = driver::Driver::new(incoming, driver::text_sink(sink));
             initialize(&client).await;
             let target = attach(&client, &f).await;
             probe.completed.send_replace(None);
@@ -2133,7 +2110,7 @@ async fn delivery_websocket(
     AttachmentTarget,
 ) {
     use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let (client, server) = tokio::io::duplex(1 << 20);
     let serving = tokio::spawn(websocket::connection(
         Valve {
@@ -2157,17 +2134,10 @@ async fn delivery_websocket(
     let (socket, _) = tokio_tungstenite::client_async(request, client)
         .await
         .unwrap();
-    let (mut sink, stream) = socket.split();
+    let (sink, stream) = socket.split();
     let texts = driver::frames(stream);
     let (incoming, received) = recording(texts);
-    let client = driver::Driver::new(incoming, |mut outgoing| async move {
-        while let Some(record) = outgoing.recv().await {
-            sink.send(Message::Text(record.into()))
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    });
+    let client = driver::Driver::new(incoming, driver::text_sink(sink));
     initialize(&client).await;
     let target = attach(&client, f).await;
     (client, received, serving, target)

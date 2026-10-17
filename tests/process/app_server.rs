@@ -1948,29 +1948,6 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
     .await;
 }
 
-fn stdio_with_eof_gate(
-    reader: tokio::process::ChildStdout,
-    mut writer: tokio::process::ChildStdin,
-) -> (driver::Driver, tokio::sync::oneshot::Sender<()>) {
-    let (close_input, mut eof) = tokio::sync::oneshot::channel();
-    let incoming = driver::lines(BufReader::new(reader));
-    let client = driver::Driver::new(incoming, |mut records| async move {
-        loop {
-            tokio::select! {
-                _ = &mut eof => break,
-                record = records.recv() => {
-                    let Some(record) = record else { break };
-                    writer.write_all(format!("{record}\n").as_bytes()).await.map_err(|error| error.to_string())?;
-                    writer.flush().await.map_err(|error| error.to_string())?;
-                }
-            }
-        }
-        // Drop only the actual ChildStdin. The driver still owns stdout.
-        Ok(())
-    });
-    (client, close_input)
-}
-
 async fn await_original_stdio_completion(
     store: &rustx::durable::SqliteConversationStore,
     attempt: &rustx::runtime::identity::AttemptId,
@@ -2034,8 +2011,7 @@ async fn t10_stdio_cli_eof_preserves_gated_attempt_and_original_canonical_commit
         drop(controller);
         let mut child = f.command("stdio").spawn().unwrap();
         let pid = child.id();
-        let (client, eof) =
-            stdio_with_eof_gate(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
         let a = attach(&client, f.sessions[0].clone(), 2).await;
         let b = attach(&client, f.sessions[1].clone(), 3).await;
@@ -2063,7 +2039,8 @@ async fn t10_stdio_cli_eof_preserves_gated_attempt_and_original_canonical_commit
             })
             .count();
         assert_eq!(starts, 1, "one original admitted A attempt");
-        eof.send(()).unwrap();
+        // Stdio EOF: the driver closes only ChildStdin and still owns stdout.
+        client.close_output().await;
         let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
         loop {
             let line = diagnostics.next_line().await.unwrap().unwrap();
