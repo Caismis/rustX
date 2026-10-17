@@ -1566,26 +1566,33 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
     );
 }
 
-#[test]
-fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading() {
-    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-    for retry in 0..2048 {
-        request_timed(&store, "unmeasured", retry, None, None, retry % 2 == 0);
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+
+    #[test]
+    fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading() {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        for retry in 0..2048 {
+            request_timed(&store, "unmeasured", retry, None, None, retry % 2 == 0);
+        }
+        assert_eq!(
+            crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
+                .unwrap(),
+            None
+        );
+        let cut = store.presentation_frontier().unwrap();
+        request_timed(&store, "unmeasured", 2048, Some(usage(None)), None, true);
+        assert_eq!(crate::context::occupancy::read(&store, cut).unwrap(), None);
+        assert_eq!(
+            crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
+                .unwrap()
+                .unwrap()
+                .input_tokens,
+            100
+        );
     }
-    assert_eq!(
-        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap()).unwrap(),
-        None
-    );
-    let cut = store.presentation_frontier().unwrap();
-    request_timed(&store, "unmeasured", 2048, Some(usage(None)), None, true);
-    assert_eq!(crate::context::occupancy::read(&store, cut).unwrap(), None);
-    assert_eq!(
-        crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
-            .unwrap()
-            .unwrap()
-            .input_tokens,
-        100
-    );
 }
 
 #[test]

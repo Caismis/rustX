@@ -320,6 +320,10 @@ async fn headless_production_turn_runs_without_any_client_host() {
     );
 
     // Publish one ordinary inbound turn through the runtime's own boundary.
+    // Armed before the trigger: settlement wakes only registered waiters.
+    let settled = runtime.runtime().settlement_signal().notified();
+    tokio::pin!(settled);
+    settled.as_mut().enable();
     runtime
         .runtime()
         .submit_inbound(submit_content("conformance: turn one"))
@@ -327,7 +331,7 @@ async fn headless_production_turn_runs_without_any_client_host() {
 
     // Deterministic settlement: the runtime's settlement signal fires once
     // when the authoritative state returns to the coordinator.
-    runtime.runtime().settlement_signal().notified().await;
+    settled.await;
 
     // The real provider path ran exactly once and the attempt settled.
     let requests = emulator.requests().await;
@@ -495,6 +499,10 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     assert_eq!(preflight.conversations()[0].conversation_id, b_conversation);
     let revision = *preflight.ownership_revision();
     assert!(product.runtime().is_activated());
+    // Armed before the trigger: settlement wakes only registered waiters.
+    let settled = product.runtime().settlement_signal().notified();
+    tokio::pin!(settled);
+    settled.as_mut().enable();
     let submitted = endpoint
         .handle_request_async(RuntimeClientRequest::SubmitInbound {
             id: RequestId::new(2),
@@ -505,7 +513,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
         submitted.result,
         Some(RuntimeClientResult::InboundAccepted { .. })
     ));
-    product.runtime().settlement_signal().notified().await;
+    settled.await;
     assert_eq!(emulator.requests().await.len(), 1);
     assert_eq!(
         crate::common::request_snapshots(&product.runtime().request_history()).len(),

@@ -1247,9 +1247,18 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native Agent interrup
     assert.equal(interrupted.type, "agent_interruption_accepted");
     assert.equal(interrupted.activation_id, first.activation_id);
     assert.equal('outcome' in interrupted, false, "intent does not manufacture physical completion");
+    // Interruption cancels exactly the captured activation. agent/wait waits
+    // for the current activation, and an Agent already inactive answers at
+    // once with none: a wait admitted after the cancelled activation settled
+    // reports no activation, and that activation's own record (asserted
+    // below) carries the outcome. A wait that captured it reports it.
     const cancelled = await session.waitAgent(first.agent_id);
-    assert.equal(cancelled.activation_id, first.activation_id);
-    assert.equal(cancelled.outcome, "cancelled");
+    if (cancelled.activation_id !== null) {
+      assert.equal(cancelled.activation_id, first.activation_id);
+      assert.equal(cancelled.outcome, "cancelled");
+    } else {
+      assert.equal(cancelled.outcome, null);
+    }
     assert.equal(interrupted.agent_id, first.agent_id);
     await Promise.all([provider.releaseGate("interrupt-initial-0"), provider.releaseGate("interrupt-initial-1")]);
     await session.resync();
@@ -1267,7 +1276,10 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native Agent interrup
         });
       });
     }
-    assert.equal(session.state.agents.find(agent => agent.agent_id === first.agent_id)?.state, "inactive");
+    const settled = session.state.agents.find(agent => agent.agent_id === first.agent_id);
+    assert.equal(settled?.state, "inactive");
+    assert.equal(settled?.activation_id, first.activation_id);
+    assert.equal(settled?.activation_state, "cancelled");
     await provider.awaitGate("interrupt-parent-notice");
     await provider.releaseGate("interrupt-parent-notice");
     if (!JSON.stringify(session.state.transcript).includes("Parent observed interruption.")) {

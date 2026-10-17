@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { compareScreenshot, decodePng } from '../screenshot-comparator';
 // Each reference owns a fresh context/page, including its renderer paint caches.
-for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'questionnaire', 'selectors']) test(`Harness Agent ${mode} reference uses native snapshots`, async ({ page }) => {
+for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'questionnaire', 'selectors']) test(`Harness Agent ${mode} reference uses native snapshots`, { tag: mode === 'settled' ? ['@smoke'] : [] }, async ({ page }) => {
  const errors: string[] = [];
  page.on('pageerror', error => errors.push(error.message));
  await page.clock.setFixedTime(new Date('2026-09-18T12:00:00Z'));

@@ -4,7 +4,12 @@ import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose, connectionAction } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 
-for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'] as const) {
+// One native compaction workflow per locale, each locale on the other theme
+// and width: English light desktop (plus reconnect and reload) and Chinese
+// dark narrow. The Context summary card's presentation in both themes and
+// widths is compaction-summary.spec.ts; the maintenance, continuation, Stop
+// and late-output semantics do not vary by presentation.
+for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
   test(`compaction continuation, questionnaire and Harness summary ${locale} ${theme}`, async ({ page }) => {
     const fixture = await startDogfood('web_compaction');
     let passed = false;

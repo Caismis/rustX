@@ -151,8 +151,18 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await queue.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Edited during the Goal round');
     await expect(queue.getByRole('textbox')).toHaveCount(0);
+    const beforeRemoval = wire.responses.length;
     await queue.getByRole('button', { name: 'Remove', exact: true }).click();
     await expect(queue).toHaveCount(0);
+    // A removal settles by an authoritative reread: after its acknowledgement
+    // the client rereads the checkpoint and subscribes again, and until then
+    // the composer offers only Stop in the primary button's place. Queue only
+    // once that reread follows the Session, so the gesture cannot land on Stop.
+    await expect.poll(() => {
+      const after = wire.responses.slice(beforeRemoval).map(row => row.method);
+      const removed = after.indexOf('inbound/remove');
+      return removed >= 0 && after.indexOf('session/subscribe', removed) > removed;
+    }).toBe(true);
     await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
     await page.setViewportSize({ width: 390, height: 844 });

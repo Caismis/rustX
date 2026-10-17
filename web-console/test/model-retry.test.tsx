@@ -8,6 +8,7 @@ import type { AppServerClient } from '../src/client/app-server';
 import type { RuntimeClientTranscriptEntry, TraceFieldSource, Request } from '../../protocol/app-server/v50';
 import { Server, checkpoint, snapshot } from './fixture';
 import { traceRecord } from './trace-fixture';
+import { localeController } from '../src/locale/controller';
 
 afterEach(cleanup);
 const originalFailure=JSON.stringify({kind:'timeout',message:'Fixture model response timeout',retry_disposition:'never',timeout_phase:'stream_idle'});
@@ -77,6 +78,34 @@ it('shows timeout then active retry, loads only disclosed failure details and st
     expect(ui.getByText('Model request retried (1)')).toBeTruthy();
     expect(server.socket.requests.some(r => r.method === 'turn/start')).toBe(false);
   } finally { server.client.disconnect(); }
+});
+
+// The browser acceptance runs the native retry workflow once per locale
+// (model-retry.spec.ts: English light desktop, Chinese dark narrow); this
+// pins both locales' active and settled retry copy for every theme and width.
+it.each([
+  ['en', 'Retrying model request (1)', 'Model request retried (1)', 'Model request timed out'],
+  ['zh', '正在重试模型请求（1）', '已重试模型请求（1）', '模型请求超时'],
+] as const)('names the active and settled native retry chain in %s', async (locale, active, settled, timeout) => {
+  const server = new Server(), state = snapshot();
+  state.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 0 };
+  state.trace = { records: [failed()] }; server.snapshots.set('A', state);
+  await server.attached('A');
+  act(() => localeController.setLocale(locale));
+  try {
+    const ui = render(<RetryFeedback client={server.client} sessionId="A" attemptId="attempt-a"/>);
+    expect(ui.container.querySelector('summary')?.textContent).toBe(timeout);
+    state.attempt.in_flight = { message_id: retry().request!.assistant_message_id!, blocks: [] };
+    state.trace = { records: [failed(), retry()] }; server.snapshots.set('A', structuredClone(state));
+    await act(() => server.client.refresh('A'));
+    expect(ui.container.querySelector('summary')?.textContent).toBe(active);
+    expect(ui.container.querySelector('[data-model-retry]')?.hasAttribute('data-active')).toBe(true);
+    state.attempt.phase = { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } };
+    state.trace.records[1].state = 'completed'; server.snapshots.set('A', structuredClone(state));
+    await act(() => server.client.refresh('A'));
+    expect(ui.container.querySelector('summary')?.textContent).toBe(settled);
+    expect(ui.container.querySelector('[data-model-retry]')?.hasAttribute('data-active')).toBe(false);
+  } finally { act(() => localeController.setLocale('en')); server.client.disconnect(); }
 });
 
 it('exact native publication ownership activates an earlier incomplete retry without a Trace reread', async () => {

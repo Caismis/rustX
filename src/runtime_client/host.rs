@@ -769,7 +769,7 @@ fn collection_page_item<T: serde::Serialize + schemars::JsonSchema>(
 #[derive(Default)]
 struct PublicationGate {
     order: Mutex<()>,
-    progress: (Mutex<u64>, std::sync::Condvar),
+    progress: (Mutex<PublicationProgress>, std::sync::Condvar),
     #[cfg(test)]
     encoding_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
@@ -778,8 +778,32 @@ struct PublicationGate {
     settlement_contention_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     settlement_wait: Mutex<Option<SettlementWait>>,
+    /// Runs after a checkpoint requested its Source repair read.
+    #[cfg(test)]
+    repair_request_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Runs when a checkpoint's repair must await an in-flight publication.
+    #[cfg(test)]
+    repair_settle_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     diagnostics: Mutex<ProjectionDiagnostics>,
+}
+
+/// Completed display transitions, and whether one is between its fold and
+/// its completion. Readers wait on these, never on the publication order.
+#[derive(Default)]
+struct PublicationProgress {
+    generation: u64,
+    publishing: bool,
+}
+
+/// One display transition in flight; dropping it completes the transition,
+/// also when its fold or encoding unwinds.
+struct Publishing<'a>(&'a PublicationGate);
+
+impl Drop for Publishing<'_> {
+    fn drop(&mut self) {
+        self.0.completed();
+    }
 }
 
 #[cfg(test)]
@@ -890,16 +914,54 @@ impl PublicationGate {
     }
 
     fn generation(&self) -> u64 {
-        *self.progress.0.lock().expect("native publication progress")
+        self.progress
+            .0
+            .lock()
+            .expect("native publication progress")
+            .generation
+    }
+    /// Marks a transition in flight; the caller holds the publication order.
+    fn publishing(&self) -> Publishing<'_> {
+        self.progress
+            .0
+            .lock()
+            .expect("native publication progress")
+            .publishing = true;
+        Publishing(self)
     }
     fn completed(&self) {
-        let mut generation = self.progress.0.lock().expect("native publication progress");
-        *generation = generation.saturating_add(1);
+        let mut progress = self.progress.0.lock().expect("native publication progress");
+        progress.generation = progress.generation.saturating_add(1);
+        progress.publishing = false;
         self.progress.1.notify_all();
+    }
+    /// Waits until no transition is in flight, or the deadline passes
+    /// (false). A transition that folded before this call is installed when
+    /// it returns true.
+    fn wait_installed(&self, deadline: std::time::Instant) -> bool {
+        let mut progress = self.progress.0.lock().expect("native publication progress");
+        #[cfg(test)]
+        if progress.publishing
+            && let Some(hook) = self.repair_settle_hook.lock().unwrap().take()
+        {
+            hook();
+        }
+        while progress.publishing {
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            progress = self
+                .progress
+                .1
+                .wait_timeout(progress, remaining)
+                .expect("native publication progress wait")
+                .0;
+        }
+        true
     }
     fn wait_after(&self, generation: u64, deadline: std::time::Instant) {
         let mut current = self.progress.0.lock().expect("native publication progress");
-        while *current == generation {
+        while current.generation == generation {
             let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
                 break;
             };
@@ -964,6 +1026,10 @@ fn commit_display<T>(
         .order
         .lock()
         .expect("native display publication gate");
+    // A source failure may resolve a pending reader without creating a cursor.
+    // Completing wakes readers after every CPU fold, including that failure
+    // path, and only once the fold's publication is installed.
+    let _publishing = publication.publishing();
     #[cfg(test)]
     publication.publication_stage("fold");
     let (draft, installed) = {
@@ -991,9 +1057,6 @@ fn commit_display<T>(
     }
     #[cfg(test)]
     publication.publication_stage("idle");
-    // A source failure may resolve a pending reader without creating a cursor.
-    // Wake readers after every completed CPU fold, including that failure path.
-    publication.completed();
     installed
 }
 
@@ -3862,6 +3925,16 @@ impl ClientInner {
             self.pending
                 .push(ConversationObservation::JournalSourceReady);
         }
+        #[cfg(test)]
+        if let Some(hook) = self
+            .publication_gate
+            .repair_request_hook
+            .lock()
+            .unwrap()
+            .take()
+        {
+            hook();
+        }
         loop {
             let progress = self.publication_gate.generation();
             {
@@ -3870,7 +3943,18 @@ impl ClientInner {
                     return Err(RuntimeClientError::ReadCutExpired);
                 }
                 if state.projection.read_domain_cut().is_none() {
-                    return Ok(());
+                    drop(state);
+                    // The read is folded once the domains are clean, but its
+                    // publication is encoded outside the state lock and
+                    // installed afterwards, before its transition completes.
+                    // The checkpoint this repair serves must include that
+                    // install, within the checkpoint's own deadline.
+                    if self.publication_gate.wait_installed(deadline) {
+                        return Ok(());
+                    }
+                    return Err(RuntimeClientError::ObservationUnavailable {
+                        message: "checkpoint Source repair deadline exhausted before its publication installed".into(),
+                    });
                 }
                 if self.pending.is_closed()
                     || !self.pending.can_publish_prepared_reads()
@@ -7599,8 +7683,12 @@ mod tests {
         probe.finish_encoding.send(()).unwrap();
         let reference = probe.committed.recv().unwrap();
         assert!(reference.readable_end <= 80_000);
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         finish_tx.send(true).unwrap();
-        fixture.runtime.settlement_signal().notified().await;
+        settled.await;
         assert_eq!(adapter.requests().len(), 1);
     }
 
@@ -7628,6 +7716,10 @@ mod tests {
             .unwrap();
         let initial = inner.checkpoint().unwrap();
         let subscription = attachment.subscribe_events(initial.cursor).unwrap();
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         fixture
             .host
             .submit_inbound(submit_content("audit ownership"))
@@ -7701,7 +7793,7 @@ mod tests {
             .expect("Audit CPU receipt does not wait for source preparation or the worker");
         release_tx.send(()).unwrap();
         drop(preparation);
-        fixture.runtime.settlement_signal().notified().await;
+        settled.await;
         inner.unpark_projection_worker();
     }
 
@@ -7920,8 +8012,12 @@ mod tests {
             )
             .is_some()
         );
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         finish_tx.send(true).unwrap();
-        fixture.runtime.settlement_signal().notified().await;
+        settled.await;
         inner.unpark_projection_worker();
     }
 
@@ -9609,12 +9705,16 @@ mod tests {
         // Releasing the model lets the attempt settle: the safe boundary
         // drains the pending mailbox item into a second turn within the
         // same attempt.
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let drained = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(drained);
+        drained.as_mut().enable();
         release_tx.send(true).expect("release");
         await_request_history_len(&fixture.host, 2).await;
         // Request facts commit before their owner's semantic publication. The
         // native attempt completion, not durable visibility, proves the drain
         // observations have been published and may be folded by this snapshot.
-        fixture.runtime.settlement_signal().notified().await;
+        drained.await;
         let (settled, _) = fixture
             .host
             .checkpoint()
@@ -9626,6 +9726,10 @@ mod tests {
         );
 
         // The background execution settles normally after release.
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         release.send_replace(true);
         await_background_terminal(
             fixture.runtime.tool_runtime().background(),
@@ -9633,7 +9737,7 @@ mod tests {
             "detach background execution",
         )
         .await;
-        fixture.runtime.settlement_signal().notified().await;
+        settled.await;
         let (final_snapshot, _) = fixture
             .host
             .checkpoint()
@@ -9659,6 +9763,10 @@ mod tests {
         let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let first_settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(first_settled);
+        first_settled.as_mut().enable();
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("first"),
@@ -9671,7 +9779,7 @@ mod tests {
                 .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
         })
         .await;
-        fixture.runtime.settlement_signal().notified().await;
+        first_settled.await;
         let (before, _) = fixture
             .host
             .checkpoint()
@@ -9704,6 +9812,10 @@ mod tests {
 
         // A purely asynchronous enqueue with no attachment admits exactly
         // one further attempt through the runtime wake gate.
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let async_settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(async_settled);
+        async_settled.as_mut().enable();
         fixture
             .runtime
             .tool_runtime()
@@ -9714,7 +9826,7 @@ mod tests {
             ))
             .expect("async enqueue");
         await_request_history_len(&fixture.host, 2).await;
-        fixture.runtime.settlement_signal().notified().await;
+        async_settled.await;
         assert_eq!(
             adapter.requests().len(),
             2,
@@ -13147,11 +13259,15 @@ mod tests {
             runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
         fixture.runtime.activate();
 
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         fixture
             .runtime
             .submit_inbound(submit_content("headless"))
             .expect("accepted");
-        fixture.runtime.settlement_signal().notified().await;
+        settled.await;
         assert_eq!(adapter.requests().len(), 1, "the real provider path ran");
         assert!(
             !fixture.runtime.tool_runtime().is_runtime_client_bound(),
@@ -13172,11 +13288,15 @@ mod tests {
         .await;
         fixture.runtime.activate();
         // Semantic execution really started before the bind attempt.
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let started = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(started);
+        started.as_mut().enable();
         fixture
             .runtime
             .submit_inbound(submit_content("start executing"))
             .expect("accepted");
-        fixture.runtime.settlement_signal().notified().await;
+        started.await;
         assert_eq!(adapter.requests().len(), 1);
 
         let rejected = RuntimeClientHost::new(RuntimeClientHostConfig {
@@ -13203,11 +13323,15 @@ mod tests {
             "the capability binding claim was not consumed"
         );
         // The runtime keeps executing normally afterwards.
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let kept_going = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(kept_going);
+        kept_going.as_mut().enable();
         fixture
             .runtime
             .submit_inbound(submit_content("keep going"))
             .expect("accepted");
-        fixture.runtime.settlement_signal().notified().await;
+        kept_going.await;
         assert_eq!(
             adapter.requests().len(),
             2,
@@ -13273,8 +13397,12 @@ mod tests {
         first.detach();
 
         // The detached attempt still settles canonically.
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         release_tx.send(true).expect("release the parked attempt");
-        fixture.runtime.settlement_signal().notified().await;
+        settled.await;
         assert_eq!(adapter.requests().len(), 1, "the attempt ran to settlement");
 
         // Reattach: a fresh attachment over the same host and the same
@@ -13980,11 +14108,15 @@ mod tests {
         // activation kick can never admit a second attempt from one item,
         // and a duplicated worker is structurally impossible (one CAS
         // winner, one `worker_started` guard).
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = fixture.runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         fixture
             .runtime
             .submit_inbound(submit_content("one item"))
             .expect("accepted");
-        fixture.runtime.settlement_signal().notified().await;
+        settled.await;
         assert_eq!(
             adapter.requests().len(),
             1,

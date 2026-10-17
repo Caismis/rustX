@@ -1029,8 +1029,12 @@ async fn t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes
             UnitApplication::Failed { .. }
         ));
         assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
+        // Armed before the trigger: settlement wakes only registered waiters.
+        let settled = runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         fixture.gates[0].release();
-        runtime.settlement_signal().notified().await;
+        settled.await;
         fixture.close().await;
     })
     .await;

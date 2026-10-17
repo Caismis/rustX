@@ -126,7 +126,7 @@ cargo build --bins --all-features
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
 
 # The CI lanes' selectors against Cargo discovery on this platform.
-cargo run --example check_test_lanes
+cargo run --all-features --example check_test_lanes
 
 # TUI's locked pnpm workflow.
 nvm install --lts
@@ -151,6 +151,20 @@ git diff --check
 ```
 
 The GitHub Actions workflow is authoritative if this list and CI ever differ.
+
+You rarely need all of it locally. Pushes to a pull request run CI's FAST
+profile: the always-on checks, the suites of the surfaces you touched, and a
+browser subset (smoke tests plus any spec you changed). When the change is
+high risk (anything outside the low-risk allowlist of documentation, Web
+presentation, translations, stylesheets and added or edited leaf tests —
+removing or renaming a test is high risk; see "Verification profiles" in
+tests/README.md) and the candidate is final, add the
+`full-verification` label: CI then runs FULL — every lane, macOS full and the
+complete browser suite in two shards — on that exact head, and on every
+later push while the label stays. Remove the label to go back to FAST while
+you keep developing. `Merge verification` is required on `main` by a
+repository ruleset and stays red for a high-risk change until FULL passes on
+the current head.
 
 ## Commit style
 

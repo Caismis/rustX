@@ -249,3 +249,153 @@ async fn unix_checkpoint_source_repair_keeps_the_current_thread_executor_service
     fixture.runtime.shutdown().await.unwrap();
     fixture.host.inner.drain_projection().await.unwrap();
 }
+
+/// An explicit checkpoint that requests a Source repair returns only after the
+/// repair's publication is installed. The worker folds the repaired read under
+/// the state lock, then encodes and installs its publication outside it; a
+/// checkpoint that found the domains clean inside that window used to return
+/// the previous published cursor (CI run 39032890413).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_source_repair_waits_for_its_publication_install() {
+    #[derive(Debug)]
+    enum Step {
+        Waiting,
+        Returned(Result<u64, String>),
+    }
+    let (_model, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+    fixture.host.projection_settled().await;
+    let before = fixture.host.checkpoint().unwrap();
+    fixture
+        .host
+        .fail_projection_read_for_test("held original Source fault");
+    let gate = &fixture.host.inner.publication_gate;
+    let (steps, step) = std::sync::mpsc::channel();
+    let release = hold_repair_publication(gate);
+    let waiting = steps.clone();
+    *gate.repair_settle_hook.lock().unwrap() = Some(Box::new(move || {
+        waiting.send(Step::Waiting).unwrap();
+    }));
+    let host = fixture.host.clone();
+    let checkpoint = std::thread::spawn(move || {
+        let result = host
+            .checkpoint()
+            .map(|checkpoint| checkpoint.cursor.get())
+            .map_err(|error| format!("{error:?}"));
+        steps.send(Step::Returned(result)).unwrap();
+    });
+    let guard = std::time::Duration::from_secs(30);
+    // The repair folded but its publication is held: the checkpoint waits for
+    // the install instead of returning the stale published cursor.
+    let first = step.recv_timeout(guard).unwrap();
+    assert!(
+        matches!(first, Step::Waiting),
+        "the checkpoint returned while its repair publication was held: {first:?}"
+    );
+    release.send(()).unwrap();
+    let Step::Returned(cursor) = step.recv_timeout(guard).unwrap() else {
+        panic!("one settlement step only");
+    };
+    assert_eq!(cursor, Ok(before.cursor.get() + 1));
+    checkpoint.join().unwrap();
+    fixture.runtime.shutdown().await.unwrap();
+    fixture.host.inner.drain_projection().await.unwrap();
+}
+
+/// Holds the next publication between its fold and its install until the
+/// returned sender releases it; the checkpoint's repair proceeds only once
+/// that fold is held.
+fn hold_repair_publication(gate: &crate::runtime_client::host::PublicationGate) -> std::sync::mpsc::Sender<()> {
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    *gate.encoding_hook.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap();
+        released.recv().unwrap();
+    }));
+    *gate.repair_request_hook.lock().unwrap() = Some(Box::new(move || {
+        entered.recv().unwrap();
+    }));
+    release
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_source_repair_fails_at_its_deadline_and_a_later_checkpoint_recovers() {
+    let (_model, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+    fixture.host.projection_settled().await;
+    let before = fixture.host.checkpoint().unwrap();
+    fixture
+        .host
+        .fail_projection_read_for_test("held original Source fault");
+    let gate = fixture.host.inner.publication_gate.clone();
+    let release = hold_repair_publication(&gate);
+    // The repair's deadline has already passed when it finds its fold
+    // published but not installed: it settles with the typed failure while
+    // the publication stays held, never with a stale checkpoint.
+    let inner = fixture.host.inner.clone();
+    let expired = tokio::task::spawn_blocking(move || {
+        inner.repair_failed_source_for_checkpoint(std::time::Instant::now())
+    })
+    .await
+    .unwrap();
+    assert!(
+        matches!(
+            &expired,
+            Err(RuntimeClientError::ObservationUnavailable { message })
+                if message.contains("deadline exhausted before its publication installed")
+        ),
+        "{expired:?}"
+    );
+    assert!(
+        gate.order.try_lock().is_err(),
+        "the publication was still held when the repair failed"
+    );
+    // Once the publication installs, a later checkpoint observes the repair.
+    release.send(()).unwrap();
+    let host = fixture.host.clone();
+    let recovered = tokio::task::spawn_blocking(move || {
+        assert!(gate.wait_installed(
+            std::time::Instant::now() + std::time::Duration::from_secs(30)
+        ));
+        host.checkpoint()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(recovered.cursor.get(), before.cursor.get() + 1);
+    fixture.runtime.shutdown().await.unwrap();
+    fixture.host.inner.drain_projection().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installed_checkpoint_source_repair_returns_without_waiting() {
+    let (_model, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+    fixture.host.projection_settled().await;
+    let before = fixture.host.checkpoint().unwrap();
+    fixture
+        .host
+        .fail_projection_read_for_test("held original Source fault");
+    let gate = fixture.host.inner.publication_gate.clone();
+    // The repair checks its fold only after the publication installed.
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    *gate.encoding_hook.lock().unwrap() = Some(Box::new(move || entered_tx.send(()).unwrap()));
+    let installed = gate.clone();
+    *gate.repair_request_hook.lock().unwrap() = Some(Box::new(move || {
+        entered.recv().unwrap();
+        assert!(installed.wait_installed(
+            std::time::Instant::now() + std::time::Duration::from_secs(30)
+        ));
+        // From here the repair must find nothing in flight.
+        *installed.repair_settle_hook.lock().unwrap() = Some(Box::new(|| {
+            panic!("an installed repair awaited a publication")
+        }));
+    }));
+    let host = fixture.host.clone();
+    let checkpoint = tokio::task::spawn_blocking(move || host.checkpoint())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.cursor.get(), before.cursor.get() + 1);
+    // The repair never waited, and advanced the published cursor once.
+    assert!(gate.repair_settle_hook.lock().unwrap().is_some());
+    fixture.runtime.shutdown().await.unwrap();
+    fixture.host.inner.drain_projection().await.unwrap();
+}

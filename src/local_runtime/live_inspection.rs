@@ -16,7 +16,6 @@
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 #[cfg(test)]
 use nix::errno::Errno;
@@ -115,7 +114,11 @@ pub(crate) fn probe_liveness(path: &Path) -> std::io::Result<Option<bool>> {
 /// The live read-only Runtime Client endpoint of one child process.
 pub(crate) struct LiveConversationInspectionServer {
     path: PathBuf,
-    stop: Arc<tokio::sync::Notify>,
+    /// Shutdown's linearization point: cancelling it stops the accept loop and
+    /// every connection's socket I/O at once, so no response is delivered
+    /// after shutdown begins. Admitted physical Source work still keeps its
+    /// connection task until the listener joins it.
+    stop: tokio_util::sync::CancellationToken,
     task: Option<tokio::task::JoinHandle<Result<(), InspectionShutdownFailure>>>,
     shutdown_failure: Option<InspectionShutdownFailure>,
     #[cfg(test)]
@@ -173,13 +176,13 @@ impl LiveConversationInspectionServer {
             }
             Err(error) => return Err(error),
         };
-        let stop = Arc::new(tokio::sync::Notify::new());
+        let stop = tokio_util::sync::CancellationToken::new();
         #[cfg(test)]
         let (workset, workset_rx) = tokio::sync::watch::channel(0);
         let task = tokio::spawn(run_listener(
             listener,
             host,
-            Arc::clone(&stop),
+            stop.clone(),
             #[cfg(test)]
             workset,
         ));
@@ -202,7 +205,7 @@ impl LiveConversationInspectionServer {
     /// Stops the accept loop, closes active inspection connections, and
     /// removes the exact process-routing socket.
     pub(crate) async fn shutdown(&mut self) -> Result<(), InspectionShutdownFailure> {
-        self.stop.notify_one();
+        self.stop.cancel();
         if let Some(task) = self.task.as_mut() {
             let result = task.await;
             self.task.take();
@@ -287,17 +290,16 @@ impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for InspectionIo<T>
 async fn run_listener(
     listener: UnixListener,
     host: RuntimeClientHost,
-    stop: Arc<tokio::sync::Notify>,
+    stop: tokio_util::sync::CancellationToken,
     #[cfg(test)] workset: tokio::sync::watch::Sender<usize>,
 ) -> Result<(), InspectionShutdownFailure> {
     let mut connections = JoinSet::new();
     let mut connection_failure = None;
     let mut endpoints: Vec<crate::runtime_client::endpoint::EndpointRetirement> = Vec::new();
-    let socket_stop = tokio_util::sync::CancellationToken::new();
     loop {
         tokio::select! {
             biased;
-            () = stop.notified() => break,
+            () = stop.cancelled() => break,
             joined = connections.join_next(), if !connections.is_empty() => {
                 if let Some(result) = joined {
                     record_connection_failure(&mut connection_failure, result);
@@ -318,7 +320,7 @@ async fn run_listener(
                 }
                 let endpoint = RuntimeClientEndpoint::new_read_only(&host);
                 endpoints.push(endpoint.retirement());
-                let socket_stop=socket_stop.clone();
+                let socket_stop = stop.clone();
                 connections.spawn(async move {
                     let (reader, writer) = stream.into_split();
                     let _ = serve_stdio_jsonl_with_io(endpoint, InspectionIo::new(reader,socket_stop.clone()), InspectionIo::new(writer,socket_stop)).await;
@@ -328,12 +330,12 @@ async fn run_listener(
             }
         }
     }
-    // Retire actual admitted observation waits, including a decoded request
-    // racing to subscribe. Physical Source work still owns its JoinSet task.
+    // Shutdown already stopped every connection's socket I/O. Retire actual
+    // admitted observation waits, including a decoded request racing to
+    // subscribe. Physical Source work still owns its JoinSet task.
     for endpoint in endpoints {
         endpoint.retire();
     }
-    socket_stop.cancel();
     drain_connections(&mut connections, &mut connection_failure).await;
     #[cfg(test)]
     workset.send_replace(0);
