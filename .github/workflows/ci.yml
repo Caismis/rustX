@@ -911,7 +911,8 @@ jobs:
       # Playwright's own discovery of the checked-out suite, bound to these
       # inputs, narrowed to the plan's selection: FULL is every discovered
       # test in two shards; FAST is the @smoke tests, every test of a changed
-      # spec and, for a presentation change, the screenshot-reference specs.
+      # spec and, for a presentation change, the presentation contracts
+      # (screenshot-reference specs and @presentation tests).
       # Files go to shards by measured cost (test/e2e/shard-weights.json), as
       # each shard's Playwright --test-list. The coverage gate compares every
       # shard's run against this inventory.

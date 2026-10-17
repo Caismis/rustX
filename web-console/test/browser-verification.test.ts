@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import type { JSONReport, JSONReportSuite, JSONReportTest } from '@playwright/test/reporter';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXECUTABLES, INSTALLED_MANIFEST, buildOverrides, check, fileErrors, identityErrors, install, record, type Identity, type Manifest } from '../scripts/browser-artifact.ts';
-import { assign, inventoryOf, verify, weightsOf, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
+import { assign, cases, inventoryOf, playwrightList, verify, weightsOf, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
 
 const identity: Identity = {
   commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.98.1',
@@ -15,7 +15,7 @@ const identity: Identity = {
 
 describe('sharded browser coverage', () => {
   const prepared = 'p'.repeat(64);
-  const inventory = (...ids: string[]): Inventory => ({ commit: identity.commit, prepared, selection: 'full', discovered: ids.length, discoveredFiles: ['spec.ts'], specs: [], tests: ids.map(id => ({ id: `${id}@`, title: `title ${id}`, file: 'spec.ts' })), shards: [['spec.ts'], []] });
+  const inventory = (...ids: string[]): Inventory => ({ commit: identity.commit, prepared, selection: 'full', discovered: ids.length, discoveredFiles: ['spec.ts'], specs: [], presentation: false, tests: ids.map(id => ({ id: `${id}@`, title: `title ${id}`, file: 'spec.ts' })), shards: [['spec.ts'], []] });
   type Ran = { id: string; status?: JSONReportTest['status']; result?: 'passed' | 'failed' | 'skipped'; expected?: JSONReportTest['expectedStatus']; skip?: boolean; repeats?: number };
   /** Playwright's JSON report of one shard that ran `ran`, each spec's id being `id`. */
   function report(...ran: Ran[]): Pick<JSONReport, 'suites'> {
@@ -65,14 +65,17 @@ describe('sharded browser coverage', () => {
   it('fails a FULL inventory that lost part of the discovered suite', () => {
     expect(verify({ ...complete, discovered: 4 }, passing, 2).errors).toEqual(['FULL selects 3 of 4 discovered tests; FULL runs them all']);
   });
-  it('fails a FAST selection without a smoke test or missing a changed spec', () => {
-    const fast = (tests: Inventory['tests'], specs: string[]): Inventory => ({ ...complete, selection: 'fast', discovered: 10, discoveredFiles: ['spec.ts', 'other.spec.ts'], specs, tests });
+  it('fails a FAST selection without a smoke test, a changed spec or the presentation contracts', () => {
+    const fast = (tests: Inventory['tests'], specs: string[], presentation = false): Inventory => ({ ...complete, selection: 'fast', discovered: 10, discoveredFiles: ['spec.ts', 'other.spec.ts'], specs, presentation, tests });
     const one = [shard(1, report({ id: 'a' }), { total: 1 })];
     expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], ['spec.ts']), one, 1).errors).toEqual([]);
     expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts' }], []), one, 1).errors).toEqual(['FAST selects no smoke test']);
     expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], ['other.spec.ts']), one, 1).errors).toEqual(['changed spec other.spec.ts is not selected by FAST']);
-    // A deleted spec is no longer discovered and needs no coverage.
-    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], ['gone.spec.ts']), one, 1).errors).toEqual([]);
+    // A changed spec Playwright cannot discover on the tested head fails
+    // closed; a removed spec is never listed (its removal needs FULL).
+    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], ['gone.spec.ts']), one, 1).errors).toEqual([`changed spec gone.spec.ts was not discovered on ${identity.commit}`]);
+    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], [], true), one, 1).errors).toEqual(['FAST for a presentation change selects no @presentation contract']);
+    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true, presentation: true }], [], true), one, 1).errors).toEqual([]);
   });
   it('fails an empty inventory instead of treating zero tests as coverage', () => {
     expect(verify(inventory(), [shard(1, report()), shard(2, report())], 2).errors).toEqual(expect.arrayContaining(['the inventory discovered no browser tests']));
@@ -81,26 +84,53 @@ describe('sharded browser coverage', () => {
 
 describe('browser selections', () => {
   const found = (file: string, title: string, tags: string[] = []) => ({ id: `${file}:${title}@`, title: `${file} › ${title}`, file, tags, test: {} as JSONReportTest });
-  const discovered = [found('smoke.spec.ts', 'boots', ['@smoke']), found('chat.spec.ts', 'sends'), found('chat.spec.ts', 'settles'), found('shell.spec.ts', 'frame'), found('other.spec.ts', 'x')];
+  const discovered = [found('smoke.spec.ts', 'boots', ['@smoke']), found('chat.spec.ts', 'sends'), found('chat.spec.ts', 'settles'), found('shell.spec.ts', 'frame'), found('other.spec.ts', 'x'),
+    found('retry-presentation.spec.ts', 'en light 1440', ['@presentation']), found('retry-presentation.spec.ts', 'zh dark 390', ['@presentation'])];
   const identityOf = { commit: identity.commit, prepared: 'p' };
   it('FULL selects every discovered test and splits whole files over two shards', () => {
-    const full = inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], screenshots: false }, ['shell.spec.ts'], {});
-    expect(full.tests).toHaveLength(5);
-    expect(full.shards.flat().sort()).toEqual(['chat.spec.ts', 'other.spec.ts', 'shell.spec.ts', 'smoke.spec.ts']);
+    const full = inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], presentation: false }, ['shell.spec.ts'], {});
+    expect(full.tests).toHaveLength(discovered.length);
+    expect(full.discovered).toBe(discovered.length);
+    expect(full.shards.flat().sort()).toEqual(['chat.spec.ts', 'other.spec.ts', 'retry-presentation.spec.ts', 'shell.spec.ts', 'smoke.spec.ts']);
   });
-  it('FAST selects smoke tests, every test of a changed spec, and screenshot specs only when Web source changed', () => {
-    const fast = (screenshots: boolean) => inventoryOf(identityOf, discovered, { selection: 'fast', shards: [1], specs: ['chat.spec.ts'], screenshots }, ['shell.spec.ts'], {});
+  it('FAST selects smoke tests, every test of a changed spec, and the presentation contracts only when Web presentation changed', () => {
+    const fast = (presentation: boolean) => inventoryOf(identityOf, discovered, { selection: 'fast', shards: [1], specs: ['chat.spec.ts'], presentation }, ['shell.spec.ts'], {});
     // Wholly selected files are one --test-list line each.
     expect(fast(false).shards).toEqual([['chat.spec.ts', 'smoke.spec.ts']]);
     expect(fast(false).tests.map(test => test.title)).toEqual(['smoke.spec.ts › boots', 'chat.spec.ts › sends', 'chat.spec.ts › settles']);
     expect(fast(false).tests.filter(test => test.smoke).map(test => test.title)).toEqual(['smoke.spec.ts › boots']);
-    expect(fast(true).shards[0]).toContain('shell.spec.ts');
+    expect(fast(false).tests.map(test => test.file)).not.toContain('retry-presentation.spec.ts');
+    expect(fast(true).shards[0]).toEqual(expect.arrayContaining(['shell.spec.ts', 'retry-presentation.spec.ts']));
+    expect(fast(true).tests.filter(test => test.presentation).map(test => test.title)).toEqual(['retry-presentation.spec.ts › en light 1440', 'retry-presentation.spec.ts › zh dark 390']);
     expect(fast(true).tests.map(test => test.file)).not.toContain('other.spec.ts');
+    expect(fast(true).presentation).toBe(true);
   });
   it('lists only the selected tests of a partly selected file', () => {
     const mixed = [found('smoke.spec.ts', 'boots', ['@smoke']), found('smoke.spec.ts', 'other')];
-    const fast = inventoryOf(identityOf, mixed, { selection: 'fast', shards: [1], specs: [], screenshots: false }, [], {});
+    const fast = inventoryOf(identityOf, mixed, { selection: 'fast', shards: [1], specs: [], presentation: false }, [], {});
     expect(fast.shards).toEqual([['smoke.spec.ts › boots']]);
+  });
+});
+
+describe('presentation contracts in the discovered suite', () => {
+  // The fixture matrices that replace native workflow combinations
+  // (tests/README.md, the replacement ledger) run in FAST for any Web
+  // presentation change, in every locale, theme and width.
+  const discovered = cases(playwrightList());
+  const identityOf = { commit: identity.commit, prepared: 'p' };
+  const titles = (presentation: boolean) => inventoryOf(identityOf, discovered, { selection: 'fast', shards: presentation ? [1, 2] : [1], specs: [], presentation }, [], {}).tests.map(test => test.title);
+  it.each([
+    ['model-retry-presentation.spec.ts', 'retry notice active and settled'],
+    ['compaction-summary.spec.ts', 'context summary card'],
+  ])('%s covers both locales, themes and widths when presentation changed, and nothing otherwise', (file, title) => {
+    const matrix = titles(true).filter(found => found.startsWith(`${file} › ${title}`));
+    expect(matrix.map(found => found.slice(`${file} › ${title} `.length)).sort()).toEqual(
+      ['en', 'zh'].flatMap(locale => ['dark', 'light'].flatMap(theme => [1440, 390].map(width => `${locale} ${theme} ${width}`))).sort());
+    expect(titles(false).filter(found => found.startsWith(`${file} ›`))).toEqual([]);
+  });
+  it('keeps the mandatory smoke tests in every FAST selection and every test in FULL', () => {
+    for (const presentation of [false, true]) expect(inventoryOf(identityOf, discovered, { selection: 'fast', shards: [1], specs: [], presentation }, [], {}).tests.some(test => test.smoke)).toBe(true);
+    expect(inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], presentation: false }, [], {}).tests).toHaveLength(discovered.length);
   });
 });
 

@@ -156,8 +156,9 @@ You rarely need all of it locally. Pushes to a pull request run CI's FAST
 profile: the always-on checks, the suites of the surfaces you touched, and a
 browser subset (smoke tests plus any spec you changed). When the change is
 high risk (anything outside the low-risk allowlist of documentation, Web
-presentation, translations, stylesheets and leaf tests; see "Verification
-profiles" in tests/README.md) and the candidate is final, add the
+presentation, translations, stylesheets and added or edited leaf tests —
+removing or renaming a test is high risk; see "Verification profiles" in
+tests/README.md) and the candidate is final, add the
 `full-verification` label: CI then runs FULL — every lane, macOS full and the
 complete browser suite in two shards — on that exact head, and on every
 later push while the label stays. Remove the label to go back to FAST while

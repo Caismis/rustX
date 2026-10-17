@@ -25,10 +25,12 @@ export interface RunIdentity { commit: string; prepared: string }
 export interface ShardIdentity extends RunIdentity { shard: number; total: number }
 /**
  * The tests a run must execute. `full` is every discovered test in two
- * shards; `fast` is the smoke tests, every test of a changed spec and, when
- * Web source changed, every spec holding screenshot references, in one shard.
+ * shards; `fast` is the smoke tests and every test of a changed spec in one
+ * shard and, when Web presentation changed, also the presentation contracts
+ * (every spec holding screenshot references and every @presentation test) in
+ * two.
  */
-export interface Selection { selection: 'full' | 'fast'; shards: number[]; specs: string[]; screenshots: boolean }
+export interface Selection { selection: 'full' | 'fast'; shards: number[]; specs: string[]; presentation: boolean }
 export interface Inventory extends RunIdentity {
   selection: Selection['selection'];
   /** Everything Playwright discovered, by test identity and spec file. */
@@ -36,12 +38,20 @@ export interface Inventory extends RunIdentity {
   discoveredFiles: string[];
   /** The changed specs FAST must cover. */
   specs: string[];
-  /** The selected tests, each with whether it is a mandatory smoke test. */
-  tests: { id: string; title: string; file: string; smoke?: boolean }[];
+  /** Whether FAST must cover the presentation contracts. */
+  presentation: boolean;
+  /** The selected tests, each with whether it is a mandatory smoke test or a presentation contract. */
+  tests: { id: string; title: string; file: string; smoke?: boolean; presentation?: boolean }[];
   /** Each shard's Playwright --test-list lines. */
   shards: string[][];
 }
 export const SMOKE = '@smoke';
+/**
+ * A fixture-driven presentation matrix that stands in for native workflows
+ * run in one locale, theme and width only (tests/README.md, the replacement
+ * ledger); FAST runs it whenever Web presentation changed.
+ */
+export const PRESENTATION = '@presentation';
 /** One shard's evidence: its identity and Playwright's own report of its run. */
 export interface ShardRun { identity: ShardIdentity; report?: Pick<JSONReport, 'suites'> }
 
@@ -88,9 +98,13 @@ export function verify(inventory: Inventory, runs: ShardRun[], total: number): C
   }
   if (inventory.selection === 'fast') {
     if (!inventory.tests.some(test => test.smoke)) errors.push('FAST selects no smoke test');
+    // A changed spec exists on the tested head (a removed one is never
+    // listed, and its removal needs FULL), so it must have been discovered.
     for (const spec of inventory.specs) {
-      if (inventory.discoveredFiles.includes(spec) && !inventory.tests.some(test => test.file === spec)) errors.push(`changed spec ${spec} is not selected by FAST`);
+      if (!inventory.discoveredFiles.includes(spec)) errors.push(`changed spec ${spec} was not discovered on ${inventory.commit}`);
+      else if (!inventory.tests.some(test => test.file === spec)) errors.push(`changed spec ${spec} is not selected by FAST`);
     }
+    if (inventory.presentation && !inventory.tests.some(test => test.presentation)) errors.push('FAST for a presentation change selects no @presentation contract');
   }
   for (let index = 1; index <= total; index++) {
     const reported = runs.filter(run => run.identity.shard === index);
@@ -195,13 +209,13 @@ export function weightsOf(reports: Pick<JSONReport, 'suites'>[]): Record<string,
 export function select(discovered: Case[], selection: Selection, screenshotSpecs: string[]): Case[] {
   if (selection.selection === 'full') return discovered;
   return discovered.filter(found => found.tags.includes(SMOKE) || selection.specs.includes(found.file)
-    || (selection.screenshots && screenshotSpecs.includes(found.file)));
+    || (selection.presentation && (found.tags.includes(PRESENTATION) || screenshotSpecs.includes(found.file))));
 }
 
 /** The inventory and each shard's --test-list lines for one selection. */
 export function inventoryOf(identity: RunIdentity, discovered: Case[], selection: Selection, screenshotSpecs: string[], weights: Record<string, number>): Inventory {
   const selected = select(discovered, selection, screenshotSpecs);
-  const tests = selected.map(({ id, title, file, tags }) => ({ id, title, file, ...(tags.includes(SMOKE) ? { smoke: true } : {}) }));
+  const tests = selected.map(({ id, title, file, tags }) => ({ id, title, file, ...(tags.includes(SMOKE) ? { smoke: true } : {}), ...(tags.includes(PRESENTATION) ? { presentation: true } : {}) }));
   // Files go to shards by weight, scaled to the share of their tests that is
   // selected. A wholly selected file is one --test-list line; a partly
   // selected one (FAST's smoke tests) lists each selected test.
@@ -211,7 +225,8 @@ export function inventoryOf(identity: RunIdentity, discovered: Case[], selection
     count(tests, file) === count(discovered, file) ? [file] : tests.filter(test => test.file === file).map(test => test.title)));
   return {
     ...identity, selection: selection.selection, discovered: discovered.length,
-    discoveredFiles: [...new Set(discovered.map(found => found.file))].sort(), specs: selection.specs, tests, shards,
+    discoveredFiles: [...new Set(discovered.map(found => found.file))].sort(), specs: selection.specs,
+    presentation: selection.selection === 'fast' && selection.presentation, tests, shards,
   };
 }
 
@@ -222,7 +237,7 @@ function markdown(coverage: Coverage, inventory: Inventory) {
     '', `Commit \`${inventory.commit}\`, prepared inputs \`${inventory.prepared.slice(0, 16)}\`.`,
     inventory.selection === 'full'
       ? `FULL: all ${coverage.total} discovered tests; ${coverage.passed} passed; ${coverage.skipped.length} intentionally skipped.`
-      : `FAST subset: ${coverage.total} of ${inventory.discovered} discovered tests (smoke, changed specs${inventory.specs.length ? `: ${inventory.specs.join(', ')}` : ''}, screenshot specs when Web source changed); ${coverage.passed} passed. Not full browser coverage.`,
+      : `FAST subset: ${coverage.total} of ${inventory.discovered} discovered tests (smoke, changed specs${inventory.specs.length ? `: ${inventory.specs.join(', ')}` : ''}, presentation contracts when Web presentation changed${inventory.presentation ? ': included' : ''}); ${coverage.passed} passed. Not full browser coverage.`,
     '', '| Shard | Tests | Passed | Skipped | Failed | Wall | Test time |', '| --- | --- | --- | --- | --- | --- | --- |',
     ...coverage.shards.map(shard => `| ${shard.index} | ${shard.tests} | ${shard.passed} | ${shard.skipped} | ${shard.failed} | ${minutes(shard.wallMs)} | ${minutes(shard.testMs)} |`),
     ...(coverage.skipped.length ? ['', 'Intentionally skipped:', ...coverage.skipped.map(title => `- ${title}`)] : []),
@@ -231,7 +246,7 @@ function markdown(coverage: Coverage, inventory: Inventory) {
   ].join('\n');
 }
 
-function playwrightList(): JSONReport {
+export function playwrightList(): JSONReport {
   const output = execFileSync(process.execPath, [join(web, 'node_modules/@playwright/test/cli.js'), 'test', '--list', '--reporter=json'], { cwd: web, encoding: 'utf8', maxBuffer: 64 << 20 });
   return JSON.parse(output) as JSONReport;
 }
@@ -241,7 +256,7 @@ if (import.meta.main) {
   if (command === 'inventory' && rest.length === 2) {
     // The inventory and each shard's --test-list for the plan's selection.
     const [manifest, directory] = [resolve(rest[0]), resolve(rest[1])];
-    const selection = JSON.parse(process.env.BROWSER_SELECTION ?? '{"selection":"full","shards":[1,2],"specs":[],"screenshots":false}') as Selection;
+    const selection = JSON.parse(process.env.BROWSER_SELECTION ?? '{"selection":"full","shards":[1,2],"specs":[],"presentation":false}') as Selection;
     const discovered = cases(playwrightList());
     if (discovered.length === 0) throw new Error('Playwright discovered no browser tests');
     const screenshotSpecs = readdirSync(join(web, 'test/e2e')).filter(name => name.endsWith('.spec.ts-snapshots')).map(name => name.slice(0, -'-snapshots'.length));

@@ -769,7 +769,7 @@ fn collection_page_item<T: serde::Serialize + schemars::JsonSchema>(
 #[derive(Default)]
 struct PublicationGate {
     order: Mutex<()>,
-    progress: (Mutex<u64>, std::sync::Condvar),
+    progress: (Mutex<PublicationProgress>, std::sync::Condvar),
     #[cfg(test)]
     encoding_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
@@ -781,11 +781,29 @@ struct PublicationGate {
     /// Runs after a checkpoint requested its Source repair read.
     #[cfg(test)]
     repair_request_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
-    /// Runs before a checkpoint settles its repair's publication.
+    /// Runs when a checkpoint's repair must await an in-flight publication.
     #[cfg(test)]
     repair_settle_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     diagnostics: Mutex<ProjectionDiagnostics>,
+}
+
+/// Completed display transitions, and whether one is between its fold and
+/// its completion. Readers wait on these, never on the publication order.
+#[derive(Default)]
+struct PublicationProgress {
+    generation: u64,
+    publishing: bool,
+}
+
+/// One display transition in flight; dropping it completes the transition,
+/// also when its fold or encoding unwinds.
+struct Publishing<'a>(&'a PublicationGate);
+
+impl Drop for Publishing<'_> {
+    fn drop(&mut self) {
+        self.0.completed();
+    }
 }
 
 #[cfg(test)]
@@ -896,16 +914,54 @@ impl PublicationGate {
     }
 
     fn generation(&self) -> u64 {
-        *self.progress.0.lock().expect("native publication progress")
+        self.progress
+            .0
+            .lock()
+            .expect("native publication progress")
+            .generation
+    }
+    /// Marks a transition in flight; the caller holds the publication order.
+    fn publishing(&self) -> Publishing<'_> {
+        self.progress
+            .0
+            .lock()
+            .expect("native publication progress")
+            .publishing = true;
+        Publishing(self)
     }
     fn completed(&self) {
-        let mut generation = self.progress.0.lock().expect("native publication progress");
-        *generation = generation.saturating_add(1);
+        let mut progress = self.progress.0.lock().expect("native publication progress");
+        progress.generation = progress.generation.saturating_add(1);
+        progress.publishing = false;
         self.progress.1.notify_all();
+    }
+    /// Waits until no transition is in flight, or the deadline passes
+    /// (false). A transition that folded before this call is installed when
+    /// it returns true.
+    fn wait_installed(&self, deadline: std::time::Instant) -> bool {
+        let mut progress = self.progress.0.lock().expect("native publication progress");
+        #[cfg(test)]
+        if progress.publishing
+            && let Some(hook) = self.repair_settle_hook.lock().unwrap().take()
+        {
+            hook();
+        }
+        while progress.publishing {
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            progress = self
+                .progress
+                .1
+                .wait_timeout(progress, remaining)
+                .expect("native publication progress wait")
+                .0;
+        }
+        true
     }
     fn wait_after(&self, generation: u64, deadline: std::time::Instant) {
         let mut current = self.progress.0.lock().expect("native publication progress");
-        while *current == generation {
+        while current.generation == generation {
             let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
                 break;
             };
@@ -970,6 +1026,10 @@ fn commit_display<T>(
         .order
         .lock()
         .expect("native display publication gate");
+    // A source failure may resolve a pending reader without creating a cursor.
+    // Completing wakes readers after every CPU fold, including that failure
+    // path, and only once the fold's publication is installed.
+    let _publishing = publication.publishing();
     #[cfg(test)]
     publication.publication_stage("fold");
     let (draft, installed) = {
@@ -997,9 +1057,6 @@ fn commit_display<T>(
     }
     #[cfg(test)]
     publication.publication_stage("idle");
-    // A source failure may resolve a pending reader without creating a cursor.
-    // Wake readers after every completed CPU fold, including that failure path.
-    publication.completed();
     installed
 }
 
@@ -3889,27 +3946,15 @@ impl ClientInner {
                     drop(state);
                     // The read is folded once the domains are clean, but its
                     // publication is encoded outside the state lock and
-                    // installed afterwards. commit_display holds the
-                    // publication order through that install, so waiting for
-                    // the order settles it: the checkpoint this repair serves
-                    // includes the repaired publication.
-                    #[cfg(test)]
-                    if let Some(hook) = self
-                        .publication_gate
-                        .repair_settle_hook
-                        .lock()
-                        .unwrap()
-                        .take()
-                    {
-                        hook();
+                    // installed afterwards, before its transition completes.
+                    // The checkpoint this repair serves must include that
+                    // install, within the checkpoint's own deadline.
+                    if self.publication_gate.wait_installed(deadline) {
+                        return Ok(());
                     }
-                    drop(
-                        self.publication_gate
-                            .order
-                            .lock()
-                            .expect("native display publication gate"),
-                    );
-                    return Ok(());
+                    return Err(RuntimeClientError::ObservationUnavailable {
+                        message: "checkpoint Source repair deadline exhausted before its publication installed".into(),
+                    });
                 }
                 if self.pending.is_closed()
                     || !self.pending.can_publish_prepared_reads()

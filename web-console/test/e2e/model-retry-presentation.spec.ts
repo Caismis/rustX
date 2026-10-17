@@ -63,7 +63,7 @@ async function presented(page: Page, notice: Locator, theme: 'light' | 'dark') {
 }
 
 for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390]) {
-  test(`retry notice active and settled ${locale} ${theme} ${width}`, async ({ page }) => {
+  test(`retry notice active and settled ${locale} ${theme} ${width}`, { tag: '@presentation' }, async ({ page }) => {
     const active = await open(page, 'retry-active', locale, theme, width);
     await expect(active.locator('summary')).toHaveText(copy[locale].active);
     await expect(active).toHaveAttribute('data-active', 'true');

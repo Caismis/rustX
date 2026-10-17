@@ -7,7 +7,7 @@ const description = {
   zh: '此投影提供模型上下文。规范会话事实保留其原始执行归属。',
 } as const;
 for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark']) for (const width of [1440, 390]) {
-  test(`context summary card ${locale} ${theme} ${width}`, async ({ page }, info) => {
+  test(`context summary card ${locale} ${theme} ${width}`, { tag: '@presentation' }, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 1000 });
     await page.addInitScript(([theme, locale]) => { localStorage.setItem('rustx-appearance-v1', theme); localStorage.setItem('rustx-locale-v1', locale); }, [theme, locale]);
     await page.goto(`${origin}/test/fixtures/agent.html?mode=compaction`);

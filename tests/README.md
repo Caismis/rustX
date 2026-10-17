@@ -295,7 +295,8 @@ suites run, never in what a suite asserts:
   its current head and every later one.
 
 The `plan` job (`.github/scripts/verification.py`) owns selection. It reads
-the pull request's changed paths and decides the profile, the risk, the
+the pull request's changed files — each path with GitHub's change status and,
+for a rename or copy, its original path — and decides the profile, the risk, the
 affected surfaces (`rust`, `protocol`, `web`, `tui`, `dev`) and which jobs
 and affected steps run. Every gated job runs only when the plan's
 `run[<job id>]` is true, and the script's tests check that `ci.yml` gates
@@ -313,7 +314,15 @@ unreadable or possibly truncated diff included. Low risk is:
   fetch or WebSocket authority), the translation dictionaries, stylesheets
   and `public/`;
 - leaf tests: `web-console/test/*.test.ts(x)`, `tui/test/*.test.ts`, browser
-  specs and their screenshot references. A changed leaf test runs in FAST.
+  specs and their screenshot references, when added or modified. A changed
+  leaf test runs in FAST.
+
+Removing or renaming a leaf test or a screenshot reference is high risk:
+FAST runs only the tests that still exist and cannot notice coverage that
+disappeared, so the removal needs FULL, and its review needs the replacement
+proof or the changed test contract that justifies it. A rename is classified
+by both of its paths. A change status GitHub does not document, or none, is
+high risk.
 
 Everything that owns behaviour is therefore high risk, including Web
 connection, authorization, workspace admission and client ownership
@@ -333,9 +342,13 @@ selection the plan passes to `browser-prepare`:
   model selection, configuration recovery, Harness primitives and an Agent
   screenshot reference), every test of a changed spec (or of a spec whose
   screenshot references changed), and, for a low-risk presentation change,
-  every spec that holds screenshot references, then over two shards. The
-  coverage gate fails if FAST selects no smoke test or omits a changed
-  spec, and its summary says it is a subset, never full coverage.
+  the presentation contracts — every spec that holds screenshot references
+  and every test tagged `@presentation` (the fixture matrices of the
+  replacement ledger below) — then over two shards. The coverage gate fails
+  if FAST selects no smoke test, omits a changed spec, names a changed spec
+  Playwright no longer discovers, or, for a presentation change, selects no
+  `@presentation` test; its summary says it is a subset, never full
+  coverage.
 
 **Merge.** `Merge verification` (the `verification` job) is the verdict, and
 the repository ruleset "Merge verification on main" requires it from GitHub
@@ -535,6 +548,10 @@ are never merged into one run.
 | `compaction` en dark, zh light | failed and held manual compaction, reconnect, automatic compaction after a questionnaire, projection history, Stop and late output | the same workflow in en light 1440 (plus reconnect and reload) and zh dark 390; the Context summary card in en and zh, light and dark, 1440 and 390 in `compaction-summary.spec.ts` (fixture) | 9.5 s + 9.9 s |
 | `live-model` profile selection (1440, lost), (390, received) | same-model profile mutation with a received or lost acknowledgement, frozen admission, reload without replay, provider request parameters | (1440, received) and (390, lost): each acknowledgement outcome and each width once; neither the placement nor the lost-ACK recovery depends on the other | 7.1 s + 6.6 s |
 
+Both replacement matrices are tagged `@presentation`, so a low-risk Web
+presentation change, which merges on FAST, still runs every locale, theme
+and width of them (`test/browser-verification.test.ts` checks the
+discovered suite selects all eight cases of each).
 None of the removed runs held a screenshot reference; their captures went to
 `/tmp`. Each replacement was checked against a deliberate violation: a wrong
 Chinese retry label fails `model-retry.test.tsx`, a fixed dark retry summary

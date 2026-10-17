@@ -1,6 +1,6 @@
 """FAST and FULL verification profiles for CI (see tests/README.md).
 
-`plan` decides, from the event and the pull request's changed paths, which
+`plan` decides, from the event and the pull request's changed files, which
 profile runs and which jobs it selects; every gated job in ci.yml runs only
 when `run[<job id>]` is true, so this module is the single owner of job
 selection. `gate` is the one verdict branch protection should require: it
@@ -41,18 +41,25 @@ PRESENTATION = (
     "web-console/src/**.css",
     "web-console/public/**",
 )
-LOW_RISK = DOCUMENTATION + (
-    *PRESENTATION,
-    # Leaf tests. Each runs in FAST when changed: the Web and TUI unit suites
-    # run whole, and a changed browser spec or screenshot reference selects
-    # that spec (browser_selection below). Shared fixtures and helpers are
-    # test infrastructure and stay high risk.
+# Leaf tests. Each runs in FAST when added or edited: the Web and TUI unit
+# suites run whole, and a changed browser spec or screenshot reference selects
+# that spec (browser_selection below). Removing or renaming one can drop
+# mandatory coverage that FAST, which only runs what exists, cannot notice, so
+# that is high risk (risk_reasons). Shared fixtures and helpers are test
+# infrastructure and stay high risk.
+LEAF_TESTS = (
     "web-console/test/*.test.ts",
     "web-console/test/*.test.tsx",
     "web-console/test/e2e/*.spec.ts",
     "web-console/test/e2e/*.spec.ts-snapshots/**",
     "tui/test/*.test.ts",
 )
+LOW_RISK = DOCUMENTATION + PRESENTATION + LEAF_TESTS
+# GitHub's pull request file statuses. Any other value, or none, is
+# unreadable metadata and high risk.
+STATUSES = ("added", "modified", "removed", "renamed", "copied", "changed", "unchanged")
+# The statuses that keep every existing test where it was.
+TEST_PRESERVING = ("added", "modified")
 # Which suites a changed path affects. Documentation selects only the
 # always-on jobs; any other path in no surface affects every suite.
 SURFACES = {
@@ -89,13 +96,34 @@ def surfaces_of(path):
     return {name for name, patterns in SURFACES.items() if matches(path, patterns)} or set(SURFACES)
 
 
-def classify(paths):
-    """Risk, affected surfaces and the reasons, for a pull request's paths."""
-    if not paths:
+def paths_of(changes):
+    """Every path the changes touch: a rename or copy contributes both names."""
+    return sorted({path for change in changes for path in (change["path"], change.get("previous")) if path})
+
+
+def risk_reasons(change):
+    """Why one changed file is high risk (empty = low risk)."""
+    status, path = change.get("status"), change["path"]
+    if status not in STATUSES:
+        return [f"{path}: unknown change status {status!r}"]
+    if status in ("renamed", "copied") and not change.get("previous"):
+        return [f"{path}: {status} without its original path"]
+    paths = [path] + ([change["previous"]] if change.get("previous") else [])
+    reasons = [f"{name}: high risk" for name in paths if risk_of(name) == "high"]
+    if status not in TEST_PRESERVING and any(matches(name, LEAF_TESTS) for name in paths):
+        reasons.append(f"{path}: test {status}" + (f" from {change['previous']}" if change.get("previous") else "")
+                       + "; removing or renaming a test can drop mandatory coverage")
+    return reasons
+
+
+def classify(changes):
+    """Risk, affected surfaces and the reasons, for a pull request's changes:
+    each {"path", "status", "previous"?} as GitHub lists it."""
+    if not changes:
         # An empty or unreadable diff cannot be classified confidently.
         return {"risk": "high", "surfaces": sorted(SURFACES), "reasons": ["no changed paths could be read"]}
-    reasons = [f"{path}: high risk" for path in paths if risk_of(path) == "high"]
-    surfaces = set().union(*(surfaces_of(path) for path in paths))
+    reasons = [reason for change in changes for reason in risk_reasons(change)]
+    surfaces = set().union(*(surfaces_of(path) for path in paths_of(changes)))
     return {"risk": "high" if reasons else "low", "surfaces": sorted(surfaces), "reasons": reasons}
 
 
@@ -147,32 +175,36 @@ FULL_JOBS = tuple(job for job, selected in selected_jobs("full", SURFACES).items
 # (web-console/scripts/browser-shards.ts). FULL runs every discovered test in
 # two shards. FAST runs one shard: the tests tagged @smoke, every test of a
 # changed spec (or of a spec whose screenshot references changed), and, when
-# Web source changed, every spec that holds screenshot references, since a
-# presentation change can move pixels.
+# Web presentation changed, the presentation contracts: every spec that holds
+# screenshot references and every test tagged @presentation, the fixture
+# matrices that stand in for native workflows run in one locale, theme and
+# width only (tests/README.md, the replacement ledger).
 BROWSER_SPEC = "web-console/test/e2e/"
 
 
-def browser_selection(profile, paths):
+def browser_selection(profile, changes):
     if profile == "full":
-        return {"selection": "full", "shards": [1, 2], "specs": [], "screenshots": False}
+        return {"selection": "full", "shards": [1, 2], "specs": [], "presentation": False}
     specs = set()
-    for path in paths:
-        if path.startswith(BROWSER_SPEC):
-            name = path[len(BROWSER_SPEC):].split("/")[0]
+    # A spec's current name; a removed spec has none to run (and its removal
+    # is high risk, so FAST cannot verify it).
+    for change in changes:
+        if change.get("status") != "removed" and change["path"].startswith(BROWSER_SPEC):
+            name = change["path"][len(BROWSER_SPEC):].split("/")[0]
             if name.endswith(".spec.ts-snapshots"):
                 name = name[: -len("-snapshots")]
             if name.endswith(".spec.ts"):
                 specs.add(name)
     # A low-risk presentation change merges on FAST, so FAST must also hold
-    # it to the screenshot references (and spreads them over both shards). A
+    # it to the presentation contracts (and spreads them over both shards). A
     # high-risk Web change needs FULL anyway; its FAST run is smoke feedback.
-    # An unreadable diff cannot name its specs: it runs every screenshot spec.
-    screenshots = not paths or any(matches(path, PRESENTATION) for path in paths)
-    return {"selection": "fast", "shards": [1, 2] if screenshots else [1], "specs": sorted(specs),
-            "screenshots": screenshots}
+    # An unreadable diff cannot name its specs: it runs every contract.
+    presentation = not changes or any(matches(path, PRESENTATION) for path in paths_of(changes))
+    return {"selection": "fast", "shards": [1, 2] if presentation else [1], "specs": sorted(specs),
+            "presentation": presentation}
 
 
-def plan(event_name, labels, paths):
+def plan(event_name, labels, changes):
     """The profile and job selection for one run.
 
     main, the nightly schedule and manual dispatch run FULL. A pull request
@@ -181,10 +213,10 @@ def plan(event_name, labels, paths):
     if event_name != "pull_request":
         profile, classified = "full", {"risk": "high", "surfaces": sorted(SURFACES), "reasons": [f"{event_name} runs FULL"]}
     else:
-        classified = classify(paths)
+        classified = classify(changes)
         profile = "full" if PROMOTION_LABEL in labels else "fast"
     return {**classified, "profile": profile, "run": selected_jobs(profile, classified["surfaces"]),
-            "steps": selected_steps(profile, paths), "browser": browser_selection(profile, paths)}
+            "steps": selected_steps(profile, paths_of(changes)), "browser": browser_selection(profile, changes)}
 
 
 def gate(planned, results, tested_head, current_head, tested=None):
@@ -231,20 +263,21 @@ def github(path):
 LISTED_FILES_LIMIT = 3000
 
 
-def changed_paths(number):
-    """Every path the pull request changes (renames contribute both names),
-    or none when GitHub's listing may be truncated: an unreadable diff is
-    classified as high risk affecting every surface."""
-    paths, page, listed = [], 1, 0
+def changed_files(number):
+    """Every file the pull request changes, with GitHub's status and, for a
+    rename or copy, its original path; or none when the listing may be
+    truncated or an entry names no path: an unreadable diff is classified as
+    high risk affecting every surface."""
+    changes, page = [], 1
     while True:
         files = github(f"pulls/{number}/files?per_page=100&page={page}")
-        listed += len(files)
         for item in files:
-            paths.append(item["filename"])
-            if item.get("previous_filename"):
-                paths.append(item["previous_filename"])
+            if not isinstance(item.get("filename"), str):
+                return []
+            changes.append({"path": item["filename"], "status": item.get("status"),
+                            **({"previous": item["previous_filename"]} if item.get("previous_filename") else {})})
         if len(files) < 100:
-            return [] if listed >= LISTED_FILES_LIMIT else sorted(set(paths))
+            return [] if len(changes) >= LISTED_FILES_LIMIT else changes
         page += 1
 
 
@@ -264,8 +297,8 @@ def main(command):
     pull = event.get("pull_request")
     if command == "plan":
         labels = [label["name"] for label in pull["labels"]] if pull else []
-        paths = changed_paths(pull["number"]) if pull else []
-        planned = plan(os.environ["GITHUB_EVENT_NAME"], labels, paths)
+        changes = changed_files(pull["number"]) if pull else []
+        planned = plan(os.environ["GITHUB_EVENT_NAME"], labels, changes)
         output("plan", json.dumps(planned, separators=(",", ":")))
         output("run", json.dumps(planned["run"], separators=(",", ":")))
         output("steps", json.dumps(planned["steps"], separators=(",", ":")))
