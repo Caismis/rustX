@@ -135,8 +135,7 @@ def classify(paths):
 
 
 # Every gated job and when it runs. FULL runs everything once: the complete
-# Rust lanes replace the FAST Rust lane, and macOS core runs in both, with
-# macOS full beside it in FULL.
+# Rust lanes replace the FAST Rust lane and macOS full replaces macOS core.
 def selected_jobs(profile, surfaces):
     full = profile == "full"
     s = set(surfaces)
@@ -146,7 +145,7 @@ def selected_jobs(profile, surfaces):
         "rust-fast": not full and rust,
         "rust-contracts": full,
         "rust-boundaries": full,
-        "rust-platform-core": full or rust,
+        "rust-platform-core": not full and rust,
         "rust-platform-boundaries": full,
         "tui": full or bool(s & {"tui", "rust", "protocol"}),
         "app-server-protocol": full or rust,

@@ -93,7 +93,8 @@ class Planning(unittest.TestCase):
                 self.assertEqual(planned["profile"], "full")
                 self.assertTrue(all(planned["run"][job] for job in v.FULL_JOBS))
                 self.assertFalse(planned["run"]["rust-fast"])
-                self.assertTrue(planned["run"]["rust-platform-core"] and planned["run"]["rust-platform-boundaries"])
+                self.assertFalse(planned["run"]["rust-platform-core"])
+                self.assertTrue(planned["run"]["rust-platform-boundaries"])
 
     def test_a_pull_request_runs_fast_until_promoted(self):
         self.assertEqual(v.plan("pull_request", [], ["src/lib.rs"])["profile"], "fast")
@@ -159,7 +160,7 @@ class Gate(unittest.TestCase):
 
     def test_full_without_macos_full_fails(self):
         planned = v.plan("push", [], [])
-        for job in ("rust-platform-boundaries", "rust-platform-core"):
+        for job in ("rust-platform-boundaries",):
             for result in ("skipped", "cancelled", "failure", None):
                 with self.subTest(job=job, result=result):
                     results = passing(planned)
@@ -172,9 +173,10 @@ class Gate(unittest.TestCase):
 
     def test_a_promoted_pull_request_cannot_pass_on_macos_core_alone(self):
         planned = v.plan("pull_request", [v.PROMOTION_LABEL], ["src/runtime/process_runner.rs"])
-        results = {**passing(planned), "rust-platform-boundaries": "skipped"}
+        results = {**passing(planned), "rust-platform-core": "success", "rust-platform-boundaries": "skipped"}
         self.assertEqual(v.gate(planned, results, "abc", "abc"),
-                         ["rust-platform-boundaries: selected for FULL but skipped"])
+                         ["rust-platform-core: not selected for FULL but success",
+                          "rust-platform-boundaries: selected for FULL but skipped"])
 
     def test_a_job_that_ran_without_being_selected_fails(self):
         planned = v.plan("pull_request", [], ["web-console/src/presentation/a.tsx"])
@@ -217,7 +219,7 @@ class Workflow(unittest.TestCase):
     def test_rust_profiles_match_the_lane_check_declarations(self):
         jobs = self.jobs()
         self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-fast"])
-        self.assertIn("VERIFICATION_PROFILE: fast full\n", jobs["rust-platform-core"])
+        self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-platform-core"])
         for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
 
