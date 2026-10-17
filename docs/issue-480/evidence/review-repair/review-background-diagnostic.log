@@ -1,0 +1,19 @@
+   Compiling rustx v0.1.0 (/home/capi/Documents/codes/rustX-issue-480)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+     Running unittests src/lib.rs (target/debug/deps/rustx-020f8f968f05fb14)
+
+running 1 test
+
+thread 'runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot' (1189973) panicked at src/runtime_client/host.rs:10583:17:
+terminal publication checkpoint: ReadCutExpired; prior=CheckpointReadCut { canonical_foreground: None, live_publication: None, conversation_id: ConversationId("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"), activation_id: None, revision: 5, through: 1, source_cut: Some(ObservationReadCut { read: ConversationReadCut { conversation_id: ConversationId("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"), journal: 1, transcript: 0, mutation_revision: 0, ledger_through: 0, surface_revision: SurfaceRevision(0), transcript_total: 0, pending_through: 0, pending_total: 0 }, ledger_through: 0, transcript_total: 0, surface_revision: SurfaceRevision(0), inherited_through: TranscriptCursor(0) }), domain_revisions: {"attempt": 3, "context": 3, "jobs": 2, "trace": 3}, collection_cuts: {"agents": ObservationCollectionCut { generation: 0, total: 0 }, "jobs": ObservationCollectionCut { generation: 2, total: 1 }, "pending_children": ObservationCollectionCut { generation: 0, total: 0 }, "pending_primary": ObservationCollectionCut { generation: 0, total: 0 }} }; durable=Ok(ObservationReadCut { read: ConversationReadCut { conversation_id: ConversationId("conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b"), journal: 3, transcript: 1, mutation_revision: 1, ledger_through: 1, surface_revision: SurfaceRevision(1), transcript_total: 1, pending_through: 1, pending_total: 0 }, ledger_through: 1, transcript_total: 1, surface_revision: SurfaceRevision(1), inherited_through: TranscriptCursor(0) }); published_cursor=RuntimeClientCursor(5)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... FAILED
+
+failures:
+
+failures:
+    runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.34s
+
+error: test failed, to rerun pass `--lib`

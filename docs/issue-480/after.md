@@ -1,5 +1,12 @@
 # Stage C: WAL/NORMAL runtime evidence
 
+> Historical pre-review evidence. Review of `426bfe57` found that request checks
+> did not prove complete ordered wire/frozen input and ordinary CPU/I/O samples
+> omitted initialization and post-verification phases. Wall windows and the
+> separate syscall trace already included deferred maintenance. All records below
+> remain retained; [revised acceptance evidence](review-repair.md) is authoritative
+> for the corrected oracle and lifecycle CPU/I/O.
+
 ## Reproducibility and limits
 
 Baseline code is Stage A `c34f87983568700c7dfa2416722cdd2cd0fd9315`, based on dependency-complete main `029e50f45d6a24c1452b5d0768274fdd661cda6f`. AFTER code is Stage B `b2b664e1`. The baseline archive receives only the identical final benchmark harness overlay. [Build provenance](evidence/after/build-provenance.json) records full hashes, commands and the original preserved baseline binary. The overlay joins the stopped relay and measures a final ordinary writable open/close before cleanup, proving no WAL frames remain. It changes no turn workload or frozen-request oracle.

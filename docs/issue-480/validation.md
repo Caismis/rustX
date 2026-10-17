@@ -1,5 +1,8 @@
 # Issue 480 validation record
 
+The original implementation results below are retained. Benchmark acceptance
+repairs and final-head verification are tracked in [the re-review report](review-repair.md).
+
 All provider requests use the local Python emulator or Pi's in-process faux
 provider. No real model API is used. Timings are observations, never correctness
 thresholds. Final benchmark runs start only after task-owned builds/tests finish.

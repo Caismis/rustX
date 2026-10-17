@@ -1,0 +1,2097 @@
+{
+  "case": "short-small",
+  "schema": 69,
+  "protocol": 50,
+  "history": 8,
+  "measured": 32,
+  "requests": 40,
+  "open_us": 152113,
+  "samples": [
+    {
+      "turn": 0,
+      "measured": false,
+      "accepted_us": 10125,
+      "settled_us": 129380,
+      "first_consumed_publication_us": 102324,
+      "notification_records": 15,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 26501 0 0 0 15 7 0 0 20 0 10 0 351668695 796241920 38528 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 6605808\nwchar: 5918007\nsyscr: 8267\nsyscw: 2520\nread_bytes: 0\nwrite_bytes: 6057984\ncancelled_write_bytes: 282624\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              157096 kB\nPss:              154815 kB\nPss_Dirty:        102188 kB\nPss_Anon:         102188 kB\nPss_File:          52627 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52564 kB\nPrivate_Dirty:    102188 kB\nReferenced:       157096 kB\nAnonymous:        102188 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 1413120,
+          "allocated": 1413120
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1216,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 1,
+      "measured": false,
+      "accepted_us": 7618,
+      "settled_us": 122041,
+      "first_consumed_publication_us": 97323,
+      "notification_records": 13,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 26922 0 0 0 25 9 0 0 20 0 10 0 351668695 796241920 38784 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 7228256\nwchar: 11043430\nsyscr: 12171\nsyscw: 4840\nread_bytes: 0\nwrite_bytes: 11272192\ncancelled_write_bytes: 561152\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              158844 kB\nPss:              156563 kB\nPss_Dirty:        103872 kB\nPss_Anon:         103872 kB\nPss_File:          52691 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52628 kB\nPrivate_Dirty:    103872 kB\nReferenced:       158844 kB\nAnonymous:        103872 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 1982464,
+          "allocated": 1982464
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1216,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "measured": false,
+      "accepted_us": 5471,
+      "settled_us": 115212,
+      "first_consumed_publication_us": 85423,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 27139 0 0 0 33 12 0 0 20 0 10 0 351668695 796241920 38976 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 7795153\nwchar: 15889038\nsyscr: 15951\nsyscw: 7131\nread_bytes: 0\nwrite_bytes: 16203776\ncancelled_write_bytes: 819200\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              159712 kB\nPss:              157431 kB\nPss_Dirty:        104740 kB\nPss_Anon:         104740 kB\nPss_File:          52691 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52628 kB\nPrivate_Dirty:    104740 kB\nReferenced:       159712 kB\nAnonymous:        104740 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 2150400,
+          "allocated": 2150400
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1216,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "measured": false,
+      "accepted_us": 7194,
+      "settled_us": 135283,
+      "first_consumed_publication_us": 102979,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 27456 0 0 0 43 14 0 0 20 0 10 0 351668695 796241920 39296 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 8381503\nwchar: 20825508\nsyscr: 20285\nsyscw: 9459\nread_bytes: 0\nwrite_bytes: 21233664\ncancelled_write_bytes: 1077248\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              161036 kB\nPss:              158755 kB\nPss_Dirty:        106000 kB\nPss_Anon:         106000 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    106000 kB\nReferenced:       161036 kB\nAnonymous:        106000 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 2351104,
+          "allocated": 2351104
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1216,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 4,
+      "measured": false,
+      "accepted_us": 9573,
+      "settled_us": 136067,
+      "first_consumed_publication_us": 102985,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 27643 0 0 0 54 17 0 0 20 0 10 0 351668695 796241920 39488 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 8969163\nwchar: 25758054\nsyscr: 24677\nsyscw: 11788\nread_bytes: 0\nwrite_bytes: 26259456\ncancelled_write_bytes: 1335296\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              161784 kB\nPss:              159503 kB\nPss_Dirty:        106748 kB\nPss_Anon:         106748 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    106748 kB\nReferenced:       161784 kB\nAnonymous:        106748 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 2523136,
+          "allocated": 2523136
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1216,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "measured": false,
+      "accepted_us": 9375,
+      "settled_us": 121070,
+      "first_consumed_publication_us": 97976,
+      "notification_records": 9,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 27945 0 0 0 63 19 0 0 20 0 10 0 351668695 796241920 39872 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 9558494\nwchar: 30760492\nsyscr: 29100\nsyscw: 14152\nread_bytes: 0\nwrite_bytes: 31354880\ncancelled_write_bytes: 1593344\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              162996 kB\nPss:              160715 kB\nPss_Dirty:        107960 kB\nPss_Anon:         107960 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    107960 kB\nReferenced:       162996 kB\nAnonymous:        107960 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 2699264,
+          "allocated": 2699264
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1216,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 6,
+      "measured": false,
+      "accepted_us": 7859,
+      "settled_us": 120936,
+      "first_consumed_publication_us": 87174,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 28151 0 0 0 73 21 0 0 20 0 10 0 351668695 796241920 40000 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 10151789\nwchar: 35829201\nsyscr: 33445\nsyscw: 16541\nread_bytes: 0\nwrite_bytes: 36524032\ncancelled_write_bytes: 1851392\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              163820 kB\nPss:              161539 kB\nPss_Dirty:        108784 kB\nPss_Anon:         108784 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    108784 kB\nReferenced:       163820 kB\nAnonymous:        108784 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 2916352,
+          "allocated": 2916352
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 7,
+      "measured": false,
+      "accepted_us": 7510,
+      "settled_us": 129423,
+      "first_consumed_publication_us": 95694,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 28495 0 0 0 84 24 0 0 20 0 10 0 351668695 796241920 40320 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 10741604\nwchar: 40803292\nsyscr: 38045\nsyscw: 18889\nread_bytes: 0\nwrite_bytes: 41590784\ncancelled_write_bytes: 2109440\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              165192 kB\nPss:              162911 kB\nPss_Dirty:        110156 kB\nPss_Anon:         110156 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    110156 kB\nReferenced:       165192 kB\nAnonymous:        110156 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 3104768,
+          "allocated": 3104768
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 8,
+      "measured": true,
+      "accepted_us": 6941,
+      "settled_us": 122017,
+      "first_consumed_publication_us": 94294,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 28648 0 0 0 94 27 0 0 20 0 10 0 351668695 796241920 40448 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 11360233\nwchar: 45695577\nsyscr: 42836\nsyscw: 21200\nread_bytes: 0\nwrite_bytes: 46575616\ncancelled_write_bytes: 2367488\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              165804 kB\nPss:              163523 kB\nPss_Dirty:        110768 kB\nPss_Anon:         110768 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    110768 kB\nReferenced:       165804 kB\nAnonymous:        110768 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 3284992,
+          "allocated": 3284992
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 9,
+      "measured": true,
+      "accepted_us": 6338,
+      "settled_us": 114328,
+      "first_consumed_publication_us": 76768,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 28817 0 0 0 102 28 0 0 20 0 10 0 351668695 796241920 40640 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 11942121\nwchar: 50719227\nsyscr: 47008\nsyscw: 23572\nread_bytes: 0\nwrite_bytes: 51691520\ncancelled_write_bytes: 2625536\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              166480 kB\nPss:              164199 kB\nPss_Dirty:        111444 kB\nPss_Anon:         111444 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    111444 kB\nReferenced:       166480 kB\nAnonymous:        111444 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 3473408,
+          "allocated": 3473408
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 10,
+      "measured": true,
+      "accepted_us": 11679,
+      "settled_us": 141409,
+      "first_consumed_publication_us": 105512,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 28950 0 0 0 115 30 0 0 20 0 10 0 351668695 796241920 40704 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 12528128\nwchar: 56050198\nsyscr: 51609\nsyscw: 26007\nread_bytes: 0\nwrite_bytes: 57114624\ncancelled_write_bytes: 2883584\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              167012 kB\nPss:              164731 kB\nPss_Dirty:        111976 kB\nPss_Anon:         111976 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    111976 kB\nReferenced:       167012 kB\nAnonymous:        111976 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 3993600,
+          "allocated": 3993600
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 11,
+      "measured": true,
+      "accepted_us": 9402,
+      "settled_us": 129958,
+      "first_consumed_publication_us": 96566,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29114 0 0 0 125 33 0 0 20 0 10 0 351668695 796241920 40896 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 13116992\nwchar: 61049137\nsyscr: 56390\nsyscw: 28370\nread_bytes: 0\nwrite_bytes: 62197760\ncancelled_write_bytes: 3141632\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              167668 kB\nPss:              165387 kB\nPss_Dirty:        112632 kB\nPss_Anon:         112632 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    112632 kB\nReferenced:       167668 kB\nAnonymous:        112632 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 4182016,
+          "allocated": 4182016
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 12,
+      "measured": true,
+      "accepted_us": 8604,
+      "settled_us": 121716,
+      "first_consumed_publication_us": 97467,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29163 0 0 0 135 35 0 0 20 0 10 0 351668695 796241920 40960 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 13746329\nwchar: 66143592\nsyscr: 60898\nsyscw: 30781\nread_bytes: 0\nwrite_bytes: 67391488\ncancelled_write_bytes: 3399680\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              167864 kB\nPss:              165583 kB\nPss_Dirty:        112828 kB\nPss_Anon:         112828 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    112828 kB\nReferenced:       167864 kB\nAnonymous:        112828 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 4366336,
+          "allocated": 4366336
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 13,
+      "measured": true,
+      "accepted_us": 6397,
+      "settled_us": 143261,
+      "first_consumed_publication_us": 109841,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29218 0 0 0 146 38 0 0 20 0 10 0 351668695 796241920 41024 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 14362656\nwchar: 71586163\nsyscr: 65781\nsyscw: 33352\nread_bytes: 0\nwrite_bytes: 72925184\ncancelled_write_bytes: 3657728\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              168084 kB\nPss:              165803 kB\nPss_Dirty:        113048 kB\nPss_Anon:         113048 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    113048 kB\nReferenced:       168084 kB\nAnonymous:        113048 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 4571136,
+          "allocated": 4571136
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 14,
+      "measured": true,
+      "accepted_us": 7267,
+      "settled_us": 128976,
+      "first_consumed_publication_us": 98291,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29374 0 0 0 156 40 0 0 20 0 10 0 351668695 796241920 41152 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 14955168\nwchar: 76819300\nsyscr: 70541\nsyscw: 35822\nread_bytes: 0\nwrite_bytes: 78241792\ncancelled_write_bytes: 3915776\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              168708 kB\nPss:              166427 kB\nPss_Dirty:        113672 kB\nPss_Anon:         113672 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    113672 kB\nReferenced:       168708 kB\nAnonymous:        113672 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 4763648,
+          "allocated": 4763648
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 15,
+      "measured": true,
+      "accepted_us": 7965,
+      "settled_us": 127032,
+      "first_consumed_publication_us": 94371,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29441 0 0 0 166 43 0 0 20 0 10 0 351668695 796241920 41216 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 15551992\nwchar: 82155635\nsyscr: 75065\nsyscw: 38345\nread_bytes: 0\nwrite_bytes: 83668992\ncancelled_write_bytes: 4173824\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              168976 kB\nPss:              166695 kB\nPss_Dirty:        113940 kB\nPss_Anon:         113940 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    113940 kB\nReferenced:       168976 kB\nAnonymous:        113940 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 4943872,
+          "allocated": 4943872
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 16,
+      "measured": true,
+      "accepted_us": 10250,
+      "settled_us": 136560,
+      "first_consumed_publication_us": 102415,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29514 0 0 0 178 46 0 0 20 0 10 0 351668695 796241920 41280 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 16155586\nwchar: 87459364\nsyscr: 79505\nsyscw: 40852\nread_bytes: 0\nwrite_bytes: 89063424\ncancelled_write_bytes: 4431872\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              169268 kB\nPss:              166987 kB\nPss_Dirty:        114232 kB\nPss_Anon:         114232 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    114232 kB\nReferenced:       169268 kB\nAnonymous:        114232 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 5140480,
+          "allocated": 5140480
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 17,
+      "measured": true,
+      "accepted_us": 12359,
+      "settled_us": 133713,
+      "first_consumed_publication_us": 110268,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29696 0 0 0 189 48 0 0 20 0 10 0 351668695 796241920 41472 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 16765057\nwchar: 92980519\nsyscr: 84058\nsyscw: 43453\nread_bytes: 0\nwrite_bytes: 94674944\ncancelled_write_bytes: 4689920\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              169996 kB\nPss:              167715 kB\nPss_Dirty:        114960 kB\nPss_Anon:         114960 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    114960 kB\nReferenced:       169996 kB\nAnonymous:        114960 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 5382144,
+          "allocated": 5382144
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 18,
+      "measured": true,
+      "accepted_us": 7651,
+      "settled_us": 130473,
+      "first_consumed_publication_us": 101621,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29793 0 0 0 199 51 0 0 20 0 10 0 351668695 796241920 41600 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 17368319\nwchar: 98505996\nsyscr: 88734\nsyscw: 46067\nread_bytes: 0\nwrite_bytes: 100290560\ncancelled_write_bytes: 4947968\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              170384 kB\nPss:              168103 kB\nPss_Dirty:        115348 kB\nPss_Anon:         115348 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    115348 kB\nReferenced:       170384 kB\nAnonymous:        115348 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 5578752,
+          "allocated": 5578752
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 19,
+      "measured": true,
+      "accepted_us": 9851,
+      "settled_us": 129042,
+      "first_consumed_publication_us": 101634,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 29949 0 0 0 209 54 0 0 20 0 10 0 351668695 796241920 41728 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 17982083\nwchar: 104093203\nsyscr: 93302\nsyscw: 48719\nread_bytes: 0\nwrite_bytes: 105967616\ncancelled_write_bytes: 5206016\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              171008 kB\nPss:              168727 kB\nPss_Dirty:        115972 kB\nPss_Anon:         115972 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    115972 kB\nReferenced:       171008 kB\nAnonymous:        115972 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 5763072,
+          "allocated": 5763072
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 20,
+      "measured": true,
+      "accepted_us": 9032,
+      "settled_us": 131939,
+      "first_consumed_publication_us": 104688,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30038 0 0 0 220 57 0 0 20 0 10 0 351668695 796241920 41856 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 18609514\nwchar: 109660552\nsyscr: 97707\nsyscw: 51354\nread_bytes: 0\nwrite_bytes: 111632384\ncancelled_write_bytes: 5464064\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              171368 kB\nPss:              169087 kB\nPss_Dirty:        116332 kB\nPss_Anon:         116332 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    116332 kB\nReferenced:       171368 kB\nAnonymous:        116332 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 5959680,
+          "allocated": 5959680
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 21,
+      "measured": true,
+      "accepted_us": 6403,
+      "settled_us": 136042,
+      "first_consumed_publication_us": 108662,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30213 0 0 0 232 60 0 0 20 0 10 0 351668695 796241920 41920 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 19228333\nwchar: 115047171\nsyscr: 102340\nsyscw: 53901\nread_bytes: 0\nwrite_bytes: 117108736\ncancelled_write_bytes: 5722112\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              172064 kB\nPss:              169783 kB\nPss_Dirty:        117028 kB\nPss_Anon:         117028 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    117028 kB\nReferenced:       172064 kB\nAnonymous:        117028 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 6156288,
+          "allocated": 6156288
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 22,
+      "measured": true,
+      "accepted_us": 6515,
+      "settled_us": 130511,
+      "first_consumed_publication_us": 101181,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30458 0 0 0 243 62 0 0 20 0 10 0 351668695 796864512 42176 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 19873892\nwchar: 120527772\nsyscr: 107508\nsyscw: 56495\nread_bytes: 0\nwrite_bytes: 122671104\ncancelled_write_bytes: 5980160\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              173044 kB\nPss:              170761 kB\nPss_Dirty:        118008 kB\nPss_Anon:         118008 kB\nPss_File:          52753 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    118008 kB\nReferenced:       173044 kB\nAnonymous:        118008 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 6356992,
+          "allocated": 6356992
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 23,
+      "measured": true,
+      "accepted_us": 8533,
+      "settled_us": 109690,
+      "first_consumed_publication_us": 84341,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30502 0 0 0 251 63 0 0 20 0 10 0 351668695 796864512 42176 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 20482197\nwchar: 125980879\nsyscr: 111761\nsyscw: 59080\nread_bytes: 0\nwrite_bytes: 128221184\ncancelled_write_bytes: 6238208\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              173220 kB\nPss:              170938 kB\nPss_Dirty:        118184 kB\nPss_Anon:         118184 kB\nPss_File:          52754 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    118184 kB\nReferenced:       173220 kB\nAnonymous:        118184 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 6529024,
+          "allocated": 6529024
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 24,
+      "measured": true,
+      "accepted_us": 6083,
+      "settled_us": 98759,
+      "first_consumed_publication_us": 74834,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30555 0 0 0 258 65 0 0 20 0 10 0 351668695 796864512 42240 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 21087579\nwchar: 131548432\nsyscr: 116325\nsyscw: 61716\nread_bytes: 0\nwrite_bytes: 133877760\ncancelled_write_bytes: 6496256\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              173432 kB\nPss:              171151 kB\nPss_Dirty:        118396 kB\nPss_Anon:         118396 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    118396 kB\nReferenced:       173432 kB\nAnonymous:        118396 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 6717440,
+          "allocated": 6717440
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 25,
+      "measured": true,
+      "accepted_us": 10130,
+      "settled_us": 123066,
+      "first_consumed_publication_us": 89411,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30641 0 0 0 267 68 0 0 20 0 10 0 351668695 796864512 42368 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 21730523\nwchar: 137206395\nsyscr: 120944\nsyscw: 64402\nread_bytes: 0\nwrite_bytes: 139624448\ncancelled_write_bytes: 6754304\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              173776 kB\nPss:              171495 kB\nPss_Dirty:        118740 kB\nPss_Anon:         118740 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    118740 kB\nReferenced:       173776 kB\nAnonymous:        118740 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 6889472,
+          "allocated": 6889472
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 26,
+      "measured": true,
+      "accepted_us": 11950,
+      "settled_us": 137231,
+      "first_consumed_publication_us": 103837,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30725 0 0 0 279 71 0 0 20 0 10 0 351668695 796864512 42432 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 22339770\nwchar: 142978788\nsyscr: 125751\nsyscw: 67136\nread_bytes: 0\nwrite_bytes: 145477632\ncancelled_write_bytes: 7012352\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              174112 kB\nPss:              171831 kB\nPss_Dirty:        119076 kB\nPss_Anon:         119076 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    119076 kB\nReferenced:       174112 kB\nAnonymous:        119076 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 7086080,
+          "allocated": 7086080
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 27,
+      "measured": true,
+      "accepted_us": 7055,
+      "settled_us": 123326,
+      "first_consumed_publication_us": 92791,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 30858 0 0 0 290 73 0 0 20 0 10 0 351668695 796864512 42496 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 23014296\nwchar: 148485879\nsyscr: 130050\nsyscw: 69741\nread_bytes: 0\nwrite_bytes: 151080960\ncancelled_write_bytes: 7270400\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              174644 kB\nPss:              172363 kB\nPss_Dirty:        119608 kB\nPss_Anon:         119608 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    119608 kB\nReferenced:       174644 kB\nAnonymous:        119608 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 7278592,
+          "allocated": 7278592
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 28,
+      "measured": true,
+      "accepted_us": 12229,
+      "settled_us": 111675,
+      "first_consumed_publication_us": 85224,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31049 0 0 0 299 74 0 0 20 0 10 0 351668695 796864512 42688 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 23731864\nwchar: 154184812\nsyscr: 134807\nsyscw: 72434\nread_bytes: 0\nwrite_bytes: 156860416\ncancelled_write_bytes: 7528448\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              175408 kB\nPss:              173127 kB\nPss_Dirty:        120372 kB\nPss_Anon:         120372 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    120372 kB\nReferenced:       175408 kB\nAnonymous:        120372 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 7499776,
+          "allocated": 7499776
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 29,
+      "measured": true,
+      "accepted_us": 8067,
+      "settled_us": 133636,
+      "first_consumed_publication_us": 101248,
+      "notification_records": 9,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31166 0 0 0 310 77 0 0 20 0 10 0 351668695 796864512 42816 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 24836998\nwchar: 159765575\nsyscr: 139498\nsyscw: 75078\nread_bytes: 0\nwrite_bytes: 162529280\ncancelled_write_bytes: 7786496\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              175876 kB\nPss:              173595 kB\nPss_Dirty:        120840 kB\nPss_Anon:         120840 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    120840 kB\nReferenced:       175876 kB\nAnonymous:        120840 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 7692288,
+          "allocated": 7692288
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "vanished_during_scan": true,
+          "logical": null,
+          "allocated": null
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 30,
+      "measured": true,
+      "accepted_us": 9337,
+      "settled_us": 149328,
+      "first_consumed_publication_us": 113907,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31188 0 0 0 322 80 0 0 20 0 10 0 351668695 796864512 42816 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 26151249\nwchar: 165346604\nsyscr: 144243\nsyscw: 77732\nread_bytes: 0\nwrite_bytes: 168198144\ncancelled_write_bytes: 8044544\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              175964 kB\nPss:              173683 kB\nPss_Dirty:        120928 kB\nPss_Anon:         120928 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    120928 kB\nReferenced:       175964 kB\nAnonymous:        120928 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 7892992,
+          "allocated": 7892992
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 31,
+      "measured": true,
+      "accepted_us": 8103,
+      "settled_us": 131186,
+      "first_consumed_publication_us": 103707,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31229 0 0 0 333 84 0 0 20 0 10 0 351668695 796864512 42944 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 27528552\nwchar: 170887207\nsyscr: 149049\nsyscw: 80350\nread_bytes: 0\nwrite_bytes: 173834240\ncancelled_write_bytes: 8302592\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              176128 kB\nPss:              173847 kB\nPss_Dirty:        121092 kB\nPss_Anon:         121092 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    121092 kB\nReferenced:       176128 kB\nAnonymous:        121092 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 8110080,
+          "allocated": 8110080
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 32,
+      "measured": true,
+      "accepted_us": 8009,
+      "settled_us": 137976,
+      "first_consumed_publication_us": 108887,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31385 0 0 0 344 86 0 0 20 0 10 0 351668695 796864512 43136 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 29005668\nwchar: 176636044\nsyscr: 154076\nsyscw: 83069\nread_bytes: 0\nwrite_bytes: 179662848\ncancelled_write_bytes: 8560640\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              176752 kB\nPss:              174471 kB\nPss_Dirty:        121716 kB\nPss_Anon:         121716 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    121716 kB\nReferenced:       176752 kB\nAnonymous:        121716 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 8306688,
+          "allocated": 8306688
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 33,
+      "measured": true,
+      "accepted_us": 7526,
+      "settled_us": 130030,
+      "first_consumed_publication_us": 95465,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31577 0 0 0 355 88 0 0 20 0 10 0 351668695 796864512 43328 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 30517986\nwchar: 182300003\nsyscr: 158717\nsyscw: 85749\nread_bytes: 0\nwrite_bytes: 185421824\ncancelled_write_bytes: 8818688\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              177520 kB\nPss:              175239 kB\nPss_Dirty:        122484 kB\nPss_Anon:         122484 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    122484 kB\nReferenced:       177520 kB\nAnonymous:        122484 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 8507392,
+          "allocated": 8507392
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 34,
+      "measured": true,
+      "accepted_us": 9495,
+      "settled_us": 123398,
+      "first_consumed_publication_us": 89421,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31709 0 0 0 365 91 0 0 20 0 10 0 351668695 796864512 43456 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 32067056\nwchar: 188049172\nsyscr: 163613\nsyscw: 88464\nread_bytes: 0\nwrite_bytes: 191250432\ncancelled_write_bytes: 9076736\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              178048 kB\nPss:              175767 kB\nPss_Dirty:        123012 kB\nPss_Anon:         123012 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    123012 kB\nReferenced:       178048 kB\nAnonymous:        123012 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 8712192,
+          "allocated": 8712192
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 35,
+      "measured": true,
+      "accepted_us": 10114,
+      "settled_us": 157661,
+      "first_consumed_publication_us": 116990,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31769 0 0 0 379 93 0 0 20 0 10 0 351668695 796864512 43456 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 33735131\nwchar: 193725799\nsyscr: 168514\nsyscw: 91152\nread_bytes: 0\nwrite_bytes: 197021696\ncancelled_write_bytes: 9334784\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              178292 kB\nPss:              176011 kB\nPss_Dirty:        123256 kB\nPss_Anon:         123256 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    123256 kB\nReferenced:       178292 kB\nAnonymous:        123256 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 8908800,
+          "allocated": 8908800
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 36,
+      "measured": true,
+      "accepted_us": 8089,
+      "settled_us": 121237,
+      "first_consumed_publication_us": 94335,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31908 0 0 0 387 96 0 0 20 0 10 0 351668695 796864512 43712 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 35415593\nwchar: 199447200\nsyscr: 173874\nsyscw: 93863\nread_bytes: 0\nwrite_bytes: 202829824\ncancelled_write_bytes: 9592832\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              178848 kB\nPss:              176567 kB\nPss_Dirty:        123812 kB\nPss_Anon:         123812 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    123812 kB\nReferenced:       178848 kB\nAnonymous:        123812 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 9101312,
+          "allocated": 9101312
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 37,
+      "measured": true,
+      "accepted_us": 12713,
+      "settled_us": 148375,
+      "first_consumed_publication_us": 112225,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31941 0 0 0 400 99 0 0 20 0 10 0 351668695 796864512 43712 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 37090839\nwchar: 204787499\nsyscr: 178752\nsyscw: 96393\nread_bytes: 0\nwrite_bytes: 208257024\ncancelled_write_bytes: 9850880\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              178976 kB\nPss:              176695 kB\nPss_Dirty:        123940 kB\nPss_Anon:         123940 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    123940 kB\nReferenced:       178976 kB\nAnonymous:        123940 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 9273344,
+          "allocated": 9273344
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 38,
+      "measured": true,
+      "accepted_us": 8552,
+      "settled_us": 143962,
+      "first_consumed_publication_us": 111105,
+      "notification_records": 12,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 31990 0 0 0 414 101 0 0 20 0 10 0 351668695 796864512 43712 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 38764262\nwchar: 210311940\nsyscr: 183770\nsyscw: 99009\nread_bytes: 0\nwrite_bytes: 213860352\ncancelled_write_bytes: 10108928\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              179172 kB\nPss:              176891 kB\nPss_Dirty:        124136 kB\nPss_Anon:         124136 kB\nPss_File:          52755 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    124136 kB\nReferenced:       179172 kB\nAnonymous:        124136 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 9449472,
+          "allocated": 9449472
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite-journal",
+          "logical": 12824,
+          "allocated": 16384
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    },
+    {
+      "turn": 39,
+      "measured": true,
+      "accepted_us": 9147,
+      "settled_us": 140316,
+      "first_consumed_publication_us": 112013,
+      "notification_records": 11,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 32193 0 0 0 425 104 0 0 20 0 10 0 351668695 796864512 43904 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 40472998\nwchar: 216075399\nsyscr: 188448\nsyscw: 101741\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10366976\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              179984 kB\nPss:              177701 kB\nPss_Dirty:        124948 kB\nPss_Anon:         124948 kB\nPss_File:          52753 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    124948 kB\nReferenced:       179984 kB\nAnonymous:        124948 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+          "logical": 9650176,
+          "allocated": 9650176
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+          "logical": 1217,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    }
+  ],
+  "initial_process": {
+    "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 24543 0 0 0 8 5 0 0 20 0 7 0 351668695 588574720 34944 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+    "io": "rchar: 5608679\nwchar: 869725\nsyscr: 5052\nsyscw: 250\nread_bytes: 0\nwrite_bytes: 909312\ncancelled_write_bytes: 20480\n",
+    "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              142840 kB\nPss:              140619 kB\nPss_Dirty:         94844 kB\nPss_Anon:          94844 kB\nPss_File:          45775 kB\nPss_Shmem:             0 kB\nShared_Clean:       2280 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     45716 kB\nPrivate_Dirty:     94844 kB\nReferenced:       142840 kB\nAnonymous:         94844 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+  },
+  "lifecycle": [
+    {
+      "phase": "before_initialization",
+      "elapsed_us": 202,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 1016 0 0 0 0 0 0 0 20 0 6 0 351668695 452243456 2624 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 9983\nwchar: 16\nsyscr: 41\nsyscw: 1\nread_bytes: 0\nwrite_bytes: 4096\ncancelled_write_bytes: 0\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:               11688 kB\nPss:                9711 kB\nPss_Dirty:          3500 kB\nPss_Anon:           3500 kB\nPss_File:           6211 kB\nPss_Shmem:             0 kB\nShared_Clean:       2024 kB\nShared_Dirty:          0 kB\nPrivate_Clean:      6164 kB\nPrivate_Dirty:      3500 kB\nReferenced:        11688 kB\nAnonymous:          3500 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_initialization",
+      "elapsed_us": 222289,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 24558 0 0 0 8 5 0 0 20 0 7 0 351668695 588574720 35136 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 5609835\nwchar: 869725\nsyscr: 5069\nsyscw: 250\nread_bytes: 0\nwrite_bytes: 909312\ncancelled_write_bytes: 20480\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              142904 kB\nPss:              140683 kB\nPss_Dirty:         94844 kB\nPss_Anon:          94844 kB\nPss_File:          45839 kB\nPss_Shmem:             0 kB\nShared_Clean:       2280 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     45780 kB\nPrivate_Dirty:     94844 kB\nReferenced:       142904 kB\nAnonymous:         94844 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_turns",
+      "elapsed_us": 5522753,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 32193 0 0 0 425 104 0 0 20 0 10 0 351668695 796864512 43904 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 40480175\nwchar: 216075399\nsyscr: 188758\nsyscw: 101741\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10366976\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              179984 kB\nPss:              177701 kB\nPss_Dirty:        124948 kB\nPss_Anon:         124948 kB\nPss_File:          52753 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52692 kB\nPrivate_Dirty:    124948 kB\nReferenced:       179984 kB\nAnonymous:        124948 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_verification",
+      "elapsed_us": 6037090,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 35653 0 0 0 462 119 0 0 20 0 10 0 351668695 796864512 47251 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 43766230\nwchar: 216075535\nsyscr: 257437\nsyscw: 101750\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10366976\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              193420 kB\nPss:              191137 kB\nPss_Dirty:        138064 kB\nPss_Anon:         138064 kB\nPss_File:          53073 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53012 kB\nPrivate_Dirty:    138064 kB\nReferenced:       193420 kB\nAnonymous:        138064 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_shutdown",
+      "elapsed_us": 6045511,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 35654 0 0 0 463 120 0 0 20 0 10 0 351668695 796241920 47206 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 43767470\nwchar: 216075543\nsyscr: 257459\nsyscw: 101751\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10366976\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              192948 kB\nPss:              190665 kB\nPss_Dirty:        137528 kB\nPss_Anon:         137528 kB\nPss_File:          53137 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53076 kB\nPrivate_Dirty:    137528 kB\nReferenced:       192948 kB\nAnonymous:        137528 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_driver_drop",
+      "elapsed_us": 6047858,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 35662 0 0 0 463 120 0 0 20 0 10 0 351668695 796241920 47206 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 43768646\nwchar: 216075543\nsyscr: 257477\nsyscw: 101751\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10366976\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              193040 kB\nPss:              190757 kB\nPss_Dirty:        137556 kB\nPss_Anon:         137556 kB\nPss_File:          53201 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53140 kB\nPrivate_Dirty:    137556 kB\nReferenced:       193040 kB\nAnonymous:        137556 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_final_writer_close",
+      "elapsed_us": 6053240,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 35662 0 0 0 463 120 0 0 20 0 10 0 351668695 796241920 47206 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 43841586\nwchar: 216075543\nsyscr: 257895\nsyscw: 101751\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10366976\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              193040 kB\nPss:              190757 kB\nPss_Dirty:        137556 kB\nPss_Anon:         137556 kB\nPss_File:          53201 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53140 kB\nPrivate_Dirty:    137556 kB\nReferenced:       193040 kB\nAnonymous:        137556 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_reopen_verification",
+      "elapsed_us": 6566307,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 37626 0 0 0 500 134 0 0 20 0 10 0 351668695 796241920 49126 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 47054010\nwchar: 216075543\nsyscr: 326589\nsyscw: 101751\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10366976\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              200896 kB\nPss:              198613 kB\nPss_Dirty:        145412 kB\nPss_Anon:         145412 kB\nPss_File:          53201 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53140 kB\nPrivate_Dirty:    145412 kB\nReferenced:       200896 kB\nAnonymous:        145412 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_cleanup",
+      "elapsed_us": 6569798,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 37626 0 0 0 500 135 0 0 20 0 10 0 351668695 796241920 49126 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 47055186\nwchar: 216075543\nsyscr: 326607\nsyscw: 101751\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10375168\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              200896 kB\nPss:              198613 kB\nPss_Dirty:        145412 kB\nPss_Anon:         145412 kB\nPss_File:          53201 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53140 kB\nPrivate_Dirty:    145412 kB\nReferenced:       200896 kB\nAnonymous:        145412 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_provider_teardown",
+      "elapsed_us": 6593256,
+      "process": {
+        "stat": "1238951 (before-review-c) S 1226833 1226833 1226833 0 -1 4194304 38042 7848 0 0 501 135 9 1 20 0 10 0 351668695 796241920 49313 18446744073709551615 111396050727040 111396127115232 140727890127520 0 0 0 0 4096 1088 0 0 0 17 12 0 0 0 0 0 111396130403848 111396130434680 111396787163136 140727890132658 140727890132785 140727890132785 140727890137030 0\n",
+        "io": "rchar: 50523109\nwchar: 216738504\nsyscr: 327075\nsyscw: 101764\nread_bytes: 0\nwrite_bytes: 219717632\ncancelled_write_bytes: 10375168\n",
+        "smaps_rollup": "655068b0c000-7ffdc3f61000 ---p 00000000 00:00 0                          [rollup]\nRss:              201444 kB\nPss:              199166 kB\nPss_Dirty:        145768 kB\nPss_Anon:         145768 kB\nPss_File:          53398 kB\nPss_Shmem:             0 kB\nShared_Clean:       2344 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53332 kB\nPrivate_Dirty:    145768 kB\nReferenced:       201444 kB\nAnonymous:        145768 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    }
+  ],
+  "measurement_version": 2,
+  "oracle_version": 2,
+  "verified_live_requests": 40,
+  "verified_reopened_requests": 40,
+  "shutdown_us": 6129,
+  "reopen_us": 504372,
+  "final_writer_close_us": 4480,
+  "checkpoint_footprint": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+      "logical": 9650176,
+      "allocated": 9650176
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+      "logical": 1217,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "before_close": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+      "logical": 9650176,
+      "allocated": 9650176
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+      "logical": 1217,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "closed_footprint": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/conversation-reservations/conv_01a14b84-3e85-7620-8cd7-da827f246550",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/ses_01a14b84-3e85-7620-8cd7-da605602f322/conversations/conv_01a14b84-3e85-7620-8cd7-da827f246550/conversation.sqlite",
+      "logical": 9650176,
+      "allocated": 9650176
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/private/sessions/catalog.json",
+      "logical": 1217,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpnMrick/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "close_us": 275,
+  "cleanup_us": 1162,
+  "oracle": "passed",
+  "sql_statements": null,
+  "allocations": null
+}
