@@ -397,6 +397,41 @@ temporary directory and target directory), once with
 `CARGO_TERM_COLOR=always` and once with `never`, each set only in a
 re-executed child's environment.
 
+### Measuring verification cost
+
+Compare only runs with matched conditions: the same lane, runner image,
+toolchain and cache state. Pull-request runs restore the caches published by
+`main`, so two PR runs in the same window are comparable; a failed or
+cancelled run is diagnostic evidence, not a timing baseline.
+
+- **Cache state**: the `Cache Rust dependencies` step logs either
+  `Restored from cache key "…" full match: true|false` or `No cache found`.
+  A miss turns dependency compilation into part of the first build step.
+- **Compilation vs execution**: Cargo's `Finished … in` line is the build
+  span of one command; libtest's `finished in` is execution of one harness.
+  A `cargo test` step's duration is their sum plus process startup, never
+  pure test time. The macOS lane separates them with `--no-run` steps,
+  `/usr/bin/time -l` (wall time, peak RSS) and the `macos-cargo-timings`
+  artifact (per-unit `--timings` reports).
+- **Library units**: two commands share compiled work only when they build
+  the same unit. Compare artifact hashes rather than command lines:
+
+  ```bash
+  cargo test --all-features --test process --no-run --message-format=json \
+    | jq -r 'select(.reason=="compiler-artifact" and .target.name=="rustx") | .filenames[0]'
+  ```
+
+  Features, `cfg(test)` and dev-dependency feature unification (any test or
+  example target in the invocation) each select a different unit. The macOS
+  lane keeps `CARGO_BUILD_JOBS=1`: a single rustX library compilation peaks
+  near 3.5 GB RSS there (`/usr/bin/time -l`), so two concurrent ones would
+  approach the runner's memory.
+- **Browser acceptance**: CI writes Playwright's JSON report to
+  `test-results/timings.json` in the `web-console-browser-evidence`
+  artifact: `stats.duration` is the whole run and each result's `duration`
+  covers one test, including the fixture it starts. Their difference is time
+  outside test bodies.
+
 ## Prerequisites
 
 Mandatory prerequisites fail closed; only explicitly opt-in tooling may
