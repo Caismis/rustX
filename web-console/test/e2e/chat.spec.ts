@@ -199,12 +199,21 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('button', { name: 'Close Inspector' }).click();
     await expect(canonical.locator('[data-tool-call-id="chat-image"]')).toHaveCount(1);
     const expandImage = async () => {
-      const process = canonical.locator('[data-turn-process]').last();
+      // A settled Turn is first drawn from its canonical head, its process
+      // shown directly without a disclosure; the durable transcript entry then
+      // replaces those seats with a collapsed Turn disclosure (turn-process
+      // test). Act only on that durable presentation, through visible controls.
+      const process = canonical.locator('[data-turn-process][aria-expanded]').last();
+      await expect(process).toBeVisible();
       if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+      await expect(process).toHaveAttribute('aria-expanded', 'true');
       // The tool row sits in its step group, collapsed once the Turn settles.
       const tool = canonical.locator('[data-tool-call-id="chat-image"]').last();
       const step = canonical.locator('[data-step-process]').filter({ has: page.locator('[data-tool-call-id="chat-image"]') }).last().locator(':scope > button');
+      await expect(step).toBeVisible();
       if (await step.getAttribute('aria-expanded') === 'false') await step.click();
+      await expect(step).toHaveAttribute('aria-expanded', 'true');
+      await expect(tool).toBeVisible();
       const disclosure = tool.getByRole('button', { expanded: false });
       if (await disclosure.count()) await disclosure.click();
     };

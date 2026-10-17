@@ -169,3 +169,32 @@ it('native successful completion identifies its exact inline member while a nume
    expect(isFinalTurnMessage({...final,turn_process:{...owner,outcome}})).toBe(false);
  expect(turnProcesses([final]).finalMetadataSeats.get('["c","a"]')).toBe(final.cursor);
 });
+
+it('a settled Turn first shown from its canonical head folds behind its disclosure once the durable transcript holds it', () => {
+  // Browser acceptance interacts with this settled presentation: until the
+  // source-owned transcript window holds the Message, its process is shown
+  // directly with no disclosure; the durable entry then replaces those seats
+  // with a collapsed Turn disclosure over closed step groups.
+  const owner = { ...process('image', 'final'), tool_call_count: 1 };
+  const call = { role: 'assistant' as const, id: 'call', content: [{ type: 'reasoning' as const, text: 'Thought call' }, { type: 'text' as const, text: 'Answer call' }] };
+  const final = { role: 'assistant' as const, id: 'final', content: [{ type: 'text' as const, text: 'Answer final' }] };
+  const descriptor = (message: typeof call): import('../../protocol/app-server/v50').RuntimeClientMessageDescriptor => ({
+    identity: message.id, locator: { type: 'by_message_id', message_id: message.id }, role: 'assistant', kind: 'message', block_count: String(message.content.length),
+    tool_call_count: '0', tool_calls: [], turn_process: owner, completed_response: null, content: [], collections: [] });
+  const state = { ...snapshot(), conversation_id: 'c', messages: [call, final] };
+  const ui = render(<AgentTranscript snapshot={{ ...state, message_descriptors: [descriptor(call), descriptor(final)] }}/>);
+  const head = screen.getByRole('button', { name: 'Worked' });
+  expect(head.hasAttribute('aria-expanded')).toBe(false);
+  expect(screen.getByText('Answer call').closest('[hidden]')).toBeNull();
+  expect(ui.container.querySelector('[data-step-process] > button')?.hasAttribute('hidden')).toBe(true);
+  ui.rerender(<AgentTranscript snapshot={{ ...state, transcript: { entries: [row('call', owner, true), row('final', owner)] } }}/>);
+  const durable = screen.getByRole('button', { name: 'Worked' });
+  expect(durable.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.getByText('Answer call').closest('[hidden]')).not.toBeNull();
+  fireEvent.click(durable);
+  const step = screen.getByRole('button', { name: 'Analysis completed' });
+  expect(step.getAttribute('aria-expanded')).toBe('false');
+  expect(step.closest('[hidden]')).toBeNull();
+  fireEvent.click(step);
+  expect(screen.getByText('Answer call').closest('[hidden]')).toBeNull();
+});
