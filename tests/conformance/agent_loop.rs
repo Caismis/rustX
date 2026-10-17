@@ -646,6 +646,13 @@ impl Driver {
     }
 
     async fn settle(&self) -> (ObservedEvents, RuntimeClientOutcome) {
+        self.settle_observing(|_| {}).await
+    }
+
+    async fn settle_observing(
+        &self,
+        mut observe: impl FnMut(&RuntimeClientEvent),
+    ) -> (ObservedEvents, RuntimeClientOutcome) {
         let mut observed = ObservedEvents::default();
         let mut events = self.events.lock().await;
         let mut owner = None;
@@ -668,6 +675,9 @@ impl Driver {
             let NotificationMethod::Event { cursor, event, .. } = &record else {
                 unreachable!()
             };
+            for fact in event.facts() {
+                observe(fact);
+            }
             let previous = self
                 .consumed_cursor
                 .swap(cursor.get(), std::sync::atomic::Ordering::SeqCst);
@@ -2682,3 +2692,6 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     drop(driver);
     emulator.finish().await;
 }
+
+#[cfg(unix)]
+mod runtime_benchmark;

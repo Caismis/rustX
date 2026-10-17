@@ -1,0 +1,85 @@
+{
+  "revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+  "scenario": "stream",
+  "node": "v24.19.0",
+  "open_ms": 16.14841499999997,
+  "history": 0,
+  "measured": 1,
+  "initial_cpu": {
+    "user": 397047,
+    "system": 35092
+  },
+  "initial_memory": {
+    "rss": 120758272,
+    "heapTotal": 35287040,
+    "heapUsed": 24423120,
+    "external": 11222026,
+    "arrayBuffers": 425248
+  },
+  "samples": [
+    {
+      "turn": 0,
+      "measured": true,
+      "accepted_ms": 1.7997349999999983,
+      "settled_ms": 498.10236599999996,
+      "cpu": {
+        "user": 421901,
+        "system": 38354
+      },
+      "memory": {
+        "rss": 124166144,
+        "heapTotal": 38957056,
+        "heapUsed": 23056152,
+        "external": 11222066,
+        "arrayBuffers": 276727
+      },
+      "footprint": [
+        {
+          "name": "conversation.db",
+          "logical": 4096,
+          "allocated": 4096
+        },
+        {
+          "name": "conversation.db-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "name": "conversation.db-wal",
+          "logical": 449112,
+          "allocated": 450560
+        }
+      ]
+    }
+  ],
+  "requests": 1,
+  "before_close": [
+    {
+      "name": "conversation.db",
+      "logical": 4096,
+      "allocated": 4096
+    },
+    {
+      "name": "conversation.db-shm",
+      "logical": 32768,
+      "allocated": 32768
+    },
+    {
+      "name": "conversation.db-wal",
+      "logical": 449112,
+      "allocated": 450560
+    }
+  ],
+  "closed_footprint": [
+    {
+      "name": "conversation.db",
+      "logical": 118784,
+      "allocated": 118784
+    }
+  ],
+  "close_ms": 4.864913999999999,
+  "cleanup_ms": 1.1479899999999361,
+  "oracle": "passed",
+  "provider": "local faux (no HTTP)",
+  "allocations": null
+}

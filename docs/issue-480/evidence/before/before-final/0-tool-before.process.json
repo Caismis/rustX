@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/tmp/rustx-480-evidence/before-final-conformance",
+    "agent_loop::runtime_benchmark::measure_runtime",
+    "--exact",
+    "--ignored",
+    "--nocapture"
+  ],
+  "returncode": 0,
+  "elapsed_seconds": 0.46857576025649905,
+  "pair": 0,
+  "case": "tool",
+  "label": "before"
+}
