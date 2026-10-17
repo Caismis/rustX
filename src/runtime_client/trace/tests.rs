@@ -4647,103 +4647,109 @@ fn native_numeric_tool_locator(
     }
 }
 
-#[test]
-fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
-    let (store, first_cut, call) = reused_tool_history();
-    let locator = TraceToolLocator {
-        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
-                message_id: MessageId::new("assistant-0"),
-            },
-            block_index: ContentBlockIndex::new(1),
-        },
-        call_id: Some(call.id.clone()),
-        tool_id: Some(call.tool_id.clone()),
-    };
-    assert!(
-        TraceProjection::at_cut(&store, &first_cut)
-            .unwrap()
-            .locate_tool_at(&locator, &first_cut)
-            .unwrap()
-            .is_none(),
-        "a proposal is not an execution at the captured cut"
-    );
-    let projection = TraceProjection::new(&store).unwrap();
-    let latest = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
-    let location = projection.locate_tool(&locator).unwrap().unwrap();
-    assert!(
-        !latest
-            .records
-            .iter()
-            .any(|record| record.id == location.record_id),
-        "the located call was never in the latest page"
-    );
-    let numeric_locator = native_numeric_tool_locator(&store, &locator);
-    assert_eq!(
-        projection.locate_tool(&numeric_locator).unwrap().unwrap(),
-        location,
-        "both typed source locators resolve exactly one immutable native occurrence"
-    );
-    assert_eq!(location.page.records.last().unwrap().id, location.record_id);
-    assert!(location.page.records.len() <= TRACE_PAGE_LIMIT);
-    let record = location.page.records.last().unwrap();
-    assert_eq!(record.location.step_id, Some(TurnId::new("step-0")));
-    let detail = projection.detail(&location.record_id).unwrap().unwrap();
-    assert_eq!(
-        detail.tool.unwrap().arguments.unwrap().value["command"],
-        call.arguments["command"]
-    );
-    let wrong_block = TraceToolLocator {
-        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
-                message_id: MessageId::new("assistant-0"),
-            },
-            block_index: ContentBlockIndex::new(0),
-        },
-        ..locator.clone()
-    };
-    assert!(projection.locate_tool(&wrong_block).unwrap().is_none());
-    let wrong_tool = TraceToolLocator {
-        tool_id: Some(ToolId::new("tool-read")),
-        ..locator.clone()
-    };
-    assert!(projection.locate_tool(&wrong_tool).unwrap().is_none());
-    let wrong_message = TraceToolLocator {
-        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
-                message_id: MessageId::new("unrelated-assistant"),
-            },
-            block_index: ContentBlockIndex::new(1),
-        },
-        ..locator.clone()
-    };
-    assert!(matches!(
-        projection.locate_tool(&wrong_message),
-        Err(ConversationStoreError::InvalidReference(message))
-            if message == "content source or read evidence unavailable"
-    ));
-    let wrong_call = TraceToolLocator {
-        call_id: Some(ToolCallId::new("different-call")),
-        ..locator.clone()
-    };
-    assert!(projection.locate_tool(&wrong_call).unwrap().is_none());
-    let second = projection
-        .locate_tool(&TraceToolLocator {
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+
+    #[test]
+    fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
+        let (store, first_cut, call) = reused_tool_history();
+        let locator = TraceToolLocator {
             occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
                 locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
-                    message_id: MessageId::new("assistant-2047"),
+                    message_id: MessageId::new("assistant-0"),
                 },
                 block_index: ContentBlockIndex::new(1),
             },
-            ..locator
-        })
-        .unwrap()
-        .unwrap();
-    assert_ne!(second.record_id, location.record_id);
-    assert_eq!(
-        second.page.records.last().unwrap().location.step_id,
-        Some(TurnId::new("step-2047"))
-    );
+            call_id: Some(call.id.clone()),
+            tool_id: Some(call.tool_id.clone()),
+        };
+        assert!(
+            TraceProjection::at_cut(&store, &first_cut)
+                .unwrap()
+                .locate_tool_at(&locator, &first_cut)
+                .unwrap()
+                .is_none(),
+            "a proposal is not an execution at the captured cut"
+        );
+        let projection = TraceProjection::new(&store).unwrap();
+        let latest = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
+        let location = projection.locate_tool(&locator).unwrap().unwrap();
+        assert!(
+            !latest
+                .records
+                .iter()
+                .any(|record| record.id == location.record_id),
+            "the located call was never in the latest page"
+        );
+        let numeric_locator = native_numeric_tool_locator(&store, &locator);
+        assert_eq!(
+            projection.locate_tool(&numeric_locator).unwrap().unwrap(),
+            location,
+            "both typed source locators resolve exactly one immutable native occurrence"
+        );
+        assert_eq!(location.page.records.last().unwrap().id, location.record_id);
+        assert!(location.page.records.len() <= TRACE_PAGE_LIMIT);
+        let record = location.page.records.last().unwrap();
+        assert_eq!(record.location.step_id, Some(TurnId::new("step-0")));
+        let detail = projection.detail(&location.record_id).unwrap().unwrap();
+        assert_eq!(
+            detail.tool.unwrap().arguments.unwrap().value["command"],
+            call.arguments["command"]
+        );
+        let wrong_block = TraceToolLocator {
+            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: MessageId::new("assistant-0"),
+                },
+                block_index: ContentBlockIndex::new(0),
+            },
+            ..locator.clone()
+        };
+        assert!(projection.locate_tool(&wrong_block).unwrap().is_none());
+        let wrong_tool = TraceToolLocator {
+            tool_id: Some(ToolId::new("tool-read")),
+            ..locator.clone()
+        };
+        assert!(projection.locate_tool(&wrong_tool).unwrap().is_none());
+        let wrong_message = TraceToolLocator {
+            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: MessageId::new("unrelated-assistant"),
+                },
+                block_index: ContentBlockIndex::new(1),
+            },
+            ..locator.clone()
+        };
+        assert!(matches!(
+            projection.locate_tool(&wrong_message),
+            Err(ConversationStoreError::InvalidReference(message))
+                if message == "content source or read evidence unavailable"
+        ));
+        let wrong_call = TraceToolLocator {
+            call_id: Some(ToolCallId::new("different-call")),
+            ..locator.clone()
+        };
+        assert!(projection.locate_tool(&wrong_call).unwrap().is_none());
+        let second = projection
+            .locate_tool(&TraceToolLocator {
+                occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: MessageId::new("assistant-2047"),
+                    },
+                    block_index: ContentBlockIndex::new(1),
+                },
+                ..locator
+            })
+            .unwrap()
+            .unwrap();
+        assert_ne!(second.record_id, location.record_id);
+        assert_eq!(
+            second.page.records.last().unwrap().location.step_id,
+            Some(TurnId::new("step-2047"))
+        );
+    }
 }
 
 #[test]

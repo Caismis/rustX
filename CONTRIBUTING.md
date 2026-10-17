@@ -152,6 +152,16 @@ git diff --check
 
 The GitHub Actions workflow is authoritative if this list and CI ever differ.
 
+You rarely need all of it locally. Pushes to a pull request run CI's FAST
+profile: the always-on checks and the suites of the surfaces you touched.
+When the change is high risk (any Rust, protocol, CI, test infrastructure,
+Product Host, client transport or manifest change; see "Verification
+profiles" in tests/README.md) and the candidate is final, add the
+`full-verification` label: CI then runs FULL — every lane, macOS and both
+browser shards — on that exact head, and again on any later push.
+`Merge verification` stays red for a high-risk change until FULL passes on
+the current head.
+
 ## Commit style
 
 Use short imperative English commit messages, for example:

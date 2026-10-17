@@ -175,64 +175,70 @@ impl SessionsEnumerationProbe {
     }
 }
 
-/// R01: with 1 and 1000 existing **published** Sessions, a new Conversation
-/// reservation enumerates zero existing Session directories.
-///
-/// The fixture is real published Session state built through the production
-/// owners. The measured reservation runs against an OS-level fixture where
-/// direct known-path access still works but directory enumeration is
-/// observable (inotify `IN_ACCESS`/`IN_OPEN` on Linux) and denied
-/// (execute-only mode), so an alternate traversal path fails or is detected at
-/// the actual filesystem-inspection boundary rather than by counting a
-/// particular helper.
-#[test]
-fn r01_reservation_inspects_zero_existing_session_directories() {
-    for sessions in [1_usize, 1000] {
-        let directory = tempfile::tempdir().unwrap();
-        let controller = ProductController::acquire(directory.path()).unwrap();
-        let mut catalog = SessionCatalog::empty(&controller).unwrap();
-        seed_published_sessions(&mut catalog, sessions);
-        drop(catalog);
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
 
-        let sessions_root = directory.path().join("sessions");
-        // `sessions/` holds the `catalog.json` plus one directory per Session.
-        assert_eq!(
-            std::fs::read_dir(&sessions_root).unwrap().count(),
-            sessions + 1,
-            "fixture did not publish {sessions} Sessions"
-        );
-        #[cfg(target_os = "linux")]
-        let mut probe = SessionsEnumerationProbe::install(&sessions_root);
-        // Deny directory enumeration while preserving direct known-path access.
-        set_directory_mode(&sessions_root, 0o111);
-        #[cfg(target_os = "linux")]
-        probe.drain();
+    /// R01: with 1 and 1000 existing **published** Sessions, a new Conversation
+    /// reservation enumerates zero existing Session directories.
+    ///
+    /// The fixture is real published Session state built through the production
+    /// owners. The measured reservation runs against an OS-level fixture where
+    /// direct known-path access still works but directory enumeration is
+    /// observable (inotify `IN_ACCESS`/`IN_OPEN` on Linux) and denied
+    /// (execute-only mode), so an alternate traversal path fails or is detected at
+    /// the actual filesystem-inspection boundary rather than by counting a
+    /// particular helper.
+    #[test]
+    fn r01_reservation_inspects_zero_existing_session_directories() {
+        for sessions in [1_usize, 1000] {
+            let directory = tempfile::tempdir().unwrap();
+            let controller = ProductController::acquire(directory.path()).unwrap();
+            let mut catalog = SessionCatalog::empty(&controller).unwrap();
+            seed_published_sessions(&mut catalog, sessions);
+            drop(catalog);
 
-        // The operation result itself is the proof: exactly one reservation of
-        // this identity succeeds and returns `Ok`. No process-global counter is
-        // read, so unrelated parallel tests cannot affect the assertion.
-        let fresh = ConversationId::generate();
-        controller.reserve_conversation(&fresh).unwrap();
-
-        #[cfg(target_os = "linux")]
-        {
-            probe.drain();
+            let sessions_root = directory.path().join("sessions");
+            // `sessions/` holds the `catalog.json` plus one directory per Session.
             assert_eq!(
-                probe.accesses, 0,
-                "reservation accessed/enumerated the existing Session tree with {sessions} present"
+                std::fs::read_dir(&sessions_root).unwrap().count(),
+                sessions + 1,
+                "fixture did not publish {sessions} Sessions"
             );
+            #[cfg(target_os = "linux")]
+            let mut probe = SessionsEnumerationProbe::install(&sessions_root);
+            // Deny directory enumeration while preserving direct known-path access.
+            set_directory_mode(&sessions_root, 0o111);
+            #[cfg(target_os = "linux")]
+            probe.drain();
+
+            // The operation result itself is the proof: exactly one reservation of
+            // this identity succeeds and returns `Ok`. No process-global counter is
+            // read, so unrelated parallel tests cannot affect the assertion.
+            let fresh = ConversationId::generate();
+            controller.reserve_conversation(&fresh).unwrap();
+
+            #[cfg(target_os = "linux")]
+            {
+                probe.drain();
+                assert_eq!(
+                    probe.accesses, 0,
+                    "reservation accessed/enumerated the existing Session tree with {sessions} present"
+                );
+            }
+            // Positive control: for an ordinary user the fixture really does deny
+            // directory enumeration; root bypasses mode bits, so the inotify probe
+            // above remains the detection mechanism there.
+            if !nix::unistd::geteuid().is_root() {
+                assert!(
+                    std::fs::read_dir(&sessions_root).is_err(),
+                    "execute-only fixture did not deny enumeration"
+                );
+            }
+            set_directory_mode(&sessions_root, 0o755);
+            assert!(marker(directory.path(), &fresh).is_file());
         }
-        // Positive control: for an ordinary user the fixture really does deny
-        // directory enumeration; root bypasses mode bits, so the inotify probe
-        // above remains the detection mechanism there.
-        if !nix::unistd::geteuid().is_root() {
-            assert!(
-                std::fs::read_dir(&sessions_root).is_err(),
-                "execute-only fixture did not deny enumeration"
-            );
-        }
-        set_directory_mode(&sessions_root, 0o755);
-        assert!(marker(directory.path(), &fresh).is_file());
     }
 }
 

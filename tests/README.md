@@ -282,6 +282,92 @@ meaningful domain/boundary/dependency topology:
 | `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
 
+## Verification profiles
+
+Fast feedback for ordinary development; complete verification at deliberate
+integration checkpoints. CI runs one of two profiles, which differ in which
+suites run, never in what a suite asserts:
+
+- **FAST** — every pull request push: the always-on checks plus the suites
+  of the surfaces the change touches.
+- **FULL** — every job, complete: `main`, the nightly schedule, manual
+  dispatch, and a pull request carrying the `full-verification` label, for
+  its current head and every later one.
+
+The `plan` job (`.github/scripts/verification.py`) owns selection. It reads
+the pull request's changed paths and decides the profile, the risk, the
+affected surfaces (`rust`, `protocol`, `web`, `tui`, `dev`) and which jobs
+and affected steps run. Every gated job runs only when the plan's
+`run[<job id>]` is true, and the script's tests check that `ci.yml` gates
+each job exactly that way.
+
+**Risk.** A change is high risk when any path can alter runtime, Agent Loop,
+persistence, canonical history, process supervision, transport, protocol,
+cancellation or recovery semantics, shared test infrastructure, CI or
+test-selection rules, or build provenance: all Rust sources and tests,
+`protocol/`, `test-support/`, `dev/`, `.github/`, the Product Host, the Web
+client, bindings and carrier, the browser fixtures and configuration, the
+TUI's App Server client, and every manifest and lockfile. A path no rule
+names, or an unreadable diff, is high risk and affects every surface.
+Presentation (Web `src/` outside those owners, the TUI's UI), leaf tests
+and browser specs are low risk. Documentation is low risk and selects no
+suite; Markdown under `examples/` is not documentation (it defines Agents,
+Skills and Workflows).
+
+**Merge.** `Merge verification` (the `verification` job) is the verdict to
+require. It always runs, and fails unless:
+
+- every job the plan selected succeeded and nothing unselected ran;
+- a high-risk change was verified by FULL;
+- the head this run verified is still the pull request's head.
+
+A high-risk pull request therefore shows a failing `Merge verification` on
+every FAST run, with the reason, until its final candidate is promoted with
+the `full-verification` label. FULL then runs on that exact head; any later
+push runs FULL again on the new head, and a result for an earlier head
+verifies nothing. The check enforces merges only once branch protection (or
+a ruleset) on `main` requires `Merge verification`; `main` currently has
+none, so a repository admin must add that rule — the workflow alone cannot
+prevent a merge. GitHub attaches checks to the pull request's head commit,
+which is tested merged with `main` as it was when the run started; requiring
+branches to be up to date before merging closes that gap.
+
+**Superseded runs.** A newer push or label on the same pull request cancels
+its unfinished run (`concurrency`, one group per pull request). Runs on
+`main`, scheduled and dispatched runs each form their own group and are
+never cancelled. FAST and FULL for one head are the same run, so they never
+cancel each other; a run's gate also fails if the pull request's head moved
+while it ran.
+
+**FAST Rust.** `rust-fast` compiles the library test harness and the
+`process` target once, runs every unit and deterministic contract module
+except the in-crate boundary suites, the capacity suite and four heavy
+contract groups, and runs the real-process `process` target. Each heavy group
+also runs in FAST when the change touches its owner:
+
+| Group | FAST runs it when the change touches |
+| --- | --- |
+| `durable::sqlite::` | `src/durable/` |
+| `local_runtime::session_runtime_manager::tests::`, `local_runtime::session::` | `src/app_server/`, `src/local_runtime/`, `tests/scripted/app_server/`, `tests/support/` |
+| `runtime_client::response::` | `src/runtime_client/` |
+
+The in-crate boundary suites, the other external boundary targets, the
+`contracts`/`provider` targets and macOS run in FULL only. This is a
+deliberate scheduling tradeoff: before #479 every pull request push ran
+everything; now a high-risk change gets that complete verification once, on
+its promoted head, and its intermediate pushes get FAST feedback. A
+low-risk change merges on FAST, which selects the suites of its surfaces (a
+Web presentation change runs the Web client checks and both browser shards).
+
+**Capacity tests.** A test whose value comes from its scale — a thousand
+turns, thousands of requests, 2,048 tool calls, 4,097 releases, a thousand
+sessions — lives in a `scale` module beside the code it measures, so its
+name contains `::scale::`. FAST skips that suite and FULL runs all of it;
+the lane check requires the suite to be non-empty and completely executed
+in FULL. An ordinary regression test may use small boundary cases, but it
+never replaces a capacity test. When a change touches the logic a capacity
+test measures, run it locally (see Running) or promote the pull request.
+
 ## How CI selects the classes
 
 The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes. The
@@ -418,18 +504,29 @@ second copy of it. Each Rust test lane ends with
 `cargo run --all-features --example check_test_lanes -- --job <job id>`, which reads the
 workflow's executing `cargo test` steps and asks libtest, through `--list`,
 what each one selects — so filters, `--skip`, features and `cfg` are
-Cargo's and libtest's own semantics. It fails for:
+Cargo's and libtest's own semantics. Every test job declares its profiles
+(`env: VERIFICATION_PROFILE: fast`, `full` or `fast full` — not a `RUST*`
+name, which the Rust cache would hash into its key) and must be gated by
+exactly `if: fromJSON(needs.plan.outputs.run)['<its id>']`; a FAST step may
+also be gated by the plan's affected-component map, and nothing else may
+make a test step conditional. Each profile's coverage is its own. It fails
+for:
 
 - a Cargo test target (lib, bin, example, integration test) selected by no
-  executing Linux step (`--no-run` does not count);
-- a Linux-discovered runnable test that no Linux step executes;
+  executing FULL Linux step (`--no-run` and FAST steps do not count);
+- a Linux-discovered runnable test that no FULL Linux step executes, the
+  capacity suite included;
 - a step that selects no runnable test of a lib or integration-test target;
 - a positive filter that matches nothing, only `#[ignore]`d tests, or only
   `--skip`ped tests, and a `--skip` that excludes nothing;
-- a suite in its `REQUIREMENTS` table (macOS: `boundary_suites::` and the
-  seven external boundary targets) that is missing or not fully executed on
-  its platform;
-- a step or libtest output it cannot interpret exactly.
+- a suite in its `REQUIREMENTS` table that is missing or not fully executed
+  in its profile on its platform: FAST on Linux must always run
+  `scripted_suites::`, `runtime::conversation_runtime::` and the `process`
+  target (affected steps never satisfy this; the capacity suite is
+  excluded), FULL on Linux the whole `::scale::` suite, FULL on macOS
+  `boundary_suites::` and the seven external boundary targets;
+- a test job without a declared profile or the canonical plan gate, and a
+  step or libtest output it cannot interpret exactly.
 
 Discovery is always native: the macOS job checks macOS, and `--job` refuses
 a job of another platform. Run it without `--job` to check every target of
@@ -609,7 +706,31 @@ feature suite.
 
 ## Running
 
+During implementation run the focused tests of what you change; at a
+checkpoint, run the affected modules; let CI's FAST run verify each push,
+and promote the final candidate to FULL instead of repeating the whole
+suite locally. CI verifies only committed, pushed heads — never local edits.
+
 ```bash
+# Focused: one module, one target, one test.
+cargo test --lib --all-features durable::sqlite::
+cargo test --all-features --test process app_server::
+(cd web-console && pnpm exec vitest run test/model-retry.test.tsx)
+
+# The FAST Rust lane (CI: rust-fast), without the affected heavy groups:
+cargo test --all-features --no-run --lib --test process
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- \
+  --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: \
+  --skip local_runtime::session_runtime_manager::tests:: \
+  --skip local_runtime::session:: --skip runtime_client::response::
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test process
+
+# The capacity suite (FULL), or one capacity test:
+cargo test --lib --all-features ::scale::
+
+# FULL: the lanes below. Promote a pull request with the
+# `full-verification` label to run all of them in CI on its exact head.
+
 # Unit tests + in-crate deterministic contracts (CI: rust-contracts):
 cargo build --bins   # unit tests exec target/debug/{bash,interactive}-supervisor
 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::

@@ -918,26 +918,33 @@ fn catalog_generation_rejects_stale_metadata_and_planned_publication() {
     );
 }
 
-#[test]
-fn deletion_protocol_counts_real_durable_ownership_without_exporting_it() {
-    let (dir, mut catalog, _) = open_catalog();
-    let target = catalog.snapshot(&first_session(&catalog)).unwrap();
-    let store = store_for(&catalog, &target.id, &target.active_conversation_id);
-    for ordinal in 1..=128 {
-        child(dir.path(), &store, ordinal, false);
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+
+    #[test]
+    fn deletion_protocol_counts_real_durable_ownership_without_exporting_it() {
+        let (dir, mut catalog, _) = open_catalog();
+        let target = catalog.snapshot(&first_session(&catalog)).unwrap();
+        let store = store_for(&catalog, &target.id, &target.active_conversation_id);
+        for ordinal in 1..=128 {
+            child(dir.path(), &store, ordinal, false);
+        }
+        drop(store);
+        let next = catalog.prepare_session(&state(), &[]).unwrap();
+        catalog
+            .publish_session(&next, SessionNodeOrigin::New)
+            .unwrap();
+        let result =
+            crate::app_server::session_deletion::project(catalog.delete_preview(&target.id));
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["preview"]["owned_node_count"], 1);
+        assert_eq!(value["preview"]["owned_child_count"], 128);
+        assert_eq!(value["preview"]["owned_conversation_count"], 129);
+        assert!(serde_json::to_string(&result).unwrap().len() < 300);
+        assert!(value["preview"].get("scopes").is_none());
     }
-    drop(store);
-    let next = catalog.prepare_session(&state(), &[]).unwrap();
-    catalog
-        .publish_session(&next, SessionNodeOrigin::New)
-        .unwrap();
-    let result = crate::app_server::session_deletion::project(catalog.delete_preview(&target.id));
-    let value = serde_json::to_value(&result).unwrap();
-    assert_eq!(value["preview"]["owned_node_count"], 1);
-    assert_eq!(value["preview"]["owned_child_count"], 128);
-    assert_eq!(value["preview"]["owned_conversation_count"], 129);
-    assert!(serde_json::to_string(&result).unwrap().len() < 300);
-    assert!(value["preview"].get("scopes").is_none());
 }
 
 #[test]

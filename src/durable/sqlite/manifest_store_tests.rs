@@ -87,74 +87,80 @@ fn assert_selected_store_output(
     }
     assert_eq!(bytes, expected);
 }
-#[test]
-fn native_manifest_warm_store_appends_are_delta_and_depth_bounded_at_100_300_1000() {
-    let store = store();
-    store.initialize(&[]).unwrap();
-    store.projected_history().unwrap();
-    let mut canonical = Vec::new();
-    for index in 1..=1000u32 {
-        let message = user_message(
-            &format!("selected-native-{index}"),
-            &format!("original 水🙂 {index}"),
-        );
-        store.append_canonical(&message).unwrap();
-        canonical.push(message);
-        compaction_resources::take_body_decodes();
-        crate::model::selected_input::take_hash_work();
-        let (snapshot, request) = selected_snapshot(&store, index);
-        assert_eq!(
-            compaction_resources::take_body_decodes(),
-            1,
-            "only the newly appended native C is read"
-        );
-        let hashes = crate::model::selected_input::take_hash_work();
-        assert!(
-            hashes.0 > 0 && hashes.0 < 1024 && hashes.1 > 0 && hashes.1 < 1024,
-            "delta hash work: {hashes:?}"
-        );
-        take_request_input_reconstructions();
-        let before: u64 = store
-            .lock()
-            .unwrap()
-            .query_row("SELECT count(*) FROM native_input_nodes", [], |r| r.get(0))
-            .unwrap();
-        observation_request::composed::take_work();
-        let committed = store
-            .commit_model_turn_start(&[], &snapshot, Utc::now())
-            .unwrap();
-        let source = observation_request::composed::take_work();
-        assert_eq!(
-            source.new_leaves, 1,
-            "Source captures only the new native occurrence: {source:?}"
-        );
-        assert!(source.max_source_metadata <= 65536 && source.max_index_page <= 65536);
-        assert_eq!(
-            take_request_input_reconstructions(),
-            (0, 0),
-            "warm request must not reconstruct its unchanged prefix"
-        );
-        let connection = store.lock().unwrap();
-        let after: u64 = connection
-            .query_row("SELECT count(*) FROM native_input_nodes", [], |r| r.get(0))
-            .unwrap();
-        let root = read_stored_snapshot_root(&connection, &snapshot.request_id)
-            .unwrap()
-            .unwrap();
-        assert!(
-            after - before <= 2 * u64::from(root.height) + 2,
-            "delta SQL nodes {} at {index}",
-            after - before
-        );
-        drop(connection);
-        if matches!(index, 100 | 300 | 1000) {
-            assert_selected_store_output(
-                &store,
-                &snapshot,
-                &request,
-                &canonical,
-                committed.started.sequence,
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+
+    #[test]
+    fn native_manifest_warm_store_appends_are_delta_and_depth_bounded_at_100_300_1000() {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        store.projected_history().unwrap();
+        let mut canonical = Vec::new();
+        for index in 1..=1000u32 {
+            let message = user_message(
+                &format!("selected-native-{index}"),
+                &format!("original 水🙂 {index}"),
             );
+            store.append_canonical(&message).unwrap();
+            canonical.push(message);
+            compaction_resources::take_body_decodes();
+            crate::model::selected_input::take_hash_work();
+            let (snapshot, request) = selected_snapshot(&store, index);
+            assert_eq!(
+                compaction_resources::take_body_decodes(),
+                1,
+                "only the newly appended native C is read"
+            );
+            let hashes = crate::model::selected_input::take_hash_work();
+            assert!(
+                hashes.0 > 0 && hashes.0 < 1024 && hashes.1 > 0 && hashes.1 < 1024,
+                "delta hash work: {hashes:?}"
+            );
+            take_request_input_reconstructions();
+            let before: u64 = store
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM native_input_nodes", [], |r| r.get(0))
+                .unwrap();
+            observation_request::composed::take_work();
+            let committed = store
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
+                .unwrap();
+            let source = observation_request::composed::take_work();
+            assert_eq!(
+                source.new_leaves, 1,
+                "Source captures only the new native occurrence: {source:?}"
+            );
+            assert!(source.max_source_metadata <= 65536 && source.max_index_page <= 65536);
+            assert_eq!(
+                take_request_input_reconstructions(),
+                (0, 0),
+                "warm request must not reconstruct its unchanged prefix"
+            );
+            let connection = store.lock().unwrap();
+            let after: u64 = connection
+                .query_row("SELECT count(*) FROM native_input_nodes", [], |r| r.get(0))
+                .unwrap();
+            let root = read_stored_snapshot_root(&connection, &snapshot.request_id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                after - before <= 2 * u64::from(root.height) + 2,
+                "delta SQL nodes {} at {index}",
+                after - before
+            );
+            drop(connection);
+            if matches!(index, 100 | 300 | 1000) {
+                assert_selected_store_output(
+                    &store,
+                    &snapshot,
+                    &request,
+                    &canonical,
+                    committed.started.sequence,
+                );
+            }
         }
     }
 }

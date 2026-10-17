@@ -545,39 +545,45 @@ fn assert_reading_fragment_source(
         offset = next;
     }
 }
-#[test]
-fn t20_reading_300_pairs_report_actual_canonical_fragment_role_coverage_and_capture_work() {
-    let store = reading_fragment_fixture();
-    let canonical = store.load_canonical().unwrap();
-    let first = fragment_snapshot(&store, 1, 0);
-    observation_request::composed::take_work();
-    let original = store
-        .commit_model_turn_start(&[], &first, Utc::now())
-        .unwrap()
-        .started;
-    let work = observation_request::composed::take_work();
-    assert_eq!(
-        work.new_leaves, 600,
-        "all actual User and Assistant occurrences captured once"
-    );
-    assert_reading_fragment_source(&store, &first, original.sequence);
-    let nodes = source_row_counts(&store).1;
-    for turn in 2..=4 {
-        let snapshot = fragment_snapshot(&store, turn, 0);
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+
+    #[test]
+    fn t20_reading_300_pairs_report_actual_canonical_fragment_role_coverage_and_capture_work() {
+        let store = reading_fragment_fixture();
+        let canonical = store.load_canonical().unwrap();
+        let first = fragment_snapshot(&store, 1, 0);
         observation_request::composed::take_work();
-        observation_request::take_header_constructions();
-        let started = store
-            .commit_model_turn_start(&[], &snapshot, Utc::now())
+        let original = store
+            .commit_model_turn_start(&[], &first, Utc::now())
             .unwrap()
             .started;
         let work = observation_request::composed::take_work();
-        assert_eq!(work.new_leaves, 0);
-        assert_eq!(work.new_nodes, 0);
-        assert_eq!(observation_request::take_header_constructions(), 0);
-        assert_eq!(source_row_counts(&store).1, nodes);
-        assert_reading_fragment_source(&store, &snapshot, started.sequence);
+        assert_eq!(
+            work.new_leaves, 600,
+            "all actual User and Assistant occurrences captured once"
+        );
+        assert_reading_fragment_source(&store, &first, original.sequence);
+        let nodes = source_row_counts(&store).1;
+        for turn in 2..=4 {
+            let snapshot = fragment_snapshot(&store, turn, 0);
+            observation_request::composed::take_work();
+            observation_request::take_header_constructions();
+            let started = store
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
+                .unwrap()
+                .started;
+            let work = observation_request::composed::take_work();
+            assert_eq!(work.new_leaves, 0);
+            assert_eq!(work.new_nodes, 0);
+            assert_eq!(observation_request::take_header_constructions(), 0);
+            assert_eq!(source_row_counts(&store).1, nodes);
+            assert_reading_fragment_source(&store, &snapshot, started.sequence);
+        }
+        assert_eq!(store.load_canonical().unwrap(), canonical);
     }
-    assert_eq!(store.load_canonical().unwrap(), canonical);
 }
 
 include!("request_shape_tests.rs");

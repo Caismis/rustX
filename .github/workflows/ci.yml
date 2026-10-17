@@ -1,15 +1,58 @@
 name: CI
 
+# Two verification profiles (tests/README.md, "Verification profiles"):
+#
+# - FAST: every pull request push. The always-on checks plus the suites of
+#   the surfaces the change touches.
+# - FULL: every job, complete. Runs on main, nightly, on manual dispatch, and
+#   on a pull request carrying the `full-verification` label, for its
+#   current and every later head.
+#
+# The `plan` job (.github/scripts/verification.py) owns job selection: every
+# gated job runs only when `run[<its id>]` is true. `verification` ("Merge
+# verification") is the one verdict to require for merge: it fails unless
+# every selected job succeeded, a high-risk change was verified by FULL, and
+# the verified head is still the pull request's head.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - main
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# A newer run for the same pull request (a push, or a label) supersedes its
+# unfinished predecessor. main, scheduled and dispatched runs each form their
+# own group and are never cancelled; another pull request never shares one.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  plan:
+    name: Verification plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      run: ${{ steps.plan.outputs.run }}
+      steps: ${{ steps.plan.outputs.steps }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Classify the change and select the profile's jobs
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/verification.py plan
+
   notifications:
     name: Notification metadata and signing
     runs-on: ubuntu-latest
@@ -23,6 +66,8 @@ jobs:
   # about two minutes instead of after a full test build.
   quality:
     name: Format, lint, and whitespace
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['quality']
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -93,6 +138,85 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
+  # FAST Rust feedback for a pull request push that touches Rust: one
+  # compilation of the library test harness and the `process` target (which
+  # also places the real executables at target/debug/), the FAST selection of
+  # unit and contract modules without the capacity suite (`::scale::`), and
+  # the real process, stdio and WebSocket App Server workflows. FULL replaces
+  # this job with the complete rust-contracts and rust-boundaries lanes; the
+  # lane check proves every test this job omits is executed there.
+  rust-fast:
+    name: Fast Rust contracts and real-process workflows (Linux)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-fast']
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERIFICATION_PROFILE: fast
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      # The rust-boundaries lineage: the same all-feature library, test
+      # harness and integration-target dependency graph.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-boundaries
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+
+      - name: Compile the FAST harnesses and the real executables
+        run: cargo test --all-features --no-run --lib --test process
+
+      # Every unit and deterministic contract module except the in-crate
+      # boundary suites (rust-boundaries), the capacity suite, and four heavy
+      # contract groups, which run below when the change touches them.
+      - name: Run the FAST unit and contract core
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: 'cargo test --lib --all-features -- --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
+
+      - name: Run the SQLite store contracts (durable changes)
+        if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
+        run: 'cargo test --lib --all-features -- durable::sqlite:: --skip ::scale::'
+
+      - name: Run the App Server and Session contracts (App Server or local runtime changes)
+        if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: 'cargo test --lib --all-features -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
+
+      - name: Run the runtime client response contracts (runtime client changes)
+        if: fromJSON(needs.plan.outputs.steps)['rust-fast:runtime-client']
+        run: 'cargo test --lib --all-features -- runtime_client::response:: --skip ::scale::'
+
+      - name: Run the real-process App Server and CLI workflows
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: cargo test --all-features --test process
+
+      - name: Check test lane coverage
+        run: cargo run --all-features --example check_test_lanes -- --job rust-fast
+
   # Fast deterministic classes: source-module unit tests, the in-crate
   # scripted contract suites, and the pure contract targets. No cross-module
   # boundary conformance suite runs here: none needs a real process, a
@@ -107,12 +231,16 @@ jobs:
   # they are excluded by their stable name prefix.
   rust-contracts:
     name: Deterministic contracts (Linux)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-contracts']
     runs-on: ubuntu-latest
     # Preparation and the two native builds consumed about 11 minutes in
     # run 38883956631. Budget compilation and complete test execution here;
     # individual liveness guards and the other lanes retain their bounds.
     timeout-minutes: 45
 
+    env:
+      VERIFICATION_PROFILE: full
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -178,9 +306,13 @@ jobs:
   # toolchain into a hard failure instead of a silent skip.
   rust-boundaries:
     name: Boundary suites (Linux)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
+    env:
+      VERIFICATION_PROFILE: full
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -288,12 +420,15 @@ jobs:
   # Linux-only.
   rust-platform-boundaries:
     name: Platform-sensitive boundaries (macOS)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
     runs-on: macos-latest
     # Keep the same native selectors. See docs/pr-424-validation.md for the
     # audited cold-build cancellation, the pending native comparison and the
     # measured warm-cache lane that set this budget (PR #465).
     timeout-minutes: 70
     env:
+      VERIFICATION_PROFILE: full
       # Job-local build metadata only: assertions, overflow checks, unwind,
       # optimization and release profiles retain their Cargo defaults.
       # rust-cache hashes the CARGO prefix, including these settings.
@@ -432,6 +567,8 @@ jobs:
   # Node being present.
   tui:
     name: TUI typecheck and tests
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['tui']
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -523,6 +660,8 @@ jobs:
 
   app-server-protocol:
     name: App Server generated protocol
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['app-server-protocol']
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -558,6 +697,8 @@ jobs:
 
   desktop-macos:
     name: Desktop adapter and Host (macOS Node)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['desktop-macos']
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -625,6 +766,8 @@ jobs:
   # archive is a run-scoped workflow artifact, never a cache entry.
   browser-prepare:
     name: Browser inputs (build once)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['browser-prepare']
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -684,7 +827,8 @@ jobs:
 
   web-client:
     name: Web client, Host and launcher tests
-    needs: browser-prepare
+    needs: [plan, browser-prepare]
+    if: fromJSON(needs.plan.outputs.run)['web-client']
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -737,7 +881,8 @@ jobs:
   # container (fonts and rasterization included), exactly as `pnpm test:e2e`.
   browser-shard:
     name: Browser acceptance (shard ${{ matrix.shard }}/2)
-    needs: browser-prepare
+    needs: [plan, browser-prepare]
+    if: fromJSON(needs.plan.outputs.run)['browser-shard']
     runs-on: ubuntu-latest
     # Per-test deadlines, fixture budgets and required assertions stay unchanged.
     timeout-minutes: 45
@@ -812,8 +957,8 @@ jobs:
   # if both shards succeeded and every discovered test ran exactly once.
   browser-report:
     name: Full Web conformance
-    needs: [browser-prepare, browser-shard]
-    if: ${{ !cancelled() && needs.browser-prepare.result == 'success' }}
+    needs: [plan, browser-prepare, browser-shard]
+    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['browser-report'] }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -863,3 +1008,37 @@ jobs:
           name: web-console-browser-report
           path: ${{ runner.temp }}/merged/
           if-no-files-found: ignore
+
+  # The merge verdict: require this check ("Merge verification") in branch
+  # protection. It runs after everything, whatever happened, and fails closed.
+  verification:
+    name: Merge verification
+    needs:
+      - plan
+      - notifications
+      - quality
+      - rust-fast
+      - rust-contracts
+      - rust-boundaries
+      - rust-platform-boundaries
+      - tui
+      - app-server-protocol
+      - desktop-macos
+      - browser-prepare
+      - web-client
+      - browser-shard
+      - browser-report
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every selected job succeeded, at the right profile, for the current head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PLAN: ${{ needs.plan.outputs.plan }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/verification.py gate

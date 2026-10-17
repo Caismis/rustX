@@ -143,86 +143,92 @@ fn unrelated_assistants(store: &SqliteConversationStore, count: u32, after: u32)
     append_assistant_history_fixture(store, &history).unwrap();
 }
 
-#[test]
-fn indexed_occupancy_and_message_lookup_cost_does_not_grow_with_irrelevant_history() {
-    let store = store();
-    terminal(&store, 0, true);
-    store
-        .append_canonical_with_event(
-            &assistant_message("target", "target"),
-            envelope(
-                store.conversation_id(),
-                "assistant",
-                None,
-                RuntimeEvent::AssistantMessageCommitted {
-                    message_id: MessageId::new("target"),
-                },
-            ),
-        )
-        .unwrap();
-    let cut = store.presentation_frontier().unwrap();
-    let occupancy = |through| {
-        query(
-            FactScope::ContextReading,
-            vec![
-                "model_request_completed",
-                "model_request_failed",
-                "compaction_completed",
-            ],
-            through,
-        )
-    };
-    let message = |through| {
-        query(
-            FactScope::Message("target".into()),
-            vec!["assistant_message_committed"],
-            through,
-        )
-    };
-    unrelated_history(&store, 8, 1);
-    let small = {
-        let connection = store.lock().unwrap();
-        [
-            execution_cost(&connection, &occupancy(1_000_000)),
-            execution_cost(&connection, &message(1_000_000)),
-        ]
-    };
-    unrelated_history(&store, 2048, 9);
-    let connection = store.lock().unwrap();
-    for (index, q) in [occupancy(1_000_000), message(1_000_000)]
-        .iter()
-        .enumerate()
-    {
-        let large = execution_cost(&connection, q);
-        assert_eq!(large.0, 1);
-        assert!(
-            large.1 <= small[index].1 + 6 && large.1 < 200,
-            "indexed VM steps grew: {:?} -> {large:?}",
-            small[index]
-        );
-        println!(
-            "lookup {index}: 8 versus 2056 unrelated rows per kind: {} -> {} VM steps",
-            small[index].1, large.1
-        );
-    }
-    assert_eq!(execution_cost(&connection, &occupancy(cut)).0, 1);
-    assert_eq!(execution_cost(&connection, &message(cut)).0, 1);
-    for predicate in [
-        "json_extract(event_json, '$.event.type') = 'model_request_completed' AND json_type(event_json, '$.event.usage') = 'object'",
-        "json_extract(event_json, '$.event.type') = 'assistant_message_committed' AND json_extract(event_json, '$.event.message_id') = 'target'",
-    ] {
-        let mut statement = connection.prepare(&format!("SELECT event_json FROM events INDEXED BY events_kind_idx WHERE {predicate} ORDER BY sequence DESC LIMIT 1")).unwrap();
-        let rows = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+
+    #[test]
+    fn indexed_occupancy_and_message_lookup_cost_does_not_grow_with_irrelevant_history() {
+        let store = store();
+        terminal(&store, 0, true);
+        store
+            .append_canonical_with_event(
+                &assistant_message("target", "target"),
+                envelope(
+                    store.conversation_id(),
+                    "assistant",
+                    None,
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("target"),
+                    },
+                ),
+            )
             .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(statement.get_status(StatementStatus::VmStep) > 2048 * 2);
-        println!(
-            "preceding kind-only query: {} VM steps",
-            statement.get_status(StatementStatus::VmStep)
-        );
+        let cut = store.presentation_frontier().unwrap();
+        let occupancy = |through| {
+            query(
+                FactScope::ContextReading,
+                vec![
+                    "model_request_completed",
+                    "model_request_failed",
+                    "compaction_completed",
+                ],
+                through,
+            )
+        };
+        let message = |through| {
+            query(
+                FactScope::Message("target".into()),
+                vec!["assistant_message_committed"],
+                through,
+            )
+        };
+        unrelated_history(&store, 8, 1);
+        let small = {
+            let connection = store.lock().unwrap();
+            [
+                execution_cost(&connection, &occupancy(1_000_000)),
+                execution_cost(&connection, &message(1_000_000)),
+            ]
+        };
+        unrelated_history(&store, 2048, 9);
+        let connection = store.lock().unwrap();
+        for (index, q) in [occupancy(1_000_000), message(1_000_000)]
+            .iter()
+            .enumerate()
+        {
+            let large = execution_cost(&connection, q);
+            assert_eq!(large.0, 1);
+            assert!(
+                large.1 <= small[index].1 + 6 && large.1 < 200,
+                "indexed VM steps grew: {:?} -> {large:?}",
+                small[index]
+            );
+            println!(
+                "lookup {index}: 8 versus 2056 unrelated rows per kind: {} -> {} VM steps",
+                small[index].1, large.1
+            );
+        }
+        assert_eq!(execution_cost(&connection, &occupancy(cut)).0, 1);
+        assert_eq!(execution_cost(&connection, &message(cut)).0, 1);
+        for predicate in [
+            "json_extract(event_json, '$.event.type') = 'model_request_completed' AND json_type(event_json, '$.event.usage') = 'object'",
+            "json_extract(event_json, '$.event.type') = 'assistant_message_committed' AND json_extract(event_json, '$.event.message_id') = 'target'",
+        ] {
+            let mut statement = connection.prepare(&format!("SELECT event_json FROM events INDEXED BY events_kind_idx WHERE {predicate} ORDER BY sequence DESC LIMIT 1")).unwrap();
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert!(statement.get_status(StatementStatus::VmStep) > 2048 * 2);
+            println!(
+                "preceding kind-only query: {} VM steps",
+                statement.get_status(StatementStatus::VmStep)
+            );
+        }
     }
 }
 
