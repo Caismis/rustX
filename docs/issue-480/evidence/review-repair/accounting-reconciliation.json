@@ -1,0 +1,7 @@
+{
+  "accepted_runs": 36,
+  "unchanged_non_lifecycle_metrics": true,
+  "all_9_counters_reconcile_for_whole_and_post_turn": true,
+  "identity": "previous through-teardown delta = revised through-cleanup product delta + separate provider-teardown delta",
+  "no_raw_sample_changes": true
+}

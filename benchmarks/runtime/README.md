@@ -81,11 +81,19 @@ settlement, unload, driver drop, final writable open/close, reopened validation,
 and cleanup. Ordinary process CPU/I/O endpoints now start **before fixture/runtime
 initialization** and follow initialization, all turns, exact verification, shutdown,
 driver drop, final writer open/close, reopened verification, cleanup and provider
-teardown. Adjacent deltas expose each phase; first-to-last and post-turn deltas
-account for the entire measured lifecycle and deferred maintenance. They exclude
-OS/test-runtime startup and final result serialization/writing. Provider child CPU
-and I/O are excluded; waiting for that child is part of wall time. Missing counters
-remain null, not zero. The turn-only counters remain separately labeled.
+teardown. Product lifecycle and product post-turn totals end at **after_cleanup**,
+including shutdown, final writer checkpoint/close, reopened verification and cleanup.
+Provider teardown is separate: Linux [`/proc/self/io`](https://man7.org/linux/man-pages/man5/proc_pid_io.5.html)
+includes waited-for children, so that phase's I/O delta can include the provider's
+entire lifetime I/O, not merely teardown work. Product I/O stops before this provider
+reap (and still includes any other children already waited for). CPU uses self
+`utime+stime` throughout and excludes child CPU; it does not share the I/O scope.
+Product wall ends at cleanup; the separate teardown wall includes waiting for the
+provider. OS/test-runtime startup and final result serialization/writing are outside
+these endpoints. Missing counters remain null, not zero. Turn-only counters remain
+separately labeled. Summary accounting version 3 derives these scopes from unchanged
+version-2 raw samples; historical through-teardown summaries remain retained.
+
 
 The earlier Stage C CPU/I/O window began after initialization and ended before
 shutdown. It did **not** cover the whole lifecycle. Its wall windows and separate

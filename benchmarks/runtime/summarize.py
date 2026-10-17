@@ -39,10 +39,15 @@ def lifecycle_totals(points, ticks_per_second):
     def delta(start, end):
         return dict(process_delta(start["process"], end["process"], ticks_per_second),
                     wall_us=end["elapsed_us"]-start["elapsed_us"])
+    by_phase = {point["phase"]: point for point in points}
+    cleanup = by_phase["after_cleanup"]
     return {"phases": {end["phase"].removeprefix("after_"): delta(start, end)
-                       for start, end in zip(points, points[1:])},
-            "whole_measured_lifecycle": delta(points[0], points[-1]),
-            "post_turn": delta(points[2], points[-1])}
+                       for start, end in zip(points[:-2], points[1:-1])},
+            "product_lifecycle": delta(points[0], cleanup),
+            "product_post_turn": delta(by_phase["after_turns"], cleanup),
+            # Linux /proc/self/io incorporates waited-for children's lifetime
+            # counters here. Self utime+stime does not include child CPU.
+            "provider_teardown_including_reaped_child_io": delta(cleanup, points[-1])}
 
 
 def main():
@@ -88,7 +93,11 @@ def main():
             "max_live_allocated_bytes":max(sum((f["allocated"] or 0) for f in s["footprint"]) for s in sample["samples"]),
             "last_live_wal_bytes":sum((f["logical"] or 0) for f in sample["before_close"] if f["path"].endswith('-wal')),
         })
-    print(json.dumps({"groups":[{"case":c,"label":l,"runs":runs} for (c,l),runs in grouped.items()],
+    print(json.dumps({"accounting_version": 3,
+                      "cpu_scope": "self runtime/driver utime+stime; excludes child CPU",
+                      "product_io_scope": "through after_cleanup, before provider reap; /proc/self/io includes any already waited-for children",
+                      "provider_teardown_io_scope": "includes waited-for provider lifetime I/O, not just teardown work",
+                      "groups":[{"case":c,"label":l,"runs":runs} for (c,l),runs in grouped.items()],
                       "failed":failed},indent=2))
 
 

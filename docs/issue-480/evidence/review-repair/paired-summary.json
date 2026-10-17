@@ -1,4 +1,8 @@
 {
+  "accounting_version": 3,
+  "cpu_scope": "self runtime/driver utime+stime; excludes child CPU",
+  "product_io_scope": "through after_cleanup, before provider reap; /proc/self/io includes any already waited-for children",
+  "provider_teardown_io_scope": "includes waited-for provider lifetime I/O, not just teardown work",
   "groups": [
     {
       "case": "cancel",
@@ -94,40 +98,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 944
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2818539,
-                "wchar": 13444,
-                "syscr": 388,
-                "syscw": 12,
-                "wall_us": 12758
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 240000.0,
               "read_bytes": 0,
               "write_bytes": 5148672,
               "cancelled_write_bytes": 356352,
-              "rchar": 13610364,
-              "wchar": 5050732,
-              "syscr": 8117,
-              "syscw": 2008,
-              "wall_us": 339100
+              "rchar": 10791825,
+              "wchar": 5037288,
+              "syscr": 7729,
+              "syscw": 1996,
+              "wall_us": 326342
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 1191936,
               "cancelled_write_bytes": 102400,
-              "rchar": 6331701,
-              "wchar": 1144068,
-              "syscr": 1347,
-              "syscw": 310,
-              "wall_us": 41141
+              "rchar": 3513162,
+              "wchar": 1130624,
+              "syscr": 959,
+              "syscw": 298,
+              "wall_us": 28383
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2818539,
+              "wchar": 13444,
+              "syscr": 388,
+              "syscw": 12,
+              "wall_us": 12758
             }
           },
           "measured_cpu_us_per_turn": 70000.0,
@@ -241,40 +245,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1207
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2818538,
-                "wchar": 13436,
-                "syscr": 388,
-                "syscw": 11,
-                "wall_us": 13597
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 220000.0,
               "read_bytes": 0,
               "write_bytes": 5148672,
               "cancelled_write_bytes": 356352,
-              "rchar": 13614454,
-              "wchar": 5050758,
-              "syscr": 8117,
-              "syscw": 2010,
-              "wall_us": 303649
+              "rchar": 10795916,
+              "wchar": 5037322,
+              "syscr": 7729,
+              "syscw": 1999,
+              "wall_us": 290052
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 10000.0,
               "read_bytes": 0,
               "write_bytes": 1191936,
               "cancelled_write_bytes": 102400,
-              "rchar": 6331694,
-              "wchar": 1144036,
-              "syscr": 1347,
-              "syscw": 306,
-              "wall_us": 34554
+              "rchar": 3513156,
+              "wchar": 1130600,
+              "syscr": 959,
+              "syscw": 295,
+              "wall_us": 20957
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2818538,
+              "wchar": 13436,
+              "syscr": 388,
+              "syscw": 11,
+              "wall_us": 13597
             }
           },
           "measured_cpu_us_per_turn": 60000.0,
@@ -388,40 +392,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 954
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2818539,
-                "wchar": 13452,
-                "syscr": 387,
-                "syscw": 13,
-                "wall_us": 13338
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 250000.0,
               "read_bytes": 0,
               "write_bytes": 5148672,
               "cancelled_write_bytes": 356352,
-              "rchar": 13610364,
-              "wchar": 5050740,
-              "syscr": 8116,
-              "syscw": 2009,
-              "wall_us": 344566
+              "rchar": 10791825,
+              "wchar": 5037288,
+              "syscr": 7729,
+              "syscw": 1996,
+              "wall_us": 331228
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 20000.0,
               "read_bytes": 0,
               "write_bytes": 1191936,
               "cancelled_write_bytes": 102400,
-              "rchar": 6331701,
-              "wchar": 1144076,
-              "syscr": 1346,
-              "syscw": 311,
-              "wall_us": 34860
+              "rchar": 3513162,
+              "wchar": 1130624,
+              "syscr": 959,
+              "syscw": 298,
+              "wall_us": 21522
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2818539,
+              "wchar": 13452,
+              "syscr": 387,
+              "syscw": 13,
+              "wall_us": 13338
             }
           },
           "measured_cpu_us_per_turn": 90000.0,
@@ -541,40 +545,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 878
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2818401,
-                "wchar": 13444,
-                "syscr": 388,
-                "syscw": 12,
-                "wall_us": 13485
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 270000.0,
               "read_bytes": 0,
               "write_bytes": 4829184,
               "cancelled_write_bytes": 229376,
-              "rchar": 9726635,
-              "wchar": 4723256,
-              "syscr": 9406,
-              "syscw": 1973,
-              "wall_us": 408711
+              "rchar": 6908234,
+              "wchar": 4709812,
+              "syscr": 9018,
+              "syscw": 1961,
+              "wall_us": 395226
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3178205,
-              "wchar": 13524,
-              "syscr": 1367,
-              "syscw": 14,
-              "wall_us": 32536
+              "rchar": 359804,
+              "wchar": 80,
+              "syscr": 979,
+              "syscw": 2,
+              "wall_us": 19051
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2818401,
+              "wchar": 13444,
+              "syscr": 388,
+              "syscw": 12,
+              "wall_us": 13485
             }
           },
           "measured_cpu_us_per_turn": 100000.0,
@@ -688,40 +692,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 923
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2818401,
-                "wchar": 13444,
-                "syscr": 388,
-                "syscw": 12,
-                "wall_us": 13903
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 240000.0,
               "read_bytes": 0,
               "write_bytes": 4833280,
               "cancelled_write_bytes": 229376,
-              "rchar": 9726699,
-              "wchar": 4727400,
-              "syscr": 9410,
-              "syscw": 1980,
-              "wall_us": 368893
+              "rchar": 6908298,
+              "wchar": 4713956,
+              "syscr": 9022,
+              "syscw": 1968,
+              "wall_us": 354990
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3178205,
-              "wchar": 13564,
-              "syscr": 1367,
-              "syscw": 19,
-              "wall_us": 31109
+              "rchar": 359804,
+              "wchar": 120,
+              "syscr": 979,
+              "syscw": 7,
+              "wall_us": 17206
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2818401,
+              "wchar": 13444,
+              "syscr": 388,
+              "syscw": 12,
+              "wall_us": 13903
             }
           },
           "measured_cpu_us_per_turn": 70000.0,
@@ -835,40 +839,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1416
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2818401,
-                "wchar": 13444,
-                "syscr": 387,
-                "syscw": 12,
-                "wall_us": 17349
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 260000.0,
+            "product_lifecycle": {
+              "cpu_us": 250000.0,
               "read_bytes": 0,
               "write_bytes": 4829184,
               "cancelled_write_bytes": 229376,
-              "rchar": 9725965,
-              "wchar": 4723320,
-              "syscr": 9363,
-              "syscw": 1981,
-              "wall_us": 378403
+              "rchar": 6907564,
+              "wchar": 4709876,
+              "syscr": 8976,
+              "syscw": 1969,
+              "wall_us": 361054
             },
-            "post_turn": {
-              "cpu_us": 30000.0,
+            "product_post_turn": {
+              "cpu_us": 20000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3178077,
-              "wchar": 13540,
-              "syscr": 1358,
-              "syscw": 16,
-              "wall_us": 38244
+              "rchar": 359676,
+              "wchar": 96,
+              "syscr": 971,
+              "syscw": 4,
+              "wall_us": 20895
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2818401,
+              "wchar": 13444,
+              "syscr": 387,
+              "syscw": 12,
+              "wall_us": 17349
             }
           },
           "measured_cpu_us_per_turn": 70000.0,
@@ -988,40 +992,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1460
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2830879,
-                "wchar": 25769,
-                "syscr": 390,
-                "syscw": 11,
-                "wall_us": 16861
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 400000.0,
               "read_bytes": 0,
               "write_bytes": 14745600,
               "cancelled_write_bytes": 503808,
-              "rchar": 14896349,
-              "wchar": 14944626,
-              "syscr": 8532,
-              "syscw": 6547,
-              "wall_us": 457360
+              "rchar": 12065470,
+              "wchar": 14918857,
+              "syscr": 8142,
+              "syscw": 6536,
+              "wall_us": 440499
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 700416,
               "cancelled_write_bytes": 102400,
-              "rchar": 6190179,
-              "wchar": 664873,
-              "syscr": 1313,
-              "syscw": 189,
-              "wall_us": 42535
+              "rchar": 3359300,
+              "wchar": 639104,
+              "syscr": 923,
+              "syscw": 178,
+              "wall_us": 25674
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2830879,
+              "wchar": 25769,
+              "syscr": 390,
+              "syscw": 11,
+              "wall_us": 16861
             }
           },
           "measured_cpu_us_per_turn": 240000.0,
@@ -1135,40 +1139,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1243
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2830884,
-                "wchar": 25785,
-                "syscr": 390,
-                "syscw": 13,
-                "wall_us": 22433
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 410000.0,
               "read_bytes": 0,
               "write_bytes": 14745600,
               "cancelled_write_bytes": 503808,
-              "rchar": 14896415,
-              "wchar": 14945738,
-              "syscr": 8534,
-              "syscw": 6686,
-              "wall_us": 469120
+              "rchar": 12065531,
+              "wchar": 14919953,
+              "syscr": 8144,
+              "syscw": 6673,
+              "wall_us": 446687
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 700416,
               "cancelled_write_bytes": 102400,
-              "rchar": 6190214,
-              "wchar": 664881,
-              "syscr": 1313,
-              "syscw": 190,
-              "wall_us": 45841
+              "rchar": 3359330,
+              "wchar": 639096,
+              "syscr": 923,
+              "syscw": 177,
+              "wall_us": 23408
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2830884,
+              "wchar": 25785,
+              "syscr": 390,
+              "syscw": 13,
+              "wall_us": 22433
             }
           },
           "measured_cpu_us_per_turn": 250000.0,
@@ -1282,40 +1286,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1178
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2830883,
-                "wchar": 25785,
-                "syscr": 389,
-                "syscw": 13,
-                "wall_us": 15516
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 420000.0,
+            "product_lifecycle": {
+              "cpu_us": 410000.0,
               "read_bytes": 0,
               "write_bytes": 14737408,
               "cancelled_write_bytes": 503808,
-              "rchar": 14892296,
-              "wchar": 14937490,
-              "syscr": 8529,
-              "syscw": 6679,
-              "wall_us": 520059
+              "rchar": 12061413,
+              "wchar": 14911705,
+              "syscr": 8140,
+              "syscw": 6666,
+              "wall_us": 504543
             },
-            "post_turn": {
-              "cpu_us": 40000.0,
+            "product_post_turn": {
+              "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 700416,
               "cancelled_write_bytes": 102400,
-              "rchar": 6190011,
-              "wchar": 664881,
-              "syscr": 1310,
-              "syscw": 190,
-              "wall_us": 55489
+              "rchar": 3359128,
+              "wchar": 639096,
+              "syscr": 921,
+              "syscw": 177,
+              "wall_us": 39973
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2830883,
+              "wchar": 25785,
+              "syscr": 389,
+              "syscw": 13,
+              "wall_us": 15516
             }
           },
           "measured_cpu_us_per_turn": 230000.0,
@@ -1435,40 +1439,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1055
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2830743,
-                "wchar": 25785,
-                "syscr": 390,
-                "syscw": 13,
-                "wall_us": 14489
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 520000.0,
               "read_bytes": 0,
               "write_bytes": 20930560,
               "cancelled_write_bytes": 290816,
-              "rchar": 9873504,
-              "wchar": 19851014,
-              "syscr": 10023,
-              "syscw": 9133,
-              "wall_us": 845980
+              "rchar": 7042761,
+              "wchar": 19825229,
+              "syscr": 9633,
+              "syscw": 9120,
+              "wall_us": 831491
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3274543,
-              "wchar": 25873,
-              "syscr": 1507,
-              "syscw": 16,
-              "wall_us": 34986
+              "rchar": 443800,
+              "wchar": 88,
+              "syscr": 1117,
+              "syscw": 3,
+              "wall_us": 20497
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2830743,
+              "wchar": 25785,
+              "syscr": 390,
+              "syscw": 13,
+              "wall_us": 14489
             }
           },
           "measured_cpu_us_per_turn": 350000.0,
@@ -1582,40 +1586,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1000
-              },
-              "provider_teardown": {
-                "cpu_us": 20000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2830744,
-                "wchar": 25793,
-                "syscr": 390,
-                "syscw": 14,
-                "wall_us": 13909
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 530000.0,
+            "product_lifecycle": {
+              "cpu_us": 510000.0,
               "read_bytes": 0,
               "write_bytes": 20930560,
               "cancelled_write_bytes": 290816,
-              "rchar": 9853710,
-              "wchar": 19850934,
-              "syscr": 10061,
-              "syscw": 9123,
-              "wall_us": 909549
+              "rchar": 7022966,
+              "wchar": 19825141,
+              "syscr": 9671,
+              "syscw": 9109,
+              "wall_us": 895640
             },
-            "post_turn": {
-              "cpu_us": 50000.0,
+            "product_post_turn": {
+              "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3251924,
-              "wchar": 25881,
-              "syscr": 1380,
-              "syscw": 17,
-              "wall_us": 39845
+              "rchar": 421180,
+              "wchar": 88,
+              "syscr": 990,
+              "syscw": 3,
+              "wall_us": 25936
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 20000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2830744,
+              "wchar": 25793,
+              "syscr": 390,
+              "syscw": 14,
+              "wall_us": 13909
             }
           },
           "measured_cpu_us_per_turn": 340000.0,
@@ -1729,40 +1733,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1905
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2830748,
-                "wchar": 25769,
-                "syscr": 389,
-                "syscw": 11,
-                "wall_us": 15418
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 580000.0,
+            "product_lifecycle": {
+              "cpu_us": 570000.0,
               "read_bytes": 0,
               "write_bytes": 20918272,
               "cancelled_write_bytes": 290816,
-              "rchar": 9848929,
-              "wchar": 19838617,
-              "syscr": 10015,
-              "syscw": 9116,
-              "wall_us": 7276634
+              "rchar": 7018181,
+              "wchar": 19812848,
+              "syscr": 9626,
+              "syscw": 9105,
+              "wall_us": 7261216
             },
-            "post_turn": {
-              "cpu_us": 30000.0,
+            "product_post_turn": {
+              "cpu_us": 20000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3254004,
-              "wchar": 25865,
-              "syscr": 1497,
-              "syscw": 15,
-              "wall_us": 39291
+              "rchar": 423256,
+              "wchar": 96,
+              "syscr": 1108,
+              "syscw": 4,
+              "wall_us": 23873
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2830748,
+              "wchar": 25769,
+              "syscr": 389,
+              "syscw": 11,
+              "wall_us": 15418
             }
           },
           "measured_cpu_us_per_turn": 410000.0,
@@ -1882,40 +1886,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 5729
-              },
-              "provider_teardown": {
-                "cpu_us": 20000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 4922265,
-                "wchar": 2117265,
-                "syscr": 649,
-                "syscw": 25,
-                "wall_us": 52373
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 14690000.0,
+            "product_lifecycle": {
+              "cpu_us": 14670000.0,
               "read_bytes": 0,
               "write_bytes": 410681344,
               "cancelled_write_bytes": 63897600,
-              "rchar": 270584402,
-              "wchar": 464080307,
-              "syscr": 304597,
-              "syscw": 186644,
-              "wall_us": 11938029
+              "rchar": 265662137,
+              "wchar": 461963042,
+              "syscr": 303948,
+              "syscw": 186619,
+              "wall_us": 11885656
             },
-            "post_turn": {
-              "cpu_us": 4150000.0,
+            "product_post_turn": {
+              "cpu_us": 4130000.0,
               "read_bytes": 0,
               "write_bytes": 1536000,
               "cancelled_write_bytes": 102400,
-              "rchar": 20143818,
-              "wchar": 3592009,
-              "syscr": 5855,
-              "syscw": 414,
-              "wall_us": 4182803
+              "rchar": 15221553,
+              "wchar": 1474744,
+              "syscr": 5206,
+              "syscw": 389,
+              "wall_us": 4130430
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 20000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 4922265,
+              "wchar": 2117265,
+              "syscr": 649,
+              "syscw": 25,
+              "wall_us": 52373
             }
           },
           "measured_cpu_us_per_turn": 112812.5,
@@ -2029,40 +2033,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 5535
-              },
-              "provider_teardown": {
-                "cpu_us": 30000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 4922270,
-                "wchar": 2117257,
-                "syscr": 647,
-                "syscw": 24,
-                "wall_us": 53957
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 14130000.0,
+            "product_lifecycle": {
+              "cpu_us": 14100000.0,
               "read_bytes": 0,
               "write_bytes": 410243072,
               "cancelled_write_bytes": 63746048,
-              "rchar": 269346731,
-              "wchar": 463645089,
-              "syscr": 304312,
-              "syscw": 186466,
-              "wall_us": 11511680
+              "rchar": 264424461,
+              "wchar": 461527832,
+              "syscr": 303665,
+              "syscw": 186442,
+              "wall_us": 11457723
             },
-            "post_turn": {
-              "cpu_us": 4140000.0,
+            "product_post_turn": {
+              "cpu_us": 4110000.0,
               "read_bytes": 0,
               "write_bytes": 1531904,
               "cancelled_write_bytes": 102400,
-              "rchar": 19372307,
-              "wchar": 3587889,
-              "syscr": 5647,
-              "syscw": 410,
-              "wall_us": 4196057
+              "rchar": 14450037,
+              "wchar": 1470632,
+              "syscr": 5000,
+              "syscw": 386,
+              "wall_us": 4142100
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 30000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 4922270,
+              "wchar": 2117257,
+              "syscr": 647,
+              "syscw": 24,
+              "wall_us": 53957
             }
           },
           "measured_cpu_us_per_turn": 104062.5,
@@ -2176,40 +2180,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 5446
-              },
-              "provider_teardown": {
-                "cpu_us": 30000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 4922266,
-                "wchar": 2117273,
-                "syscr": 645,
-                "syscw": 26,
-                "wall_us": 50007
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 14480000.0,
+            "product_lifecycle": {
+              "cpu_us": 14450000.0,
               "read_bytes": 0,
               "write_bytes": 410501120,
               "cancelled_write_bytes": 63766528,
-              "rchar": 271706189,
-              "wchar": 463547821,
-              "syscr": 305085,
-              "syscw": 186503,
-              "wall_us": 14004075
+              "rchar": 266783923,
+              "wchar": 461430548,
+              "syscr": 304440,
+              "syscw": 186477,
+              "wall_us": 13954068
             },
-            "post_turn": {
-              "cpu_us": 4170000.0,
+            "product_post_turn": {
+              "cpu_us": 4140000.0,
               "read_bytes": 0,
               "write_bytes": 1536000,
               "cancelled_write_bytes": 102400,
-              "rchar": 20172669,
-              "wchar": 3592017,
-              "syscr": 5858,
-              "syscw": 415,
-              "wall_us": 4404786
+              "rchar": 15250403,
+              "wchar": 1474744,
+              "syscr": 5213,
+              "syscw": 389,
+              "wall_us": 4354779
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 30000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 4922266,
+              "wchar": 2117273,
+              "syscr": 645,
+              "syscw": 26,
+              "wall_us": 50007
             }
           },
           "measured_cpu_us_per_turn": 115000.0,
@@ -2329,40 +2333,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 6142
-              },
-              "provider_teardown": {
-                "cpu_us": 30000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 4922137,
-                "wchar": 2117273,
-                "syscr": 646,
-                "syscw": 26,
-                "wall_us": 50071
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 19420000.0,
+            "product_lifecycle": {
+              "cpu_us": 19390000.0,
               "read_bytes": 0,
               "write_bytes": 550416384,
               "cancelled_write_bytes": 24817664,
-              "rchar": 205780094,
-              "wchar": 544358499,
-              "syscr": 1255589,
-              "syscw": 256209,
-              "wall_us": 38860712
+              "rchar": 200857957,
+              "wchar": 542241226,
+              "syscr": 1254943,
+              "syscw": 256183,
+              "wall_us": 38810641
             },
-            "post_turn": {
-              "cpu_us": 5570000.0,
+            "product_post_turn": {
+              "cpu_us": 5540000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 0,
-              "rchar": 28096286,
-              "wchar": 2117465,
-              "syscr": 772079,
-              "syscw": 42,
-              "wall_us": 5585608
+              "rchar": 23174149,
+              "wchar": 192,
+              "syscr": 771433,
+              "syscw": 16,
+              "wall_us": 5535537
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 30000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 4922137,
+              "wchar": 2117273,
+              "syscr": 646,
+              "syscw": 26,
+              "wall_us": 50071
             }
           },
           "measured_cpu_us_per_turn": 137500.0,
@@ -2476,40 +2480,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 5574
-              },
-              "provider_teardown": {
-                "cpu_us": 30000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 4922132,
-                "wchar": 2117273,
-                "syscr": 647,
-                "syscw": 26,
-                "wall_us": 49628
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 18390000.0,
+            "product_lifecycle": {
+              "cpu_us": 18360000.0,
               "read_bytes": 0,
               "write_bytes": 550916096,
               "cancelled_write_bytes": 24817664,
-              "rchar": 208295819,
-              "wchar": 544858980,
-              "syscr": 1254339,
-              "syscw": 256488,
-              "wall_us": 38104153
+              "rchar": 203373687,
+              "wchar": 542741707,
+              "syscr": 1253692,
+              "syscw": 256462,
+              "wall_us": 38054525
             },
-            "post_turn": {
-              "cpu_us": 5560000.0,
+            "product_post_turn": {
+              "cpu_us": 5530000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 0,
-              "rchar": 27406608,
-              "wchar": 2117481,
-              "syscr": 771853,
-              "syscw": 44,
-              "wall_us": 5582569
+              "rchar": 22484476,
+              "wchar": 208,
+              "syscr": 771206,
+              "syscw": 18,
+              "wall_us": 5532941
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 30000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 4922132,
+              "wchar": 2117273,
+              "syscr": 647,
+              "syscw": 26,
+              "wall_us": 49628
             }
           },
           "measured_cpu_us_per_turn": 130312.5,
@@ -2623,40 +2627,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 5518
-              },
-              "provider_teardown": {
-                "cpu_us": 20000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 4922136,
-                "wchar": 2117265,
-                "syscr": 647,
-                "syscw": 25,
-                "wall_us": 48508
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 17950000.0,
+            "product_lifecycle": {
+              "cpu_us": 17930000.0,
               "read_bytes": 0,
               "write_bytes": 550817792,
               "cancelled_write_bytes": 24825856,
-              "rchar": 202820512,
-              "wchar": 544760114,
-              "syscr": 1245443,
-              "syscw": 256400,
-              "wall_us": 18339221
+              "rchar": 197898376,
+              "wchar": 542642849,
+              "syscr": 1244796,
+              "syscw": 256375,
+              "wall_us": 18290713
             },
-            "post_turn": {
-              "cpu_us": 5530000.0,
+            "product_post_turn": {
+              "cpu_us": 5510000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 27373663,
-              "wchar": 2117361,
-              "syscr": 771415,
-              "syscw": 29,
-              "wall_us": 5564943
+              "rchar": 22451527,
+              "wchar": 96,
+              "syscr": 770768,
+              "syscw": 4,
+              "wall_us": 5516435
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 20000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 4922136,
+              "wchar": 2117265,
+              "syscr": 647,
+              "syscw": 25,
+              "wall_us": 48508
             }
           },
           "measured_cpu_us_per_turn": 136250.0,
@@ -2776,40 +2780,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 3544
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 3468056,
-                "wchar": 663001,
-                "syscr": 467,
-                "syscw": 18,
-                "wall_us": 24076
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 5240000.0,
+            "product_lifecycle": {
+              "cpu_us": 5230000.0,
               "read_bytes": 0,
               "write_bytes": 156880896,
               "cancelled_write_bytes": 22810624,
-              "rchar": 75756145,
-              "wchar": 174398288,
-              "syscr": 119245,
-              "syscw": 70935,
-              "wall_us": 4141348
+              "rchar": 72288089,
+              "wchar": 173735287,
+              "syscr": 118778,
+              "syscw": 70917,
+              "wall_us": 4117272
             },
-            "post_turn": {
-              "cpu_us": 820000.0,
+            "product_post_turn": {
+              "cpu_us": 810000.0,
               "read_bytes": 0,
               "write_bytes": 376832,
               "cancelled_write_bytes": 102400,
-              "rchar": 8622033,
-              "wchar": 978585,
-              "syscr": 2340,
-              "syscw": 125,
-              "wall_us": 829301
+              "rchar": 5153977,
+              "wchar": 315584,
+              "syscr": 1873,
+              "syscw": 107,
+              "wall_us": 805225
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 3468056,
+              "wchar": 663001,
+              "syscr": 467,
+              "syscw": 18,
+              "wall_us": 24076
             }
           },
           "measured_cpu_us_per_turn": 110312.5,
@@ -2923,40 +2927,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 3563
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 3468057,
-                "wchar": 663025,
-                "syscr": 468,
-                "syscw": 21,
-                "wall_us": 24319
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 5210000.0,
+            "product_lifecycle": {
+              "cpu_us": 5200000.0,
               "read_bytes": 0,
               "write_bytes": 157134848,
               "cancelled_write_bytes": 22908928,
-              "rchar": 75743017,
-              "wchar": 174652940,
-              "syscr": 119041,
-              "syscw": 71050,
-              "wall_us": 4121994
+              "rchar": 72274960,
+              "wchar": 173989915,
+              "syscr": 118573,
+              "syscw": 71029,
+              "wall_us": 4097675
             },
-            "post_turn": {
-              "cpu_us": 820000.0,
+            "product_post_turn": {
+              "cpu_us": 810000.0,
               "read_bytes": 0,
               "write_bytes": 376832,
               "cancelled_write_bytes": 102400,
-              "rchar": 8626147,
-              "wchar": 978601,
-              "syscr": 2341,
-              "syscw": 127,
-              "wall_us": 833852
+              "rchar": 5158090,
+              "wchar": 315576,
+              "syscr": 1873,
+              "syscw": 106,
+              "wall_us": 809533
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 3468057,
+              "wchar": 663025,
+              "syscr": 468,
+              "syscw": 21,
+              "wall_us": 24319
             }
           },
           "measured_cpu_us_per_turn": 110000.0,
@@ -3070,40 +3074,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 3157
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 3468056,
-                "wchar": 663025,
-                "syscr": 468,
-                "syscw": 21,
-                "wall_us": 22646
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 4910000.0,
+            "product_lifecycle": {
+              "cpu_us": 4900000.0,
               "read_bytes": 0,
               "write_bytes": 156729344,
               "cancelled_write_bytes": 22732800,
-              "rchar": 75484721,
-              "wchar": 174201287,
-              "syscr": 119208,
-              "syscw": 70862,
-              "wall_us": 3926226
+              "rchar": 72016665,
+              "wchar": 173538262,
+              "syscr": 118740,
+              "syscw": 70841,
+              "wall_us": 3903580
             },
-            "post_turn": {
-              "cpu_us": 840000.0,
+            "product_post_turn": {
+              "cpu_us": 830000.0,
               "read_bytes": 0,
               "write_bytes": 376832,
               "cancelled_write_bytes": 102400,
-              "rchar": 8626140,
-              "wchar": 978593,
-              "syscr": 2341,
-              "syscw": 126,
-              "wall_us": 849051
+              "rchar": 5158084,
+              "wchar": 315568,
+              "syscr": 1873,
+              "syscw": 105,
+              "wall_us": 826405
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 3468056,
+              "wchar": 663025,
+              "syscr": 468,
+              "syscw": 21,
+              "wall_us": 22646
             }
           },
           "measured_cpu_us_per_turn": 100937.5,
@@ -3223,40 +3227,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 3151
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 299008,
-                "cancelled_write_bytes": 53248,
-                "rchar": 4502926,
-                "wchar": 908701,
-                "syscr": 593,
-                "syscw": 43,
-                "wall_us": 27391
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 5580000.0,
+            "product_lifecycle": {
+              "cpu_us": 5570000.0,
               "read_bytes": 0,
-              "write_bytes": 220016640,
-              "cancelled_write_bytes": 10428416,
-              "rchar": 51836593,
-              "wchar": 216988625,
-              "syscr": 329577,
-              "syscw": 101829,
-              "wall_us": 6091665
+              "write_bytes": 219717632,
+              "cancelled_write_bytes": 10375168,
+              "rchar": 47333667,
+              "wchar": 216079924,
+              "syscr": 328984,
+              "syscw": 101786,
+              "wall_us": 6064274
             },
-            "post_turn": {
-              "cpu_us": 1080000.0,
+            "product_post_turn": {
+              "cpu_us": 1070000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 8192,
+              "rchar": 6610922,
+              "wchar": 120,
+              "syscr": 138410,
+              "syscw": 7,
+              "wall_us": 1051285
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
               "read_bytes": 0,
               "write_bytes": 299008,
-              "cancelled_write_bytes": 61440,
-              "rchar": 11113848,
-              "wchar": 908821,
-              "syscr": 139003,
-              "syscw": 50,
-              "wall_us": 1078676
+              "cancelled_write_bytes": 53248,
+              "rchar": 4502926,
+              "wchar": 908701,
+              "syscr": 593,
+              "syscw": 43,
+              "wall_us": 27391
             }
           },
           "measured_cpu_us_per_turn": 104687.5,
@@ -3370,40 +3374,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 3043
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 3467923,
-                "wchar": 663017,
-                "syscr": 467,
-                "syscw": 20,
-                "wall_us": 23035
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 6200000.0,
+            "product_lifecycle": {
+              "cpu_us": 6190000.0,
               "read_bytes": 0,
               "write_bytes": 219635712,
               "cancelled_write_bytes": 10375168,
-              "rchar": 50639700,
-              "wchar": 216661114,
-              "syscr": 330576,
-              "syscw": 101790,
-              "wall_us": 6507473
+              "rchar": 47171777,
+              "wchar": 215998097,
+              "syscr": 330109,
+              "syscw": 101770,
+              "wall_us": 6484438
             },
-            "post_turn": {
-              "cpu_us": 1070000.0,
+            "product_post_turn": {
+              "cpu_us": 1060000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 10071511,
-              "wchar": 663177,
-              "syscr": 138744,
-              "syscw": 32,
-              "wall_us": 1071814
+              "rchar": 6603588,
+              "wchar": 160,
+              "syscr": 138277,
+              "syscw": 12,
+              "wall_us": 1048779
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 3467923,
+              "wchar": 663017,
+              "syscr": 467,
+              "syscw": 20,
+              "wall_us": 23035
             }
           },
           "measured_cpu_us_per_turn": 127500.0,
@@ -3517,40 +3521,40 @@
                 "syscr": 18,
                 "syscw": 0,
                 "wall_us": 3491
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 3467923,
-                "wchar": 662961,
-                "syscr": 468,
-                "syscw": 13,
-                "wall_us": 23458
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 6360000.0,
+            "product_lifecycle": {
+              "cpu_us": 6350000.0,
               "read_bytes": 0,
               "write_bytes": 219713536,
               "cancelled_write_bytes": 10375168,
-              "rchar": 50513126,
-              "wchar": 216738488,
-              "syscr": 327034,
-              "syscw": 101763,
-              "wall_us": 6593054
+              "rchar": 47045203,
+              "wchar": 216075527,
+              "syscr": 326566,
+              "syscw": 101750,
+              "wall_us": 6569596
             },
-            "post_turn": {
-              "cpu_us": 1070000.0,
+            "product_post_turn": {
+              "cpu_us": 1060000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 10042934,
-              "wchar": 663105,
-              "syscr": 138317,
-              "syscw": 23,
-              "wall_us": 1070503
+              "rchar": 6575011,
+              "wchar": 144,
+              "syscr": 137849,
+              "syscw": 10,
+              "wall_us": 1047045
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 3467923,
+              "wchar": 662961,
+              "syscr": 468,
+              "syscw": 13,
+              "wall_us": 23458
             }
           },
           "measured_cpu_us_per_turn": 131562.5,
@@ -3670,40 +3674,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1052
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2845638,
-                "wchar": 42102,
-                "syscr": 390,
-                "syscw": 14,
-                "wall_us": 17339
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 420000.0,
               "read_bytes": 0,
               "write_bytes": 6815744,
               "cancelled_write_bytes": 417792,
-              "rchar": 15255658,
-              "wchar": 6788461,
-              "syscr": 8611,
-              "syscw": 3569,
-              "wall_us": 1877826
+              "rchar": 12410020,
+              "wchar": 6746359,
+              "syscr": 8221,
+              "syscw": 3555,
+              "wall_us": 1860487
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 40000.0,
               "read_bytes": 0,
               "write_bytes": 1236992,
               "cancelled_write_bytes": 102400,
-              "rchar": 7981696,
-              "wchar": 1217798,
-              "syscr": 1743,
-              "syscw": 325,
-              "wall_us": 53437
+              "rchar": 5136058,
+              "wchar": 1175696,
+              "syscr": 1353,
+              "syscw": 311,
+              "wall_us": 36098
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2845638,
+              "wchar": 42102,
+              "syscr": 390,
+              "syscw": 14,
+              "wall_us": 17339
             }
           },
           "measured_cpu_us_per_turn": 240000.0,
@@ -3817,40 +3821,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 967
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2845639,
-                "wchar": 42078,
-                "syscr": 391,
-                "syscw": 11,
-                "wall_us": 18456
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 440000.0,
               "read_bytes": 0,
               "write_bytes": 6856704,
               "cancelled_write_bytes": 417792,
-              "rchar": 15296855,
-              "wchar": 6829579,
-              "syscr": 8621,
-              "syscw": 3580,
-              "wall_us": 1917546
+              "rchar": 12451216,
+              "wchar": 6787501,
+              "syscr": 8230,
+              "syscw": 3569,
+              "wall_us": 1899090
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 1236992,
               "cancelled_write_bytes": 102400,
-              "rchar": 8022903,
-              "wchar": 1217742,
-              "syscr": 1754,
-              "syscw": 318,
-              "wall_us": 46955
+              "rchar": 5177264,
+              "wchar": 1175664,
+              "syscr": 1363,
+              "syscw": 307,
+              "wall_us": 28499
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2845639,
+              "wchar": 42078,
+              "syscr": 391,
+              "syscw": 11,
+              "wall_us": 18456
             }
           },
           "measured_cpu_us_per_turn": 270000.0,
@@ -3964,40 +3968,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1588
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2845638,
-                "wchar": 42078,
-                "syscr": 390,
-                "syscw": 11,
-                "wall_us": 14431
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 440000.0,
               "read_bytes": 0,
               "write_bytes": 6815744,
               "cancelled_write_bytes": 417792,
-              "rchar": 15255652,
-              "wchar": 6788261,
-              "syscr": 8609,
-              "syscw": 3544,
-              "wall_us": 2616453
+              "rchar": 12410014,
+              "wchar": 6746183,
+              "syscr": 8219,
+              "syscw": 3533,
+              "wall_us": 2602022
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 1236992,
               "cancelled_write_bytes": 102400,
-              "rchar": 7981696,
-              "wchar": 1217734,
-              "syscr": 1743,
-              "syscw": 317,
-              "wall_us": 229727
+              "rchar": 5136058,
+              "wchar": 1175656,
+              "syscr": 1353,
+              "syscw": 306,
+              "wall_us": 215296
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2845638,
+              "wchar": 42078,
+              "syscr": 390,
+              "syscw": 11,
+              "wall_us": 14431
             }
           },
           "measured_cpu_us_per_turn": 250000.0,
@@ -4117,40 +4121,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 957
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2845497,
-                "wchar": 42094,
-                "syscr": 390,
-                "syscw": 13,
-                "wall_us": 15054
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 460000.0,
               "read_bytes": 0,
               "write_bytes": 8192000,
               "cancelled_write_bytes": 290816,
-              "rchar": 9795479,
-              "wchar": 7940365,
-              "syscr": 9636,
-              "syscw": 4288,
-              "wall_us": 1948634
+              "rchar": 6949982,
+              "wchar": 7898271,
+              "syscr": 9246,
+              "syscw": 4275,
+              "wall_us": 1933580
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 40000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3226104,
-              "wchar": 42214,
-              "syscr": 1389,
-              "syscw": 20,
-              "wall_us": 46342
+              "rchar": 380607,
+              "wchar": 120,
+              "syscr": 999,
+              "syscw": 7,
+              "wall_us": 31288
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2845497,
+              "wchar": 42094,
+              "syscr": 390,
+              "syscw": 13,
+              "wall_us": 15054
             }
           },
           "measured_cpu_us_per_turn": 270000.0,
@@ -4264,40 +4268,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1043
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2845502,
-                "wchar": 42086,
-                "syscr": 390,
-                "syscw": 12,
-                "wall_us": 13377
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 390000.0,
               "read_bytes": 0,
               "write_bytes": 8187904,
               "cancelled_write_bytes": 290816,
-              "rchar": 9796260,
-              "wchar": 7936323,
-              "syscr": 9682,
-              "syscw": 4295,
-              "wall_us": 1915275
+              "rchar": 6950758,
+              "wchar": 7894237,
+              "syscr": 9292,
+              "syscw": 4283,
+              "wall_us": 1901898
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 20000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3225750,
-              "wchar": 42206,
-              "syscr": 1371,
-              "syscw": 19,
-              "wall_us": 32543
+              "rchar": 380248,
+              "wchar": 120,
+              "syscr": 981,
+              "syscw": 7,
+              "wall_us": 19166
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2845502,
+              "wchar": 42086,
+              "syscr": 390,
+              "syscw": 12,
+              "wall_us": 13377
             }
           },
           "measured_cpu_us_per_turn": 240000.0,
@@ -4411,40 +4415,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 948
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2845496,
-                "wchar": 42094,
-                "syscr": 390,
-                "syscw": 13,
-                "wall_us": 14809
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 520000.0,
               "read_bytes": 0,
               "write_bytes": 8249344,
               "cancelled_write_bytes": 290816,
-              "rchar": 9816633,
-              "wchar": 7990266,
-              "syscr": 9685,
-              "syscw": 4337,
-              "wall_us": 3776457
+              "rchar": 6971137,
+              "wchar": 7948172,
+              "syscr": 9295,
+              "syscw": 4324,
+              "wall_us": 3761648
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 50000.0,
               "read_bytes": 0,
               "write_bytes": 16384,
               "cancelled_write_bytes": 8192,
-              "rchar": 3248555,
-              "wchar": 54514,
-              "syscr": 1513,
-              "syscw": 24,
-              "wall_us": 225230
+              "rchar": 403059,
+              "wchar": 12420,
+              "syscr": 1123,
+              "syscw": 11,
+              "wall_us": 210421
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2845496,
+              "wchar": 42094,
+              "syscr": 390,
+              "syscw": 13,
+              "wall_us": 14809
             }
           },
           "measured_cpu_us_per_turn": 310000.0,
@@ -4564,40 +4568,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1181
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2831628,
-                "wchar": 26512,
-                "syscr": 390,
-                "syscw": 11,
-                "wall_us": 13666
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 310000.0,
               "read_bytes": 0,
               "write_bytes": 9756672,
               "cancelled_write_bytes": 774144,
-              "rchar": 14461135,
-              "wchar": 9771232,
-              "syscr": 11096,
-              "syscw": 3920,
-              "wall_us": 385042
+              "rchar": 11629507,
+              "wchar": 9744720,
+              "syscr": 10706,
+              "syscw": 3909,
+              "wall_us": 371376
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 483328,
               "cancelled_write_bytes": 102400,
-              "rchar": 4866349,
-              "wchar": 448528,
-              "syscr": 997,
-              "syscw": 136,
-              "wall_us": 37418
+              "rchar": 2034721,
+              "wchar": 422016,
+              "syscr": 607,
+              "syscw": 125,
+              "wall_us": 23752
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2831628,
+              "wchar": 26512,
+              "syscr": 390,
+              "syscw": 11,
+              "wall_us": 13666
             }
           },
           "measured_cpu_us_per_turn": 140000.0,
@@ -4711,40 +4715,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1628
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2831628,
-                "wchar": 26512,
-                "syscr": 390,
-                "syscw": 11,
-                "wall_us": 13407
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 310000.0,
               "read_bytes": 0,
               "write_bytes": 9748480,
               "cancelled_write_bytes": 774144,
-              "rchar": 14456793,
-              "wchar": 9762968,
-              "syscr": 11092,
-              "syscw": 3911,
-              "wall_us": 374138
+              "rchar": 11625165,
+              "wchar": 9736456,
+              "syscr": 10702,
+              "syscw": 3900,
+              "wall_us": 360731
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 483328,
               "cancelled_write_bytes": 102400,
-              "rchar": 4867755,
-              "wchar": 448512,
-              "syscr": 1001,
-              "syscw": 134,
-              "wall_us": 41268
+              "rchar": 2036127,
+              "wchar": 422000,
+              "syscr": 611,
+              "syscw": 123,
+              "wall_us": 27861
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2831628,
+              "wchar": 26512,
+              "syscr": 390,
+              "syscw": 11,
+              "wall_us": 13407
             }
           },
           "measured_cpu_us_per_turn": 130000.0,
@@ -4858,40 +4862,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1001
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2831623,
-                "wchar": 26552,
-                "syscr": 390,
-                "syscw": 16,
-                "wall_us": 14933
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 320000.0,
               "read_bytes": 0,
               "write_bytes": 9756672,
               "cancelled_write_bytes": 774144,
-              "rchar": 14461081,
-              "wchar": 9771232,
-              "syscr": 11096,
-              "syscw": 3920,
-              "wall_us": 392111
+              "rchar": 11629458,
+              "wchar": 9744680,
+              "syscr": 10706,
+              "syscw": 3904,
+              "wall_us": 377178
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 483328,
               "cancelled_write_bytes": 102400,
-              "rchar": 4867521,
-              "wchar": 448576,
-              "syscr": 999,
-              "syscw": 142,
-              "wall_us": 42670
+              "rchar": 2035898,
+              "wchar": 422024,
+              "syscr": 609,
+              "syscw": 126,
+              "wall_us": 27737
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2831623,
+              "wchar": 26552,
+              "syscr": 390,
+              "syscw": 16,
+              "wall_us": 14933
             }
           },
           "measured_cpu_us_per_turn": 130000.0,
@@ -5011,40 +5015,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1128
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2831488,
-                "wchar": 26512,
-                "syscr": 390,
-                "syscw": 11,
-                "wall_us": 13173
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 320000.0,
               "read_bytes": 0,
               "write_bytes": 11194368,
               "cancelled_write_bytes": 569344,
-              "rchar": 10556004,
-              "wchar": 10992203,
-              "syscr": 13359,
-              "syscw": 4823,
-              "wall_us": 491572
+              "rchar": 7724516,
+              "wchar": 10965691,
+              "syscr": 12969,
+              "syscw": 4812,
+              "wall_us": 478399
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 30000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3357786,
-              "wchar": 26608,
-              "syscr": 1757,
-              "syscw": 15,
-              "wall_us": 39474
+              "rchar": 526298,
+              "wchar": 96,
+              "syscr": 1367,
+              "syscw": 4,
+              "wall_us": 26301
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2831488,
+              "wchar": 26512,
+              "syscr": 390,
+              "syscw": 11,
+              "wall_us": 13173
             }
           },
           "measured_cpu_us_per_turn": 150000.0,
@@ -5158,40 +5162,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1002
-              },
-              "provider_teardown": {
-                "cpu_us": 0.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2831489,
-                "wchar": 26528,
-                "syscr": 389,
-                "syscw": 13,
-                "wall_us": 13175
               }
             },
-            "whole_measured_lifecycle": {
+            "product_lifecycle": {
               "cpu_us": 360000.0,
               "read_bytes": 0,
               "write_bytes": 11198464,
               "cancelled_write_bytes": 569344,
-              "rchar": 10594889,
-              "wchar": 10996333,
-              "syscr": 13465,
-              "syscw": 4827,
-              "wall_us": 509200
+              "rchar": 7763400,
+              "wchar": 10969805,
+              "syscr": 13076,
+              "syscw": 4814,
+              "wall_us": 496025
             },
-            "post_turn": {
+            "product_post_turn": {
               "cpu_us": 40000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3400345,
-              "wchar": 26656,
-              "syscr": 2002,
-              "syscw": 21,
-              "wall_us": 41323
+              "rchar": 568856,
+              "wchar": 128,
+              "syscr": 1613,
+              "syscw": 8,
+              "wall_us": 28148
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 0.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2831489,
+              "wchar": 26528,
+              "syscr": 389,
+              "syscw": 13,
+              "wall_us": 13175
             }
           },
           "measured_cpu_us_per_turn": 180000.0,
@@ -5305,40 +5309,40 @@
                 "syscr": 17,
                 "syscw": 0,
                 "wall_us": 1020
-              },
-              "provider_teardown": {
-                "cpu_us": 10000.0,
-                "read_bytes": 0,
-                "write_bytes": 0,
-                "cancelled_write_bytes": 0,
-                "rchar": 2831495,
-                "wchar": 26528,
-                "syscr": 390,
-                "syscw": 13,
-                "wall_us": 14593
               }
             },
-            "whole_measured_lifecycle": {
-              "cpu_us": 400000.0,
+            "product_lifecycle": {
+              "cpu_us": 390000.0,
               "read_bytes": 0,
               "write_bytes": 11194368,
               "cancelled_write_bytes": 569344,
-              "rchar": 10560602,
-              "wchar": 10992310,
-              "syscr": 13542,
-              "syscw": 4835,
-              "wall_us": 628395
+              "rchar": 7729107,
+              "wchar": 10965782,
+              "syscr": 13152,
+              "syscw": 4822,
+              "wall_us": 613802
             },
-            "post_turn": {
-              "cpu_us": 50000.0,
+            "product_post_turn": {
+              "cpu_us": 40000.0,
               "read_bytes": 0,
               "write_bytes": 0,
               "cancelled_write_bytes": 8192,
-              "rchar": 3358485,
-              "wchar": 26648,
-              "syscr": 1787,
-              "syscw": 20,
-              "wall_us": 45701
+              "rchar": 526990,
+              "wchar": 120,
+              "syscr": 1397,
+              "syscw": 7,
+              "wall_us": 31108
+            },
+            "provider_teardown_including_reaped_child_io": {
+              "cpu_us": 10000.0,
+              "read_bytes": 0,
+              "write_bytes": 0,
+              "cancelled_write_bytes": 0,
+              "rchar": 2831495,
+              "wchar": 26528,
+              "syscr": 390,
+              "syscw": 13,
+              "wall_us": 14593
             }
           },
           "measured_cpu_us_per_turn": 200000.0,
