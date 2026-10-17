@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn failed_listener_join_remains_explicit_on_every_shutdown_wait() {
@@ -17,7 +18,7 @@ async fn failed_listener_join_remains_explicit_on_every_shutdown_wait() {
         let (_, workset) = tokio::sync::watch::channel(0);
         let mut server = LiveConversationInspectionServer {
             path: path.clone(),
-            stop: Arc::new(tokio::sync::Notify::new()),
+            stop: tokio_util::sync::CancellationToken::new(),
             task: Some(task),
             shutdown_failure: None,
             workset,
@@ -68,7 +69,7 @@ async fn failed_connection_is_reported_only_after_survivors_join_and_persists() 
         let (_, workset) = tokio::sync::watch::channel(0);
         let mut server = LiveConversationInspectionServer {
             path: path.clone(),
-            stop: Arc::new(tokio::sync::Notify::new()),
+            stop: tokio_util::sync::CancellationToken::new(),
             task: Some(task),
             shutdown_failure: None,
             workset,
