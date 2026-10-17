@@ -229,17 +229,24 @@ def github(path):
         return json.load(response)
 
 
+# GitHub lists at most this many files of a pull request.
+LISTED_FILES_LIMIT = 3000
+
+
 def changed_paths(number):
-    """Every path the pull request changes (renames contribute both names)."""
-    paths, page = [], 1
+    """Every path the pull request changes (renames contribute both names),
+    or none when GitHub's listing may be truncated: an unreadable diff is
+    classified as high risk affecting every surface."""
+    paths, page, listed = [], 1, 0
     while True:
         files = github(f"pulls/{number}/files?per_page=100&page={page}")
+        listed += len(files)
         for item in files:
             paths.append(item["filename"])
             if item.get("previous_filename"):
                 paths.append(item["previous_filename"])
         if len(files) < 100:
-            return sorted(set(paths))
+            return [] if listed >= LISTED_FILES_LIMIT else sorted(set(paths))
         page += 1
 
 

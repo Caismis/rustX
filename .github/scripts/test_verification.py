@@ -71,6 +71,20 @@ class Classification(unittest.TestCase):
         self.assertEqual(v.classify(["README.md", "docs/a.md"]), {"risk": "low", "surfaces": [], "reasons": []})
 
 
+class Listing(unittest.TestCase):
+    def test_a_possibly_truncated_file_listing_is_unreadable(self):
+        pages = {1: [{"filename": f"web-console/src/presentation/f{index}.tsx"} for index in range(100)]}
+        original = v.github
+        try:
+            v.github = lambda path: pages.get(int(path.rsplit("=", 1)[1]), [])
+            self.assertEqual(len(v.changed_paths(1)), 100)
+            for page in range(2, 31):
+                pages[page] = pages[1]
+            self.assertEqual(v.changed_paths(1), [])
+        finally:
+            v.github = original
+
+
 class Planning(unittest.TestCase):
     def test_main_schedule_and_dispatch_run_full(self):
         for event in ("push", "schedule", "workflow_dispatch"):
