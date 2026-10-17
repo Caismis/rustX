@@ -138,10 +138,22 @@ export function assign(tests: { file: string }[], weights: Record<string, number
   return shards.map(shard => shard.files.sort());
 }
 
-/** Measured seconds per spec file from Playwright JSON reports of complete runs. */
+/**
+ * Measured seconds per spec file from Playwright JSON reports of complete
+ * one-worker runs: each test's wall span until the next test of its run
+ * starts, so the time between tests (fixture teardown, worker restarts)
+ * counts toward the file that caused it.
+ */
 export function weightsOf(reports: Pick<JSONReport, 'suites'>[]): Record<string, number> {
   const weights: Record<string, number> = {};
-  for (const report of reports) for (const { file, test } of cases(report)) for (const result of test.results) weights[file] = (weights[file] ?? 0) + result.duration / 1000;
+  for (const report of reports) {
+    const runs = cases(report).flatMap(({ file, test }) => test.results.map(result => ({ file, start: Date.parse(result.startTime), duration: result.duration })))
+      .sort((a, b) => a.start - b.start);
+    runs.forEach((run, index) => {
+      const span = index + 1 < runs.length ? runs[index + 1].start - run.start : run.duration;
+      weights[run.file] = (weights[run.file] ?? 0) + span / 1000;
+    });
+  }
   return Object.fromEntries(Object.entries(weights).sort(([a], [b]) => a.localeCompare(b)).map(([file, seconds]) => [file, Math.round(seconds * 10) / 10]));
 }
 

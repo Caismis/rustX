@@ -81,9 +81,13 @@ describe('shard assignment', () => {
     expect(shards).toEqual([['new.spec.ts'], ['measured.spec.ts', 'small.spec.ts']]);
     expect(assign([...input].reverse(), { 'measured.spec.ts': 20, 'small.spec.ts': 10 }, 2)).toEqual(shards);
   });
-  it('derives weights from reported durations per file', () => {
-    const report = { suites: [{ title: 'a.spec.ts', file: 'a.spec.ts', line: 0, column: 0, specs: [1500, 2500].map((duration, index) => ({ id: String(index), title: 't', tags: [], ok: true, file: 'a.spec.ts', line: 1, column: 1, tests: [{ timeout: 1, annotations: [], expectedStatus: 'passed' as const, projectName: '', projectId: '', status: 'expected' as const, results: [{ workerIndex: 0, parallelIndex: 0, status: 'passed' as const, duration, error: undefined, errors: [], stdout: [], stderr: [], retry: 0, startTime: '', attachments: [], annotations: [] }] }] })) }] };
-    expect(weightsOf([report])).toEqual({ 'a.spec.ts': 4 });
+  it('weighs each test by its wall span until the next test of its run starts', () => {
+    const result = (startTime: string, duration: number) => ({ workerIndex: 0, parallelIndex: 0, status: 'passed' as const, duration, error: undefined, errors: [], stdout: [], stderr: [], retry: 0, startTime, attachments: [], annotations: [] });
+    const spec = (file: string, id: string, start: string, duration: number) => ({ id, title: 't', tags: [], ok: true, file, line: 1, column: 1, tests: [{ timeout: 1, annotations: [], expectedStatus: 'passed' as const, projectName: '', projectId: '', status: 'expected' as const, results: [result(start, duration)] }] });
+    const suite = (file: string, specs: ReturnType<typeof spec>[]) => ({ title: file, file, line: 0, column: 0, specs });
+    // a: 1.5 s test, then 2.5 s until b starts; b: last test, its own 3 s.
+    const report = { suites: [suite('b.spec.ts', [spec('b.spec.ts', '2', '2026-01-01T00:00:04.000Z', 3000)]), suite('a.spec.ts', [spec('a.spec.ts', '1', '2026-01-01T00:00:00.000Z', 1500)])] };
+    expect(weightsOf([report])).toEqual({ 'a.spec.ts': 4, 'b.spec.ts': 3 });
   });
 });
 
