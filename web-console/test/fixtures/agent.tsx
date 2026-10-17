@@ -8,6 +8,7 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
+import { traceRecord } from '../trace-fixture';
 import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v50';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
@@ -84,6 +85,22 @@ if (mode === 'fork') {
  server.summaries.set('B', { name: '原始会话：探索历史分叉与上下文压缩的交互设计' });
  server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
  server.handlers.set('session/node', () => ({ type: 'node', node: { ordinal: '1', id: 'node-A', conversation_id: 'conversation-A', origin: { type: 'fork', source_session: 'B', source_node: 'node-B', source_surface_revision: '2', source_message: 'answer-1', side: 'after' } } }));
+}
+if (mode === 'retry-active' || mode === 'retry-settled') {
+ // One native timeout and its retry, as the Trace publishes them: the
+ // presentation matrix of model-retry.spec.ts's native workflow.
+ const failed = traceRecord(0, { state: 'failed' }); failed.request!.failure_kind = 'timeout';
+ const retry = traceRecord(1, { state: mode === 'retry-active' ? 'running' : 'completed' });
+ retry.request!.previous_failure_kind = 'timeout'; retry.request!.predecessor = { availability: 'available', request_id: 'request-0', request_id_source: null };
+ s.trace = { records: [failed, retry] };
+ const recovered = { role: 'assistant' as const, id: retry.request!.assistant_message_id!, content: [{ type: 'text' as const, text: 'Recovered after timeout.' }] };
+ if (mode === 'retry-active') {
+  s.messages.pop(); s.transcript.entries.pop();
+  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, in_flight: { message_id: recovered.id, blocks: [] }, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+ } else {
+  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } }, turn: 1 };
+  s.messages[1] = recovered; s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: recovered } };
+ }
 }
 server.snapshots.set('A', s);
 await server.attached('A');

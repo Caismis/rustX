@@ -505,14 +505,16 @@ are never merged into one run.
 
 | Removed native run | Invariant | Retained or replacement proof | Saved (CI run 39015122730) |
 | --- | --- | --- | --- |
-| `model-retry` en dark, zh light | timeout retry disclosure, recovery placement, Stop during retry, late output hidden | the same workflow in en light 1440 (plus reload) and zh dark 390; both locales' timeout, active and settled retry copy in `test/model-retry.test.tsx` | 8.4 s + 8.8 s |
+| `model-retry` en dark, zh light | timeout retry disclosure, recovery placement, Stop during retry, late output hidden | the same workflow in en light 1440 (plus reload) and zh dark 390; `model-retry-presentation.spec.ts` (fixture: native Trace retry states) for en and zh × light and dark × 1440 and 390, active and settled: copy, active state, readable contrast in the theme, in-viewport without overflow, disclosure by pointer and keyboard, settled placement before the reply; both locales' timeout/active/settled copy in `test/model-retry.test.tsx` | 8.4 s + 8.8 s |
 | `compaction` en dark, zh light | failed and held manual compaction, reconnect, automatic compaction after a questionnaire, projection history, Stop and late output | the same workflow in en light 1440 (plus reconnect and reload) and zh dark 390; the Context summary card in en and zh, light and dark, 1440 and 390 in `compaction-summary.spec.ts` (fixture) | 9.5 s + 9.9 s |
 | `live-model` profile selection (1440, lost), (390, received) | same-model profile mutation with a received or lost acknowledgement, frozen admission, reload without replay, provider request parameters | (1440, received) and (390, lost): each acknowledgement outcome and each width once; neither the placement nor the lost-ACK recovery depends on the other | 7.1 s + 6.6 s |
 
 None of the removed runs held a screenshot reference; their captures went to
 `/tmp`. Each replacement was checked against a deliberate violation: a wrong
-Chinese retry label fails `model-retry.test.tsx`, and a wrong English
-projection description fails the four English `compaction-summary` cases.
+Chinese retry label fails `model-retry.test.tsx`, a fixed dark retry summary
+colour fails the four dark `model-retry-presentation` cases, and a wrong
+English projection description fails the four English `compaction-summary`
+cases.
 The suite shrank by six native runs (about 50 s of test time) and gained four
 fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
 `shell`, `settings-presentation`) start no Agent and were left unchanged.
