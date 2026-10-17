@@ -46,8 +46,10 @@ also assert ordered current inputs and prior replies. Failures retain logs and
 process results and make the command fail; never drop a slow or failed sample.
 
 Recorded windows: initialization, per-turn inbound acceptance, first consumed
-publication, settlement, historical correctness reads, runtime unload, connection
-close, reopen and filesystem cleanup. The stream/cancel driver controls provider
+publication, settlement, runtime unload, connection close, final writable
+open/close, reopen with canonical validation, and filesystem cleanup. Historical
+correctness reads are included in process wall time and the final process sample;
+they have no separate wall-time field. The stream/cancel driver controls provider
 gates before draining notifications, so its first-consumed-publication measurement
 is **not** first emission latency. It must not be compared with short-response
 publication latency. Process samples bracket the entire execution and verification;
@@ -55,7 +57,11 @@ per-turn CPU deltas distinguish seeded/measured work from final exact read-back.
 `stat` ticks, `io` and `smaps_rollup` belong to runtime plus driver only, excluding
 the provider process. Missing proc files are null, not zero. RSS/PSS are sampled,
 not peaks. Files record both logical length and allocated blocks; WAL and SHM are
-explicit files. Last connection close/checkpoint costs remain in the accounting.
+explicit files. The relay is joined after abort before driver drop. A read-only owner can leave
+WAL frames after the writer closes, so a measured final writable open/close
+completes checkpointing before cleanup; the harness asserts no WAL frames remain.
+This maintenance step is identical in the corrected BEFORE and AFTER binaries.
+The original Stage A binary and results remain preserved separately.
 
 Strace observes OS system calls, not physical-media traffic. `pwrite64` arguments
 and filenames distinguish SQLite, WAL and other files; `fsync`/`fdatasync` distinguish
@@ -92,3 +98,18 @@ initial trace exposed this legitimate race and its failure is retained.
 Hardware `perf` counters are probed without changing host permissions; refusal
 is recorded, not bypassed. No allocation profiler is installed on the measurement
 host. Neither unavailable metric is reported as zero.
+
+The corrected Pi fixture (version 2) fixes faux chunk sizes: 256 characters with
+microtask scheduling for unpaced replies, and 16 characters at 425 tokens/second
+for streaming (Pi counts four characters per token). RustX streaming uses
+17-character numbered chunks gated every 10 ms. The original Pi preliminary
+runs used random default chunk lengths and a timer per unpaced chunk; retain them
+as fixture evidence, but use only version 2 repeats for the final comparison.
+
+`trace_summary.py` joins unfinished/resumed syscall records by PID and reports
+completed calls, failures, successful returned write bytes and sync calls by path.
+An unresolved count must be reported, not silently treated as complete accounting.
+`summarize.py` derives CPU from `/proc/stat` user+system ticks and reports sampled
+RSS/PSS, process write-byte deltas and all per-run values. CPU per turn is the
+measured-window total divided by turn count, including driver/sample overhead;
+it is not an exclusive runtime profile or an allocation count.

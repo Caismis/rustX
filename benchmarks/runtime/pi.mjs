@@ -18,7 +18,10 @@ const { openNodeSqliteStorage } = await load('packages/durable/src/storage/sqlit
 assert(['short-small', 'short-large', 'large', 'stream'].includes(scenario));
 const history = scenario === 'short-small' ? 8 : scenario === 'short-large' ? 64 : 0;
 const measured = history ? 32 : 1;
-const setup = chatSetup(scenario === 'stream' ? { tokensPerSecond: 1200, tokenSize: { min: 12, max: 12 } } : { tokensPerSecond: 1e9 });
+const faux_options = scenario === 'stream'
+  ? { tokensPerSecond: 425, tokenSize: { min: 4, max: 4 } }
+  : { tokensPerSecond: 0, tokenSize: { min: 64, max: 64 } };
+const setup = chatSetup(faux_options);
 let requests = 0;
 const reply = (i) => scenario === 'large' ? 'L'.repeat(32768) : scenario === 'stream' ? Array.from({ length: 128 }, (_, n) => `stream-delta-${String(n).padStart(4, '0')} `).join('') : `reply ${String(i).padStart(4, '0')}`;
 setup.faux.setResponses(Array.from({ length: history + measured }, (_, i) => (request) => {
@@ -69,6 +72,6 @@ await reopened.harness.close(context);
 const cleanup = performance.now();
 await rm(rootDir, { recursive: true });
 const cleanup_ms = performance.now() - cleanup;
-await writeFile(output, JSON.stringify({ revision, scenario, node: process.version, open_ms, history, measured,
+await writeFile(output, JSON.stringify({ revision, scenario, fixture_version: 2, faux_options, node: process.version, versions: process.versions, open_ms, history, measured,
   initial_cpu, initial_memory, samples, requests, before_close, closed_footprint, close_ms, cleanup_ms,
   oracle: 'passed', provider: 'local faux (no HTTP)', allocations: null }, null, 2));

@@ -18,7 +18,8 @@ on the host ext4 NVMe filesystem. No real model APIs were used.
 ## Ordinary baseline
 
 These are preliminary single-run observations, not final speedup estimates.
-Three interleaved pairs using the preserved binary follow implementation.
+Three interleaved pairs follow implementation. The final paired runner uses
+a corrected accounting harness on both revisions, as explained below.
 All six final samples passed their execution and exact read-back oracles.
 
 | Workload | Measured turn median, ms | Process wall, s |
@@ -66,6 +67,13 @@ inventory that raced a legitimately removed temporary journal. The final
 inventory records vanished files with null sizes; `before-trace-final` passed.
 Earlier successful runs remain under `before`. Nothing is silently discarded.
 
-The benchmark and frozen-input oracles remain unchanged between the final
-BEFORE executable and its future AFTER counterpart. No durability behavior or
-Source representation is changed in Stage A.
+No durability behavior or Source representation is changed in Stage A.
+The final Stage C comparison rebuilds this exact Stage A revision with a shared
+harness overlay: join the stopped relay, then measure a final ordinary writable
+open/close and assert no WAL frames remain before cleanup. This closes an
+accounting gap when a read-only owner outlives the writer. It changes no turn
+workload or frozen-input oracle. Original binaries and results above remain
+retained; their shutdown window is not substituted for the corrected comparison.
+Pi's preliminary runs above also remain retained; final comparisons use the
+explicit fixed-chunk, microtask-scheduled version 2 fixture. See the final
+[AFTER report](after.md) for paired evidence and exact hashes.

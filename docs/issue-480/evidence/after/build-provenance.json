@@ -1,0 +1,31 @@
+{
+  "before_code": "c34f87983568700c7dfa2416722cdd2cd0fd9315",
+  "after_code": "b2b664e18234af8e5356976e01d21d9ee3264229",
+  "baseline_preparation": "git archive Stage A to /tmp/rustx-480-baseline-source; overlay only runtime_benchmark.rs from after code; uv sync --frozen for fake-provider",
+  "build": "cargo test --release --locked --test conformance --no-run --message-format=json; default features; ordinary library",
+  "shared_target_dir": "/home/capi/Documents/codes/rustX-issue-480/target",
+  "hashes": {
+    "before": {
+      "Cargo.lock": "134fee3666ff3968691cd1c6c4f318ed5531cc9d25c02f35e155e70dacf16fa8",
+      "tests/conformance/agent_loop.rs": "658af7824d488b290169d3d1d92ec7efd2dd3c88db2fee7e6ea4f8aa2e5b3a4f",
+      "tests/conformance/agent_loop/runtime_benchmark.rs": "fb0e967bfa31cb7dcdf7fb99c7a2a97b42763a0c5fd02a2a18b203a07a6e96e3",
+      "test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c63f98df95cf30a0cc85127b2684858fba4d49fda2805d56029344f360c97db7"
+    },
+    "after": {
+      "Cargo.lock": "5a88074d3762bdf268b191882358bd58d48805a9c079806897dbcdc4a920da51",
+      "tests/conformance/agent_loop.rs": "658af7824d488b290169d3d1d92ec7efd2dd3c88db2fee7e6ea4f8aa2e5b3a4f",
+      "tests/conformance/agent_loop/runtime_benchmark.rs": "fb0e967bfa31cb7dcdf7fb99c7a2a97b42763a0c5fd02a2a18b203a07a6e96e3",
+      "test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c63f98df95cf30a0cc85127b2684858fba4d49fda2805d56029344f360c97db7"
+    }
+  },
+  "binaries": {
+    "before-final-conformance": "485946ef2704e6ec3849e896420af16915606c2f206da403f706d12bed918ad9",
+    "before-corrected-conformance": "a6b5c49a44c672c6efcdfeee0996824ca3d6dc8549bb1d54c061d0f00fc917fd",
+    "after-conformance": "61f7931575502318c502f37fbc206805dde192b1b306bf64601d8886c501e983",
+    "before-native-profile": "b27eb01900a5faed197824e700f66fb7f6cdfa4144bc83c77cb30be30c18fd73",
+    "after-native-profile": "3b27133ab6a07c8a295be47a406baadf30ef57afaae224f195112d9cf9995e4d"
+  },
+  "smoke": "correctness-only; concurrent validation/build load; exclude timings",
+  "native_wall_note": "native manifest elapsed includes post-run binary hashing; use the test-reported profile elapsed for attribution; inclusive scopes are not CPU shares",
+  "policy": "no real model APIs; runtime Python HTTP/SSE fake and Pi in-process faux only; warm cache, fresh processes/stores, no task-owned concurrent builds/tests during headline measurements"
+}

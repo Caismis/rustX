@@ -68,4 +68,9 @@ append-only archive authority rather than copying databases or pinning WAL
 snapshots across backpressure. Failure/cancellation drops owned connections and
 releases earlier acquisitions; deterministic tests must prove that cleanup.
 
-This proposal is not yet implemented or validated. Benchmark BEFORE precedes it.
+Stage A committed this proposal and BEFORE evidence before behavior changes.
+Stage B implements the protocol above; all 10 focused WAL regressions and the
+complete 243-test in-crate boundary suite pass. Preflight uses a scoped reader
+and the captured ResourceReadCut after releasing capture barriers, and ends
+before ZIP delivery. See [the implemented contract and audit](durability.md) and
+[the validation record](validation.md) for final verification details.
