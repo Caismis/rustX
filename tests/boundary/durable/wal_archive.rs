@@ -32,9 +32,11 @@ impl Fixture {
         let (node, _) = catalog.lineage(&session, None).unwrap();
         let database = catalog.database_path(&session, &node.conversation_id);
         let store = SqliteConversationStore::open(node.conversation_id.clone(), &database).unwrap();
-        let descendant = child(root.path(), &store, 1, false);
+        // macOS temporary roots can be /var aliases of canonical /private/var.
+        let canonical_root = root.path().canonicalize().unwrap();
+        let descendant = child(&canonical_root, &store, 1, false);
         let child_path = crate::runtime::subagent::child_conversation_store_path(
-            root.path(),
+            &canonical_root,
             &session,
             &descendant,
         );
@@ -236,7 +238,11 @@ fn wal_fork_installs_frozen_uncheckpointed_source_and_survives_source_removal() 
 #[test]
 fn wal_existing_management_does_not_convert_and_writer_transition_validates_identity() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("conversation.sqlite");
+    let path = root
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("conversation.sqlite");
     let id = ConversationId::generate();
     let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
     store.initialize(&[]).unwrap();
@@ -273,7 +279,11 @@ fn wal_existing_management_does_not_convert_and_writer_transition_validates_iden
 fn wal_archive_preflight_validates_captured_head_after_later_activation() {
     use crate::scripted_suites::support::context::{checkpoint_commit_fixture, checkpoint_fixture};
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("conversation.sqlite");
+    let path = root
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("conversation.sqlite");
     let id = ConversationId::generate();
     let writer = SqliteConversationStore::open(id.clone(), &path).unwrap();
     writer.initialize(&[message("original")]).unwrap();
