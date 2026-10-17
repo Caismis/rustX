@@ -1296,6 +1296,106 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Valve<S> {
     }
 }
 
+/// A peer can consume a delimiter before the writer returns from its poll.
+/// Closing acceptance joins that poll before sampling its byte accounting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn valve_zero_budget_barrier_includes_physically_accepted_delimiter() {
+    use std::{pin::Pin, task::Poll};
+    use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+    struct AcceptedWrite {
+        inner: tokio::io::DuplexStream,
+        accepted: Arc<Hold>,
+    }
+    struct Release(Arc<Hold>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    impl AsyncWrite for AcceptedWrite {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let count = std::task::ready!(Pin::new(&mut self.inner).poll_write(cx, bytes))?;
+            if count > 0 {
+                self.accepted.enter(&bytes[..count]);
+            }
+            Poll::Ready(Ok(count))
+        }
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    bounded(async {
+        let control = ValveControl::new();
+        let accepted = Arc::new(Hold::new());
+        let _release = Release(accepted.clone());
+        accepted.arm_for(|offered| offered == b"\n");
+        let (inner, mut peer) = tokio::io::duplex(64);
+        let mut writer = Valve {
+            inner: AcceptedWrite {
+                inner,
+                accepted: accepted.clone(),
+            },
+            control: control.clone(),
+        };
+        let writing = tokio::spawn(async move {
+            writer.write_all(b"warmup").await.unwrap();
+            writer.write_all(b"\n").await.unwrap();
+            writer
+        });
+        assert_eq!(accepted.entered().await, b"\n");
+        let mut record = [0; 7];
+        peer.read_exact(&mut record).await.unwrap();
+        assert_eq!(&record, b"warmup\n");
+        assert_eq!(
+            control.written(),
+            record.len() - 1,
+            "peer consumption precedes delimiter accounting"
+        );
+        assert!(matches!(
+            control.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        let closing = {
+            let control = control.clone();
+            tokio::task::spawn_blocking(move || {
+                control.grant(0);
+                control.written()
+            })
+        };
+        accepted.release();
+        let accepted_before = closing.await.unwrap();
+        assert_eq!(accepted_before, record.len());
+        let mut writer = writing.await.unwrap();
+        std::future::poll_fn(|cx| {
+            assert!(Pin::new(&mut writer).poll_write(cx, b"next\n").is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(control.refused(|_| true).await, b"next\n");
+        assert_eq!(
+            control.written(),
+            accepted_before,
+            "no next-record bytes accepted"
+        );
+    })
+    .await;
+}
+
 fn server_info(id: i64) -> Request {
     Request {
         jsonrpc: JsonRpcVersion::V2,
@@ -3026,9 +3126,12 @@ async fn t17_stdio_teardown_retires_unaccepted_record_without_write_readiness() 
                     noticed = true;
                 }
             }
+            // The peer can read the preceding delimiter before poll_write
+            // updates its counter. Joining its state lock closes acceptance
+            // and includes that completed write in the baseline.
+            valve.grant(0);
             let accepted_before = valve.written();
             assert!(accepted_before > 0);
-            valve.grant(0);
             input
                 .write_all(
                     format!("{}\n", serde_json::to_string(&server_info(291)).unwrap()).as_bytes(),

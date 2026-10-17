@@ -11,6 +11,41 @@ The normative contract is in [invariants](invariants.md), the public methods and
 lock order in [App Server protocol](app-server-protocol.md), and source/read-cut
 semantics in [conversation reading](conversation-reading.md).
 
+## Transport fixture accounting follow-up (after `dab517f7`)
+
+Final-head CI run [38983227430](https://github.com/Caismis/rustX/actions/runs/38983227430)
+passed Linux boundaries (237 in-crate cases and all external targets, including
+all 47 Subagent cases and the original skill-identity failure), TUI, protocol
+regeneration, quality, macOS Node/Host, macOS native boundaries and Full Web.
+macOS passed 3,268 in-crate tests (three existing ignores) plus every external
+target, including the corrected lock fixture and all 47 Subagent tests. Full Web
+passed 2,853 unit tests (four existing skips) and all 317 browser cases (32.7m).
+Thus eight CI jobs passed; Linux contracts passed 3,953 tests but
+failed `local_runtime::session_runtime_manager::tests::transports::t17_stdio_teardown_retires_unaccepted_record_without_write_readiness`:
+its accepted-byte baseline was 563 and the later value 564. The active-Attempt
+no-op and one-worker handoff regressions both passed on that remote head.
+
+The transport fixture's inner duplex write wakes its peer before `Valve` returns
+and increments its diagnostic byte counter. Reading both warmup JSONL records
+therefore proves physical delimiter acceptance, but does not join the writer's
+counter update. The test sampled `written()` before `grant(0)`, allowing precisely
+one already-accepted delimiter byte to appear later as an alleged new reply byte.
+The correction closes the valve first: `grant(0)` shares the mutex held across the
+inner physical poll and counter update. Its return joins that update, closes
+further acceptance, and only then permits a stable baseline. Production transport
+behavior and every zero-new-byte assertion, RPC identity and deadline are unchanged.
+
+`local_runtime::session_runtime_manager::tests::transports::valve_zero_budget_barrier_includes_physically_accepted_delimiter`
+uses a real duplex peer and a scoped hold immediately after physical newline
+acceptance but before the inner poll returns. It proves the peer reads the full
+record while accounting is exactly one byte behind and the original poll owns
+the valve lock. After release, closing the valve captures all seven warmup bytes;
+the exact next record is Pending with zero accepted bytes. The physical writer
+handle is joined, and the scoped release prevents a parked writer on unwinding.
+The exact new regression and original T17 failure passed, followed by all 37
+transport-module tests (80.33s). Formatting and strict all-targets/all-features
+Clippy passed. Full native validation of this test-only repair is in progress.
+
 ## Archive stream integrity follow-up (after `3b0c0256`)
 
 Independent review identified a remaining consumer omission: archive preflight
