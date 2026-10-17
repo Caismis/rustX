@@ -1,0 +1,31 @@
+name: Isolated document conversion runtime
+description: Install and admit the sandboxed Office converter that document tests and browser acceptance drive.
+runs:
+  using: composite
+  steps:
+    - name: Install isolated document conversion runtime
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y bubblewrap apparmor-profiles libreoffice-writer libreoffice-impress fonts-liberation
+        # Ubuntu restricts capabilities in unprivileged user namespaces.
+        # Load its packaged bwrap-specific profile, which grants setup
+        # capabilities to bwrap but denies them to its executed children.
+        # Keep system-wide restrictions and converter network isolation.
+        sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+        test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+        # A transient user service owns each converter cgroup. No root payload.
+        sudo loginctl enable-linger "$USER"
+        sudo systemctl start "user@$(id -u).service"
+        echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+        echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+    - name: Verify document sandbox namespace admission
+      shell: bash
+      run: >-
+        bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --new-session
+        --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib
+        --symlink usr/lib64 /lib64 -- /usr/bin/true
+    - name: Verify aggregate Office resource admission
+      shell: bash
+      run: node web-console/scripts/check-office-sandbox.ts

@@ -347,16 +347,37 @@ summarizes them and the lane check below verifies them against Cargo:
   TypeScript through `cargo run --example generate_app_server_protocol` and
   fails on drift; `pnpm typecheck` checks the fixtures and reference
   intersections.
-- **web-console** — development launcher `typecheck`/`test`, Web
-  `typecheck`, deterministic `pnpm test` (Vitest over `test/**/*.test.ts(x)`;
-  the `*.measurement.tsx` counters are excluded), `check:i18n`,
-  `check:provenance` (source provenance and dependency notices), then
-  `cargo build --bins` and `pnpm test:e2e`. `test:e2e` is
-  `pnpm build && bash scripts/browser-tests.sh`: the job's only production
-  build (Vite, then `provenance.ts --artifact` over the new `dist/`) runs
-  from checked-in source immediately before Playwright, whose preview server
-  serves that `dist/`, in the digest-pinned browser container. No earlier
-  step builds or reuses `dist/`.
+- **Browser and Web client** — five jobs. `browser-prepare` builds once from
+  the checked-out source: `cargo build --bins --example
+  document_artifact_fixture` and the only production Web build (`pnpm
+  build`: Vite, then `provenance.ts --artifact` over the new `dist/`), both
+  run by `web-console/scripts/browser-artifact.ts pack`. It records them
+  (debug info stripped, symbols kept) with their identity — commit, runner
+  platform and architecture, the `rust-toolchain.toml` pin it proved its
+  compiler matched, the Cargo command, Node version and ABI, pnpm,
+  Playwright, and checksums of the Cargo and pnpm manifests and lockfiles —
+  and a checksum and mode per file, and takes Playwright's own `--list`
+  inventory of the suite. Node native addons are not shared: `pnpm install`
+  rebuilds them from the lockfile in every job. `web-client` (launcher
+  `typecheck`/`test`, Web `typecheck`, Vitest `pnpm test` with the
+  `*.measurement.tsx` counters excluded, `check:i18n`, `check:provenance`)
+  and the two `browser-shard` jobs install those inputs only after
+  `browser-artifact.ts install` verifies the identity against their own
+  checkout and runner and every checksum, into a checkout holding no build
+  output; any mismatch fails, and nothing is rebuilt in its place. Each
+  shard runs `browser-tests.sh --shard=<i>/2` with one worker and
+  Playwright's file-level split, after the script re-verifies the installed
+  inputs (`RUSTX_BROWSER_PREPARED=1` selects that path instead of
+  `cargo build`) and `provenance.ts --artifact` re-checks the installed
+  bundle. `browser-report` ("Full Web conformance", the one browser verdict)
+  merges both blob reports into one HTML report with every trace and
+  screenshot, and `browser-shards.ts verify` passes only when every
+  inventoried test ran exactly once in exactly one shard, against the
+  inventory's commit and prepared inputs, and passed or skipped itself; a
+  missing or empty shard, a duplicate, an unexecuted test or another
+  identity fails it, as does either shard's failure. Locally,
+  `pnpm test:e2e` stays self-contained: `pnpm build && bash
+  scripts/browser-tests.sh`, which runs `cargo build` itself.
 
 ### The lane check
 
@@ -426,11 +447,14 @@ cancelled run is diagnostic evidence, not a timing baseline.
   lane keeps `CARGO_BUILD_JOBS=1`: a single rustX library compilation peaks
   near 3.5 GB RSS there (`/usr/bin/time -l`), so two concurrent ones would
   approach the runner's memory.
-- **Browser acceptance**: CI writes Playwright's JSON report to
-  `test-results/timings.json` in the `web-console-browser-evidence`
-  artifact: `stats.duration` is the whole run and each result's `duration`
-  covers one test, including the fixture it starts. Their difference is time
-  outside test bodies.
+- **Browser acceptance**: each `browser-shard-<i>` artifact holds
+  Playwright's JSON report of that shard (`shard-report/report.json`):
+  `stats.duration` is the shard's run and each result's `duration` covers one
+  test, including the fixture it starts; their difference is time outside
+  test bodies. `browser-report` prints a per-shard table (tests, wall time,
+  summed test time) in its step summary, and the critical path is
+  `browser-prepare` plus the slower shard plus `browser-report`. Runner
+  minutes are the sum over all five jobs.
 
 ## Prerequisites
 

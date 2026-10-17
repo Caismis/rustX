@@ -4,18 +4,22 @@ const fixturePort = Number(process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
 const previewURL = `http://127.0.0.1:${previewPort}`;
 const fixtureURL = `http://127.0.0.1:${fixturePort}`;
 const wsEndpoint = process.env.RUSTX_BROWSER_WS_ENDPOINT;
-if (!wsEndpoint) throw new Error('Use pnpm test:e2e or pnpm test:e2e:update: references require the pinned browser container.');
+// Discovery (`--list`) launches no browser, so it alone needs no container.
+if (!wsEndpoint && !process.argv.includes('--list')) throw new Error('Use pnpm test:e2e or pnpm test:e2e:update: references require the pinned browser container.');
 export default defineConfig({
   testDir: './test/e2e', testMatch: '*.spec.ts', workers: 1, timeout: 120_000,
-  // CI keeps the default dot progress and records per-test durations in the
-  // uploaded browser evidence (test-results/), for verification-cost reports.
-  reporter: process.env.CI ? [['dot'], ['json', { outputFile: 'test-results/timings.json' }]] : 'list',
+  // CI shards keep dot progress, write a blob report that the merge job joins
+  // into one HTML report with every shard's traces and screenshots, and write
+  // Playwright's JSON report of the shard's own run, from which the merge job
+  // proves complete coverage and records per-test durations
+  // (scripts/browser-shards.ts).
+  reporter: process.env.CI ? [['dot'], ['blob'], ['json', { outputFile: 'shard-report/report.json' }]] : 'list',
   updateSnapshots: 'none',
   // Every browser reference goes through expectStableScreenshot (test/e2e/screenshot.ts)
   // and the exact pixel contract in test/screenshot-comparator.ts. The settings below are
   // only a strict tripwire: an accidental toHaveScreenshot must never inherit a permissive
   // Playwright default, and normal runs must never write snapshots.
   expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 0 } },
-  use: { locale: 'en-US', storageState: { cookies: [], origins: [previewURL, fixtureURL].map(origin => ({ origin, localStorage: [{ name: 'rustx-locale-v1', value: 'en' }] })) }, connectOptions: { wsEndpoint }, baseURL: previewURL, viewport: { width: 1440, height: 1000 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
+  use: { locale: 'en-US', storageState: { cookies: [], origins: [previewURL, fixtureURL].map(origin => ({ origin, localStorage: [{ name: 'rustx-locale-v1', value: 'en' }] })) }, connectOptions: { wsEndpoint: wsEndpoint ?? '' }, baseURL: previewURL, viewport: { width: 1440, height: 1000 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
   webServer: [{ command: `pnpm preview --port ${previewPort} --strictPort`, url: previewURL, reuseExistingServer: false }, { command: `pnpm dev --config test/workbench.vite.config.ts --port ${fixturePort} --strictPort`, url: `${fixtureURL}/test/fixtures/foundation.html`, reuseExistingServer: false }],
 });

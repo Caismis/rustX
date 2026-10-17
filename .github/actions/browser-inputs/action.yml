@@ -1,0 +1,20 @@
+name: Prepared browser inputs
+description: >-
+  Download the inputs the browser-prepare job built once for this run, verify
+  them against this checkout and runner, and install them into the clean
+  checkout. A mismatch fails the job; nothing is rebuilt in its place.
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: browser-prepared
+        path: ${{ runner.temp }}/browser-archive
+    - name: Verify and install the prepared inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+        stage="$RUNNER_TEMP/browser-prepared"
+        mkdir "$stage"
+        zstd -dc "$RUNNER_TEMP/browser-archive/browser-prepared.tar.zst" | tar -xf - -C "$stage"
+        node web-console/scripts/browser-artifact.ts install "$stage"
