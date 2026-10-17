@@ -362,6 +362,7 @@ fn deletion_process_death_after_commit_and_mid_cleanup_converges_without_discove
                 "--exact",
                 "local_runtime::session::tests::deletion_tests::lifecycle::deletion_process_child",
                 "--nocapture",
+                "--format=terse",
             ])
             .env("RUSTX_255_ROOT", dir.path())
             .env("RUSTX_255_GATE", boundary)
@@ -497,6 +498,7 @@ fn deletion_tree_and_children_cascade_but_fork_clone_and_external_resources_surv
                 source_node: node,
                 source_surface_revision: revision,
                 source_message: MessageId::new("source-user-a"),
+                source_locator: fixture_source_locator(&store, "source-user-a"),
                 side: crate::local_runtime::session::LineageSide::Before,
             },
         )

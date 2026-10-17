@@ -1,3 +1,6 @@
+import { domainReceipt } from './fixture';
+import { settingsReceipt } from './fixture';
+import { contentAdvance } from './fixture';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationHeader } from '../src/app/agent/ConversationHeader';
 import { SidebarRoot } from '../src/presentation/sidebar/SidebarRoot';
@@ -11,7 +14,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v49';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v50';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -28,7 +31,7 @@ beforeEach(() => { localStorage.clear(); server = new Server(); });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.useRealTimers(); });
 const input = () => screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
 function live(text = 'first token'): RuntimeClientSnapshot {
-  return { ...snapshot(), transcript: { entries: [], statistics: { turns: '1', steps: '2', completed_responses: '0', model_requests: '1', requests_with_usage: '0', latest_turn: { attempt_id: 'exact-attempt', started_at: '2026-09-25T00:00:00Z' } } },
+  return { ...snapshot(), transcript: { entries: [], statistics: { turns: '1', steps: '2', completed_responses: '0', model_requests: '1', requests_with_usage: '0', latest_turn: { attempt_id_deferred:false, attempt_id_source:null, attempt_id: 'exact-attempt', started_at: '2026-09-25T00:00:00Z' } } },
     attempt: { attempt_id: 'exact-attempt', phase: { type: 'running' }, turn: 2, in_flight: { message_id: 'exact-message', blocks: [{ type: 'text', block_index: 0, text }] } } };
 }
 it('streaming publications update the transcript but do not render AppFrame or composer; local clock ticks stay local', async () => {
@@ -41,12 +44,12 @@ it('streaming publications update the transcript but do not render AppFrame or c
   const message = input(), seat = message.closest('[data-composer-seat]'), header = screen.getByLabelText('Session title').closest('header');
   fireEvent.change(message, { target: { value: 'untouched draft' } }); message.focus(); message.setSelectionRange(4, 7);
   const frameCalls = vi.mocked(AppFrame).mock.calls.length, composerCalls = vi.mocked(AgentComposer).mock.calls.length;
-  const reads = server.requests.filter(row => row.request.method === 'session/snapshot').length;
+  const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
   for (let index = 0; index < 5; index++) await act(async () => {
-    emit({ type: 'assistant_text_delta', attempt_id: 'exact-attempt', message_id: 'exact-message', block_index: 0, delta: String(index) });
+    emit(contentAdvance({attempt_id:'exact-attempt',message_id:'exact-message',block_index:0,kind:'text',delta:String(index)}, index, index + 1));
   });
   expect(screen.getByText('01234')).toBeTruthy();
-  expect(server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(reads);
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
   expect(input()).toBe(message); expect(message.closest('[data-composer-seat]')).toBe(seat);
   expect(screen.getByLabelText('Session title').closest('header')).toBe(header);
   expect(vi.mocked(AppFrame).mock.calls.length).toBe(frameCalls);
@@ -60,7 +63,7 @@ it('streaming publications update the transcript but do not render AppFrame or c
   expect(vi.mocked(AgentComposer).mock.calls.length).toBeGreaterThan(composerCalls);
   expect(vi.mocked(AppFrame).mock.calls.length).toBe(frameCalls);
   const clock = live(); clock.transcript.statistics!.latest_turn!.attempt_id = 'clock-attempt';
-  await act(async () => emit({ type: 'read_domains_updated', transcript: clock.transcript, todos: clock.todos }));
+  await act(async () => emit({ type: 'read_domains_updated', transcript: clock.transcript, trace: clock.trace, todos: clock.todos }));
   const before = [vi.mocked(AppFrame).mock.calls.length, vi.mocked(AgentComposer).mock.calls.length];
   await act(async () => vi.advanceTimersByTime(5000));
   expect(screen.getByText('Deep diving for 5s ···')).toBeTruthy();
@@ -74,8 +77,11 @@ function host() {
   return { ...server.workspaceHost, configureWorkspace: async () => ({ kind: 'read' as const, projection: source }), resolveWorkspace: async () => ({ cwd: '/workspace/A' }), classifyLocations: async (paths: string[]) => paths.map(() => ({ authorized: true as const, workspaceId: 'workspace-a' })) };
 }
 function nativeModel() {
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [model('fixture/root'), model('fixture/chosen')] } }));
-  server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
+  // Native composition always publishes its configured model, including when
+  // the catalog default was inherited instead of explicitly persisted.
+  if(!server.snapshots.get('A')!.model) server.snapshots.set('A',{...server.snapshots.get('A')!,model:{configured:{model:'fixture/root'},effective:{model:'fixture/root'}} as NonNullable<RuntimeClientSnapshot['model']>});
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [model('fixture/root'), model('fixture/chosen')] }).models??[])));
+  server.handlers.set('session/model', () => (domainReceipt('model',[server.snapshots.get('A')!.model!])));
   server.handlers.set('session/create', request => {
     if (request.method !== 'session/create') throw Error('wrong method');
     const selection = request.params.settings.model ?? { model: 'fixture/root' };
@@ -87,7 +93,7 @@ function nativeModel() {
     const selection = request.params.config;
     const value = { configured: selection, effective: { model: selection.model, profile: selection.profile } } as NonNullable<RuntimeClientSnapshot['model']>;
     server.snapshots.set('A', { ...snapshot(), model: value });
-    return { type: 'model', model: value };
+    return {type:'model_set',settings_revision:'1'};
   });
 }
 it('hero and committed Session retain the exact composer card/input; internal phases add no layout rows', async () => {
@@ -167,8 +173,8 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   server.snapshots.set('A', { ...snapshot('A'), model: projection });
   server.snapshots.set('B', { ...snapshot('B'), model: structuredClone(projection) });
   nativeModel();
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [model('fixture/root'), model('fixture/chosen')] } }));
-  server.handlers.set('session/model', () => ({ type: 'model', model: server.snapshots.get('A')!.model! }));
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [model('fixture/root'), model('fixture/chosen')] }).models??[])));
+  server.handlers.set('session/model', () => (domainReceipt('model',[server.snapshots.get('A')!.model!])));
   await server.attached('A', 'B');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
@@ -252,7 +258,7 @@ it.each(['cancelled', 'failed', 'timed_out', 'limit_exceeded'] as const)('execut
   }
   await act(async () => server.update('A', live('streamed transition')));
   expect(screen.getByText('streamed transition')).toBeTruthy();
-  const terminal: RuntimeClientSnapshot = { ...snapshot(), transcript: { entries: [{ cursor: '1', item: { type: 'attempt_terminal', turn: {
+  const terminal: RuntimeClientSnapshot = { ...snapshot(), transcript: { entries: [{ cursor: '1', item: { type: 'attempt_terminal', turn: {attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,
     conversation_id: 'conversation-A', attempt_id: 'exact-attempt', event_id: 'terminal-event', outcome, control_cursor: '1', message_count: 0, tool_call_count: 0,
     started_at: '2026-09-25T00:00:00Z', ended_at: '2026-09-25T00:00:07Z',
   } } }] } };
@@ -289,8 +295,8 @@ it('a settled live Attempt without a journal projection cannot manufacture termi
 
 it('typing while attachment is held offers the model picker without calling native session commands', async () => {
   await server.connect(); nativeModel(); server.held.add('session/attach');
-  server.handlers.set('session/models',()=>({type:'models',catalog:{models:[model('fixture/root')]}}));
-  server.handlers.set('session/model',()=>({type:'model',model:cfg3Effective().effective_model}));
+  server.handlers.set('session/models',()=>(domainReceipt('model_catalog.models',({models:[model('fixture/root')]}).models??[])));
+  server.handlers.set('session/model',()=>(domainReceipt('model',[cfg3Effective().effective_model])));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   const opening=await server.waitFor('session/attach',1),message=input();
@@ -382,8 +388,8 @@ it('restoring a cold selected view does not retire its own in-flight admission',
 
 it('cold composer reads native model and whole-conversation usage before runtime is ready', async () => {
   await server.connect(); nativeModel(); server.held.add('session/attach');
-  server.snapshots.get('A')!.transcript.statistics = { turns: '8', steps: '46', completed_responses: '8', model_requests: '46', requests_with_usage: '46', reported_usage: { input_tokens: 900000, output_tokens: 100000, total_tokens: 1000000 } };
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A', model: { model: 'cold/native-model' } } }));
+  server.snapshots.get('A')!.transcript.statistics = { turns: '8', steps: '46', completed_responses: '8', model_requests: '46', requests_with_usage: '46', reported_usage: { input_tokens: "900000", output_tokens: "100000", total_tokens: "1000000" } };
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A', model: { model: 'cold/native-model' } },'0')));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await server.waitFor('session/attach', 1);

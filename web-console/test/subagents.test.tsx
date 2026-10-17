@@ -9,7 +9,7 @@ import { RuntimeFacts } from '../src/app/agent/Activity';
 import { SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v49';
+import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v50';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.disconnect(); });
 const agent: RuntimeClientAgent = { title: 'Research', agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: '/workspace' };
@@ -134,9 +134,9 @@ it('obsolete queued meter reads fail the existing transport admission proof befo
   const server = new Server(); servers.push(server);
   for (const id of ['A', 'B']) server.snapshots.get(id)!.agents = [agent, { ...agent, agent_id: 'second' }];
   await server.attached('A', 'B'); server.held.add('session/statistics'); server.held.add('agent/statistics');
-  const pending = Array.from({ length: 8 }, () => server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics').catch(() => {}));
-  const blockers = server.requests.filter(row => row.request.method === 'session/statistics').slice(-8);
-  expect(blockers).toHaveLength(8);
+  const pending = Array.from({ length: 6 }, () => server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics').catch(() => {}));
+  const blockers = server.requests.filter(row => row.request.method === 'session/statistics').slice(-6);
+  expect(blockers).toHaveLength(6);
   const view = (id: string) => <SubagentScope client={server.client} sessionId={id}><span/></SubagentScope>;
   const ui = render(view('A')); ui.rerender(view('B'));
   expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(0);
@@ -248,11 +248,11 @@ it('failed detach retains T1 but Open and refresh cannot mint observation admiss
   expect(reads()).toHaveLength(6); expect(server.target('A').attachment_id).not.toBe(target.attachment_id);
 });
 
-it('Release fences unsent meter requests waiting behind the real eight-slot RPC lane', async () => {
+it('Release fences unsent meter requests waiting behind the real six-slot ordinary RPC lane', async () => {
   const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = [agent, { ...agent, agent_id: 'second' }];
   await server.attached('A'); server.held.add('session/statistics'); server.held.add('session/detach');
-  const blockers = Array.from({ length: 8 }, () => server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics'));
-  const requests = server.requests.filter(row => row.request.method === 'session/statistics').slice(-8);
+  const blockers = Array.from({ length: 6 }, () => server.client.request({ method: 'session/statistics', params: { session_id: 'A' } }, 'session_statistics'));
+  const requests = server.requests.filter(row => row.request.method === 'session/statistics').slice(-6);
   render(<SubagentScope client={server.client} sessionId="A"><span/></SubagentScope>);
   let releasing!: Promise<void>;
   await act(async () => { releasing = server.client.release('A'); for (const row of requests) server.reply(row.request); await Promise.all(blockers); });
@@ -312,4 +312,58 @@ it('native task titles identify inbound senders and parent messages stay context
   ui.rerender(<AgentConversationContext value={agent}><AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [{ cursor: '2', item: { type: 'message', message: { ...report, source: { agent: { agent_id: agent.parent_agent_id } } } } }] } }}/></AgentConversationContext>);
   expect(ui.getByRole('button', { name: /Message from parent agent/ })).toBeTruthy();
   expect(ui.container.querySelector('[data-user-message]')).toBeNull();
+});
+
+it('T20 resident Child views have an eight-view bound and require explicit close without evicting drafts', async () => {
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server = new Server(); servers.push(server); await server.attached('A');
+  server.held.add('agent/status');
+  function Views() {
+    const scope = useSubagents()!;
+    return <><output>{scope.opened.map(value => value.agent_id).join(',')}</output>
+      <span>{scope.full ? 'capacity reached' : 'capacity available'}</span>
+      <span data-testid="selected">{scope.selected?.agent_id ?? 'parent'}</span>
+      {Array.from({length:9}, (_, index) => <button key={index} onClick={() => scope.open(`older-${index}`, {...agent, agent_id:`older-${index}`})}>Open older {index}</button>)}
+      <button onClick={() => scope.close('older-0')}>Close oldest</button></>;
+  }
+  const ui = render(<SubagentScope client={server.client} sessionId="A"><Views/></SubagentScope>);
+  for (let index=0;index<8;index++) fireEvent.click(ui.getByText(`Open older ${index}`));
+  expect(ui.getByRole('status').textContent?.split(',')).toHaveLength(8);
+  fireEvent.click(ui.getByText('Open older 8'));
+  expect(ui.getByText('capacity reached')).toBeTruthy();
+  expect(ui.getByTestId('selected').textContent).toBe('older-7');
+  expect(ui.getByRole('status').textContent).toContain('older-0');
+  fireEvent.click(ui.getByText('Close oldest'));
+  fireEvent.click(ui.getByText('Open older 8'));
+  expect(ui.getByText('capacity available')).toBeTruthy();
+  expect(ui.getByTestId('selected').textContent).toBe('older-8');
+  expect(ui.getByRole('status').textContent?.split(',')).toHaveLength(8);
+  expect(ui.getByRole('status').textContent).not.toContain('older-0');
+  expect(server.requests.filter(row=>row.request.method==='agent/status')).toHaveLength(1);
+});
+
+it('T11/T18 off-head header reads fence a closed view and retain physical occupancy through reopen', async () => {
+  const { useSubagents } = await import('../src/app/agent/subagent-context');
+  const server=new Server(); servers.push(server); await server.attached('A');
+  server.held.add('agent/status'); server.held.add('agent/statistics');
+  const initial={...agent,agent_id:'older',title:'Initial view'};
+  const reopened={...initial,title:'Reopened view',activation_id:'activation-new'};
+  function Views() {
+    const scope=useSubagents()!;
+    return <><output data-testid="header">{scope.opened[0]?.title}:{scope.opened[0]?.activation_id}</output>
+      <button onClick={()=>scope.open('older',initial)}>Open old view</button>
+      <button onClick={()=>{scope.close('older');scope.open('older',reopened);}}>Reopen view</button></>;
+  }
+  const ui=render(<SubagentScope client={server.client} sessionId="A"><Views/></SubagentScope>);
+  await act(async()=>fireEvent.click(ui.getByText('Open old view')));
+  const first=await server.waitFor('agent/status',1);
+  await act(async()=>fireEvent.click(ui.getByText('Reopen view')));
+  expect(server.requests.filter(row=>row.request.method==='agent/status')).toHaveLength(1);
+  const cut=server.client.getSnapshot().views.A.checkpoint!.read_cut;
+  const page=(header:RuntimeClientAgent)=>({type:'domain_page' as const,page:{cursor:'0',read_cut:{...cut,domain_revisions:{...cut.domain_revisions,agents:'0'}},domain:'agents',total:'1',items:[{offset:'0',identity:'older',value:header,content:[],deferred:false}],next_offset:null}});
+  await act(async()=>server.socket.success(first,page({...initial,title:'Late obsolete title'})));
+  expect(ui.getByTestId('header').textContent).toBe('Reopened view:activation-new');
+  const second=await server.waitFor('agent/status',2);
+  await act(async()=>server.socket.success(second,page({...reopened,title:'Current native title'})));
+  expect(ui.getByTestId('header').textContent).toBe('Current native title:activation-new');
 });

@@ -36,6 +36,8 @@ jobs:
           toolchain: "1.98.1"
           components: rustfmt, clippy
 
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       # The one Rust cache policy, applied identically to every Rust-bearing
       # lane. Five properties matter and all five are deliberate:
       #
@@ -106,7 +108,10 @@ jobs:
   rust-contracts:
     name: Deterministic contracts (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Preparation and the two native builds consumed about 11 minutes in
+    # run 38883956631. Budget compilation and complete test execution here;
+    # individual liveness guards and the other lanes retain their bounds.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -117,6 +122,8 @@ jobs:
         with:
           toolchain: "1.98.1"
 
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -183,6 +190,8 @@ jobs:
         with:
           toolchain: "1.98.1"
 
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -269,9 +278,13 @@ jobs:
     env:
       # Job-local build metadata only: assertions, overflow checks, unwind,
       # optimization and release profiles retain their Cargo defaults.
-      # rust-cache hashes the CARGO prefix, including both settings.
+      # rust-cache hashes the CARGO prefix, including these settings.
       CARGO_PROFILE_DEV_DEBUG: "1"
       CARGO_PROFILE_TEST_DEBUG: "1"
+      # Ordinary and cfg(test) rustX units overlap in Cargo's native timing
+      # report. Serialize compiler processes on this runner; libtest keeps
+      # its existing concurrency, assertions, selectors, and deadlines.
+      CARGO_BUILD_JOBS: "1"
 
     steps:
       - name: Checkout
@@ -282,6 +295,8 @@ jobs:
         with:
           toolchain: "1.98.1"
 
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       # One lineage per lane; see the policy note in the `quality` job. This is
       # the macOS lineage: it shares nothing with any Linux lane, because the
       # action's key carries the runner OS, architecture and host triple.
@@ -307,6 +322,7 @@ jobs:
             echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
             echo "CARGO_PROFILE_DEV_DEBUG=$CARGO_PROFILE_DEV_DEBUG"
             echo "CARGO_PROFILE_TEST_DEBUG=$CARGO_PROFILE_TEST_DEBUG"
+            echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
             echo 'Cargo HTML reports separate build units; /usr/bin/time -l records wall time and peak RSS per phase.'
             echo 'Ordinary libraries, cfg(test) libraries, real binaries and binary test harnesses remain distinct Cargo units.'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -409,6 +425,8 @@ jobs:
         with:
           toolchain: "1.98.1"
 
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       # The real-child integration suite drives the shared provider emulator,
       # so this job needs the same Python 3.12 + uv toolchain as the Rust one.
       - name: Install Python 3.12
@@ -493,6 +511,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       # One lineage per lane; see the policy note in the `quality` job. This
       # lane is Rust-bearing despite its Node surface: `pnpm check` shells out
       # to `cargo run --example generate_app_server_protocol`.
@@ -526,6 +546,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: desktop-host
@@ -623,6 +645,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       # One lineage per lane; see the policy note in the `quality` job.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

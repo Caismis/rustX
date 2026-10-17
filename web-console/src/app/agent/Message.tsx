@@ -1,14 +1,14 @@
 import { InboundMessage } from './InboundMessage';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
-import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v49';
+import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v50';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v49';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
 import type { ReactNode } from 'react';
 
 export function Content({ blocks, markdown = false, streaming = false, tools = [], reasoningHidden = false, include }: { reasoningHidden?: boolean; tools?: ForegroundToolExecution[]; markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[]; include?: readonly number[] }) {
@@ -23,9 +23,10 @@ export function Content({ blocks, markdown = false, streaming = false, tools = [
     if (block.type === 'reasoning') return <Reasoning key={index} text={block.text ?? ''} running={streaming} hidden={reasoningHidden} preview={streaming || preferences.transcriptMode !== 'compact'}/>;
     if (block.type === 'refusal') return <p key={index}>{block.text}</p>;
     if (block.type === 'tool_call') {
-      const id = 'call_id' in block ? block.call_id : block.id;
-      const tool = tools.find(tool => tool.block_index === ('block_index' in block ? block.block_index : index) && tool.call_id === id && tool.tool_id === block.tool_id);
-      return tool ? <Tool key={id} tool={tool}/> : <small key={id}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
+      const indexInMessage='block_index' in block?block.block_index:index;
+      const id = 'block_index' in block ? block.call_id : block.id;
+      const tool = tools.find(tool => tool.block_index === indexInMessage && (id==null||tool.call_id===id) && (block.tool_id==null||tool.tool_id===block.tool_id));
+      return tool ? <Tool key={indexInMessage} tool={tool}/> : <small key={indexInMessage}>{tx('agent:message.assembling')}{' '}{block.name}…</small>;
     }
     return null;
   });

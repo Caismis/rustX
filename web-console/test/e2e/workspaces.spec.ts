@@ -28,7 +28,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     const cwd = await a.workspaceHost.host.resolveWorkspace(wa.id, a.endpoint);
     const created = await remoteA.createSession(cwd);
     const id = created.session.id;
-    const read = () => remoteA.client.call('session/settings', { session_id: id }, 'settings');
+    const read = () => remoteA.readSettings(id);
     const original = await read(); expect(original.settings.cwd).toBe(a.workspaceA);
     await expect(remoteB.readSession(id)).rejects.toThrow();
     const listed = await remoteA.client.call('session/list', { offset: 0, limit: 32 }, 'sessions');
@@ -63,9 +63,10 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await closeSessionView(page, id);
     await expect.poll(async () => (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
     const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
-    await remoteA.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_application');
-    const refreshed = await remoteA.client.call('session/snapshot', { target: attached.target }, 'snapshot');
-    expect(refreshed.snapshot.resources?.revision).toBe(attached.snapshot.resources?.revision);
+    const baselineCheckpoint=await remoteA.client.call('session/checkpoint',{target:attached.target},'checkpoint');
+    await remoteA.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_receipt');
+    const refreshed = await remoteA.client.call('session/checkpoint', { target: attached.target }, 'checkpoint');
+    expect(refreshed.checkpoint.snapshot.resources?.revision).toBe(baselineCheckpoint.checkpoint.snapshot.resources?.revision);
     await remoteA.client.call('session/detach', { target: attached.target }, 'detached');
     await page.locator(`button[data-session-id="${id}"]`).click();
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();

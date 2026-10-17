@@ -46,8 +46,8 @@ it('durable user/assistant order and tool artifact galleries follow only transcr
   const s = snapshot();
   s.transcript = { entries: [
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'u', source: 'human', content: [{ type: 'text', text: 'First user' }] } } },
-    { cursor: '2', tool_calls: [{ message_id: 'a', block_index: 1, call_id: 'native-call', tool_id: 'image-tool', name: 'image-tool', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: 1, artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } }], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'text', text: 'Second assistant' }, { type: 'tool_call', id: 'native-call', tool_id: 'image-tool', name: 'image-tool', arguments: {} }] } } },
-    { cursor: '3', item: { type: 'message', message: { role: 'tool', occurrence: { assistant_message_id: 'a', block_index: 1 }, id: 't', tool_call_id: 'native-call', tool_id: 'image-tool', result: { status: { type: 'success' }, duration_ms: 1, artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } } },
+    { cursor: '2', tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:1},assembly_complete:true, message_id: 'a', block_index: 1, call_id: 'native-call', tool_id: 'image-tool', name: 'image-tool', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1", artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } }], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'text', text: 'Second assistant' }, { type: 'tool_call', id: 'native-call', tool_id: 'image-tool', name: 'image-tool', arguments: {} }] } } },
+    { cursor: '3', item: { type: 'message', message: { role: 'tool', occurrence: { assistant_message_id: 'a', block_index: 1 }, id: 't', tool_call_id: 'native-call', tool_id: 'image-tool', result: { status: { type: 'success' }, duration_ms: "1", artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } } },
   ] };
   const ui = render(<AgentTranscript snapshot={s} />);
   expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].map(node => node.getAttribute('data-chat-anchor-key'))).toEqual(['message:u', 'message:a']);
@@ -57,7 +57,7 @@ it('durable user/assistant order and tool artifact galleries follow only transcr
 });
 it('Job result galleries retain finite identities, including duplicate tool names', () => {
   const s = snapshot();
-  s.jobs = ['exec-1', 'exec-2'].map(job_id => ({ job_id, tool_id: 'native', tool_name: 'Same name', state: 'succeeded', result: { status: { type: 'success' }, duration_ms: 1, artifacts: [{ artifact_id: `artifact-${job_id}`, name: `${job_id}.png`, mime_type: 'image/png' }, { artifact_id: `file-${job_id}`, name: `${job_id}.txt`, mime_type: 'text/plain' }] } }));
+  s.jobs = ['exec-1', 'exec-2'].map(job_id => ({ job_id, tool_id: 'native', tool_name: 'Same name', state: 'succeeded', result: { status: { type: 'success' }, duration_ms: '1', artifacts: [{ artifact_id: `artifact-${job_id}`, name: `${job_id}.png`, mime_type: 'image/png' }, { artifact_id: `file-${job_id}`, name: `${job_id}.txt`, mime_type: 'text/plain' }] } }));
   const ui = render(<RuntimeFacts snapshot={s} />);
   for (const button of ui.getAllByRole('button', { name: /Same name/ })) fireEvent.click(button);
   for (const id of ['exec-1', 'exec-2']) {
@@ -138,7 +138,7 @@ it('a finite Job retains its expanded output across proactive terminal snapshot 
   const ui = render(<RuntimeFacts snapshot={s}/>);
   fireEvent.click(ui.getByRole('button', { name: /bash/ }));
   const row = ui.container.querySelector('[data-job-id="finite-job"]');
-  ui.rerender(<RuntimeFacts snapshot={{ ...s, jobs: [{ ...job, state: 'succeeded', result: { status: { type: 'success' }, duration_ms: 1, content: [{ type: 'text', text: 'Settled output' }] } }] }}/>);
+  ui.rerender(<RuntimeFacts snapshot={{ ...s, jobs: [{ ...job, state: 'succeeded', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'Settled output' }] } }] }}/>);
   expect(ui.container.querySelector('[data-job-id="finite-job"]')).toBe(row);
   expect(row?.textContent).toContain('Settled output');
   expect(ui.getByLabelText('Tool status').textContent).toBe('success');
@@ -167,7 +167,7 @@ it.each(['cancelled', 'failed'] as const)('native %s keeps released partial pros
       { kind: 'reasoning' as const, block_index: 1, text: 'Already released reasoning' },
       { kind: 'proposed_tool_call' as const, block_index: 2, call_id: 'proposal', tool_id: 'bash', name: 'bash', arguments: '{', complete: false },
     ] };
-  const turn = { conversation_id: s.conversation_id, attempt_id: 'attempt-A', event_id: 'end', control_cursor: '1', outcome, message_count: 0, tool_call_count: 0 };
+  const turn = {attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null, conversation_id: s.conversation_id, attempt_id: 'attempt-A', event_id: 'end', control_cursor: '1', outcome, message_count: 0, tool_call_count: 0 };
   s.transcript = { entries: [{ cursor: '1', item: { type: 'publication_audit', audit } }, { cursor: '2', item: { type: 'attempt_terminal', turn } }] };
   // A stale partial snapshot cannot duplicate a durably settled publication.
   s.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, in_flight: { message_id: 'partial', blocks: [{ type: 'text', block_index: 0, text: 'Stale streaming copy' }] } };
@@ -194,7 +194,7 @@ it.each(['empty', 'proposal', 'whitespace'] as const)('%s publication audits do 
 
 it('terminal failures stay at their native position through subsequent turns and reconstruction', () => {
   const s = snapshot();
-  const turn = { conversation_id: s.conversation_id, attempt_id: 'bad', control_cursor: '2', outcome: 'failed' as const,
+  const turn = {attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null, conversation_id: s.conversation_id, attempt_id: 'bad', control_cursor: '2', outcome: 'failed' as const,
     message_count: 1, tool_call_count: 0, failure: { type: 'model' as const, kind: 'malformed_tool_proposal' as const, message: 'Invalid arguments <script>unsafe()</script>' } };
   s.transcript = { entries: [
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'u', source: 'human', content: [{ type: 'text', text: 'Please answer' }] } } },
@@ -217,7 +217,7 @@ it('terminal failures stay at their native position through subsequent turns and
 
 it('authentication failures use Harness copy and stopping never renders a failure row', () => {
   const s = snapshot();
-  const turn = { conversation_id: s.conversation_id, attempt_id: 'auth', control_cursor: '1', outcome: 'failed' as const,
+  const turn = {attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null, conversation_id: s.conversation_id, attempt_id: 'auth', control_cursor: '1', outcome: 'failed' as const,
     message_count: 0, tool_call_count: 0, failure: { type: 'model' as const, kind: 'authentication' as const, message: 'Provider authentication detail' } };
   s.transcript = { entries: [{ cursor: '1', item: { type: 'attempt_terminal', turn } }] };
   const ui = render(<AgentTranscript snapshot={s}/>);

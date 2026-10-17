@@ -1,5 +1,5 @@
 import { assign, fromPromise, raise, setup, stateIn, type SnapshotFrom } from 'xstate';
-import type { AvailableConfiguration, ConfigurationApplication } from '../../../../../protocol/app-server/v49';
+import type { AvailableConfiguration, ConfigurationApplication } from '../../../../../protocol/app-server/v50';
 import { isOutcomeUncertain, type AppServerClient, type ClientView, type ConnectionState } from '../../../client/app-server';
 
 /** The native Session configuration authority of exactly one Session. */
@@ -11,12 +11,12 @@ export interface SessionConfigurationPort {
 
 export function createSessionConfigurationPort(client: AppServerClient, sessionId: string): SessionConfigurationPort {
   return {
-    read: async () => (await client.request({ method: 'session/configuration', params: { session_id: sessionId } }, 'session_configuration')).application ?? null,
+    read: async () => {const generation=client.getSnapshot().generation;return await client.readApplication(sessionId,()=>client.getSnapshot().generation===generation)??null;},
     adopt: async candidate => {
       await client.request({
         method: 'session/adoptConfiguration',
         params: { session_id: sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding },
-      }, 'configuration_application');
+      }, 'configuration_receipt');
     },
   };
 }

@@ -1,11 +1,11 @@
 /**
- * A fresh snapshot reconstructs the whole semantic UI.
+ * A bounded native checkpoint reconstructs its captured display facts.
  *
- * This is the property that lets every Pi component be a disposable render
- * target: no component instance history, no hidden local conversation log,
- * and no incremental state that a `snapshot_get` cannot rebuild. Purely local
- * display preferences are the deliberate exception, and they are proven to be
- * non-semantic here rather than assumed to be.
+ * Pi components are disposable render targets: their instance history and local
+ * preferences cannot become a conversation authority. Complete native events
+ * advance the current fold; deferred fields use exact source reads independently
+ * of Applied. This finite fixture verifies checkpoint replacement and local
+ * display preferences, without claiming it contains every deferred body.
  */
 
 import assert from "node:assert/strict";
@@ -74,13 +74,13 @@ function representative(): RuntimeClientSnapshot {
           },
         ],
         exit_code: 0,
-        duration_ms: 2_800,
+        duration_ms: "2800",
       })),
     ],
     attempt: attemptView({
       attempt_id: "attempt-1",
       turn: 3,
-      last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
+      last_usage: { input_tokens: "12500", output_tokens: "840", total_tokens: "13340" },
       execution_settings: null,
       model: attemptModel("alpha/model-a"),
       in_flight: {
@@ -101,7 +101,7 @@ function representative(): RuntimeClientSnapshot {
         foreground("call-1", "tool-bash", "bash", {
           type: "settled",
           arguments: '{"command":"cargo test"}',
-          result: toolResult({ exit_code: 0, duration_ms: 2_800 }),
+          result: toolResult({ exit_code: 0, duration_ms: "2800" }),
         }),
         foreground("call-2", "tool-grep", "grep", {
           type: "running",

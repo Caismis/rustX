@@ -102,10 +102,12 @@ struct PendingSink {
 impl InteractionObserver for PendingSink {
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &std::sync::Arc<crate::runtime::interaction::PendingInteractionSource>,
         _audit: &RuntimeEventEnvelope,
         _transcript_cursor: TranscriptCursor,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
+        let request = source.request();
         let _ = self.sender.send(request.clone());
     }
 
@@ -114,6 +116,7 @@ impl InteractionObserver for PendingSink {
         _id: &InteractionId,
         _outcome: &crate::runtime::interaction::InteractionOutcome,
         _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
     }
 }

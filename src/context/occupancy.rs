@@ -4,8 +4,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::context::tokens::bytes_to_tokens;
+#[cfg(test)]
+use crate::durable::ConversationStore;
+use crate::durable::ConversationStoreError;
+#[cfg(test)]
 use crate::durable::presentation::{FactQuery, FactScope};
-use crate::durable::{ConversationStore, ConversationStoreError};
+#[cfg(test)]
 use crate::events::types::RuntimeEvent;
 
 /// Latest native context reading for this Conversation, with explicit provenance.
@@ -17,10 +21,8 @@ pub struct ContextOccupancy {
     #[serde(default)]
     pub estimated: bool,
     /// Normalized request input, or the committed rebuilt-context estimate.
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub input_tokens: u64,
     /// Capacity frozen in the request or compaction's native model snapshot.
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub context_window_tokens: u64,
     /// Provider-facing historical model, never substituted from current config.
     pub model: String,
@@ -46,11 +48,8 @@ impl ContextOccupancy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextBreakdown {
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub system_tokens: u64,
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub tool_tokens: u64,
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub message_tokens: u64,
 }
 
@@ -59,6 +58,7 @@ pub struct ContextBreakdown {
 /// checkpoint replaces it with its native estimate; failed maintenance preserves it.
 /// # Errors
 /// Durable read failures are not treated as missing evidence.
+#[cfg(test)]
 pub(crate) fn read(
     store: &dyn ConversationStore,
     through: u64,

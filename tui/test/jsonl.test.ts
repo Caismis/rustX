@@ -182,7 +182,7 @@ describe("JSONL framing", () => {
   });
 
   it("round-trips an encoded record through the decoder", () => {
-    const value = { method: "snapshot_get", id: 7, note: "a\nb\r\nc☃" };
+    const value = { method: "session/checkpoint", id: 7, note: "a\nb\r\nc☃" };
     const decoder = new JsonlDecoder();
     assert.deepEqual(decoder.push(encodeRecord(value)), [value]);
   });

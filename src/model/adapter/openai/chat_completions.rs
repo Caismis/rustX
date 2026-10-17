@@ -98,6 +98,9 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile =
+            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_stream_of_failure(error),
@@ -110,7 +113,7 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
         Box::pin(futures_util::stream::unfold(
             ChatPhase::Preparing {
                 client,
-                request: translated,
+                request: crate::model::adapter::provider_request(translated),
                 normalizer: ChatStreamNormalizer::new(
                     validated,
                     request.invocation.compat.chat_tool_protocol,
@@ -290,13 +293,13 @@ fn cancelled_error() -> ModelError {
 enum ChatPhase {
     Preparing {
         client: Client<OpenAIConfig>,
-        request: serde_json::Value,
+        request: crate::model::adapter::ProviderRequest,
         normalizer: ChatStreamNormalizer,
         cancellation: CancellationSignal,
     },
     Opening {
         client: Client<OpenAIConfig>,
-        request: serde_json::Value,
+        request: crate::model::adapter::ProviderRequest,
         normalizer: ChatStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -1410,6 +1413,9 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
 /// opaque request parameters are shallow-overlaid last under the
 /// protected-key contract.
 pub(crate) fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
     construct_request(request, true)
 }
 
@@ -1455,17 +1461,30 @@ fn construct_request(
     let typed = builder
         .build()
         .map_err(|e| invalid_request(&format!("failed to build Chat Completions request: {e}")))?;
-    let mut value = serde_json::to_value(&typed).map_err(|e| {
+    let mut value = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = crate::model::adapter::profile::phase(
+            crate::model::adapter::profile::Phase::TypedToValue,
+        );
+        serde_json::to_value(&typed)
+    }
+    .map_err(|e| {
         invalid_request(&format!(
             "failed to serialize the Chat Completions request: {e}"
         ))
     })?;
-    value["messages"] = serde_json::to_value(
-        messages
-            .iter()
-            .map(|message| &message.message)
-            .collect::<Vec<_>>(),
-    )
+    value["messages"] = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = crate::model::adapter::profile::phase(
+            crate::model::adapter::profile::Phase::TypedToValue,
+        );
+        serde_json::to_value(
+            messages
+                .iter()
+                .map(|message| &message.message)
+                .collect::<Vec<_>>(),
+        )
+    }
     .map_err(|error| invalid_request(&format!("failed to serialize Chat messages: {error}")))?;
     let wire_messages = value
         .get_mut("messages")
@@ -1511,6 +1530,9 @@ fn construct_request(
         request.max_output_tokens().into();
     crate::model::adapter::correlation::encode(&mut value, ModelProtocol::OpenAiChatCompletions)
         .map_err(invalid_request)?;
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
     finalize_provider_request(
         value,
         request.request_params(),
@@ -1552,6 +1574,10 @@ fn translate_messages(
     request: &ModelRequest,
     require_history: bool,
 ) -> Result<Vec<TranslatedChatMessage>, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::TranslateMessages,
+    );
     let mut system_messages = Vec::new();
     let mut transcript_messages = Vec::new();
     let reasoning_replay = request.invocation.compat.chat_reasoning_replay;
@@ -1568,7 +1594,14 @@ fn translate_messages(
             reasoning: None,
         });
     }
-    for block in &request.messages {
+    #[cfg(feature = "issue-387-profile")]
+    let blocks = request.messages.iter().enumerate().map(|(index, block)| {
+        crate::model::adapter::profile::item(index);
+        block
+    });
+    #[cfg(not(feature = "issue-387-profile"))]
+    let blocks = &request.messages;
+    for block in blocks {
         let (translated, reasoning) = match block.view() {
             ModelMessageView::User(user) => (
                 ChatMessage::Standard(translate_user_message(user, &request.images)?),
@@ -1639,6 +1672,8 @@ fn translate_user_message(
 ) -> Result<ChatCompletionRequestMessage, ModelError> {
     let mut parts = Vec::new();
     for content in user {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::block();
         match content {
             crate::message::types::UserContentBlock::Text(text) => {
                 parts.push(ChatCompletionRequestUserMessageContentPart::Text(
@@ -1688,6 +1723,8 @@ fn translate_assistant_message(
     let mut tool_calls = Vec::new();
     let mut reasoning = None;
     for content in assistant {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::block();
         match content {
             AssistantContentBlock::Text(text) => {
                 parts.push(ChatCompletionRequestAssistantMessageContentPart::Text(

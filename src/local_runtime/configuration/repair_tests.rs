@@ -1803,7 +1803,7 @@ fn a_non_utf8_user_source_keeps_its_exact_name_through_every_transaction() {
         .unwrap();
     let authored = fixture.read(&SourceTarget::User);
     assert!(authored.contains("max_concurrent = 3"));
-    assert_eq!(written.user.revision, revision(&authored));
+    assert_eq!(written, revision(&authored));
     assert_eq!(
         std::fs::read_to_string(directory.join(&other)).unwrap(),
         neighbour
@@ -1933,7 +1933,23 @@ fn an_unsupported_user_version_is_invalid_in_projection_and_resolution_alike() {
             },
         )
         .unwrap();
-    assert!(repaired.user.authored.is_some());
+    let committed = fixture.read(&SourceTarget::User);
+    assert_eq!(
+        repaired,
+        crate::local_runtime::settings::revision(Some(committed.as_bytes()))
+    );
+    let authored: toml::Value = toml::from_str(&committed).unwrap();
+    assert!(
+        authored.get("schema_version").is_none(),
+        "manual repair preserves the input's implicit current schema version"
+    );
+    let path = fixture.path(&SourceTarget::User);
+    let original = super::super::parse_layer(&path, USER.as_bytes(), false).unwrap();
+    let repaired_layer = super::super::parse_layer(&path, committed.as_bytes(), false).unwrap();
+    assert_eq!(
+        repaired_layer, original,
+        "manual repair preserves every authored semantic field through native encoding"
+    );
     let settings = fixture
         .manager
         .read_source_settings(&fixture.workspace)
@@ -2078,6 +2094,76 @@ fn capacity(value: usize) -> super::super::settings::SourceMutation {
     }
 }
 
+/// An interrupted blocking lock continues before reading the CAS revision.
+/// Both actual native writers still compete for the same persistent inode.
+#[test]
+fn interrupted_native_writer_locks_preserve_exactly_one_cas_winner() {
+    use crate::local_runtime::settings::locks;
+    let fixture = Fixture::new();
+    let original = "[subagents]\nmax_concurrent = 2\n";
+    fixture.write(&fixture.workspace, original);
+    let expected = revision_of(original);
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let writers: Vec<_> = [3, 4]
+        .into_iter()
+        .map(|value| {
+            let manager = fixture.manager.clone();
+            let target = fixture.workspace.clone();
+            let expected = expected.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                locks::fail_next(libc::EINTR);
+                barrier.wait();
+                let result = manager.write_source_settings(&target, &expected, capacity(value));
+                assert!(locks::attempts() >= 2, "the same lock must be retried");
+                result
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = writers
+        .into_iter()
+        .map(|writer| writer.join().unwrap())
+        .collect();
+    let committed = revision_of(&fixture.read(&fixture.workspace));
+    assert_eq!(
+        outcomes.iter().filter(|outcome| outcome.is_ok()).count(),
+        1,
+        "{outcomes:?}"
+    );
+    let conflict = outcomes
+        .iter()
+        .find_map(|outcome| match outcome {
+            Err(SettingsError::Conflict {
+                expected, actual, ..
+            }) => Some((expected, actual)),
+            _ => None,
+        })
+        .expect("the losing native writer must report Conflict");
+    assert_eq!(conflict, (&expected, &committed));
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| outcome.as_ref().ok() == Some(&committed))
+    );
+}
+
+#[test]
+fn noninterrupted_native_writer_lock_failure_does_not_retry_or_publish() {
+    use crate::local_runtime::settings::locks;
+    let fixture = Fixture::new();
+    let original = "[subagents]\nmax_concurrent = 2\n";
+    fixture.write(&fixture.workspace, original);
+    locks::fail_next(libc::EACCES);
+    let result = fixture.manager.write_source_settings(
+        &fixture.workspace,
+        &revision_of(original),
+        capacity(3),
+    );
+    assert!(matches!(result, Err(SettingsError::Io)), "{result:?}");
+    assert_eq!(locks::attempts(), 1);
+    assert_eq!(fixture.read(&fixture.workspace), original);
+}
+
 #[test]
 fn ordinary_source_writes_obey_the_same_physical_authority() {
     let text = "[subagents]\nmax_concurrent = 2\n";
@@ -2147,7 +2233,7 @@ fn a_valid_source_write_replaces_atomically_under_its_exact_revision() {
     let published = "[subagents]\nmax_concurrent = 3\n";
     assert_eq!(fixture.read(&fixture.workspace), published);
     assert_eq!(
-        written.workspace.unwrap().revision,
+        written,
         super::super::super::settings::revision(Some(published.as_bytes()))
     );
     // A new inode renamed into place; no staged file is left behind.
@@ -2221,10 +2307,7 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
     let still = fixture.receipt(&target).unwrap();
     assert_eq!(still.status, ConfigRepairStatus::Unresolved);
     assert_ne!(still.id, malformed.id);
-    assert_eq!(
-        still.before_revision,
-        manual.workspace.as_ref().unwrap().revision
-    );
+    assert_eq!(still.before_revision, manual);
     assert!(
         still
             .diagnostic
@@ -2233,7 +2316,13 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
             .contains("subagents.max_concurrent")
     );
     // A semantically invalid but parsable source stays editable.
-    let workspace = manual.workspace.unwrap();
+    let workspace = fixture
+        .manager
+        .read_source_settings(&target)
+        .unwrap()
+        .workspace
+        .unwrap();
+    assert_eq!(workspace.revision, manual);
     assert!(workspace.authored.is_some());
     assert!(workspace.diagnostic.is_none());
 
@@ -2241,7 +2330,7 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
     let sequence = fixture.sequence();
     fixture
         .manager
-        .write_source_settings(&target, &workspace.revision, capacity(2))
+        .write_source_settings(&target, &manual, capacity(2))
         .unwrap();
     assert!(fixture.receipt(&target).is_none());
     assert_eq!(fixture.sequence(), sequence + 1);
@@ -3784,9 +3873,7 @@ fn a_writer_creating_the_lock_during_a_read_restarts_it() {
                 let original = super::super::super::settings::revision(Some(USER.as_bytes()));
                 let written = writer
                     .write_source_settings(&SourceTarget::User, &original, capacity(3))
-                    .unwrap()
-                    .user
-                    .revision;
+                    .unwrap();
                 assert_ne!(written, original);
                 if restore {
                     std::fs::write(writer.config_path(&SourceTarget::User), USER).unwrap();
@@ -4164,10 +4251,7 @@ fn a_native_writer_interleaved_with_a_capture_waits_and_publishes_whole() {
     let base = fixture
         .manager
         .write_source_settings(&fixture.workspace, &initial, capacity(2))
-        .unwrap()
-        .workspace
-        .unwrap()
-        .revision;
+        .unwrap();
     let lock = lock_of(&fixture.path(&fixture.workspace));
     let writer = fixture.manager.clone();
     let target = fixture.workspace.clone();
@@ -4197,7 +4281,7 @@ fn a_native_writer_interleaved_with_a_capture_waits_and_publishes_whole() {
         .unwrap();
     assert_eq!(read.workspace.unwrap().revision, base);
     let thread = spawned.lock().unwrap().take().expect("the writer started");
-    let written = thread.join().unwrap().unwrap().workspace.unwrap().revision;
+    let written = thread.join().unwrap().unwrap();
     assert_ne!(written, base);
     assert_eq!(written, revision_of(&fixture.read(&fixture.workspace)));
     assert!(
@@ -4611,10 +4695,7 @@ fn a_native_writer_during_a_session_capture_is_never_mixed_into_it() {
         let base = fixture
             .manager
             .write_source_settings(&workspace, &initial, capacity(2))
-            .unwrap()
-            .workspace
-            .unwrap()
-            .revision;
+            .unwrap();
         assert_eq!(resolved(&fixture).unwrap()[&document], base, "{case}");
         let lock = lock_of(&document);
         let writer = fixture.manager.clone();
@@ -4625,10 +4706,7 @@ fn a_native_writer_during_a_session_capture_is_never_mixed_into_it() {
             assert!(!writer_excluded(&lock), "the capture holds no lock");
             let written = writer
                 .write_source_settings(&target, &base, capacity(3))
-                .unwrap()
-                .workspace
-                .unwrap()
-                .revision;
+                .unwrap();
             *slot.lock().unwrap() = Some(written);
         };
         let failure = if application {

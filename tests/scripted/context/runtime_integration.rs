@@ -772,7 +772,7 @@ async fn proactive_compaction_before_the_next_turn() {
             result: success_result("ok"),
         },
         RuntimeEvent::ToolMessageCommitted {
-            message_id: MessageId::new("attempt-1-tool-1-call-1"),
+            message_id: MessageId::new("attempt-1-tool-1-0"),
             tool_call_id: ToolCallId::new("call-1"),
         },
         RuntimeEvent::TurnCompleted,
@@ -839,7 +839,7 @@ async fn proactive_compaction_before_the_next_turn() {
     ));
     assert!(matches!(
         requests[1].messages[2].as_canonical(),
-        Some(MessageBlock::Tool(tool)) if tool.id.as_str() == "attempt-1-tool-1-call-1"
+        Some(MessageBlock::Tool(tool)) if tool.id.as_str() == "attempt-1-tool-1-0"
     ));
 
     // The Message Ledger keeps every original fact and gains exactly one
@@ -853,7 +853,7 @@ async fn proactive_compaction_before_the_next_turn() {
         vec![
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ]
     );
@@ -868,7 +868,7 @@ async fn proactive_compaction_before_the_next_turn() {
             .collect::<Vec<_>>(),
         vec![
             "attempt-1-agent-1".to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ],
         "the summary replaced exactly the selected span at its position"
@@ -1475,7 +1475,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         .iter()
         .cloned()
         .map(Into::into)
-        .collect::<Vec<ModelInputMessage>>();
+        .collect::<rustx::model::SelectedModelInput>();
     let unconstrained = rustx::context::planning::summary_prefix(
         &planner,
         &candidate_messages,
@@ -1972,10 +1972,10 @@ async fn overflow_retry_budget_is_per_model_turn() {
         vec![
             "msg-user-1".to_owned(),
             retry_message_id(1).as_str().to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             retry_message_id(2).as_str().to_owned(),
         ],
-        "one canonical summary per compaction, nothing rewritten"
+        "compaction preserves canonical history without summary commits"
     );
     assert_eq!(result.conversation.surface().compaction_generation(), 2);
 }
@@ -3700,8 +3700,8 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
     oracle.set_image_projection(tool_runtime.artifacts().clone(), image);
     oracle
         .prepare_media(
-            &historical,
-            &historical,
+            &historical.clone().into(),
+            &historical.clone().into(),
             &rustx::runtime::CancellationSignal::new(),
         )
         .await
@@ -3712,9 +3712,9 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
                 retired: historical[..*n].to_vec(),
             }
             .model_input();
-            oracle.estimate_model_input(&summary.messages, "", &[]) <= summary_limit
+            oracle.estimate_model_input(&summary.messages.into(), "", &[]) <= summary_limit
                 && oracle
-                    .estimate_model_input(&historical[*n..], "", &[])
+                    .estimate_model_input(&historical[*n..].to_vec().into(), "", &[])
                     .saturating_add(128)
                     <= 9_999
         })

@@ -200,7 +200,7 @@ it('Session diagnostic capacity refuses before closing the current Remote socket
   await owner.select('remote'); expect(owner.getSnapshot().mode).toBe('remote');
   await owner.disconnect();
 });
-it('admission reserves the last detached batch for eight transmitted mutations and discards queued work', async () => {
+it('admission reserves the last detached batch for six transmitted mutations and discards queued work', async () => {
   const { a, b, client, owner } = pair(); await owner.select('remote'); await owner.connectRemote(remote, TOKEN);
   a.held.add('session/name'); b.held.add('session/name');
   for (let index = 0; index < 7; index++) {
@@ -209,16 +209,16 @@ it('admission reserves the last detached batch for eight transmitted mutations a
   }
   const old = a.socket, close = vi.spyOn(old, 'close').mockImplementation(() => {});
   const pending = Array.from({ length: 64 }, (_, i) => client.request({ method: 'session/name', params: { session_id: 'A', name: `Pending ${i}` } }, 'session').catch(error => error));
-  expect(old.requests.filter(row => row.method === 'session/name')).toHaveLength(8);
+  expect(old.requests.filter(row => row.method === 'session/name')).toHaveLength(6);
   const replacement = owner.select('remote');
   expect(close).toHaveBeenCalledTimes(1);
-  expect(client.getSnapshot().uncertain).toHaveLength(8);
+  expect(client.getSnapshot().uncertain).toHaveLength(6);
   const outcomes = await Promise.all(pending);
-  expect(outcomes.filter(error => String(error).includes('Unsent operations were discarded'))).toHaveLength(56);
+  expect(outcomes.filter(error => String(error).includes('Unsent operations were discarded'))).toHaveLength(58);
   old.onclose?.(new CloseEvent('close')); await replacement;
   expect(client.getSnapshot().detached).toHaveLength(8);
   const operations = client.getSnapshot().detached![7].operations;
-  expect(operations).toHaveLength(8); expect(new Set(operations.map(item => item.id)).size).toBe(8);
+  expect(operations).toHaveLength(6); expect(new Set(operations.map(item => item.id)).size).toBe(6);
   expect(client.getSnapshot().uncertain).toEqual([]); expect(owner.getSnapshot().mode).toBe('remote');
   await owner.disconnect();
 });

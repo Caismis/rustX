@@ -73,7 +73,7 @@ async fn present_is_admitted_for_selected_named_child_and_invocation_override() 
         !tool_names(&delegate(&resources, "plain", None).unwrap())
             .contains(&"builtin:present".to_owned())
     );
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -105,7 +105,7 @@ async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_ov
         )
         .is_ok()
     );
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 const MODELS: &str = r#"[providers.local]
@@ -550,7 +550,7 @@ async fn cfg3_named_agent_and_invocation_tools_are_independent_of_root_visibilit
         let child = delegate(&resources, "reviewer", Some(&requested)).unwrap();
         assert_eq!(tool_names(&child), [format!("builtin:{name}")]);
     }
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 /// Skill delegation is its own authorization domain, gated by the #234
@@ -575,7 +575,7 @@ async fn cfg3_child_skill_and_plugin_selection_is_independent_of_root_visibility
     let child = delegate(&resources, "reviewer", Some(&requested)).unwrap();
     assert_eq!(skill_names(&child), ["security-review"]);
     assert!(child.extensions.agent_status().is_some());
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 /// An unknown or hidden reference keeps its own failure class: it is never
@@ -1176,5 +1176,5 @@ async fn cfg3_child_todo_override_needs_no_root_plugin_ceiling() {
             .is_some()
     );
     assert!(product.runtime().native_extensions().todo().is_none());
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }

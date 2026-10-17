@@ -1,7 +1,10 @@
 //! Bounded deterministic selection over compiled typed historical input.
+use super::engine::assemble_context_input;
 use crate::context::engine::{CompactionBudgets, CompactionConstraints};
 use crate::context::{ContextEngine, ContextError, ContextErrorKind};
-use crate::model::{ModelInputMessage, input::assemble_model_input, projected::ModelMessageView};
+#[cfg(test)]
+use crate::model::ModelInputMessage;
+use crate::model::{SelectedModelInput, projected::ModelMessageView};
 use crate::runtime::CancellationSignal;
 use crate::tools::types::ModelToolDefinition;
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,7 +34,7 @@ async fn cancellation_point(signal: &CancellationSignal) -> Result<(), ContextEr
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(crate) async fn summary_prefix(
     engine: &ContextEngine,
-    input: &[ModelInputMessage],
+    input: &SelectedModelInput,
     prompt: &str,
     tools: &[ModelToolDefinition],
     budgets: CompactionBudgets,
@@ -122,15 +125,13 @@ pub(crate) async fn summary_prefix(
             boundaries.push((n, transcript.len()));
         }
     }
-    let complete = assemble_model_input(
+    let complete = assemble_context_input(
         input,
         constraints.staged_request_context,
         constraints.carryover,
         constraints.carryover_anchor,
     )
     .map_err(|e| failure(ContextErrorKind::MalformedHistory, &e))?;
-    #[cfg(test)]
-    record_materialized_bytes(&complete);
     let monotone = engine.supports_monotone_compaction(&complete);
     drop(complete);
     let mut search = Search {
@@ -235,7 +236,7 @@ struct Cost {
 }
 struct Search<'a, 'c> {
     engine: &'a ContextEngine,
-    input: &'a [ModelInputMessage],
+    input: &'a SelectedModelInput,
     prompt: &'a str,
     tools: &'a [ModelToolDefinition],
     constraints: &'a CompactionConstraints<'c>,
@@ -252,22 +253,24 @@ impl Search<'_, '_> {
         }
         let (n, end) = self.boundaries[index];
         let summary = super::summarizer::summary_model_input(&self.transcript[..end]);
-        let summary_tokens = self.engine.estimate_model_input(&summary.messages, "", &[]);
+        let summary_tokens = self
+            .engine
+            .estimate_model_input(&summary.messages.into(), "", &[]);
         cancellation_point(self.cancellation).await?;
-        let planned = assemble_model_input(
-            &self.input[n..],
+        let planned = assemble_context_input(
+            &self.input.range(n..self.input.len()),
             self.constraints.staged_request_context,
             self.constraints.carryover,
             self.constraints.carryover_anchor,
         )
         .map_err(|e| failure(ContextErrorKind::MalformedHistory, &e))?;
-        #[cfg(test)]
-        record_materialized_bytes(&planned);
         let primary = self
             .engine
             .estimate_model_input(&planned, self.prompt, self.tools);
         cancellation_point(self.cancellation).await?;
-        let recent = self.engine.estimate_model_input(&self.input[n..], "", &[]);
+        let recent =
+            self.engine
+                .estimate_model_input(&self.input.range(n..self.input.len()), "", &[]);
         cancellation_point(self.cancellation).await?;
         let cost = Cost {
             summary: summary_tokens,
@@ -300,12 +303,12 @@ pub(crate) fn take_copied_bytes() -> u64 {
 }
 
 #[cfg(test)]
-fn record_materialized_bytes(messages: &[ModelInputMessage]) {
-    // Logical serialized bytes of bodies actually cloned by assembly, not RSS.
+pub(super) fn record_materialized_message(message: &ModelInputMessage) {
+    // Only newly cloned staged/carryover bodies; historical roots are shared.
     COPIED_BYTES.with(|total| {
         total.set(
             total.get().saturating_add(
-                crate::context::resources::bounded_encoded_len(&messages, usize::MAX)
+                crate::context::resources::bounded_encoded_len(message, usize::MAX)
                     .expect("test accounting") as u64,
             ),
         );

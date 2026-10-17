@@ -1,7 +1,8 @@
 import type { Translate } from '../../../locale/translation';
 import type {
-  CapabilityInspection1, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
-} from '../../../../../protocol/app-server/v49';
+  RuntimeClientSnapshot, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
+} from '../../../../../protocol/app-server/v50';
+type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../capability';
 import type { ExtensionFamily } from '../projection';
 
@@ -63,14 +64,14 @@ export const resourceFamilies: readonly ResourceFamily[] = ['mcp', 'skill', 'age
 /** The native observation for this identity, or `undefined` when native
  * published none. Absence stays absence: it is never read as `unprepared`,
  * `disabled` or any other status native did not say. */
-function preparationOf(resources: CapabilityInspection1, family: ResourceFamily, name: string): Preparation | undefined {
+function preparationOf(resources: CapabilityInspection, family: ResourceFamily, name: string): Preparation | undefined {
   if (family === 'mcp' || family === 'managed_python') return resources.sources[toolSourceId(family, name)]?.status;
   if (family === 'workflow') return resources.workflows[name]?.status;
   return undefined;
 }
 
 /** The diagnostics native attributed to exactly this resource identity. */
-function diagnosticsOf(resources: CapabilityInspection1, family: ResourceFamily, name: string): readonly string[] {
+function diagnosticsOf(resources: CapabilityInspection, family: ResourceFamily, name: string): readonly string[] {
   return resources.resource_diagnostics
     .filter(item => item.subject.kind === 'resource' && item.subject.family === family && item.subject.name === name)
     .map(item => item.reason);
@@ -84,7 +85,7 @@ export function collectionDiagnostics(source: SourceSettings | undefined, famili
     .filter(item => item.subject.kind === 'collection' && families.includes(item.subject.family));
 }
 
-function selectedOf(resources: CapabilityInspection1, family: ResourceFamily, name: string): boolean | undefined {
+function selectedOf(resources: CapabilityInspection, family: ResourceFamily, name: string): boolean | undefined {
   const main = resources.main;
   if (!main) return undefined;
   if (family === 'skill') return main.skills.some(skill => skill.name === name);

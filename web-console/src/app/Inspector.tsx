@@ -32,7 +32,7 @@ export function Inspector({ log: protocolLog, state, view }: { log: ProtocolLog;
     cursor: view?.cursor, cwd: view?.settings?.cwd,
     attempt: snapshot?.attempt, pending_interactions: snapshot?.pending_interactions,
     job_count: snapshot?.jobs?.length ?? 0, agent_count: snapshot?.agents?.length ?? 0,
-    workflows: snapshot?.workflows, model: snapshot?.model, capabilities: snapshot?.capabilities,
+    workflows: snapshot?.workflows, model: snapshot?.model, model_status: snapshot?.model_status, capabilities: snapshot?.capabilities,
     settings_evidence: snapshot?.settings_evidence,
     resource_revision: snapshot?.resources?.revision, capability_revision: snapshot?.capabilities.revision,
     approval_mode: snapshot?.effective_approval_mode,

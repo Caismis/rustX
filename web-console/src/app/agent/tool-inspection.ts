@@ -1,11 +1,12 @@
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
-import type { ForegroundToolExecution, TraceToolLocator } from '../../../../protocol/app-server/v49';
+import type { ForegroundToolExecution, TraceToolLocator } from '../../../../protocol/app-server/v50';
 
 /** The owning Conversation supplies the native navigation authority. */
 export const ToolInspectionContext = createContext<((locator: TraceToolLocator) => Promise<void>) | undefined>(undefined);
 export function useToolInspection(tool: ForegroundToolExecution) {
   const locate = useContext(ToolInspectionContext);
-  return locate ? () => locate({ occurrence: { assistant_message_id: tool.message_id, block_index: tool.block_index }, call_id: tool.call_id, tool_id: tool.tool_id }) : undefined;
+  const callId=tool.call_id,toolId=tool.tool_id;
+  return locate ? () => locate({ occurrence: tool.occurrence, call_id:callId, tool_id:toolId }) : undefined;
 }
 
 /** A still-attached background Session must not switch the visible Conversation's tab. */

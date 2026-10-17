@@ -7,7 +7,8 @@ import type { PopupContent } from "./popup-frame.ts";
 
 type Pending = NonNullable<InboundDiagnostics["pending"]>[number];
 export function pendingText(item: Pending): string {
-  return item.message.content.map(block => block.type === "text" ? block.text : "[attachment]").join("");
+  const preview=item.message.content.map(block => block.type === "text" ? block.text : "[attachment]").join("");
+  return item.deferred ? `${preview} [content deferred · /observation inbound.pending]` : preview;
 }
 /** Observations are captured on opening; stale CAS is a visible terminal result. */
 export class PendingInputView implements PopupContent {
@@ -56,7 +57,8 @@ export class PendingInputView implements PopupContent {
     else if (matchesKey(data, "ctrl+d")) void this.mutate();
     else if (matchesKey(data, "enter")) {
       const item = this.items[this.#selected];
-      if (item && item.message.content.every(block => block.type === "text")) { this.#editing = true; this.editor.focused = this.#focused; this.editor.setText(pendingText(item)); }
+      if (item?.deferred) { this.#notice = "Original input is deferred; /observation inbound.pending reads bounded source bytes. Remove remains available."; }
+      else if (item && item.message.content.every(block => block.type === "text")) { this.#editing = true; this.editor.focused = this.#focused; this.editor.setText(pendingText(item)); }
       else this.#notice = "Only plain Human text can be edited; attachments can be removed.";
     }
     this.changed();
@@ -64,7 +66,8 @@ export class PendingInputView implements PopupContent {
   async mutate(text?: string): Promise<void> {
     const item = this.items[this.#selected];
     if (!item || this.#busy || this.#done) return;
-    const expected: MethodParams<"inbound/remove">["expected"] = { sequence: item.sequence, message_id: item.message.id, revision: item.revision };
+    if(text !== undefined && item.deferred) { this.#notice="Deferred original input cannot be edited from a partial preview."; this.changed(); return; }
+    const expected: MethodParams<"inbound/remove">["expected"] = { sequence: item.sequence, revision: item.revision };
     this.#busy = true;
     try {
       if (text === undefined) await this.session.removePending(expected);

@@ -1287,6 +1287,7 @@ async fn handshake_core(
                 Ok(Some(
                     ChildFrame::InteractionRequested(_)
                     | ChildFrame::InteractionSettled { .. }
+                    | ChildFrame::InteractionRemoved { .. }
                     | ChildFrame::InteractionResponseResult(_)
                     | ChildFrame::InteractionPublicationAdmissionRequested(_),
                 )) => {
@@ -1834,16 +1835,24 @@ async fn drive_child_control(
                         retained.release(&release.unit_id, release.pgid);
                     }
                     Ok(Some(ChildFrame::InteractionRequested(request))) => {
-                        if let Some(sink) = &interactions {
-                            sink.apply_requested(request);
+                        if let Some(sink) = &interactions
+                            && let Err(error)=sink.apply_requested(*request).await {
+                            violation=Some(format!("nested interaction reliable route failed: {error:?}"));
                         }
                     }
                     Ok(Some(ChildFrame::InteractionSettled {
                         interaction,
                         outcome,
                     })) => {
-                        if let Some(sink) = &interactions {
-                            sink.apply_settled(&interaction, &outcome);
+                        if let Some(sink) = &interactions
+                            && let Err(error)=sink.apply_settled(&interaction,&outcome).await {
+                            violation=Some(format!("nested interaction reliable settlement route failed: {error:?}"));
+                        }
+                    }
+                    Ok(Some(ChildFrame::InteractionRemoved{interaction}))=>{
+                        if let Some(sink)=&interactions
+                            && let Err(error)=sink.apply_removed(&interaction).await {
+                            violation=Some(format!("nested interaction removal route failed: {error:?}"));
                         }
                     }
                     Ok(Some(ChildFrame::InteractionResponseResult(frame))) => {
@@ -1886,9 +1895,7 @@ async fn drive_child_control(
                     Ok(Some(
                         ChildFrame::InteractionPublicationAdmissionRequested(request),
                     )) => {
-                        let admitted = interactions
-                            .as_ref()
-                            .is_some_and(|sink| sink.admit_publication(&request.interaction));
+                        let admitted=if let Some(sink)=&interactions {sink.admit_publication(&request.interaction).await}else{false};
                         // The request frame uses `admitted = false` as its
                         // wire shape; the root authority's answer must echo
                         // the exact identity and set the decision explicitly.
@@ -1977,6 +1984,11 @@ async fn drive_child_control(
             cancellation_delivered,
         )
         .await;
+    }
+    // EOF/reap is exact physical evidence for route retirement. Native
+    // interaction audits remain unchanged; reliable relays own only locators.
+    if let Some(sink) = &interactions {
+        sink.retire_pending_routes().await;
     }
     let outcome = match (result, violation, unproven_offer) {
         // Refused physical evidence cannot produce a quiescent receipt.

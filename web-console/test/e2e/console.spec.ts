@@ -1,3 +1,4 @@
+import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
@@ -130,8 +131,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     // Native Tool completion and provider response completion are separate boundaries.
     await fixture.control('observations/await?kind=response_completed&count=4&timeoutMs=30000');
     await expect(page.getByText('Approval completed.', { exact: true })).toBeVisible();
-    await send('Questionnaire please'); await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
-    await reload(); await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
+    await send('Questionnaire please'); await openQuestionnaire(page);
+    await reload(); await openQuestionnaire(page); await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await expect(page.getByText('Questionnaire completed.', { exact: true })).toBeVisible();
     await send('Publish while detached'); await fixture.gate('publish-question');
     await connectionAction(page, 'Disconnect');
@@ -145,7 +146,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await remote.shutdown(); remote = undefined;
     await connectionAction(page, 'Reconnect');
     await expect(page.getByLabel('Transport token')).toHaveCount(0); await showInspector(page);
-    await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
+    await openQuestionnaire(page);
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
@@ -159,6 +160,10 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     await closeSettings(page);
     await expect(page.getByLabel('Native diagnostic JSON')).toContainText('console-model');
+    // The fixed 32-row native tail excludes A's earliest response after the
+    // intervening interaction audits. Load its advancing historical page.
+    if (await page.getByText('A is running. A finished.', { exact: true }).count() === 0)
+      await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');

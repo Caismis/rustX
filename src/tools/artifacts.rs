@@ -10,6 +10,10 @@
 //! The shared lifetime identity capacity is [`MAX_ARTIFACTS_PER_STORE`]; durable
 //! reservations consume slots even when the subsequent byte write is abandoned.
 
+#[cfg(test)]
+mod integrity_tests;
+mod seal;
+
 use nix::fcntl::{Flock, FlockArg};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -226,22 +230,33 @@ impl ArtifactStore {
         // whose writer has not yet published bytes. No reader can defeat admission.
         let reservation = File::options()
             .read(true)
+            .write(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(self.root.join(format!("{}.reserved", id.as_str())))
             .map_err(|_| ArtifactError::WriteFailed("artifact reservation unavailable".into()))?;
         let reservation = Flock::lock(reservation, FlockArg::LockExclusiveNonblock)
             .map_err(|(_, error)| ArtifactError::WriteFailed(error.to_string()))?;
+        let metadata = reservation
+            .metadata()
+            .map_err(|error| ArtifactError::WriteFailed(error.to_string()))?;
+        if !metadata.is_file() || metadata.len() != 0 {
+            return Err(ArtifactError::WriteFailed(
+                "artifact reservation already contains settlement evidence".into(),
+            ));
+        }
         let path = self.path_of(id);
         let file = File::options()
             .create_new(true)
+            .read(true)
             .write(true)
             .open(&path)
             .map_err(|error| ArtifactError::WriteFailed(format!("{}: {error}", path.display())))?;
         #[cfg(test)]
         after_publication();
         Ok(ArtifactWriter {
+            root: self.root.clone(),
             file,
-            _reservation: reservation,
+            reservation,
             _lifecycle: self.lifecycle.clone(),
         })
     }
@@ -271,7 +286,8 @@ impl ArtifactStore {
                 return Err(std::io::Error::other("artifact identity capacity exceeded"));
             }
             // Successful shared admission proves the native one-shot writer has
-            // ended. Create-new semantics make these bytes immutable thereafter.
+            // ended. Native create-new writers cannot replace them thereafter;
+            // callers freezing external-file bytes must also retain integrity evidence.
             let len = Self::open_archive_reader(root, &id)
                 .ok()
                 .map(|reader| reader.len);
@@ -282,6 +298,8 @@ impl ArtifactStore {
 
     /// Open existing durable bytes without a presentation-size limit.
     /// The caller reads bounded chunks and retains the Conversation allocation.
+    /// Shared admission excludes native writers; it does not authenticate bytes
+    /// against external filesystem writes. Frozen readers own that evidence.
     /// # Errors
     /// Invalid identities, symlinks, missing bytes and non-files fail explicitly.
     pub(crate) fn open_archive_reader(
@@ -305,10 +323,12 @@ impl ArtifactStore {
         if !metadata.is_file() {
             return Err(std::io::Error::other("artifact is not a regular file"));
         }
+        let seal = seal::Seal::read(&reservation, metadata.len())?;
         Ok(ArtifactReadHandle {
             file,
-            _reservation: reservation,
-            len: metadata.len(),
+            len: seal.length,
+            seal,
+            reservation,
         })
     }
 
@@ -325,16 +345,31 @@ impl ArtifactStore {
                 "lineage artifact byte budget exceeded",
             ));
         }
+        #[cfg(test)]
+        let source_id = id;
         let id = self.create_artifact().map_err(std::io::Error::other)?;
         let mut writer = self.open_writer(&id).map_err(std::io::Error::other)?;
         let expected = reader.len;
-        let length = std::io::copy(&mut reader.by_ref().take(expected + 1), &mut writer)?;
-        if length != expected {
-            return Err(std::io::Error::other("settled artifact length changed"));
+        let mut verification = reader.verification();
+        let mut buffer = vec![0; seal::CHUNK];
+        let mut offset = 0;
+        while offset < expected {
+            let length =
+                usize::try_from((expected - offset).min(65_536)).map_err(std::io::Error::other)?;
+            reader.read_exact(&mut buffer[..length])?;
+            #[cfg(test)]
+            integrity_tests::copy_read(source.root(), source_id.as_str(), offset);
+            reader.verify_chunk(&mut verification, offset, &buffer[..length])?;
+            #[cfg(test)]
+            integrity_tests::copy_verified(source.root(), source_id.as_str(), offset);
+            writer.write_all(&buffer[..length])?;
+            offset += u64::try_from(length).map_err(std::io::Error::other)?;
         }
-        writer.file.sync_all()?;
-        File::open(self.root())?.sync_all()?;
-        *remaining -= length;
+        reader.finish_verification(verification)?;
+        writer
+            .finish_copy(&reader.seal)
+            .map_err(std::io::Error::other)?;
+        *remaining -= expected;
         Ok(id)
     }
 
@@ -351,30 +386,26 @@ impl ArtifactStore {
         id: &ArtifactId,
     ) -> Result<Vec<u8>, ArtifactError> {
         validate_id(id)?;
-        let mut file = File::options()
-            .read(true)
-            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-            .open(root.join(format!("{}.bin", id.as_str())))
-            .map_err(|_| ArtifactError::WriteFailed("artifact unavailable".into()))?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| ArtifactError::WriteFailed("artifact unavailable".into()))?;
-        if !metadata.is_file() || metadata.len() > ARTIFACT_TRANSFER_MAX as u64 {
-            return Err(ArtifactError::WriteFailed(
-                "artifact exceeds read limit or is not a regular file".into(),
-            ));
-        }
-        let mut bytes = Vec::with_capacity(ARTIFACT_TRANSFER_MAX + 1);
-        Read::by_ref(&mut file)
-            .take((ARTIFACT_TRANSFER_MAX + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ArtifactError::WriteFailed("artifact read failed".into()))?;
-        if bytes.len() > ARTIFACT_TRANSFER_MAX {
-            return Err(ArtifactError::WriteFailed(
-                "artifact exceeds read limit".into(),
-            ));
-        }
-        Ok(bytes)
+        let read = || -> std::io::Result<Vec<u8>> {
+            let mut reader = Self::open_archive_reader(root, id)?;
+            let length = usize::try_from(reader.len).map_err(std::io::Error::other)?;
+            if length > ARTIFACT_TRANSFER_MAX {
+                return Err(std::io::Error::other("artifact exceeds read limit"));
+            }
+            let mut bytes = vec![0; length];
+            let mut verification = reader.verification();
+            for (index, chunk) in bytes.chunks_mut(seal::CHUNK).enumerate() {
+                reader.read_exact(chunk)?;
+                reader.verify_chunk(
+                    &mut verification,
+                    u64::try_from(index * seal::CHUNK).map_err(std::io::Error::other)?,
+                    chunk,
+                )?;
+            }
+            reader.finish_verification(verification)?;
+            Ok(bytes)
+        };
+        read().map_err(|error| ArtifactError::WriteFailed(error.to_string()))
     }
 
     /// Publish one bounded byte payload. Never replaces an existing artifact.
@@ -390,11 +421,8 @@ impl ArtifactStore {
         let mut writer = self.open_writer(&id)?;
         writer
             .write_all(bytes)
-            .and_then(|()| writer.file.sync_all())
             .map_err(|_| ArtifactError::WriteFailed("artifact write failed".into()))?;
-        File::open(&self.root)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| ArtifactError::WriteFailed("artifact directory sync failed".into()))?;
+        writer.finish()?;
         Ok(id)
     }
 
@@ -428,12 +456,37 @@ fn validate_id(id: &ArtifactId) -> Result<(), ArtifactError> {
 
 /// A streaming writer bound to one artifact file.
 ///
-/// Writing appends bytes to the artifact; the file is persisted on drop.
-/// This is not a durable recovery backend: fsync guarantees are outside M5.
+/// Writing appends bytes. Only [`Self::finish`] durably settles the bytes and
+/// publishes their native integrity evidence; dropping a writer abandons it.
 pub struct ArtifactWriter {
+    root: PathBuf,
     _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     file: File,
-    _reservation: Flock<File>,
+    reservation: Flock<File>,
+}
+
+impl ArtifactWriter {
+    /// Durably settle bytes and integrity evidence under the original reservation.
+    /// # Errors
+    /// Returns a write failure if any byte/evidence write or durability barrier fails.
+    /// An error gives no successful settlement receipt. Dropping without calling
+    /// finish abandons the writer and does not settle it.
+    pub fn finish(mut self) -> Result<(), ArtifactError> {
+        seal::settle(&mut self.file, &self.reservation, &self.root, None)
+            .map_err(|error| ArtifactError::WriteFailed(error.to_string()))
+    }
+
+    // A copied Original must retain the source seal, not certify a changed
+    // destination as new content during its final durability pass.
+    fn finish_copy(mut self, original: &seal::Seal) -> Result<(), ArtifactError> {
+        seal::settle(
+            &mut self.file,
+            &self.reservation,
+            &self.root,
+            Some(original),
+        )
+        .map_err(|error| ArtifactError::WriteFailed(error.to_string()))
+    }
 }
 
 impl Write for ArtifactWriter {
@@ -451,12 +504,43 @@ impl Write for ArtifactWriter {
 /// reopening a settled identity for mutation. Paths remain private to the store.
 pub(crate) struct ArtifactReadHandle {
     file: File,
-    _reservation: Flock<File>,
+    reservation: Flock<File>,
+    seal: seal::Seal,
     pub(crate) len: u64,
+}
+impl ArtifactReadHandle {
+    pub(crate) fn verification(&self) -> seal::Verification {
+        self.seal.verification()
+    }
+    pub(crate) fn verify_chunk(
+        &self,
+        verification: &mut seal::Verification,
+        offset: u64,
+        bytes: &[u8],
+    ) -> std::io::Result<[u8; 32]> {
+        self.seal
+            .verify(&self.reservation, verification, offset, bytes)
+    }
+    pub(crate) fn finish_verification(
+        &mut self,
+        verification: seal::Verification,
+    ) -> std::io::Result<()> {
+        let mut extra = [0];
+        if self.file.read(&mut extra)? != 0 || self.file.metadata()?.len() != self.len {
+            return Err(std::io::Error::other("settled artifact length changed"));
+        }
+        self.seal.check_complete(verification)
+    }
 }
 impl Read for ArtifactReadHandle {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.file.read(buffer)
+    }
+}
+
+impl std::io::Seek for ArtifactReadHandle {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.file, position)
     }
 }
 
@@ -491,6 +575,7 @@ mod tests {
                     )
                     .unwrap();
                 writer.write_all(b"legitimate execution succeeds").unwrap();
+                writer.finish().unwrap();
             });
             // Identity is durable; writer is parked just before admission. A
             // reader must not acquire a reservation lock while bytes are absent.
@@ -575,11 +660,11 @@ mod tests {
             super::ARTIFACT_TRANSFER_MAX
         );
         let oversized = store.create_artifact().unwrap();
-        store
-            .open_writer(&oversized)
-            .unwrap()
+        let mut writer = store.open_writer(&oversized).unwrap();
+        writer
             .write_all(&vec![0; super::ARTIFACT_TRANSFER_MAX + 1])
             .unwrap();
+        writer.finish().unwrap();
         assert!(store.read_bounded(&oversized).is_err());
         std::os::unix::fs::symlink(store.path_of(&id), dir.path().join("artifact_99.bin")).unwrap();
         assert!(store.read_bounded(&ArtifactId::new("artifact_99")).is_err());
@@ -704,7 +789,12 @@ mod tests {
         for suffix in ["bin", "reserved"] {
             for frontier in [super::MAX_ARTIFACTS_PER_STORE + 1, u64::MAX] {
                 let dir = tempfile::tempdir().unwrap();
-                std::fs::write(dir.path().join("artifact_1.bin"), b"retained").unwrap();
+                let original = ArtifactStore::new(ConversationId::generate(), &dir).unwrap();
+                assert_eq!(
+                    original.put_bounded(b"retained").unwrap().as_str(),
+                    "artifact_1"
+                );
+                drop(original);
                 std::fs::write(
                     dir.path().join(format!("artifact_{frontier}.{suffix}")),
                     b"",
@@ -768,7 +858,7 @@ mod tests {
         let mut writer = store.open_writer(&id).expect("open");
         writer.write_all(b"hello\n").expect("write");
         writer.write_all(&[0xff, 0x00, b'x']).expect("write");
-        drop(writer);
+        writer.finish().unwrap();
         let path = store.path_of(&id);
         let bytes = std::fs::read(&path).expect("read artifact");
         assert_eq!(bytes, b"hello\n\xff\x00x");

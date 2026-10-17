@@ -2049,6 +2049,8 @@ impl RecoveryPlan {
         // classification never reaches this branch again because the attempt
         // is no longer unresolved.
         let envelope = RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id: EventId::new(format!("recovery-attempt-terminal:{attempt_id}")),
             sequence: 0,
@@ -2085,6 +2087,8 @@ impl RecoveryPlan {
         timestamp: DateTime<Utc>,
     ) -> RuntimeEventEnvelope {
         RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
             event_id,
             sequence: 0,
@@ -2282,6 +2286,8 @@ mod tests {
         // The fold never reads the event identity; a stable fixture id is
         // sufficient for the state-machine regressions.
         RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new("evt"),
             sequence: 0,

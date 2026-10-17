@@ -1,6 +1,6 @@
 // Regressions for fields contributed by draft-2020-12 $ref siblings.
 // These must be usable through the public union, not a handwritten DTO.
-import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v49.js';
+import type {MessageBlock, UserContentBlock, RuntimeClientSnapshot} from './v50.js';
 
 const text = {type: 'text', text: 'Native content'} satisfies UserContentBlock;
 const user = {role: 'user', id: 'user-1', content: [text], source: 'human'} satisfies MessageBlock;
@@ -24,7 +24,7 @@ const tool = {
   role: 'tool', id: 'result-B',
   occurrence: {assistant_message_id: 'assistant-B', block_index: 2},
   tool_call_id: 'call_1', tool_id: 'tool-bash',
-  result: {status: {type: 'success'}, content: [], duration_ms: 0},
+  result: {status: {type: 'success'}, content: [], duration_ms: "0"},
 } satisfies MessageBlock;
 read(tool);
 const {occurrence: nativeOwner, ...missingOwner} = tool;
@@ -33,11 +33,11 @@ const invalidTool: MessageBlock = missingOwner;
 void nativeOwner;
 void invalidTool;
 
-// Native response projections and explicit cut side are the mandatory v49 contract.
-import type {CompletedResponseView, Request1} from './v49.js';
-const completed = {
+// Native response projections and explicit cut side are the mandatory v50 contract.
+import type {CompletedResponseView, Request1} from './v50.js';
+const completed = {closing_locator:{type:'by_message_id',message_id:'destination-assistant'},deferred_fields:[],
   closing_message_id: 'destination-assistant',
-  origin: {conversation_id: 'source-conversation', attempt_id: 'source-attempt', closing_message_id: 'source-assistant'},
+  origin: {attempt_id_source:null,conversation_id: 'source-conversation', attempt_id: 'source-attempt', closing_message_id: 'source-assistant'},
   completed_at: '2026-09-19T00:00:00Z', surface_revision: '42',
   timing: {total_duration_ms: 19000, ttft_ms: 320, generation_ms: 1280, output_tokens_per_second: 15.625},
 } satisfies CompletedResponseView;
@@ -46,16 +46,16 @@ const after: Extract<Request1, {method: 'session/branch'}>['params']['side'] = '
 const before: Extract<Request1, {method: 'session/branch'}>['params']['side'] = 'before';
 void after; void before;
 
-// Job discovery must expose omitted matches, and abandonment is a typed failure.
-import type { MethodResult, ErrorData } from './v49.js';
-const jobs = { type: 'jobs', jobs: [], returned: 0, matched: 0, limit: 64, truncated: false } satisfies MethodResult;
+// Job pages require exact source cuts/counts; abandonment is a typed failure.
+import type { MethodResult, ErrorData } from './v50.js';
+const jobs = { type: 'checkpoint_page', page:{domain:'jobs',items:[],read_cut:{conversation_id:'conversation',revision:'0',through:'0',domain_revisions:{},collection_cuts:{}},cursor:'0',total:'0',collections:[],next_offset:null} } satisfies MethodResult;
 // @ts-expect-error A bounded list cannot silently omit its discovery metadata.
-const dishonestJobs: MethodResult = { type: 'jobs', jobs: [] };
+const dishonestJobs: MethodResult = { type:'checkpoint_page',page:{domain:'jobs',items:[]} };
 const failedJob = { kind: 'job_publication_abandoned', job_id: 'job-a' } satisfies ErrorData;
 void jobs; void dishonestJobs; void failedJob;
-// Creation intent already belongs to SessionPersistentState in mandatory v49.
+// Creation intent already belongs to SessionPersistentState in mandatory v50.
 // A display-only projected default must be expressible as no explicit override.
-import type {SessionModelConfig} from './v49.js';
+import type {SessionModelConfig} from './v50.js';
 const initialModel = {model: 'provider/selected', profile: 'high'} satisfies SessionModelConfig;
 const explicitCreate = {method: 'session/create', params: {settings: {cwd: '/workspace', model: initialModel}}} satisfies Request1;
 const nativeDefaultCreate = {method: 'session/create', params: {settings: {cwd: '/workspace'}}} satisfies Request1;
@@ -63,7 +63,7 @@ void explicitCreate;
 void nativeDefaultCreate;
 
 // One canonical generation includes both mainline catalog invalidation and Jobs/Agents.
-import type { Notification } from './v49.js';
+import type { Notification } from './v50.js';
 const summaryOnly = { jsonrpc: '2.0', method: 'session/summaryInvalidated', params: { session_id: 'session', catalog_changed: false } } satisfies Notification;
 const membershipChanged = { ...summaryOnly, params: { session_id: 'session', catalog_changed: true } } satisfies Notification;
 // @ts-expect-error Membership scope cannot be inferred from an older missing-flag shape.
@@ -71,13 +71,13 @@ const missingCatalogScope: Notification = { jsonrpc: '2.0', method: 'session/sum
 void summaryOnly; void membershipChanged; void missingCatalogScope;
 
 // Absence is a native unavailable fact in the mandatory vocabulary, not a decoder fallback.
-import type { TraceToolSummary } from './v49.js';
+import type { TraceToolSummary } from './v50.js';
 const boundedToolArguments: TraceToolSummary['arguments'] = { text: '{"command":"pwd"}', truncated: false };
 const unavailableToolArguments: TraceToolSummary['arguments'] = null;
 void boundedToolArguments; void unavailableToolArguments;
 
 // Workspace files and immutable managed Artifact identities stay closed and distinct.
-import type {SessionFileReference, FileReference} from './v49.js';
+import type {SessionFileReference, FileReference} from './v50.js';
 const delivered = {
   scope: {conversation_id: 'original-conversation', device: '1', inode: '123'},
   path: '报告 file.md', name: '报告 file.md', description: 'Report', mime_type: 'text/markdown',
@@ -91,8 +91,8 @@ const readFailure = {kind: 'session_file_read', reason: 'unavailable'} satisfies
 const ambiguousFailure: ErrorData = {kind: 'session_file_read', reason: 'whatever'};
 void managed; void forbiddenFileRead; void readFailure; void ambiguousFailure;
 
-// Compaction correlation remains the one native bounded string domain on v49.
-import type {ManualCompactionRequestId} from './v49.js';
+// Compaction correlation remains the one native bounded string domain on v50.
+import type {ManualCompactionRequestId} from './v50.js';
 const compactionId: ManualCompactionRequestId = '550e8400-e29b-41d4-a716-446655440000';
 const compactId: Extract<Request1, {method: 'context/compact'}>['params']['request_id'] = compactionId;
 const projectedId: NonNullable<NonNullable<RuntimeClientSnapshot['context']>['manual_compaction']>['request_id'] = compactId;
@@ -100,3 +100,25 @@ const projectedId: NonNullable<NonNullable<RuntimeClientSnapshot['context']>['ma
 const numericCompactionId: ManualCompactionRequestId = 1;
 void projectedId;
 void numericCompactionId;
+
+// Native Tool durations retain their entire u64 domain independently of JSON numbers.
+const exactDuration: typeof tool.result.duration_ms = '18446744073709551615';
+// @ts-expect-error A rounded numeric Tool duration is not the native wire quantity.
+const roundedDuration: typeof tool.result.duration_ms = 18446744073709551615;
+void exactDuration; void roundedDuration;
+
+// A deferred audit retains the native-selected positive settlement head even
+// when its original publication body is unavailable in the loaded page.
+import type { RuntimeClientEvent, RuntimeClientPublicationSettlement } from './v50.js';
+const auditBlocks: RuntimeClientPublicationSettlement['block_count'] = '18446744073709551615';
+// @ts-expect-error Publication block counts must never be rounded JSON numbers.
+const roundedAuditBlocks: RuntimeClientPublicationSettlement['block_count'] = 18446744073709551615;
+const auditHead: Extract<RuntimeClientEvent,{type:'assistant_publication_deferred_settled'}>['settlement_head'] = [];
+const traceHead: Extract<RuntimeClientEvent,{type:'read_domains_updated'}>['trace'] = {records:[],next_cursor:null};
+void auditBlocks; void roundedAuditBlocks; void auditHead; void traceHead;
+
+// Deferred display owners never become executable control identities.
+const deferredObservedAttempt:import('./v50.js').RuntimeClientAttempt={attempt_id:null,attempt_id_source:{type:'journal',domain:'journal.1',field:{sequence:1,path:['attempt_id'],encoded_bytes:9000}},phase:{type:'incomplete'},turn:0,foreground:[],model:null,execution_settings:null};
+// @ts-expect-error Native semantic IDs remain required, even when their display alias is deferred.
+const requiredNativeAttemptId:import('./v50.js').AttemptId=deferredObservedAttempt.attempt_id;
+void requiredNativeAttemptId;

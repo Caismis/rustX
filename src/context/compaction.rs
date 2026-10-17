@@ -57,6 +57,7 @@ impl Default for CompactionAttribution {
 /// The already-committed output of one compaction execution.
 #[derive(Debug)]
 pub(crate) struct ExecutedCompaction {
+    pub(crate) newly_committed: bool,
     pub(crate) persisted_event: RuntimeEventEnvelope,
 }
 
@@ -119,7 +120,7 @@ pub(crate) async fn execute_compaction(
         crate::context::resources::ResourceLimits::default(),
     )
     .map_err(resource_failure)?;
-    let complete = crate::model::input::assemble_model_input(
+    let complete = super::engine::assemble_context_input(
         &history.messages,
         constraints.staged_request_context,
         constraints.carryover,
@@ -146,7 +147,7 @@ pub(crate) async fn execute_compaction(
     let (retired_count, summary) = loop {
         let n = super::planning::summary_prefix(
             &engine,
-            &history.messages,
+            &projection.messages,
             effective_system_prompt,
             tools,
             budgets,
@@ -190,7 +191,7 @@ pub(crate) async fn execute_compaction(
             .into());
         }
         let request = crate::context::summarizer::SummaryRequest {
-            retired: history.messages[..n].to_vec(),
+            retired: projection.messages.range(0..n).to_vec(),
         };
         let result = model_resources.summarize(request).await;
         match result {
@@ -217,7 +218,7 @@ pub(crate) async fn execute_compaction(
     let mut sources = std::collections::BTreeMap::new();
     let mut checkpoint_sources = std::collections::BTreeMap::new();
     let mut includes_previous_summary = false;
-    for message in &history.messages[..retired_count] {
+    for message in projection.messages.iter().take(retired_count) {
         match message {
             crate::model::ModelInputMessage::Canonical(original) => {
                 let source = CanonicalMessageRef::of(conversation_id, original);
@@ -340,7 +341,7 @@ pub(crate) async fn execute_compaction(
         })?;
     let after_projection = engine.build_projection_input(
         conversation.revision(),
-        compiled.messages,
+        compiled.messages.into(),
         tools,
         None,
         effective_system_prompt,
@@ -400,7 +401,12 @@ pub(crate) async fn execute_compaction(
     let receipt = match store.commit_projection(input) {
         Ok(receipt) => receipt,
         Err(error) => match store.projection_receipt(&attribution.operation_id, &fingerprint) {
-            Ok(Some(receipt)) => receipt,
+            Ok(Some(mut receipt)) => {
+                // This is first delivery after an uncertain native commit,
+                // unlike an ordinary duplicate operation receipt lookup.
+                receipt.newly_committed = true;
+                receipt
+            }
             Ok(None) => return Err(CompactionExecutionError::Durable(error.to_string())),
             Err(lookup) => {
                 return Err(CompactionExecutionError::Durable(format!(
@@ -410,6 +416,7 @@ pub(crate) async fn execute_compaction(
         },
     };
     let completed = ExecutedCompaction {
+        newly_committed: receipt.newly_committed,
         persisted_event: receipt.completed,
     };
     let reload_current = || -> Result<ConversationState, String> {

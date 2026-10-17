@@ -504,7 +504,8 @@ mod tests {
         let tools = crate::capabilities::AvailableToolCatalog::metadata([]);
         let skills = SkillSnapshot::new(Vec::new());
         let resolve = |state| {
-            let availability = BTreeMap::from([(source.clone(), state)]);
+            let availability =
+                crate::capabilities::CapabilityAvailability::from([(source.clone(), state)]);
             let resolved = resolve_agent_profile(
                 &profile,
                 &AgentProfileAuthority {

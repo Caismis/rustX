@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import { decodeProtocolMessage } from "../src/protocol/decoder.ts";
+import { AppServerRequestError, isResyncRequired } from '../src/app-server/client.ts';
 
 import {
   compareExact,
@@ -34,6 +35,14 @@ const fixtures = (JSON.parse(encoded) as unknown[]).map((record) => {
   const decoded = decodeProtocolMessage(record);
   assert.ok(decoded, "every Rust fixture satisfies the generated runtime contract");
   return decoded;
+});
+
+it('typed InvalidRange is a source range failure rather than a resync',()=>{
+  const error={code:-32000,message:'Invalid source range',data:{kind:'invalid_range' as const}};
+  assert.equal(describeRpcError(error),'the requested range is outside the retained source');
+  const failure=new AppServerRequestError('conversation/contentRead',error);
+  assert.equal(failure.kind,'invalid_range');
+  assert.equal(isResyncRequired(failure),false);
 });
 
 describe("Rust-produced App Server fixtures", () => {

@@ -58,8 +58,47 @@ async fn call(driver: &impl AppServerConformanceDriver, id: i64, call: Method) -
     response.result
 }
 
+async fn checkpoint_and_subscribe(
+    driver: &impl AppServerConformanceDriver,
+    target: &AttachmentTarget,
+    id: i64,
+) -> rustx::runtime_client::checkpoint::RuntimeClientCheckpoint {
+    let MethodResult::Checkpoint { checkpoint } = call(
+        driver,
+        id,
+        Method::SessionCheckpoint {
+            trace_records: vec![],
+            target: target.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("checkpoint")
+    };
+    let MethodResult::Subscribed {
+        target: following,
+        after_cursor,
+        registration_id,
+    } = call(
+        driver,
+        id + 1,
+        Method::SessionSubscribe {
+            target: target.clone(),
+            after_cursor: checkpoint.cursor,
+        },
+    )
+    .await
+    else {
+        panic!("subscription receipt")
+    };
+    assert_eq!(following, *target);
+    assert_eq!(after_cursor, checkpoint.cursor);
+    assert!(!registration_id.is_empty());
+    *checkpoint
+}
+
 /// One semantic parity scenario. The caller supplies only an outer liveness guard.
-/// All observations come from protocol snapshots/events, not test-owned state.
+/// All observations come from bounded native checkpoints/events.
 #[allow(clippy::too_many_lines)]
 pub async fn representative_scenario(
     driver: &impl AppServerConformanceDriver,
@@ -113,27 +152,19 @@ pub async fn representative_scenario(
             }
         ),
     );
-    let MethodResult::Attached {
-        target: a,
-        snapshot: snapshot_a,
-        cursor: _cursor_a,
-        ..
-    } = a
-    else {
+    let MethodResult::Attached { target: a, .. } = a else {
         panic!("attach A")
     };
-    let MethodResult::Attached {
-        target: b,
-        snapshot: snapshot_b,
-        cursor: _cursor_b,
-        ..
-    } = b
-    else {
+    let MethodResult::Attached { target: b, .. } = b else {
         panic!("attach B")
     };
     assert_eq!(a.session_id, sessions[0]);
     assert_eq!(b.session_id, sessions[1]);
     assert_ne!(a.conversation_id, b.conversation_id);
+    let checkpoint_a = checkpoint_and_subscribe(driver, &a, 101).await;
+    let checkpoint_b = checkpoint_and_subscribe(driver, &b, 103).await;
+    let snapshot_a = checkpoint_a.snapshot;
+    let snapshot_b = checkpoint_b.snapshot;
     assert_eq!(snapshot_a.conversation_id, a.conversation_id);
     assert_eq!(snapshot_b.conversation_id, b.conversation_id);
     assert_eq!(snapshot_a.effective_approval_mode, ApprovalMode::Policy);
@@ -168,12 +199,14 @@ pub async fn representative_scenario(
             target: a.clone(),
             agent_id: child_id.clone(),
             locator: rustx::runtime_client::trace::TraceToolLocator {
-                occurrence: rustx::message::types::ToolCallOccurrenceRef::new(
-                    rustx::runtime::identity::MessageId::new("missing-assistant"),
-                    rustx::message::types::ContentBlockIndex::new(0),
-                ),
-                call_id: rustx::runtime::identity::ToolCallId::new("call"),
-                tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
+                occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                    locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: rustx::runtime::identity::MessageId::new("missing-assistant"),
+                    },
+                    block_index: rustx::message::types::ContentBlockIndex::new(0),
+                },
+                call_id: Some(rustx::runtime::identity::ToolCallId::new("call")),
+                tool_id: Some(rustx::runtime::identity::ToolId::new("tool-bash")),
             },
         },
         Method::AgentTrace {
@@ -218,20 +251,22 @@ pub async fn representative_scenario(
             },
         )
         .await;
-        assert!(matches!(
-            result,
-            MethodResult::ConfigurationApplication { .. }
-        ));
+        assert!(matches!(result, MethodResult::ConfigurationReceipt { .. }));
         loop {
             let notification = driver.next_notification().await;
             if let NotificationMethod::ConfigurationChanged { application } =
                 notification.notification
                 && application.scope == target.session_id.to_string()
-                    && application.units.values().all(|unit| !matches!(unit,
-                        rustx::local_runtime::configuration::application::UnitApplication::Preparing)) {
-                    assert!(application.candidate.is_none());
-                    break;
-                }
+            {
+                let application = application
+                    .inline
+                    .as_deref()
+                    .expect("bounded fixture application");
+                if application.units.values().all(|unit| !matches!(unit,rustx::local_runtime::configuration::application::UnitApplication::Preparing)) {
+                        assert!(application.candidate.is_none());
+                        break;
+                    }
+            }
         }
     }
 
@@ -241,7 +276,6 @@ pub async fn representative_scenario(
     ));
     let MethodResult::Attached {
         target: replacement,
-        snapshot,
         ..
     } = call(
         driver,
@@ -269,16 +303,21 @@ pub async fn representative_scenario(
     assert_ne!(replacement.attachment_id, a.attachment_id);
     assert_eq!(replacement.runtime_incarnation, a.runtime_incarnation);
     assert_eq!(replacement.conversation_id, a.conversation_id);
+    let snapshot = checkpoint_and_subscribe(driver, &replacement, 108)
+        .await
+        .snapshot;
     assert_eq!(snapshot.conversation_id, a.conversation_id);
     assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
     assert_eq!(
         snapshot.resources.revision.get(),
         snapshot_a.resources.revision.get()
     );
-    let MethodResult::Snapshot { snapshot, .. } = call(
+    let MethodResult::Checkpoint {
+        checkpoint: checkpoint_1,
+    } = call(
         driver,
         9,
-        Method::SessionSnapshot {
+        Method::SessionCheckpoint {
             trace_records: vec![],
             target: b.clone(),
         },
@@ -287,6 +326,7 @@ pub async fn representative_scenario(
     else {
         panic!("snapshot B")
     };
+    let snapshot = checkpoint_1.snapshot;
     assert_eq!(snapshot.conversation_id, b.conversation_id);
     assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
     assert_eq!(

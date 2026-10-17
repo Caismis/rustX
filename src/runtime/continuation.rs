@@ -29,7 +29,7 @@ impl AcceptedOutputContinuationSource {
     pub fn from_accepted_output(
         request_id: crate::runtime::identity::RequestId,
         conversation: &crate::runtime::identity::ConversationId,
-        previous_input: &[crate::model::ModelInputMessage],
+        previous_input: &crate::model::SelectedModelInput,
         output: &crate::message::types::MessageBlock,
     ) -> Result<Self, String> {
         let crate::message::types::MessageBlock::Assistant(assistant) = output else {
@@ -52,9 +52,7 @@ impl AcceptedOutputContinuationSource {
             request_id,
             native_state,
             assistant: crate::model::projected::CanonicalMessageRef::of(conversation, output),
-            covered_input_fingerprint: crate::model::types::semantic_messages_fingerprint(
-                previous_input,
-            ),
+            covered_input_fingerprint: previous_input.semantic_fingerprint(),
             accepted_output_fingerprint: crate::model::types::semantic_messages_fingerprint(&[
                 crate::model::ModelInputMessage::Canonical(output.clone()),
             ]),

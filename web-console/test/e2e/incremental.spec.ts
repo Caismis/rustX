@@ -8,6 +8,7 @@ test('issue420 fixed long response browser recording', async ({ page }, info) =>
   writeFileSync(info.outputPath('metrics.json'), JSON.stringify(metrics, null, 2));
   await info.attach('measurements', { body: JSON.stringify(metrics, null, 2), contentType: 'application/json' });
   await page.screenshot({ path: info.outputPath('final.png') });
+  expect(metrics.initialCheckpoints).toBe(1);
   expect(metrics.snapshots).toBe(0);
   expect(metrics.historyTop).toBe(210);
   expect(metrics.historyBottomWrites).toBe(0);

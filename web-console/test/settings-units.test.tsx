@@ -1,3 +1,4 @@
+import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -6,7 +7,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v49';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v50';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -475,7 +476,7 @@ it('the authoritative observation that settles a commit resets unparsed JSON eve
   fireEvent.click(save());
   await waitFor(() => expect(nativeWrites).toHaveLength(1));
   const committed = revision('r2', { main: { ...main, context_window: '64000' } });
-  await act(async () => { nativeWrites[0]!.resolve({ acknowledgement: committed }); });
+  await act(async () => { nativeWrites[0]!.resolve({ acknowledgement: sourceReceipt(committed) }); });
   // Until the commit is observed the unit accepts no edit; text typed now is
   // the editor's alone.
   unparsed(input, '{"temperature": 3');

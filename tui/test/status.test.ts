@@ -1,3 +1,4 @@
+import { contentAdvance } from './support/fixtures.ts';
 /**
  * Working status, footer, and the activity area.
  *
@@ -136,22 +137,10 @@ describe("working status", () => {
       model: attemptModel("alpha/model-a"),
     });
     push({ type: "assistant_message_started", attempt_id: "a1", message_id: "m1" });
-    push({
-      type: "assistant_reasoning_delta",
-      attempt_id: "a1",
-      message_id: "m1",
-      block_index: 0,
-      delta: "hmm",
-    });
+    push(contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'reasoning',delta:"hmm"}, 0, 1));
     assert.equal(workingStatus(state), "Thinking…");
 
-    push({
-      type: "assistant_text_delta",
-      attempt_id: "a1",
-      message_id: "m1",
-      block_index: 1,
-      delta: "well",
-    });
+    push(contentAdvance({attempt_id:"a1",message_id:"m1",block_index:1,kind:'text',delta:"well"}, 0, 1));
     assert.equal(workingStatus(state), "Streaming response…");
   });
 
@@ -352,9 +341,9 @@ describe("footer", () => {
     assert.match(
       footer(
         stateOf({
-          transcript: { statistics: { turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 12500, output_tokens: 840, total_tokens: 13340 } } },
+          transcript: { statistics: { turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: "12500", output_tokens: "840", total_tokens: "13340" } } },
           attempt: attemptView({
-            last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
+            last_usage: { input_tokens: "12500", output_tokens: "840", total_tokens: "13340" },
           }),
         }),
         "connected",
@@ -417,7 +406,7 @@ describe("footer", () => {
       attempt: attemptView({
         execution_settings: null,
         model: attemptModel("beta/model-b"),
-        last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
+        last_usage: { input_tokens: "12500", output_tokens: "840", total_tokens: "13340" },
       }),
       jobs: [backgroundExecution("exec_f42b7a90-69c3-73bb-ba5b-0a4b3c29d4eb", "running")],
       capabilities: { configured_tools: [], revision: "9" },
@@ -509,11 +498,11 @@ describe("startup and context", () => {
       attempt: attemptView({
         execution_settings: null,
         model: attemptModel("alpha/model-a", { contextWindow: 256_000 }),
-        last_usage: { input_tokens: 25_600, output_tokens: 512, total_tokens: 26_112 },
+        last_usage: { input_tokens: "25600", output_tokens: "512", total_tokens: "26112" },
       }),
     });
     assert.equal(contextLabel(state), "context unreported", "latest Attempt usage is not context authority");
-    state.context.occupancy = { estimated: false, input_tokens: 25600, context_window_tokens: 256000, model: "historical/model", breakdown: { system_tokens: 600, tool_tokens: 5000, message_tokens: 20000 } };
+    state.context.occupancy = { estimated: false, model_deferred:false, model_source:null, input_tokens: "25600", context_window_tokens: "256000", model: "historical/model", breakdown: { system_tokens: "600", tool_tokens: "5000", message_tokens: "20000" } };
     assert.equal(contextLabel(state), "last context 25.6k/256k");
     state.context.occupancy.estimated = true;
     assert.equal(contextLabel(state), "context ~25.6k/256k");
@@ -671,10 +660,10 @@ describe("activity area", () => {
       ],
       attempt: attemptView({
         foreground: [
-          foreground("call-1", "tool-bash", "bash", {
+          {...foreground("call-1", "tool-bash", "bash", {
             type: "running",
             arguments: '{"command":"ls"}',
-          }),
+          }),message_id:"m1",occurrence:{locator:{type:"by_message_id",message_id:"m1"},block_index:0}},
         ],
       }),
     });
@@ -799,7 +788,7 @@ describe("client collapse is finite and reversible", () => {
     // runtime never sent, and it must not pretend otherwise.
     const result = {
       status: { type: "failed" as const, error: "boom" },
-      truncation: { truncated: true, original_bytes: 9_001 },
+      truncation: { truncated: true, original_bytes: "9001" },
     };
     for (const rendered of [background(result, false), background(result, true)]) {
       assert.match(rendered, /runtime-truncated result \(from 9001 bytes\)/);
@@ -904,8 +893,8 @@ it("unknown context window is omitted and snapshot replacement rebuilds approval
 });
 
 it("drops tokens then Session then context before essential facts require two rows", () => {
-  const state = stateOf({ attempt: attemptView({ phase: { type: "settled", outcome: { type: "completed", finish_reason: { type: "stop" } } }, last_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } }) });
-  state.statistics = { turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } };
+  const state = stateOf({ attempt: attemptView({ phase: { type: "settled", outcome: { type: "completed", finish_reason: { type: "stop" } } }, last_usage: { input_tokens: "1", output_tokens: "2", total_tokens: "3" } }) });
+  state.statistics = { turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1", reported_usage: { input_tokens: "1", output_tokens: "2", total_tokens: "3" } };
   const session = { name: "work" } as import("../src/protocol/app-server.ts").SessionView;
   const wide = footer(state, "connected", 200, session);
   assert.match(wide, /session work.*↑1 ↓2/);
@@ -929,4 +918,14 @@ it("footer view recomputes segment selection on resize without a native event", 
   assert.ok(narrow.split("\n").every((row) => row.length <= 40));
   state = stateOf({ effective_approval_mode: "full_access" });
   assert.match(plainText(view.render(80).join("\n")), /FULL ACCESS/);
+});
+
+
+it('deferred occupancy model keeps native quantities without a guessed identity', () => {
+  const state = stateOf({context:{compaction_count:0,compaction_in_progress:false,occupancy:{
+    estimated:false,input_tokens:'25600',context_window_tokens:'256000',model:null,
+    model_deferred:true,model_source:'context.occupancy.inherited.model',
+    breakdown:{system_tokens:'600',tool_tokens:'5000',message_tokens:'20000'},
+  }}});
+  assert.equal(contextLabel(state), 'last context 25.6k/256k · model deferred (/context-model)');
 });

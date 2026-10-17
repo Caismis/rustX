@@ -1,7 +1,9 @@
+import{traceReceipt}from'./fixture';
 import { afterEach, expect, it } from 'vitest';
-import { Server, snapshot } from './fixture';
-import { beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, TRACE_DETAIL_LIMIT, TRACE_LIMIT } from '../src/client/trace';
+import { Server, snapshot,checkpoint } from './fixture';
+import { beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace,traceInterestBatches, traceInterests, TRACE_DETAIL_LIMIT, TRACE_DETAIL_MAX_BYTES, TRACE_LIMIT } from '../src/client/trace';
 import { requestDetail as detail, traceRecord as entry } from './trace-fixture';
+const rootCut=()=>checkpoint(snapshot()).read_cut;
 let server: Server;
 afterEach(() => server?.client.disconnect());
 it('prepends overlapping pages exactly once and retains native numeric order', () => {
@@ -33,9 +35,9 @@ it('a live message arriving during older read survives and advances only the liv
   expect(request.params).toMatchObject({ before: 'trace:10' });
   server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: '1', event: { type: 'message_committed', attempt_id: 'attempt', message: { id: 'live-message', role: 'user', source: 'human', content: [] }, transcript_cursor: '1' } } });
   const live = server.client.getSnapshot().views.A.cursor;
-  server.socket.success(request, { type: 'trace', page: { records: [entry(8), entry(9)] } });
+  server.socket.success(request, { type: 'trace', page: {read_cut:rootCut(), records: [entry(8), entry(9)] } });
   const repair = await server.waitFor('session/trace', 2);
-  server.socket.success(repair, { type: 'trace', page: { records: [entry(10), entry(11)], next_cursor: 'trace:10' } }); await older;
+  server.socket.success(repair, { type: 'trace', page: {read_cut:rootCut(), records: [entry(10), entry(11)], next_cursor: 'trace:10' } }); await older;
   const view = server.client.getSnapshot().views.A;
   expect(view.cursor).toBe(live);
   expect(view.snapshot?.messages[0]?.id).toBe('live-message');
@@ -50,7 +52,7 @@ it('resync fences an older read even when snapshot refresh installs the same con
   const older = server.client.loadEarlierTrace('A'); const request = await server.waitFor('session/trace', 1);
   server.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target: server.target('A'), after_cursor: '0', earliest_serviceable: '1' } });
   await server.client.refresh('A');
-  server.socket.success(request, { type: 'trace', page: { records: [entry(9)] } }); await older;
+  server.socket.success(request, { type: 'trace', page: {read_cut:rootCut(), records: [entry(9)] } }); await older;
   expect(server.client.getSnapshot().views.A.trace?.page.records).toEqual([entry(10)]);
 });
 it('reconnect replaces historical read caches without replay', async () => {
@@ -59,7 +61,7 @@ it('reconnect replaces historical read caches without replay', async () => {
   const older = server.client.loadEarlierTrace('A'); const rejected = expect(older).rejects.toThrow();
   const request = await server.waitFor('session/trace', 1); const old = server.socket;
   await server.connect(); await rejected;
-  old.success(request, { type: 'trace', page: { records: [entry(9)] } });
+  old.success(request, { type: 'trace', page: {read_cut:rootCut(), records: [entry(9)] } });
   expect(server.client.getSnapshot().views.A.trace?.page.records).toEqual([entry(10)]);
 });
 it('reattachment in the same connection rejects the old page and duplicate load gestures coalesce', async () => {
@@ -68,7 +70,7 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   const older = server.client.loadEarlierTrace('A'); await server.client.loadEarlierTrace('A');
   const request = await server.waitFor('session/trace', 1);
   await server.client.release('A'); await server.client.attach('A');
-  server.socket.success(request, { type: 'trace', page: { records: [entry(9)] } }); await older;
+  server.socket.success(request, { type: 'trace', page: {read_cut:rootCut(), records: [entry(9)] } }); await older;
   expect(server.client.getSnapshot().views.A.trace?.page.records).toEqual([entry(10)]);
   expect(server.requests.filter(item => item.request.method === 'session/trace')).toHaveLength(1);
 });
@@ -77,7 +79,7 @@ it('native lifecycle patches repair a selected old record separately from rebase
   const old = { ...entry(1), state: 'running' as const };
   const first = selectTrace(replaceTrace({ records: [old, entry(2)], next_cursor: 'trace:1' }), old.id);
   const updated = refreshTrace(first, { records: [entry(100)] }, [
-    { id: old.id, location: old.location, state: 'completed', attachments: [], truncated: false, timing: { ...old.timing, duration_ms: '123' } },
+    { fields:old.fields,collections:old.collections,id: old.id, location: old.location, state: 'completed', attachments: [], truncated: false, timing: { ...old.timing, duration_ms: '123' } },
   ]);
   expect(updated.epoch).toBeGreaterThan(first.epoch);
   expect(updated.page.next_cursor).toBeUndefined();
@@ -95,17 +97,17 @@ it('paging completion repairs newly loaded interests after a terminal notificati
   server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: '1', event: { type: 'trace_changed' } } });
   const live = await server.waitFor('session/trace', 2);
   const liveWork = server.client['traceReads'].get('A')!.work;
-  server.socket.success(live, { type: 'trace', page: { records: [entry(100), entry(101)], next_cursor: 'trace:100', updates: [{
-    id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false,
+  server.socket.success(live, { type: 'trace', page: {read_cut:rootCut(), records: [entry(100), entry(101)], next_cursor: 'trace:100', updates: [{
+    fields:old.fields,collections:old.collections,id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false,
   }] } });
   await liveWork;
-  server.socket.success(request, { type: 'trace', page: { records: [old] } });
+  server.socket.success(request, { type: 'trace', page: {read_cut:rootCut(), records: [old] } });
   const repair = await server.waitFor('session/trace', 3);
   expect(repair.params).toMatchObject({ records: ['trace:1', 'trace:100', 'trace:101'] });
-  server.socket.success(repair, { type: 'trace', page: { records: [entry(100), entry(101)], updates: [{ id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false }] } });
+  server.socket.success(repair, { type: 'trace', page: {read_cut:rootCut(), records: [entry(100), entry(101)], updates: [{ fields:old.fields,collections:old.collections,id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false }] } });
   await older;
   expect(server.client.getSnapshot().views.A.trace?.page.records[0]).toMatchObject({ id: old.id, state: 'completed' });
-  expect(server.requests.filter(item => item.request.method === 'session/snapshot')).toHaveLength(0);
+  expect(server.requests.filter(item => item.request.method === 'session/checkpoint')).toHaveLength(1);
 
 });
 
@@ -135,11 +137,13 @@ it('forty new anchors rebase history, retain one exact selection, and bound inte
   expect(next.epoch).toBeGreaterThan(cache.epoch);
   expect(next.selection).toEqual(old);
   expect(traceInterests(next)[0]).toBe(old.position);
-  const settled = refreshTrace(next, tail, [{ id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false }]);
+  const settled = refreshTrace(next, tail, [{ fields:old.fields,collections:old.collections,id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false }]);
   expect(settled.selection).toMatchObject({ id: old.id, state: 'completed' });
   expect(settled.page.records).toEqual(tail.records);
   expect(settled.page.records.some(row => row.id === old.id)).toBe(false);
-  expect(traceInterests({ ...settled, page: { records: Array.from({ length: TRACE_LIMIT }, (_, i) => entry(i + 100)) } })).toHaveLength(TRACE_LIMIT);
+  const batches=traceInterestBatches({ ...settled, page: { records: Array.from({ length: TRACE_LIMIT }, (_, i) => entry(i + 100)) } });
+  expect(batches.flat()).toHaveLength(TRACE_LIMIT+1);
+  expect(batches.every(batch=>batch.length<=8)).toBe(true);
 });
 it('non-overlap rebase fences a pending older page and uses the new interval cursor', async () => {
   server = new Server(); server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(8), entry(9), entry(10)], next_cursor: 'before-eight' } });
@@ -147,14 +151,14 @@ it('non-overlap rebase fences a pending older page and uses the new interval cur
   server.client.selectTrace('A', 'trace:8');
   const older = server.client.loadEarlierTrace('A'); const request = await server.waitFor('session/trace', 1);
   await server.update('A', { ...snapshot(), trace: { records: [entry(20), entry(21), entry(22)], next_cursor: 'before-twenty' } });
-  server.socket.success(request, { type: 'trace', page: { records: [entry(7)] } }); await older;
+  server.socket.success(request, { type: 'trace', page: {read_cut:rootCut(), records: [entry(7)] } }); await older;
   expect(server.client.getSnapshot().views.A.trace?.page.records.map(row => row.id)).toEqual(['trace:20', 'trace:21', 'trace:22']);
   expect(server.client.getSnapshot().views.A.trace?.selection?.id).toBe('trace:8');
   const next = server.client.loadEarlierTrace('A'); const nextRequest = await server.waitFor('session/trace', 2);
   expect(nextRequest.params).toMatchObject({ before: 'before-twenty' });
-  server.socket.success(nextRequest, { type: 'trace', page: { records: [entry(19)] } });
+  server.socket.success(nextRequest, { type: 'trace', page: {read_cut:rootCut(), records: [entry(19)] } });
   const repair = await server.waitFor('session/trace', 3);
-  server.socket.success(repair, { type: 'trace', page: { records: [entry(20), entry(21), entry(22)], next_cursor: 'before-twenty' } }); await next;
+  server.socket.success(repair, { type: 'trace', page: {read_cut:rootCut(), records: [entry(20), entry(21), entry(22)], next_cursor: 'before-twenty' } }); await next;
   expect(server.client.getSnapshot().views.A.trace?.page.records.map(row => row.id)).toEqual(['trace:19', 'trace:20', 'trace:21', 'trace:22']);
 });
 
@@ -206,7 +210,7 @@ it('a detail reply cannot attach to a different attachment target', async () => 
   const request = await server.waitFor('session/traceDetail', 1);
   await server.client.release('A');
   await server.client.attach('A');
-  server.socket.success(request, { type: 'trace_detail', detail: detail(10) });
+  server.socket.success(request, traceReceipt(detail(10)));
   await pending;
   expect(server.client.getSnapshot().views.A.trace?.details['trace:10']?.detail).toBeUndefined();
 });
@@ -220,7 +224,7 @@ it('a lifecycle repair invalidates cached detail and fences a pending older read
   const pending = server.client.loadTraceDetail('A', running.id);
   const request = await server.waitFor('session/traceDetail', 1);
   await server.update('A', { ...snapshot(), trace: { records: [entry(1)] } });
-  server.socket.success(request, { type: 'trace_detail', detail: detail(1) });
+  server.socket.success(request, traceReceipt(detail(1)));
   await pending;
   expect(server.client.getSnapshot().views.A.trace?.details[running.id]).toBeUndefined();
   const cached = completeTraceDetail(replaceTrace({ records: [running] }), running.id, 1, detail(1));
@@ -231,22 +235,22 @@ it('native TraceChanged coalesces burst reads independently of durable Session u
   server = new Server(); await server.attached('A');
   server.held.add('session/trace');
   let cursor = 0;
-  const emit = (event: import('../../protocol/app-server/v49').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
-  emit({ type: 'read_domains_updated', transcript: { entries: [] } });
+  const emit = (event: import('../../protocol/app-server/v50').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  emit({ type: 'read_domains_updated', transcript: { entries: [] }, trace: {records:[],next_cursor:null} });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
   emit({ type: 'trace_changed' });
   const first = await server.waitFor('session/trace', 1);
   for (let i = 0; i < 100; i++) emit({ type: 'trace_changed' });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
-  server.socket.success(first, { type: 'trace', page: { records: [entry(1)] } });
+  server.socket.success(first, { type: 'trace', page: {read_cut:rootCut(), records: [entry(1)] } });
   const second = await server.waitFor('session/trace', 2);
   const observed = new Promise<void>(resolve => { const stop = server.client.subscribe(() => {
     if (server.client.getSnapshot().views.A.trace?.page.records.some(row => row.id === 'trace:2')) { stop(); resolve(); }
   }); });
-  server.socket.success(second, { type: 'trace', page: { records: [entry(1), entry(2)] } });
+  server.socket.success(second, { type: 'trace', page: {read_cut:rootCut(), records: [entry(1), entry(2)] } });
   await observed;
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(2);
-  expect(server.requests.filter(row => row.request.method === 'session/snapshot')).toHaveLength(0);
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
 });
 
 it('overlapping snapshot supersedes paging and unchanged pending detail without stranding loading', async () => {
@@ -264,8 +268,8 @@ it('overlapping snapshot supersedes paging and unchanged pending detail without 
   expect(authoritative.epoch).toBe(epoch);
   expect(authoritative.loading).toBe(false);
   expect(authoritative.details['trace:10']).toBeUndefined();
-  server.socket.success(page, { type: 'trace', page: { records: [entry(9)] } });
-  server.socket.success(pending, { type: 'trace_detail', detail: detail(10) });
+  server.socket.success(page, { type: 'trace', page: {read_cut:rootCut(), records: [entry(9)] } });
+  server.socket.success(pending, traceReceipt(detail(10)));
   await Promise.all([older, heavy]);
   expect(server.client.getSnapshot().views.A.trace).toBe(authoritative);
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(1);
@@ -289,8 +293,8 @@ it('421: Web consumes the generated bounded Tool vocabulary through the actual c
 
 it('cold trace supports paging and details without runtime attachment, and retires late reads', async () => {
   server = new Server(); await server.connect(); server.held.add('session/attach');
-  server.handlers.set('session/traceHistory', request => ({ type: 'session_trace_history', conversation_id: 'conversation-A', page: request.method === 'session/traceHistory' && request.params.before ? { records: [entry(9)], next_cursor: null } : { records: [entry(10)], next_cursor: 'trace:10' } }));
-  server.handlers.set('session/traceHistoryDetail', () => ({ type: 'session_trace_history_detail', conversation_id: 'conversation-A', detail: detail(10) }));
+  server.handlers.set('session/traceHistory', request => ({ type: 'session_trace_history', conversation_id: 'conversation-A', page: request.method === 'session/traceHistory' && request.params.before ? {read_cut:rootCut(), records: [entry(9)], next_cursor: null } : {read_cut:rootCut(), records: [entry(10)], next_cursor: 'trace:10' } }));
+  server.handlers.set('session/traceHistoryDetail', request => {if(request.method!=='session/traceHistoryDetail')throw Error('method');return {type:'session_trace_history_detail',conversation_id:'conversation-A',page:traceReceipt(detail(Number(request.params.record_id.slice(6)))).page};});
   const attach = server.client.attach('A');
   const opening = await server.waitFor('session/attach', 1);
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -299,7 +303,7 @@ it('cold trace supports paging and details without runtime attachment, and retir
   await server.client.loadEarlierTrace('A');
   expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toEqual([entry(9), entry(10)]);
   await server.client.loadTraceDetail('A', 'trace:9');
-  expect(server.client.getSnapshot().views.A.tracePreview?.cache.details['trace:9']?.detail).toEqual(detail(10));
+  expect(server.client.getSnapshot().views.A.tracePreview?.cache.details['trace:9']?.detail).toEqual(detail(9));
   server.client.selectTrace('A', 'trace:10');
   server.held.add('session/traceHistoryDetail');
   const read = server.client.loadTraceDetail('A', 'trace:10');
@@ -308,4 +312,19 @@ it('cold trace supports paging and details without runtime attachment, and retir
   server.reply(request); await read;
   expect(server.client.getSnapshot().views.A.tracePreview).toBeUndefined();
   expect(server.client.getSnapshot().views.A.trace?.details['trace:10']).toBeUndefined();
+});
+
+// T20: count alone cannot bound a cache containing a few enormous details.
+it('bounds encoded detail bytes while preserving selection and native interval', () => {
+  let cache=selectTrace(replaceTrace({records:[entry(1),entry(2),entry(3)]}),'trace:1');
+  const huge='🙂'.repeat(1_800_000);
+  for(let id=1;id<=3;id++){
+    const value=detail(id);
+    value.request!.effective_system_prompt={text:huge,truncated:false};
+    cache=completeTraceDetail(cache,`trace:${id}`,cache.epoch,value);
+  }
+  expect(new TextEncoder().encode(JSON.stringify(cache.details)).length).toBeLessThanOrEqual(TRACE_DETAIL_MAX_BYTES);
+  expect(cache.details['trace:1']?.detail).toBeDefined();
+  expect(cache.selection?.id).toBe('trace:1');
+  expect(cache.page.records.map(row=>row.id)).toEqual(['trace:1','trace:2','trace:3']);
 });

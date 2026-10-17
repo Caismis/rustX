@@ -26,7 +26,7 @@ vi.mock('../src/app/components/ArtifactPreview', () => ({ ArtifactPreview: ({ ar
 let server: Server, owner: PreviewWorkspaceOwner, stop: () => void;
 let width = 1000, resize: () => void, disconnect: ReturnType<typeof vi.fn>;
 const artifact = (id: string, name = 'same.txt'): PreviewArtifact => ({ source: { kind: 'artifact', id }, name, image: false, mimeType: 'text/plain' });
-const file: PreviewSource = { kind: 'session_file', messageId: 'message-a', index: 0, file: { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'dir/same.txt', name: 'same.txt', mime_type: 'text/plain' } };
+const file: Extract<PreviewSource,{kind:"session_file"}> = { kind: 'session_file', conversationId: 'conversation-A', locator: {type:'by_message_id' as const,message_id:'message-a'}, index: 0, file: { scope: { conversation_id: 'original', device: '1', inode: '2' }, path: 'dir/same.txt', name: 'same.txt', mime_type: 'text/plain' } };
 const workspace = () => owner.getSnapshot().workspace!;
 const live = () => leases.created.filter(lease => !lease.signal.aborted);
 beforeEach(async () => {
@@ -44,7 +44,7 @@ function Shell({ returnFocus = () => {} }: { returnFocus?: () => void }) {
 }
 it('exact closed sources distinguish names, namespaces, declarations, indices and every reference field', () => {
   const sources: PreviewSource[] = [{ kind: 'artifact', id: 'one' }, { kind: 'artifact', id: 'two' }, file,
-    { ...file, messageId: 'message-b' }, { ...file, index: 1 }, { ...file, file: { ...file.file, path: 'other/same.txt' } },
+    { ...file, locator: {type:'by_message_id' as const,message_id:'message-b'} }, { ...file, index: 1 }, { ...file, file: { ...file.file, path: 'other/same.txt' } },
     { ...file, file: { ...file.file, scope: { ...file.file.scope, conversation_id: 'other' } } }];
   const ids = sources.map(source => owner.openPreview({ ...artifact(''), source }));
   expect(new Set(ids).size).toBe(7); expect(workspace().tabs).toHaveLength(7);

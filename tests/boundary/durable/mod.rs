@@ -7,3 +7,5 @@
 //! in-crate for the child entry point seam.
 
 pub(crate) mod process_death;
+
+mod content;

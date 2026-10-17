@@ -36,9 +36,15 @@ counted as such:
 
 - **Measurement** — `#[ignore]`d instrumented runs
   (`issue419_measure_native_cold_load`,
-  `stage_profile_real_create_pipeline`) and the Web
+  `stage_profile_real_create_pipeline`,
+  `measure_native_request_index_complete_300_turn_source`) and the Web
   `pnpm test:issue-420-performance` counters. They record numbers for an
   issue report, assert no timing threshold and run only explicitly.
+  Run the native request-index comparison with
+  `CARGO_INCREMENTAL=0 cargo test --lib --all-features measure_native_request_index_complete_300_turn_source -- --ignored --nocapture`.
+  The separate `t08_t15_t20_layout_construction_buffers_tokens_and_scopes_preview_reader`
+  unit test proves exact preview bytes and bounded construction-write / scoped
+  reader counts; its correctness result does not depend on elapsed time.
 - **Fixture generator** — `#[ignore]`d `regenerate_committed_fixture_corpus`
   rewrites a committed corpus; the `generate_schemas` and
   `generate_app_server_protocol` examples regenerate checked-in artifacts

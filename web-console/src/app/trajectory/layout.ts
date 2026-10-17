@@ -1,7 +1,9 @@
+import {traceAttemptKey,traceStepKey,traceOccurrenceKey,sameTraceStep} from '../../../../protocol/app-server/trace-identity';
+import {canonicalLocatorKey} from '../../../../protocol/app-server/content-identity';
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v49';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v50';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
 export type TrajectoryFacet = 'overview' | 'rendered' | 'raw' | 'source' | 'input' | 'output' | 'schema' | 'timing' | 'options' | 'usage' | 'system-prompt' | 'tools' | 'diff';
@@ -22,7 +24,8 @@ interface Origin extends TrajectorySelection {
  * as its own bounded summary evidence, never borrowed from a member. */
 interface Structure {
   display_key: string;
-  attempt_id: string;
+  ownerKey: string;
+  attempt_id?: string;
   anchor_record_id: string;
   record_ids: string[];
   native_record?: TraceRecord;
@@ -30,7 +33,7 @@ interface Structure {
   preview: string;
 }
 export type StructuralDisplayItem =
-  | (Structure & { type: 'GroupHeader'; kind: 'message' | 'step'; step_id?: string })
+  | (Structure & { type: 'GroupHeader'; kind: 'message' | 'step'; step_id?: string; stepKey?: string })
   | (Structure & { type: 'TurnHeader'; ordinal: number });
 /** Only this closed union owns inspectable native records. */
 export type InspectableDisplayItem =
@@ -51,7 +54,7 @@ export const displayKey = (...parts: (string | number | null | undefined)[]) => 
  * the facet identity stay untranslated; only their labels follow the locale. */
 export const contextKindLabel = (tx: Translate, kind: TraceContextKind) => tx(`trajectory:context.${kind}`);
 
-function origin(record: TraceRecord, tag: string, label: string, preview = '', facet: TrajectoryFacet = 'overview', ...parts: string[]): Origin {
+function origin(record: TraceRecord, tag: string, label: string, preview = '', facet: TrajectoryFacet = 'overview', ...parts: (string | number | null | undefined)[]): Origin {
   return { record, owner_record_id: record.id, display_key: displayKey(tag, ...parts), facet, label, preview };
 }
 
@@ -89,13 +92,15 @@ export function recordLabel(tx: Translate, record: TraceRecord): string {
 export interface TrajectoryGroupModel {
   kind: 'message' | 'step';
   nativeStepId?: string;
+  stepKey?: string;
   label: string;
   records: TraceRecord[];
   cells: InspectableDisplayItem[];
 }
 export interface TrajectoryTurnModel {
   kind: 'turn';
-  nativeAttemptId: string;
+  ownerKey: string;
+  nativeAttemptId?: string;
   displayOrdinal: number;
   records: TraceRecord[];
   groups: TrajectoryGroupModel[];
@@ -113,11 +118,11 @@ function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   const request = record.request;
   const cells: InspectableDisplayItem[] = [];
   const change = systemPresentation(tx, record);
-  if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'tools' ? (request.tool_catalog === 'changed' ? tx('trajectory:copy.frozen-tool-catalog-changed') : tx('trajectory:copy.initial-frozen-tool-catalog')) : tx('trajectory:copy.prompt-preview-unavailable')), change.facet, record.id, request.request_id), type: 'SystemPromptCell' });
+  if (change) cells.push({ ...origin(record, 'system', change.label, request.system_prompt.preview?.text ?? (change.facet === 'tools' ? (request.tool_catalog === 'changed' ? tx('trajectory:copy.frozen-tool-catalog-changed') : tx('trajectory:copy.initial-frozen-tool-catalog')) : tx('trajectory:copy.prompt-preview-unavailable')), change.facet, record.id, record.id), type: 'SystemPromptCell' });
   for (const context of request.context_additions) {
-    cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'overview', record.id, request.request_id, context.message_id), type: 'ContextRow', context, context_message_id: context.message_id });
+    cells.push({ ...origin(record, 'context', contextKindLabel(tx, context.context_kind), context.preview?.text ?? tx('trajectory:trajectory-inspector.content-unavailable'), 'overview', record.id, canonicalLocatorKey(context.locator)), type: 'ContextRow', context, context_message_id: context.message_id??undefined });
   }
-  cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model, 'overview', record.id, request.request_id), type: 'RequestBoundary' });
+  cells.push({ ...origin(record, 'request-boundary', tx('trajectory:copy.request'), request.model??tx('common:activity.content-deferred'), 'overview', record.id), type: 'RequestBoundary' });
   return cells;
 }
 
@@ -134,14 +139,14 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
     // Keep interaction lifecycle audits in Trace, not as duplicate trajectory
     // rows or timeline spans (including when the owning Tool is on another page).
     if (record.kind === 'interaction') continue;
-    const { attempt_id: attempt, step_id: step } = record.location;
+    const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });
       continue;
     }
     let turn = turns.get(attempt);
     if (!turn) {
-      turn = { kind: 'turn', nativeAttemptId: attempt, displayOrdinal: turns.size + 1, records: [], groups: [] };
+      turn = { kind: 'turn', ownerKey:attempt,nativeAttemptId:record.location.attempt_id??undefined, displayOrdinal: turns.size + 1, records: [], groups: [] };
       turns.set(attempt, turn);
       sections.push(turn);
     }
@@ -153,7 +158,7 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
     if (!group) {
       group = step == null
         ? { kind: 'message', label: tx('trajectory:group.message'), records: [], cells: [] }
-        : { kind: 'step', nativeStepId: step, label: tx('trajectory:group.step', { n: turn.groups.filter(group => group.kind === 'step').length + 1 }), records: [], cells: [] };
+        : { kind: 'step', stepKey:step,nativeStepId:record.location.step_id??undefined, label: tx('trajectory:group.step', { n: turn.groups.filter(group => group.kind === 'step').length + 1 }), records: [], cells: [] };
       if (step != null) groups.set(key, group);
       // Attempt-only inputs keep their arrival position; request-owned prompt/context
       // cells retain their exact Step, including an initial prompt.
@@ -171,15 +176,15 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
   if (cursor) items.push({ type: 'HistoryBoundary', display_key: displayKey('history-boundary', cursor), cursor });
   for (const section of projection.sections) {
     if (section.kind === 'outside') { items.push(...section.cells); continue; }
-    const attempt = section.nativeAttemptId;
+    const attempt = section.ownerKey;
     const native = section.records.find(record => record.kind === 'attempt');
-    items.push({ type: 'TurnHeader', display_key: displayKey('turn', attempt), attempt_id: attempt,
+    items.push({ type: 'TurnHeader', display_key: displayKey('turn', attempt), ownerKey:attempt,attempt_id:section.nativeAttemptId,
       anchor_record_id: section.records[0]!.id, record_ids: section.records.map(record => record.id),
       ordinal: section.displayOrdinal, label: tx('trajectory:copy.turn-value', { p0: section.displayOrdinal }), preview: '', ...(native ? { native_record: native } : {}) });
     for (const group of section.groups) {
       const native = group.records.find(record => record.kind === 'step');
-      items.push({ type: 'GroupHeader', kind: group.kind, display_key: displayKey('group', attempt, group.nativeStepId ?? group.records[0]!.id), attempt_id: attempt,
-        ...(group.nativeStepId === undefined ? {} : { step_id: group.nativeStepId }),
+      items.push({ type: 'GroupHeader', kind: group.kind, display_key: displayKey('group', attempt, group.stepKey ?? group.records[0]!.id), ownerKey:attempt,attempt_id:section.nativeAttemptId,
+        stepKey:group.stepKey,...(group.nativeStepId === undefined ? {} : { step_id: group.nativeStepId }),
         anchor_record_id: group.records[0]!.id, record_ids: group.records.map(record => record.id),
         label: group.label, preview: '', ...(native ? { native_record: native } : {}) });
       items.push(...group.cells);
@@ -190,15 +195,15 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record: TraceRecord, call: { call_id: string; tool_id: string }): string | undefined {
-  const { attempt_id, step_id } = record.location;
-  if (attempt_id == null || step_id == null) return;
-  return displayKey(attempt_id, step_id, call.call_id, call.tool_id);
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v50').RuntimeClientToolOccurrence|null}):string|undefined {
+ const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
+ if(owner==null||step==null||!call.occurrence)return;
+ return displayKey(owner,step,traceOccurrenceKey(call.occurrence));
 }
 export function matchingCalls(records: readonly TraceRecord[]): Map<string, TraceRecord[]> {
   const owners = new Map<string, string[]>();
   for (const record of records) {
-    if (record.kind !== 'assistant' || !record.message_id) continue;
+    if (record.kind !== 'assistant') continue;
     for (const call of record.calls) {
       const scope = callScope(record, call);
       if (scope) owners.set(scope, [...(owners.get(scope) ?? []), record.id]);
@@ -300,7 +305,7 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
   const requests = new Map<string, Extract<InspectableDisplayItem, { type: 'RequestBoundary' }>>();
   const owners = new Map<string, TraceRecord>();
   for (const item of items) {
-    if (item.type === 'TurnHeader') turns.set(item.attempt_id, item);
+    if (item.type === 'TurnHeader') turns.set(item.ownerKey, item);
     if (isInspectable(item)) owners.set(item.owner_record_id, item.record);
     if (isInspectable(item) && item.record.request) {
       const marker = cellsOf(tx, item.record).find((cell): cell is Extract<InspectableDisplayItem, { type: 'RequestBoundary' }> => cell.type === 'RequestBoundary')!;
@@ -317,14 +322,12 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
   for (const [owner, marker] of requests) {
     const last = cells.reduce((found, cell, index) => cell.owner_record_id === owner ? index : found, -1);
     const next = cells[last + 1];
-    const output = next && !next.record.request && next.record.location.attempt_id != null
-      && next.record.location.attempt_id === marker.record.location.attempt_id
-      && next.record.location.step_id === marker.record.location.step_id ? next : undefined;
+    const output = next && !next.record.request && sameTraceStep(next.record.location,marker.record.location) ? next : undefined;
     hosts.set((output ?? marker).display_key, marker);
     if (!output) markerSeats.add(marker.display_key);
   }
   const turnOf = (record: TraceRecord | undefined) => {
-    const attempt = record?.location.attempt_id;
+    const attempt = record&&traceAttemptKey(record.location);
     return attempt == null ? undefined : turns.get(attempt);
   };
   const seats: TrajectoryLedgerRow[] = items.flatMap<TrajectoryLedgerRow>(item => {
@@ -345,13 +348,13 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
       rows.push(...seats.filter(row => ownerOf(row) === section.record.id));
       continue;
     }
-    const turn = turns.get(section.nativeAttemptId);
+    const turn = turns.get(section.ownerKey);
     if (!turn) continue;
     const owned = seats.filter(row => row.turn === turn);
     // As in Harness, a Turn folds only when it has more than one content row;
     // its System cells and first content row stay visible above the summary.
     const content = owned.filter(row => row.kind === 'semantic' && row.item?.type !== 'SystemPromptCell');
-    const collapsed = !searching && folded.has(turn.attempt_id) && content.length > 1;
+    const collapsed = !searching && folded.has(turn.ownerKey) && content.length > 1;
     const main = content[0];
     // Promotion changes presentation only; the native Request/Step stays intact.
     rows.push(...owned.filter(isInitial));
@@ -370,11 +373,11 @@ export function ledgerRows(tx: Translate, projection: TrajectoryProjection, item
     if (collapsed) {
       const steps = section.groups.filter(group => group.kind === 'step').length;
       const calls = section.records.filter(record => record.kind === 'tool').length;
-      body.push({ display_key: displayKey('turn-summary', turn.attempt_id), kind: 'summary', height: 20, turn, turnStart: false,
+      body.push({ display_key: displayKey('turn-summary', turn.ownerKey), kind: 'summary', height: 20, turn, turnStart: false,
         summary: [tx(steps === 1 ? 'trajectory:summary.steps.one' : 'trajectory:summary.steps.other', { count: steps }),
           tx(calls === 1 ? 'trajectory:summary.tool-calls.one' : 'trajectory:summary.tool-calls.other', { count: calls })].join(' · ') });
     }
-    if (!body.length) body.push({ display_key: displayKey('structure-marker', turn.attempt_id), kind: 'structure', height: 20, turn, turnStart: false });
+    if (!body.length) body.push({ display_key: displayKey('structure-marker', turn.ownerKey), kind: 'structure', height: 20, turn, turnStart: false });
     body[0]!.turnStart = true;
     // A tiny Request seat cannot carry the Turn label.
     if (body[0]!.kind === 'marker') { body[0]!.kind = 'structure'; body[0]!.height = 20; }

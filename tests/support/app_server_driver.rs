@@ -29,6 +29,10 @@ impl Driver {
         let reader = tokio::spawn(async move {
             tokio::pin!(incoming);
             while let Some(record) = incoming.next().await {
+                assert!(
+                    record.len() <= rustx::app_server::transport::MAX_MESSAGE_BYTES,
+                    "complete physical App Server record exceeds the encoded byte limit"
+                );
                 let value: serde_json::Value = serde_json::from_str(&record).unwrap();
                 if let Some(id) = value.get("id") {
                     let sender = routing
@@ -117,7 +121,7 @@ pub const TOKEN: &str = "test-token-000000000000000000000000000000000000000";
 pub async fn socket(
     url: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    try_socket(url, &format!("rustx.app-server.v49, rustx-token.{TOKEN}"))
+    try_socket(url, &format!("rustx.app-server.v50, rustx-token.{TOKEN}"))
         .await
         .unwrap()
 }
@@ -137,13 +141,13 @@ pub async fn try_socket(
     let (socket, response) = tokio_tungstenite::connect_async(request).await?;
     assert_eq!(
         response.headers()["sec-websocket-protocol"],
-        "rustx.app-server.v49",
+        "rustx.app-server.v50",
         "the response selects only the public subprotocol, never a secret"
     );
     Ok(socket)
 }
 pub async fn websocket(url: &str) -> Driver {
-    websocket_offering(url, &format!("rustx.app-server.v49, rustx-token.{TOKEN}")).await
+    websocket_offering(url, &format!("rustx.app-server.v50, rustx-token.{TOKEN}")).await
 }
 pub async fn websocket_offering(url: &str, offered: &str) -> Driver {
     use futures_util::SinkExt;

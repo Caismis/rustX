@@ -124,7 +124,11 @@ async fn receive_until(
 
 /// Whether one delivered event is the terminal attempt settlement.
 fn settled(event: &RuntimeClientProtocolEvent) -> bool {
-    matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    event
+        .event
+        .facts()
+        .iter()
+        .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
 }
 
 /// The committed compaction generations carried by `ContextCompacted`
@@ -132,7 +136,8 @@ fn settled(event: &RuntimeClientProtocolEvent) -> bool {
 fn compaction_generations(events: &[RuntimeClientProtocolEvent]) -> Vec<u64> {
     events
         .iter()
-        .filter_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .filter_map(|fact| match fact {
             RuntimeClientEvent::ContextCompacted { context, .. } => context
                 .latest_compaction
                 .as_ref()
@@ -140,6 +145,49 @@ fn compaction_generations(events: &[RuntimeClientProtocolEvent]) -> Vec<u64> {
             _ => None,
         })
         .collect()
+}
+
+fn canonical_keys(
+    attachment: &RuntimeAttachment,
+    checkpoint: &rustx::runtime_client::checkpoint::RuntimeClientCheckpoint,
+) -> Vec<rustx::runtime::identity::MessageId> {
+    let mut keys = Vec::new();
+    let mut offset = 0;
+    loop {
+        let response = attachment.handle_request(RuntimeClientRequest::CheckpointPageGet {
+            id: RequestId::new(900),
+            cut: checkpoint.read_cut.clone(),
+            domain: "messages".into(),
+            offset,
+            limit: 4,
+        });
+        let Some(rustx::runtime_client::RuntimeClientResult::CheckpointPage { page }) =
+            response.result
+        else {
+            panic!("same-cut canonical directory: {:?}", response.error)
+        };
+        assert_eq!(page.read_cut, checkpoint.read_cut);
+        assert_eq!(page.domain, "messages");
+        assert!(page.items.len() <= 4);
+        assert!(rustx::runtime_client::checkpoint::bounded_bytes(&page, 786_432).is_some());
+        for item in page.items {
+            assert_eq!(item.offset, keys.len() as u64);
+            assert_eq!(item.identity, format!("ledger:{}", item.offset + 1));
+            let message: MessageBlock = rustx::runtime_client::structural_json::decode(
+                item.value
+                    .expect("the finite fixture message is materialized"),
+            )
+            .expect("same-cut original canonical Message");
+            keys.push(message.id().clone());
+        }
+        let Some(next) = page.next_offset else {
+            assert_eq!(keys.len() as u64, page.total);
+            return keys;
+        };
+        assert!(next > offset);
+        assert_eq!(next, keys.len() as u64);
+        offset = next;
+    }
 }
 
 fn text(value: &str) -> Vec<UserContentBlock> {
@@ -254,7 +302,7 @@ fn reconstruct_at(host: &RuntimeClientHost, index: usize) -> (RequestSnapshot, M
 }
 
 /// Only provider-visible typed content, excluding immutable source provenance.
-fn request_wire(messages: &[rustx::model::ModelInputMessage]) -> String {
+fn request_wire(messages: &rustx::model::SelectedModelInput) -> String {
     serde_json::to_string(
         &messages
             .iter()
@@ -278,7 +326,7 @@ fn projection_count(store: &dyn rustx::durable::ConversationStore) -> usize {
 }
 
 /// The same assertion over the provider-neutral request representation.
-fn mixed_compaction_summaries(messages: &[rustx::model::ModelInputMessage]) -> usize {
+fn mixed_compaction_summaries(messages: &rustx::model::SelectedModelInput) -> usize {
     messages
         .iter()
         .filter(|message| {
@@ -304,7 +352,7 @@ fn is_agent_status(message: &MessageBlock) -> bool {
 
 /// Every tool call in one message list has its result, every result follows
 /// its call, and neither ever appears without the other.
-fn assert_tool_units_complete(messages: &[rustx::model::ModelInputMessage], context: &str) {
+fn assert_tool_units_complete(messages: &rustx::model::SelectedModelInput, context: &str) {
     let mut calls: Vec<String> = Vec::new();
     let mut results: Vec<String> = Vec::new();
     for message in messages {
@@ -572,7 +620,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     let compacted: Vec<(String, u64)> = events_two
         .iter()
         .chain(&events_three)
-        .filter_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .filter_map(|fact| match fact {
             RuntimeClientEvent::ContextCompacted {
                 attempt_id,
                 context,
@@ -597,7 +646,10 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
             )
         ]
     );
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(snapshot.context.compaction_count, 2);
     assert_eq!(
         snapshot
@@ -935,7 +987,8 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     // Exactly two committed compactions, attributed in generation order.
     let compacted: Vec<(String, u64)> = events
         .iter()
-        .filter_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .filter_map(|fact| match fact {
             RuntimeClientEvent::ContextCompacted {
                 attempt_id,
                 context,
@@ -960,7 +1013,10 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
             )
         ]
     );
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(snapshot.context.compaction_count, 2);
 
     // Status capture/evaluation ran exactly once per fresh-inbound step; the
@@ -1065,7 +1121,10 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             *request
         );
     }
-    let (detached_snapshot, _) = host.snapshot().expect("snapshot without attachments");
+    let (detached_snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot without attachments");
     assert_eq!(detached_snapshot.context.compaction_count, 1);
     assert_eq!(detached_snapshot.messages.len(), 5);
 
@@ -1097,7 +1156,8 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     await_request_history_len(host, 5).await;
     assert_eq!(compaction_generations(&live), [2]);
 
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let checkpoint = host.checkpoint().expect("bounded checkpoint");
+    let snapshot = &checkpoint.snapshot;
     assert_eq!(snapshot.context.compaction_count, 2);
     assert_eq!(
         snapshot
@@ -1108,7 +1168,13 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             .generation,
         2
     );
-    assert_eq!(snapshot.messages.len(), 8);
+    assert_eq!(snapshot.messages.len(), 8, "bounded canonical display head");
+    let keys = canonical_keys(&attachment_b, &checkpoint);
+    assert_eq!(
+        keys.len(),
+        8,
+        "bounded pages retain the whole canonical directory"
+    );
 
     // The full history is continuous: five snapshots, all reconstructible.
     let requests = adapter.requests();
@@ -1144,6 +1210,21 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     assert_eq!(
         projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
         2
+    );
+    assert_eq!(
+        keys,
+        ledger
+            .iter()
+            .map(|message| message.id().clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .map(MessageBlock::id)
+            .collect::<Vec<_>>(),
+        ledger.iter().map(MessageBlock::id).collect::<Vec<_>>()
     );
 }
 

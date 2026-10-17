@@ -38,7 +38,6 @@ use rustx::agent::{
     AgentStatusObservation,
 };
 use rustx::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-use rustx::durable::TranscriptCursor;
 use rustx::events::types::RuntimeEvent;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
@@ -217,7 +216,14 @@ struct ExecutionSignals {
 }
 
 impl AgentExecutionObserver for ExecutionSignals {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
+    ) {
         if matches!(event, RuntimeEvent::ToolExecutionStarted { .. }) {
             self.started.send_replace(true);
         }
@@ -253,22 +259,33 @@ impl AgentExecutionObserver for ExecutionSignals {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, _observation: &AgentStatusObservation) {}
+    fn observe_status(
+        &self,
+        _observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
+    }
 
     fn observe_publication_opened(&self, _attempt_id: &AttemptId, _start: &PublicationStreamStart) {
     }
 
-    fn observe_publication(&self, _attempt_id: &AttemptId, _frame: &PublicationFrame) {}
+    fn observe_publication(
+        &self,
+        _attempt_id: &AttemptId,
+        _frame: &PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
+    ) {
+    }
 
     fn observe_publication_settled(
         &self,
         _attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        _transcript_cursor: TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }
@@ -590,13 +607,13 @@ where
 /// The canonical tool results of an audited attempt, in canonical order.
 fn tool_results(
     audit: &common::DurableExecutionAudit,
-) -> Vec<&rustx::tools::types::ToolExecutionResult> {
+) -> Vec<rustx::tools::types::ToolExecutionResult> {
     audit
         .result
         .messages()
-        .iter()
+        .into_iter()
         .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(&tool.result),
+            MessageBlock::Tool(tool) => Some(tool.result),
             _ => None,
         })
         .collect()
@@ -605,7 +622,7 @@ fn tool_results(
 /// The single canonical tool result of an audited attempt.
 fn single_tool_result(
     audit: &common::DurableExecutionAudit,
-) -> &rustx::tools::types::ToolExecutionResult {
+) -> rustx::tools::types::ToolExecutionResult {
     let results = tool_results(audit);
     assert_eq!(
         results.len(),
@@ -613,7 +630,7 @@ fn single_tool_result(
         "an accepted ToolCall settles exactly once, canonically; outcome={:?}",
         audit.result.outcome
     );
-    results[0]
+    results.into_iter().next().unwrap()
 }
 
 /// Every per-call execution fact of the audited attempt, in durable order.

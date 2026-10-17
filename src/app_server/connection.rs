@@ -20,7 +20,7 @@ use super::host::{AppServerHost, AttachmentPermit, HostAdmissionError};
 const MAX_ATTACHMENTS: usize = 32;
 
 fn valid_request_id(id: &RequestId) -> bool {
-    !matches!(id, RequestId::Integer(n) if !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(n))
+    id.is_valid()
 }
 
 struct RouteTable {
@@ -111,6 +111,7 @@ fn release_route(host: &AppServerHost, table: &Mutex<RouteTable>, route: &Arc<Ro
         .is_some_and(|current| Arc::ptr_eq(current, route))
     {
         routes.active.remove(&route.target.session_id);
+        route.registration.retire();
         host.revocations().revoke(|| route.attachment.detach());
         host.uploads().revoke_route(route);
         route.external.release();
@@ -122,6 +123,7 @@ pub(super) struct Route {
     pub(super) target: AttachmentTarget,
     pub(super) client: ManagedRuntimeClient,
     pub(super) attachment: RuntimeAttachment,
+    registration: Arc<super::registration::Slot>,
     external: crate::local_runtime::session_runtime_manager::RuntimeResidencyPin,
     capacity: AttachmentPermit,
 }
@@ -158,7 +160,7 @@ pub struct AppServerConnection {
     delivery_access: Option<tokio_util::sync::CancellationToken>,
     /// This connection's in-flight delivery requests, by exact request id.
     deliveries: Arc<super::delivery_access::Operations>,
-    observation_reads: Arc<Mutex<Vec<(RequestId, tokio_util::sync::CancellationToken)>>>,
+    associations: Arc<super::admission::Associations>,
 }
 
 /// Which source repair observations one connection may see.
@@ -230,28 +232,31 @@ impl RepairInterest {
     }
 }
 
-/// Read cancellation owns only a disposable observation, never child work.
-struct ObservationRead {
-    id: RequestId,
-    token: tokio_util::sync::CancellationToken,
-    reads: Arc<Mutex<Vec<(RequestId, tokio_util::sync::CancellationToken)>>>,
-}
-impl Drop for ObservationRead {
-    fn drop(&mut self) {
-        self.token.cancel();
-        self.reads
-            .lock()
-            .expect("observation reads mutex")
-            .retain(|(id, _)| *id != self.id);
-    }
-}
-
 /// One response and, for a delivery request, the owner of its publication
 /// commit. Transports carry both through the bounded outbound queue and commit
 /// at the physical write; in-process callers commit on return.
 pub(crate) struct Reply {
     pub(super) response: Response,
     pub(super) publication: Option<super::delivery_access::Publication>,
+    pub(crate) association: Option<super::admission::Association>,
+    pub(crate) may_have_committed: bool,
+    pub(crate) registration: Option<super::registration::Publication>,
+}
+
+pub(super) enum Prepared {
+    Ready(Option<Box<Reply>>),
+    Pending(futures_util::future::BoxFuture<'static, Option<Reply>>),
+}
+impl Prepared {
+    fn ready(reply: Reply) -> Self {
+        Self::Ready(Some(Box::new(reply)))
+    }
+    async fn resolve(self) -> Option<Reply> {
+        match self {
+            Self::Ready(reply) => reply.map(|reply| *reply),
+            Self::Pending(work) => work.await,
+        }
+    }
 }
 
 impl Reply {
@@ -259,6 +264,9 @@ impl Reply {
         Self {
             response,
             publication: None,
+            association: None,
+            may_have_committed: false,
+            registration: None,
         }
     }
 
@@ -268,9 +276,30 @@ impl Reply {
         &self.response
     }
 
+    /// Exercise failure substitution at the writer without changing publication ownership.
+    #[cfg(test)]
+    pub(crate) fn force_encoding_overflow_for_test(&mut self) {
+        let Response::Success(success) = &mut self.response else {
+            panic!("successful read required")
+        };
+        let MethodResult::SessionFileBytes { data, .. } = &mut success.result else {
+            panic!("delivery bytes required")
+        };
+        *data = "x".repeat(super::transport::MAX_MESSAGE_BYTES);
+    }
+
     /// Commits now. A delivery cancelled or revoked earlier is replaced by
     /// its typed failure for the same request id.
     pub(crate) fn commit(self) -> Response {
+        if let Some(registration) = &self.registration {
+            let record =
+                super::transport::serialize_record(&self.response).expect("bounded direct receipt");
+            if let super::registration::Acceptance::Accepted(record, ()) =
+                registration.hand_off(&record, |_| std::task::Poll::Ready(Ok(())))
+            {
+                return serde_json::from_str(&record).expect("bounded receipt");
+            }
+        }
         match &self.publication {
             Some(publication) => publication.publish(self.response),
             None => self.response,
@@ -285,6 +314,14 @@ impl AppServerConnection {
 
     pub(crate) fn transport_failure(&self) {
         self.host.transport_failure();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registration_for_test(
+        &self,
+        target: &AttachmentTarget,
+    ) -> Arc<super::registration::Slot> {
+        self.route(target).unwrap().registration.clone()
     }
 
     #[cfg(test)]
@@ -324,7 +361,7 @@ impl AppServerConnection {
             next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             delivery_access: None,
             deliveries: Arc::default(),
-            observation_reads: Arc::default(),
+            associations: Arc::default(),
         }
     }
 
@@ -358,7 +395,7 @@ impl AppServerConnection {
         &self,
         id: &RequestId,
         target: &AttachmentTarget,
-        message_id: crate::runtime::identity::MessageId,
+        locator: crate::runtime_client::content::CanonicalContentLocator,
         delivery_index: usize,
         access: super::delivery_access::Access,
     ) -> (
@@ -394,7 +431,7 @@ impl AppServerConnection {
         let result = super::delivery_access::request(
             self.host.clone(),
             route,
-            message_id,
+            locator,
             delivery_index,
             super::delivery_access::Roots::OriginalMapping,
             access,
@@ -429,6 +466,7 @@ impl AppServerConnection {
                 access.cancel();
             }
             for route in active.values() {
+                route.registration.retire();
                 route.attachment.detach();
             }
         });
@@ -437,15 +475,13 @@ impl AppServerConnection {
             route.external.release();
             route.capacity.release();
         }
-        for (_, token) in self
-            .observation_reads
-            .lock()
-            .expect("observation reads mutex")
-            .iter()
-        {
-            token.cancel();
-        }
+        self.associations.close();
         self.changed.notify_one();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn closed_for_test(&self) -> bool {
+        self.routes.lock().expect("routes mutex").closed
     }
 
     /// Decode a strict JSON-RPC request before performing any semantic action.
@@ -458,21 +494,30 @@ impl AppServerConnection {
 
     /// [`Self::handle_json`] without committing: the transport commits a
     /// delivery response at its physical write.
+    pub(super) fn prepare_json(&self, json: &str) -> Prepared {
+        match Self::decode(json) {
+            Ok(Some(request)) => self.prepare_request(request),
+            Ok(None) => Prepared::Ready(None),
+            Err(response) => Prepared::ready(Reply::plain(response)),
+        }
+    }
+
     pub(super) async fn reply_json(&self, json: &str) -> Option<Reply> {
+        self.prepare_json(json).resolve().await
+    }
+
+    fn decode(json: &str) -> Result<Option<Request>, Response> {
+        if json.len() > super::transport::MAX_MESSAGE_BYTES {
+            return Err(failure(None, rpc_error(-32600, "Invalid Request", None)));
+        }
         let value: serde_json::Value = match serde_json::from_str(json) {
             Ok(value) => value,
             Err(_) => {
-                return Some(Reply::plain(failure(
-                    None,
-                    rpc_error(-32700, "Parse error", None),
-                )));
+                return Err(failure(None, rpc_error(-32700, "Parse error", None)));
             }
         };
         let Some(object) = value.as_object() else {
-            return Some(Reply::plain(failure(
-                None,
-                rpc_error(-32600, "Invalid Request", None),
-            )));
+            return Err(failure(None, rpc_error(-32600, "Invalid Request", None)));
         };
         let id = object
             .get("id")
@@ -487,24 +532,20 @@ impl AppServerConnection {
                 .any(|key| !matches!(key.as_str(), "jsonrpc" | "id" | "method" | "params"))
             || (object.contains_key("id") && id.is_none())
         {
-            return Some(Reply::plain(failure(
-                id,
-                rpc_error(-32600, "Invalid Request", None),
-            )));
+            return Err(failure(id, rpc_error(-32600, "Invalid Request", None)));
         }
-        let id = id?;
+        let Some(id) = id else {
+            return Ok(None);
+        };
         // Decoding rounds a number literal before any DTO can see it, so the
         // provider-native parameter domain is decided on the original text.
         if !super::wire::request_params_numbers_are_exact(json) {
-            return Some(Reply::plain(failure(
-                Some(id),
-                rpc_error(-32602, "Invalid params", None),
-            )));
+            return Err(failure(Some(id), rpc_error(-32602, "Invalid params", None)));
         }
         // Decode the original bytes, not the Value above: materializing a Value
         // first would erase duplicate fields before typed validation.
         if let Ok(request) = serde_json::from_str::<Request>(json) {
-            Some(self.reply(request).await)
+            Ok(Some(request))
         } else {
             // Probe only the method tag, using the same derived vocabulary.
             // A closed enum mismatch inside params must never be classified
@@ -513,7 +554,7 @@ impl AppServerConnection {
                 "method": object["method"]
             }))
             .is_err_and(|error| error.to_string().starts_with("unknown variant"));
-            Some(Reply::plain(failure(
+            Err(failure(
                 Some(id),
                 rpc_error(
                     if unknown { -32601 } else { -32602 },
@@ -524,7 +565,7 @@ impl AppServerConnection {
                     },
                     None,
                 ),
-            )))
+            ))
         }
     }
 
@@ -537,35 +578,83 @@ impl AppServerConnection {
 
     /// The response plus, for a delivery, its uncommitted publication.
     pub(crate) async fn reply(&self, request: Request) -> Reply {
-        let id = request.id;
-        if !valid_request_id(&id) {
-            return Reply::plain(failure(None, domain(ErrorData::InvalidParams)));
+        self.prepare_request(request)
+            .resolve()
+            .await
+            .expect("typed request has a reply")
+    }
+
+    fn prepare_request(&self, request: Request) -> Prepared {
+        let id = &request.id;
+        if !id.is_valid() {
+            return Prepared::ready(Reply::plain(failure(
+                None,
+                rpc_error(-32600, "Invalid Request", None),
+            )));
         }
-        let (result, publication) = match request.call {
-            call @ Method::AgentConversation { .. } => {
-                let token = tokio_util::sync::CancellationToken::new();
-                let reads = self.observation_reads.clone();
-                reads
-                    .lock()
-                    .expect("observation reads mutex")
-                    .push((id.clone(), token.clone()));
-                let _read = ObservationRead {
-                    id: id.clone(),
-                    token: token.clone(),
-                    reads,
-                };
-                (self.dispatch(call, Some(token)).await, None)
+        if matches!(&request.call, Method::DeliveryCancel { request_id } | Method::AgentObserveCancel { request_id } if !request_id.is_valid())
+            || matches!(&request.call, Method::CompactContext { request_id, .. } if !RequestId::is_valid_string(request_id.as_str()))
+        {
+            return Prepared::ready(Reply::plain(failure(
+                Some(id.clone()),
+                rpc_error(-32602, "Invalid params", None),
+            )));
+        }
+        let association = match self.associations.admit(id, &request.call) {
+            Ok(association) => association,
+            Err(error) => {
+                return Prepared::ready(Reply::plain(failure(Some(id.clone()), domain(error))));
+            }
+        };
+        let connection = self.clone();
+        Prepared::Pending(Box::pin(async move {
+            Some(connection.execute(request, association).await)
+        }))
+    }
+
+    /// Synchronous admission seam; callers deliberately control the first poll.
+    #[cfg(test)]
+    pub(crate) fn admitted_request_for_test(
+        &self,
+        request: Request,
+    ) -> futures_util::future::BoxFuture<'static, Reply> {
+        let prepared = self.prepare_request(request);
+        Box::pin(async move { prepared.resolve().await.expect("request reply") })
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One carrier match preserves exact admission and publication ownership across every request kind"
+    )]
+    async fn execute(&self, request: Request, association: super::admission::Association) -> Reply {
+        let may_have_committed = request.call.may_commit();
+        let id = request.id;
+        let (mut result, publication) = match request.call {
+            call @ Method::AgentObserve { .. } => {
+                let control = association
+                    .observation_control()
+                    .expect("observation admitted");
+                let _cancel_wait_on_drop = control.cancel.clone().drop_guard();
+                if control.cancel.is_cancelled() {
+                    (Err(domain(ErrorData::ObservationCancelled)), None)
+                } else {
+                    (
+                        self.dispatch(call, Some(control), Some(association.clone()))
+                            .await,
+                        None,
+                    )
+                }
             }
             Method::AgentDeliveryRead {
                 target,
                 agent_id,
-                message_id,
+                locator,
                 delivery_index,
             } => {
                 self.delivery(
                     &id,
                     &target,
-                    message_id,
+                    locator,
                     delivery_index,
                     super::delivery_access::Access::AgentBytes(agent_id),
                 )
@@ -574,13 +663,13 @@ impl AppServerConnection {
             Method::AgentDeliveryLocate {
                 target,
                 agent_id,
-                message_id,
+                locator,
                 delivery_index,
             } => {
                 self.delivery(
                     &id,
                     &target,
-                    message_id,
+                    locator,
                     delivery_index,
                     super::delivery_access::Access::AgentLocation(agent_id),
                 )
@@ -588,13 +677,13 @@ impl AppServerConnection {
             }
             Method::DeliveryRead {
                 target,
-                message_id,
+                locator,
                 delivery_index,
             } => {
                 self.delivery(
                     &id,
                     &target,
-                    message_id,
+                    locator,
                     delivery_index,
                     super::delivery_access::Access::Bytes,
                 )
@@ -602,20 +691,38 @@ impl AppServerConnection {
             }
             Method::DeliveryLocate {
                 target,
-                message_id,
+                locator,
                 delivery_index,
             } => {
                 self.delivery(
                     &id,
                     &target,
-                    message_id,
+                    locator,
                     delivery_index,
                     super::delivery_access::Access::Location,
                 )
                 .await
             }
-            call => (self.ordinary(call).await, None),
+            call => (self.ordinary(call, association.clone()).await, None),
         };
+        // The active wait ended; its ID remains reserved through response disposition.
+        association.finish_observation();
+        let registration = match &result {
+            Ok(MethodResult::Subscribed {
+                target,
+                registration_id,
+                ..
+            }) => self.route(target).ok().map(|route| {
+                route
+                    .registration
+                    .receipt_for(registration_id, &id)
+                    .expect("bounded receipt error")
+            }),
+            _ => None,
+        };
+        if matches!(&result, Ok(MethodResult::Subscribed { .. })) && registration.is_none() {
+            result = Err(domain(ErrorData::StaleAttachment));
+        }
         let response = match result {
             Ok(result) => Response::Success(Box::new(Success {
                 jsonrpc: JsonRpcVersion::V2,
@@ -627,32 +734,60 @@ impl AppServerConnection {
         Reply {
             response,
             publication,
+            association: Some(association),
+            may_have_committed,
+            registration,
         }
     }
 
-    async fn ordinary(&self, call: Method) -> Result<MethodResult, RpcError> {
+    async fn ordinary(
+        &self,
+        call: Method,
+        association: super::admission::Association,
+    ) -> Result<MethodResult, RpcError> {
         // Catalog mutations retain their owner if the protocol waiter leaves.
         // Runtime operations already transfer ownership at start_operation;
         // attachment reservations intentionally remain caller-cancellable.
         if matches!(
             &call,
-            Method::SessionCreate { .. }
+            Method::SessionEditorRead { .. }
+                | Method::SessionHistory { .. }
+                | Method::SessionStatistics { .. }
+                | Method::SessionTraceHistory { .. }
+                | Method::SessionTraceHistoryDetail { .. }
+                | Method::SessionTracePage { .. }
+                | Method::SessionTraceValueRead { .. }
+                | Method::SessionTraceContentRead { .. }
+                | Method::SessionHistoryContentRead { .. }
+                | Method::SessionHistoryPage { .. }
+                | Method::SessionHistoryValueRead { .. }
+                | Method::SessionCreate { .. }
                 | Method::SessionName { .. }
                 | Method::SessionDelete { .. }
                 | Method::SessionFork { .. }
                 | Method::SessionForkProjection { .. }
                 | Method::SessionBranch { .. }
                 | Method::SessionRecoverDeletion { .. }
+                | Method::SessionSwitchNode { .. }
                 | Method::SourcesWrite { .. }
+                | Method::SourcesRead { .. }
+                | Method::SourcesPage { .. }
+                | Method::SourcesValueRead { .. }
+                | Method::SettingsRead { .. }
+                | Method::SettingsValueRead { .. }
+                | Method::SessionApplicationValueRead { .. }
+                | Method::SessionConfiguration { .. }
                 | Method::ConfigurationReconcile { .. }
                 | Method::AdoptConfiguration { .. }
         ) {
             let connection = self.clone();
-            tokio::spawn(async move { Box::pin(connection.dispatch(call, None)).await })
-                .await
-                .unwrap_or_else(|_| Err(domain(ErrorData::OperationFailed)))
+            tokio::spawn(async move {
+                Box::pin(connection.dispatch(call, None, Some(association))).await
+            })
+            .await
+            .unwrap_or_else(|_| Err(domain(ErrorData::OperationFailed)))
         } else {
-            Box::pin(self.dispatch(call, None)).await
+            Box::pin(self.dispatch(call, None, Some(association))).await
         }
     }
 
@@ -671,7 +806,8 @@ impl AppServerConnection {
     async fn dispatch(
         &self,
         method: Method,
-        observation_cancel: Option<tokio_util::sync::CancellationToken>,
+        observation_cancel: Option<super::admission::ObservationControl>,
+        physical_association: Option<super::admission::Association>,
     ) -> Result<MethodResult, RpcError> {
         if self.routes.lock().expect("routes mutex").closed {
             return Err(domain(ErrorData::StaleAttachment));
@@ -713,20 +849,9 @@ impl AppServerConnection {
             });
         }
         self.observe_repair_source(&method).await;
-        if let Method::AgentConversationCancel { request_id } = method {
-            let reads = self
-                .observation_reads
-                .lock()
-                .expect("observation reads mutex");
-            let token = reads
-                .iter()
-                .find(|(id, _)| *id == request_id)
-                .map(|(_, token)| token);
-            if let Some(token) = token {
-                token.cancel();
-            }
-            return Ok(MethodResult::AgentConversationCancelled {
-                accepted: token.is_some(),
+        if let Method::AgentObserveCancel { request_id } = method {
+            return Ok(MethodResult::AgentObserveCancelled {
+                accepted: self.associations.cancel_observation(&request_id),
             });
         }
         if let Method::DeliveryCancel { request_id } = method {
@@ -737,8 +862,17 @@ impl AppServerConnection {
                 accepted: self.deliveries.cancel(&request_id),
             });
         }
+        let request_lane = super::RequestLane::for_method(&method);
         if let Some(target) = runtime_target(&method) {
             let route = self.route(target)?;
+            if let Method::AgentSendMessage { agent_id, .. } = &method {
+                route
+                    .attachment
+                    .operation_authority()
+                    .map_err(client_error)?
+                    .check_agent_message_target(agent_id)
+                    .map_err(client_error)?;
+            }
             let client = route.client.clone();
             let changed = self.changed.clone();
             let sessions = self.sessions.clone();
@@ -759,11 +893,19 @@ impl AppServerConnection {
                 // operation lease. Only capture authority here; execution is
                 // owned by the manager task outside these admission locks.
                 self.host
-                    .admit_request(|request_owner| {
-                        client.start_operation(move || {
+                    .admit_request(request_lane, |request_owner| {
+                        client.start_operation(move |operation| {
+                            let configuration = matches!(
+                                method,
+                                Method::ConfigurationGet { .. }
+                                    | Method::ConfigurationPage { .. }
+                                    | Method::ConfigurationValueRead { .. }
+                            )
+                            .then(|| operation.configuration_source());
                             let authority = route.attachment.operation_authority();
                             async move {
                                 let _request = request_owner;
+                                let _physical_association = physical_association;
                                 dispatch_runtime(
                                     method,
                                     route,
@@ -771,6 +913,7 @@ impl AppServerConnection {
                                     changed,
                                     sessions,
                                     manager,
+                                    configuration,
                                     upload_host,
                                     observation_cancel,
                                 )
@@ -785,19 +928,12 @@ impl AppServerConnection {
                 .await
                 .map_err(|_| domain(ErrorData::OperationFailed))?;
         }
+        let _physical_association = physical_association;
         let request_owner = self
             .host
-            .admit_request(std::convert::identity)
+            .admit_request(request_lane, std::convert::identity)
             .map_err(host_error)?;
         match method {
-            Method::Initialize(_)
-            | Method::ServerDiagnostics {}
-            | Method::AgentDeliveryRead { .. }
-            | Method::AgentDeliveryLocate { .. }
-            | Method::DeliveryRead { .. }
-            | Method::DeliveryLocate { .. }
-            | Method::DeliveryCancel { .. }
-            | Method::AgentConversationCancel { .. } => unreachable!(),
             Method::SessionDetach { target } => {
                 // Removing a connection relationship needs no live-runtime lease.
                 let route = self.route(&target)?;
@@ -848,10 +984,9 @@ impl AppServerConnection {
                             .set_current_node(&target.session_id, &node_id)
                             .await
                             .map_err(session_error)?;
-                        manager
-                            .load(&target.session_id, Some(&node_id))
-                            .await
-                            .map_err(manager_error)?;
+                        // Node selection is committed. The successor attaches
+                        // independently; observation admission must not turn a
+                        // confirmed catalog mutation into an ambiguous failure.
                         Ok(MethodResult::Session { session })
                     }
                     .await;
@@ -911,12 +1046,16 @@ impl AppServerConnection {
                 at,
                 limit,
             } => {
-                if limit == 0 || limit > 256 {
+                if limit == 0 || limit > 32 {
                     return Err(domain(ErrorData::InvalidParams));
                 }
+                let (node_id, upper) = self
+                    .history_trace_cut(&session_id, node_id.as_ref(), None)
+                    .await?;
+                let at = history_anchor(at, upper.as_ref())?;
                 let (conversation_id, window) = self
                     .sessions
-                    .read_history(&session_id, node_id.as_ref(), at, limit)
+                    .read_history(&session_id, Some(&node_id), at, limit)
                     .await
                     .map_err(session_error)?;
                 Ok(MethodResult::SessionHistory {
@@ -953,32 +1092,250 @@ impl AppServerConnection {
                 if record_id.len() > 256 {
                     return Err(domain(ErrorData::InvalidParams));
                 }
-                let (conversation_id, detail) = self
+                let (node_id, cut) = self
+                    .history_trace_cut(&session_id, node_id.as_ref(), None)
+                    .await?;
+                let (conversation_id, page) = self
                     .sessions
-                    .read_trace(&session_id, node_id.as_ref(), move |projection| {
-                        projection.detail(&record_id)
+                    .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                        let cut = match cut {
+                            Some(cut) => cut,
+                            None => crate::runtime_client::trace_observation::history_cut(store)?,
+                        };
+                        crate::runtime_client::trace_observation::history_detail(
+                            store, &cut, &record_id,
+                        )
                     })
                     .await
                     .map_err(session_error)?;
                 Ok(MethodResult::SessionTraceHistoryDetail {
                     conversation_id,
-                    detail: detail.map(Box::new),
+                    page: page.map_err(client_error)?,
+                })
+            }
+            Method::SessionTracePage {
+                session_id,
+                node_id,
+                cut,
+                domain: collection,
+                offset,
+                limit,
+            } => {
+                if limit == 0 || limit > 32 || offset > 9_007_199_254_740_991 {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (node_id, _) = self
+                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+                    .await?;
+                let (_, page) = self
+                    .sessions
+                    .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                        crate::runtime_client::trace_observation::history_page(
+                            store,
+                            &cut,
+                            &collection,
+                            offset,
+                            limit,
+                        )
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::CheckpointPage {
+                    page: page.map_err(client_error)?,
+                })
+            }
+            Method::SessionTraceValueRead {
+                session_id,
+                node_id,
+                cut,
+                domain: collection,
+                item_offset,
+                path,
+                offset,
+                max_bytes,
+            } => {
+                if path.len() > 32
+                    || max_bytes == 0
+                    || max_bytes > 65_536
+                    || offset > 9_007_199_254_740_991
+                    || item_offset > 9_007_199_254_740_991
+                {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (node_id, _) = self
+                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+                    .await?;
+                let (_, chunk) = self
+                    .sessions
+                    .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                        crate::runtime_client::trace_observation::history_value_read(
+                            store,
+                            &cut,
+                            &collection,
+                            item_offset,
+                            &path,
+                            (offset, max_bytes),
+                        )
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::CheckpointValueChunk {
+                    chunk: chunk.map_err(client_error)?,
+                })
+            }
+            Method::SessionTraceContentRead {
+                session_id,
+                node_id,
+                cut,
+                content_ref,
+                offset,
+                max_bytes,
+            } => {
+                self.history_content_read(
+                    session_id,
+                    node_id,
+                    cut,
+                    content_ref,
+                    (offset, max_bytes),
+                )
+                .await
+            }
+            Method::SessionHistoryContentRead {
+                session_id,
+                node_id,
+                cut,
+                content_ref,
+                offset,
+                max_bytes,
+            } => {
+                // The source is the exact native historical page cut, not an ACK
+                // or a new observation frontier. Reuse native cold/Live cut checks.
+                let cut = history_checkpoint_cut(cut);
+                return self
+                    .history_content_read(
+                        session_id,
+                        node_id,
+                        cut,
+                        content_ref,
+                        (offset, max_bytes),
+                    )
+                    .await;
+            }
+            Method::SessionHistoryPage {
+                session_id,
+                node_id,
+                cut,
+                domain: collection,
+                offset,
+                limit,
+            } => {
+                if limit == 0
+                    || limit > 32
+                    || offset > 9_007_199_254_740_991
+                    || collection.len() > 1024
+                {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let evidence = history_checkpoint_cut(cut);
+                let (node_id, _) = self
+                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&evidence))
+                    .await?;
+                let (_, page) = self
+                    .sessions
+                    .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                        crate::runtime_client::trace_observation::validate_history_cut(
+                            store, &evidence,
+                        )?;
+                        crate::runtime_client::history_observation::page(
+                            store,
+                            &evidence,
+                            &collection,
+                            offset,
+                            limit,
+                        )
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::CheckpointPage {
+                    page: page.map_err(client_error)?,
+                })
+            }
+            Method::SessionHistoryValueRead {
+                session_id,
+                node_id,
+                cut,
+                domain: collection,
+                item_offset,
+                path,
+                offset,
+                max_bytes,
+            } => {
+                if path.len() > 32
+                    || path.iter().any(|field| field.len() > 256)
+                    || collection.len() > 1024
+                    || max_bytes == 0
+                    || max_bytes > 65_536
+                    || offset > 9_007_199_254_740_991
+                    || item_offset > 9_007_199_254_740_991
+                {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let evidence = history_checkpoint_cut(cut);
+                let (node_id, _) = self
+                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&evidence))
+                    .await?;
+                let (_, chunk) = self
+                    .sessions
+                    .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                        crate::runtime_client::trace_observation::validate_history_cut(
+                            store, &evidence,
+                        )?;
+                        crate::runtime_client::history_observation::value_read(
+                            store,
+                            &evidence,
+                            &collection,
+                            item_offset,
+                            &path,
+                            (offset, max_bytes),
+                        )
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::CheckpointValueChunk {
+                    chunk: chunk.map_err(client_error)?,
                 })
             }
             Method::SessionStatistics {
                 session_id,
                 node_id,
             } => {
-                let (conversation_id, statistics, occupancy) = self
+                let reading = self
                     .sessions
                     .read_statistics(&session_id, node_id.as_ref())
                     .await
-                    .map_err(session_error)?;
+                    .map_err(session_error)?
+                    .map_err(client_error)?;
                 Ok(MethodResult::SessionStatistics {
-                    conversation_id,
-                    statistics,
-                    occupancy,
+                    conversation_id: reading.conversation_id,
+                    statistics: reading.statistics,
+                    occupancy: reading.occupancy,
+                    read_cut: reading.read_cut,
                 })
+            }
+            Method::SessionEditorRead {
+                locator,
+                block_index,
+                offset,
+                max_bytes,
+            } => {
+                super::editor_read::read(
+                    self.sessions.clone(),
+                    locator,
+                    block_index,
+                    offset,
+                    max_bytes,
+                )
+                .await
             }
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
@@ -987,13 +1344,15 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
-            Method::SessionCreate { settings } => self
-                .host
-                .manager()
-                .create_session(settings)
-                .await
-                .map(transition)
-                .map_err(session_error),
+            Method::SessionCreate { settings } => {
+                let result = self
+                    .host
+                    .manager()
+                    .create_session(settings)
+                    .await
+                    .map_err(session_error)?;
+                transition(result, &self.sessions).await
+            }
             Method::SessionName { session_id, name } => Ok(MethodResult::Session {
                 session: self
                     .sessions
@@ -1007,7 +1366,51 @@ impl AppServerConnection {
             } => Ok(MethodResult::Node {
                 node: self
                     .sessions
-                    .read_node(&session_id, &node_id)
+                    .observe_node(&session_id, &node_id)
+                    .await
+                    .map_err(session_error)?,
+            }),
+            Method::SessionNodeOriginHistory {
+                session_id,
+                node_id,
+                limit,
+            } => {
+                if limit == 0 || limit > 32 {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let (_destination, origin) = self
+                    .sessions
+                    .acquire_read_origin(&session_id, &node_id)
+                    .await
+                    .map_err(session_error)?;
+                let (_, upper) = self
+                    .history_trace_cut(&origin.source_session, Some(&origin.source_node), None)
+                    .await?;
+                let at = history_anchor(
+                    crate::durable::reading::ConversationWindowAt::Canonical {
+                        locator: origin.source_locator,
+                        cut: None,
+                    },
+                    upper.as_ref(),
+                )?;
+                let (conversation_id, window) = self
+                    .sessions
+                    .read_history(&origin.source_session, Some(&origin.source_node), at, limit)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionHistory {
+                    conversation_id,
+                    window,
+                })
+            }
+            Method::SessionNodeValueRead {
+                reference,
+                offset,
+                max_bytes,
+            } => Ok(MethodResult::NodeValueChunk {
+                chunk: self
+                    .sessions
+                    .node_value_read(&reference, offset, max_bytes)
                     .await
                     .map_err(session_error)?,
             }),
@@ -1016,65 +1419,94 @@ impl AppServerConnection {
                 offset,
                 limit,
             } => {
-                let page = self
+                let (nodes, next_offset) = self
                     .sessions
-                    .tree(&session_id, offset, limit)
+                    .observe_tree(&session_id, offset, limit)
                     .await
                     .map_err(session_error)?;
-                Ok(MethodResult::Tree {
-                    nodes: page.nodes,
-                    next_offset: page.next_offset,
-                })
+                Ok(MethodResult::Tree { nodes, next_offset })
             }
             Method::SessionForkProjection {
                 session_id,
                 node_id,
                 ledger,
                 activation,
-            } => self
-                .sessions
-                .fork_projection(&session_id, node_id.as_ref(), ledger, activation)
-                .await
-                .map(transition)
-                .map_err(session_error),
+            } => {
+                let result = self
+                    .sessions
+                    .fork_projection(&session_id, node_id.as_ref(), ledger, activation)
+                    .await
+                    .map_err(session_error)?;
+                transition(result, &self.sessions).await
+            }
             Method::SessionFork {
                 session_id,
                 node_id,
                 surface_revision,
                 boundary,
                 side,
-            } => self
-                .sessions
-                .copy_lineage(
-                    &session_id,
-                    node_id.as_ref(),
-                    surface_revision,
-                    boundary.as_ref(),
-                    false,
-                    side,
-                )
-                .await
-                .map(transition)
-                .map_err(session_error),
+            } => {
+                let boundary = match boundary {
+                    Some(locator) => Some(
+                        self.sessions
+                            .resolve_boundary(
+                                &session_id,
+                                node_id.as_ref(),
+                                surface_revision,
+                                &locator,
+                                side,
+                            )
+                            .await
+                            .map_err(session_error)?,
+                    ),
+                    None => None,
+                };
+                let result = self
+                    .sessions
+                    .copy_lineage(
+                        &session_id,
+                        node_id.as_ref(),
+                        surface_revision,
+                        boundary.as_ref(),
+                        false,
+                        side,
+                    )
+                    .await
+                    .map_err(session_error)?;
+                transition(result, &self.sessions).await
+            }
             Method::SessionBranch {
                 session_id,
                 node_id,
                 surface_revision,
                 boundary,
                 side,
-            } => self
-                .sessions
-                .copy_lineage(
-                    &session_id,
-                    Some(&node_id),
-                    surface_revision,
-                    Some(&boundary),
-                    true,
-                    side,
-                )
-                .await
-                .map(transition)
-                .map_err(session_error),
+            } => {
+                let boundary = self
+                    .sessions
+                    .resolve_boundary(
+                        &session_id,
+                        Some(&node_id),
+                        surface_revision,
+                        &boundary,
+                        side,
+                    )
+                    .await
+                    .map_err(session_error)?;
+                let result = self
+                    .sessions
+                    .copy_lineage(
+                        &session_id,
+                        Some(&node_id),
+                        surface_revision,
+                        Some(&boundary),
+                        true,
+                        side,
+                    )
+                    .await
+                    .map_err(session_error)?;
+                transition(result, &self.sessions).await
+            }
             Method::SessionDeletePreview { session_id } => {
                 Ok(deletion(self.sessions.delete_preview(&session_id).await))
             }
@@ -1095,45 +1527,142 @@ impl AppServerConnection {
                     .map_err(|_| domain(ErrorData::OperationFailed))?
             }
             Method::ConfigurationReconcile { target } => {
-                Ok(MethodResult::ConfigurationApplication {
-                    application: self
-                        .host
-                        .manager()
-                        .reconcile_configuration(&target)
-                        .await
-                        .map_err(source_settings_error)?,
+                let application = self
+                    .host
+                    .manager()
+                    .reconcile_configuration(&target)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::ConfigurationReceipt {
+                    scope: application.scope,
+                    version: application.version,
                 })
             }
             Method::AdoptConfiguration {
                 session_id,
                 candidate,
                 expected_binding,
-            } => Ok(MethodResult::ConfigurationApplication {
-                application: self
+            } => {
+                let application = self
                     .host
                     .manager()
                     .adopt_configuration(&session_id, &candidate, expected_binding)
-                    .map_err(|rejection| domain(ErrorData::ConfigurationAdoption { rejection }))?,
-            }),
+                    .map_err(|rejection| domain(ErrorData::ConfigurationAdoption { rejection }))?;
+                Ok(MethodResult::ConfigurationReceipt {
+                    scope: application.scope,
+                    version: application.version,
+                })
+            }
             Method::SessionConfiguration { session_id } => {
                 self.sessions
-                    .read_settings(&session_id)
+                    .read_session_summary(&session_id)
                     .await
                     .map_err(session_error)?;
-                Ok(MethodResult::SessionConfiguration {
-                    application: self.host.manager().configuration_application(&session_id),
+                let application = self.host.manager().configuration_application(&session_id);
+                let projection = tokio::task::spawn_blocking(move || {
+                    application
+                        .as_ref()
+                        .map(crate::local_runtime::configuration::observation::session_application)
+                        .transpose()
                 })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+                .map_err(|error| source_read_error(&error))?;
+                Ok(MethodResult::SessionConfiguration { projection })
+            }
+            Method::SessionApplicationValueRead {
+                session_id,
+                reference,
+                offset,
+                max_bytes,
+            } => {
+                self.sessions
+                    .read_session_summary(&session_id)
+                    .await
+                    .map_err(session_error)?;
+                let application = self
+                    .host
+                    .manager()
+                    .configuration_application(&session_id)
+                    .ok_or_else(|| domain(ErrorData::ContentSourceUnavailable))?;
+                let chunk = tokio::task::spawn_blocking(move || {
+                    crate::local_runtime::configuration::observation::session_application_read(
+                        &application,
+                        &reference,
+                        offset,
+                        max_bytes,
+                    )
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+                .map_err(|error| source_read_error(&error))?;
+                Ok(MethodResult::SessionApplicationValueChunk { chunk })
             }
             Method::SourcesRead { target } => {
                 let projection = self
                     .host
                     .manager()
-                    .source_settings(&target, None)
+                    .source_settings(&target)
                     .await
                     .map_err(source_settings_error)?;
+                let projection = tokio::task::spawn_blocking(move || {
+                    crate::local_runtime::configuration::observation::bounded(&projection)
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+                .map_err(|_| {
+                    domain(ErrorData::ObservationUnavailable {
+                        diagnostic: "source projection unavailable".into(),
+                    })
+                })?;
                 Ok(MethodResult::SourceSettings {
                     projection: Box::new(projection),
                 })
+            }
+            Method::SourcesPage {
+                target,
+                revision,
+                field,
+                offset,
+                limit,
+            } => {
+                let source = self
+                    .host
+                    .manager()
+                    .source_settings(&target)
+                    .await
+                    .map_err(source_settings_error)?;
+                let page = tokio::task::spawn_blocking(move || {
+                    crate::local_runtime::configuration::observation::page(
+                        &source, &revision, field, offset, limit,
+                    )
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+                .map_err(|error| source_read_error(&error))?;
+                Ok(MethodResult::SourcePage { page })
+            }
+            Method::SourcesValueRead {
+                target,
+                reference,
+                offset,
+                max_bytes,
+            } => {
+                let source = self
+                    .host
+                    .manager()
+                    .source_settings(&target)
+                    .await
+                    .map_err(source_settings_error)?;
+                let chunk = tokio::task::spawn_blocking(move || {
+                    crate::local_runtime::configuration::observation::read(
+                        &source, &reference, offset, max_bytes,
+                    )
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+                .map_err(|error| source_read_error(&error))?;
+                Ok(MethodResult::SourceValueChunk { chunk })
             }
             Method::McpProbe {
                 target,
@@ -1153,14 +1682,15 @@ impl AppServerConnection {
                 expected_revision,
                 mutation,
             } => {
-                let projection = self
+                let receipt = self
                     .host
                     .manager()
-                    .source_settings(&target, Some((expected_revision, mutation)))
+                    .write_source_settings(&target, expected_revision, mutation)
                     .await
                     .map_err(source_settings_error)?;
-                Ok(MethodResult::SourceSettings {
-                    projection: Box::new(projection),
+                Ok(MethodResult::SourcesWritten {
+                    revision: receipt.revision,
+                    configuration_revision: receipt.configuration_revision,
                 })
             }
             Method::SettingsRead { session_id } => {
@@ -1169,7 +1699,53 @@ impl AppServerConnection {
                     .read_settings(&session_id)
                     .await
                     .map_err(session_error)?;
-                Ok(MethodResult::Settings { revision, settings })
+                let projection = tokio::task::spawn_blocking(move || {
+                    crate::local_runtime::configuration::observation::session_settings(
+                        revision, &settings,
+                    )
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+                .map_err(|error| source_read_error(&error))?;
+                Ok(MethodResult::Settings { projection })
+            }
+            Method::SettingsValueRead {
+                session_id,
+                reference,
+                offset,
+                max_bytes,
+            } => {
+                let (revision, settings) = self
+                    .sessions
+                    .read_settings(&session_id)
+                    .await
+                    .map_err(session_error)?;
+                let chunk = tokio::task::spawn_blocking(move || {
+                    crate::local_runtime::configuration::observation::session_settings_read(
+                        revision, &settings, &reference, offset, max_bytes,
+                    )
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+                .map_err(|error| source_read_error(&error))?;
+                Ok(MethodResult::SettingsValueChunk { chunk })
+            }
+            Method::SessionAttachmentStatus { session_id } => {
+                let target = self
+                    .routes
+                    .lock()
+                    .expect("routes mutex")
+                    .active
+                    .get(&session_id)
+                    .map(|route| route.target.clone());
+                Ok(MethodResult::AttachmentStatus {
+                    target,
+                    configuration_revision: self
+                        .host
+                        .manager()
+                        .configuration_application(&session_id)
+                        .map(|application| application.version),
+                })
             }
             Method::SessionAttach {
                 session_id,
@@ -1187,14 +1763,7 @@ impl AppServerConnection {
                     .map_err(manager_error)?;
                 let result = reservation.commit(|| {
                     let client = runtime.client();
-                    let (
-                        crate::runtime_client::attachment::AttachedSnapshot {
-                            attachment,
-                            snapshot,
-                            cursor,
-                        },
-                        external,
-                    ) = client.attach().map_err(manager_error)?;
+                    let (attachment, external) = client.attach().map_err(manager_error)?;
                     let target = AttachmentTarget {
                         session_id: session_id.clone(),
                         conversation_id: runtime.conversation_id().clone(),
@@ -1206,17 +1775,19 @@ impl AppServerConnection {
                             target: target.clone(),
                             client,
                             attachment,
+                            registration: Arc::default(),
                             external,
                             capacity,
                         }),
                         MethodResult::Attached {
-                            configuration: self
+                            configuration_revision: self
                                 .host
                                 .manager()
-                                .configuration_application(&session_id),
+                                .configuration_application(&session_id)
+                                .map(|application| application.version),
+                            attachment_kind: super::protocol::AttachmentKind::Controller,
+                            observation_source: super::protocol::ObservationSource::Live,
                             target,
-                            snapshot: Box::new(snapshot),
-                            cursor,
                         },
                     ))
                 })?;
@@ -1226,8 +1797,113 @@ impl AppServerConnection {
                 self.changed.notify_one();
                 Ok(result)
             }
-            _ => unreachable!("runtime methods admitted above"),
+            _ => Err(domain(ErrorData::OperationFailed)),
         }
+    }
+
+    async fn history_content_read(
+        &self,
+        session_id: crate::local_runtime::session::SessionId,
+        node_id: Option<crate::local_runtime::session::SessionNodeId>,
+        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        content_ref: crate::runtime_client::content::ContentRef,
+        range: (u64, u32),
+    ) -> Result<MethodResult, RpcError> {
+        let (offset, max_bytes) = range;
+        if offset > 9_007_199_254_740_991
+            || max_bytes == 0
+            || max_bytes > 65_536
+            || matches!(
+                content_ref.source,
+                crate::runtime_client::content::ContentSource::LivePublicationPrefix { .. }
+            )
+        {
+            return Err(domain(ErrorData::InvalidParams));
+        }
+        let (node_id, _) = self
+            .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+            .await?;
+        let (_, chunk) = self
+            .sessions
+            .read_trace_observation(&session_id, Some(&node_id), move |store| {
+                // Native source validation checks Conversation ownership,
+                // immutable cut, representation and committed source frontier.
+                crate::runtime_client::trace_observation::validate_history_cut(store, &cut)?;
+                let source = cut
+                    .source_cut
+                    .as_ref()
+                    .ok_or(RuntimeClientError::ReadCutExpired)?;
+                store
+                    .validate_content_source_cut(&content_ref, source)
+                    .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
+                store
+                    .content_read(&content_ref, offset, max_bytes)
+                    .map_err(RuntimeClientError::content_read_error)
+            })
+            .await
+            .map_err(session_error)?;
+        Ok(MethodResult::ContentChunk {
+            chunk: chunk.map_err(client_error)?,
+        })
+    }
+
+    async fn history_trace_cut(
+        &self,
+        session: &crate::local_runtime::session::SessionId,
+        node: Option<&crate::local_runtime::session::SessionNodeId>,
+        requested: Option<&crate::runtime_client::checkpoint::CheckpointReadCut>,
+    ) -> Result<
+        (
+            crate::local_runtime::session::SessionNodeId,
+            Option<crate::runtime_client::checkpoint::CheckpointReadCut>,
+        ),
+        RpcError,
+    > {
+        let selected = match node {
+            Some(node) => node.clone(),
+            None => {
+                self.sessions
+                    .read_session_summary(session)
+                    .await
+                    .map_err(session_error)?
+                    .active_node
+            }
+        };
+        let node = self
+            .sessions
+            .observe_node(session, &selected)
+            .await
+            .map_err(session_error)?;
+        if requested.is_some_and(|cut| {
+            cut.conversation_id != node.conversation_id || cut.activation_id.is_some()
+        }) {
+            return Err(domain(ErrorData::ReadCutExpired));
+        }
+        let manager = self.host.manager().clone();
+        let upper = tokio::task::spawn_blocking(move || {
+            manager.history_observation_cut(&node.conversation_id)
+        })
+        .await
+        .map_err(|_| domain(ErrorData::OperationFailed))?
+        .map_err(manager_error)?;
+        if let (Some(requested), Some(upper)) = (requested, &upper) {
+            let source = requested
+                .source_cut
+                .as_ref()
+                .ok_or_else(|| domain(ErrorData::ReadCutExpired))?;
+            let native = upper
+                .source_cut
+                .as_ref()
+                .ok_or_else(|| domain(ErrorData::ReadCutExpired))?;
+            if requested.through > upper.through
+                || requested.revision > upper.revision
+                || !source.read.reconstructible_from(&native.read)
+                || source.inherited_through > native.inherited_through
+            {
+                return Err(domain(ErrorData::ReadCutExpired));
+            }
+        }
+        Ok((selected, upper))
     }
 
     fn route(&self, target: &AttachmentTarget) -> Result<Arc<Route>, RpcError> {
@@ -1307,7 +1983,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v49 notice reaches only a connection that negotiated v49.
+        // A v50 notice reaches only a connection that negotiated v50.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -1364,27 +2040,23 @@ impl AppServerConnection {
     /// Level-triggered against the manager's current applications and this
     /// connection's per-scope version cursor.
     fn next_configuration_change(&self) -> Option<NotificationMethod> {
-        for application in self.host.manager().configuration_applications() {
-            let mut versions = self
-                .configuration_versions
-                .lock()
-                .expect("configuration notification versions");
-            let version = versions.entry(application.scope.clone()).or_default();
-            if application.version > *version {
-                *version = application.version;
-                return Some(NotificationMethod::ConfigurationChanged { application });
-            }
-        }
-        None
+        let mut versions = self
+            .configuration_versions
+            .lock()
+            .expect("configuration notification versions");
+        let application = self
+            .host
+            .manager()
+            .next_configuration_application(&versions)?;
+        let projection =
+            crate::local_runtime::configuration::observation::session_application(&application)
+                .ok()?;
+        versions.insert(application.scope, application.version);
+        Some(NotificationMethod::ConfigurationChanged {
+            application: projection,
+        })
     }
 
-    /// The next Session-metadata invalidation this connection has not delivered
-    /// yet (Issue #386).
-    ///
-    /// Scanned level-triggered from the native log, exactly like configuration
-    /// applications: no per-connection queue, no durable replay, no scheduler.
-    /// One Session is announced per call, in publication order, and the cursor
-    /// advances only for a notification actually returned.
     fn next_ownership_invalidation(&self) -> Option<NotificationMethod> {
         let mut delivered = self
             .ownership_invalidations_delivered
@@ -1428,16 +2100,38 @@ impl AppServerConnection {
     /// # Panics
     /// Panics if a connection routing mutex is poisoned.
     pub async fn next_notification(&self) -> Notification {
+        loop {
+            let (notification, publication) = self.next_notification_candidate().await;
+            if let Some(publication) = publication {
+                let record = super::transport::serialize_record(&notification)
+                    .expect("bounded native notification");
+                if matches!(
+                    publication.hand_off(&record, |_| std::task::Poll::Ready(Ok(()))),
+                    super::registration::Acceptance::Discarded
+                ) {
+                    continue;
+                }
+            }
+            return notification;
+        }
+    }
+
+    pub(crate) async fn next_notification_candidate(
+        &self,
+    ) -> (Notification, Option<super::registration::Publication>) {
         let _reader = self.reader.lock().await;
         let mut configuration_changes = self.host.manager().configuration_changes();
         let mut summary_invalidations = self.summary_invalidations.changes();
         let mut source_repairs = self.host.manager().source_repairs().subscribe();
         loop {
             if let Some(notification) = self.next_level_notification() {
-                return Notification {
-                    jsonrpc: JsonRpcVersion::V2,
-                    notification,
-                };
+                return (
+                    Notification {
+                        jsonrpc: JsonRpcVersion::V2,
+                        notification,
+                    },
+                    None,
+                );
             }
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -1472,58 +2166,101 @@ impl AppServerConnection {
                         // The exact registration this poll parks on travels with
                         // its delivery: a `Closed` only ends residency if it is
                         // still the attachment's current registration.
-                        let observed = route.attachment.subscription();
-                        let delivery = match (route.client.validate(), &observed) {
-                            (Ok(()), Some(subscription)) => subscription.next().await,
-                            _ => EventDelivery::Closed,
+                        let (registration, subscription) =
+                            route.registration.wait_following().await;
+                        let delivery = if route.client.validate().is_ok() {
+                            subscription.next().await
+                        } else {
+                            EventDelivery::Closed
                         };
-                        (route, delivery, observed)
+                        (route, delivery, Some(subscription), registration)
                     })
                 })
                 .collect();
-            let (route, delivery, observed) = tokio::select! {
+            let (route, delivery, observed, registration) = tokio::select! {
                 () = &mut changed => continue,
                 _ = configuration_changes.changed() => continue,
                 _ = summary_invalidations.changed() => continue,
                 _ = source_repairs.changed() => continue,
                 result = futures_util::future::select_all(pending) => result.0,
             };
-            let target = route.target.clone();
-            let notification = match delivery {
-                EventDelivery::Event(event) => NotificationMethod::Event {
+            if let Some(candidate) =
+                self.routed_notification(&route, delivery, observed, registration)
+            {
+                return candidate;
+            }
+        }
+    }
+    fn routed_notification(
+        &self,
+        route: &Arc<Route>,
+        delivery: EventDelivery,
+        observed: Option<crate::runtime_client::host::EventSubscription>,
+        registration: super::registration::Registration,
+    ) -> Option<(Notification, Option<super::registration::Publication>)> {
+        let target = route.target.clone();
+        let mut publication = None;
+        let notification = match delivery {
+            EventDelivery::Event(event) => {
+                let registration_id = registration.id.clone();
+                publication = Some(registration.event(event.cursor));
+                NotificationMethod::Event {
+                    registration_id,
                     target,
                     cursor: event.cursor,
                     event: Box::new(event.event),
-                },
-                EventDelivery::ResyncRequired {
-                    after_cursor,
-                    earliest_serviceable,
-                } => NotificationMethod::ResyncRequired {
+                }
+            }
+            EventDelivery::Unavailable { message } => {
+                let registration_id = registration.id.clone();
+                let (recovery, _) = registration.recovery();
+                publication = Some(recovery);
+                NotificationMethod::ObservationUnavailable {
+                    registration_id,
                     target,
+                    message: message.chars().take(512).collect(),
+                }
+            }
+            EventDelivery::ResyncRequired {
+                after_cursor: _,
+                earliest_serviceable,
+            } => {
+                let registration_id = registration.id.clone();
+                let (recovery, after_cursor) = registration.recovery();
+                publication = Some(recovery);
+                NotificationMethod::ResyncRequired {
+                    registration_id,
+                    target,
+                    reason: super::protocol::ResyncReason::ReplayUnavailable,
+                    checkpoint_required: true,
+                    failed_at_cursor: None,
                     after_cursor,
                     earliest_serviceable,
-                },
-                EventDelivery::Closed
-                    if observed
-                        .is_some_and(|subscription| route.attachment.superseded(&subscription)) =>
-                {
-                    // A resync replaced this registration while the consumer was
-                    // parked on it. The attachment is alive and has a newer
-                    // registration; retiring its route here would end the
-                    // attachment that asked for the repair.
-                    continue;
                 }
-                EventDelivery::Closed | EventDelivery::Exhausted => {
-                    release_route(&self.host, &self.routes, &route);
-                    NotificationMethod::Closed { target }
-                }
-                EventDelivery::Pending => unreachable!("async delivery never returns Pending"),
-            };
-            return Notification {
+            }
+            EventDelivery::Closed
+                if observed
+                    .is_some_and(|subscription| route.attachment.superseded(&subscription)) =>
+            {
+                // A resync replaced this registration while the consumer was
+                // parked on it. The attachment is alive and has a newer
+                // registration; retiring its route here would end the
+                // attachment that asked for the repair.
+                return None;
+            }
+            EventDelivery::Closed | EventDelivery::Exhausted => {
+                release_route(&self.host, &self.routes, route);
+                NotificationMethod::Closed { target }
+            }
+            EventDelivery::Pending => unreachable!("async delivery never returns Pending"),
+        };
+        Some((
+            Notification {
                 jsonrpc: JsonRpcVersion::V2,
                 notification,
-            };
-        }
+            },
+            publication,
+        ))
     }
 }
 
@@ -1535,12 +2272,16 @@ impl Drop for AppServerConnection {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Exhaustive public RPC routing keeps new variants from silently bypassing their owner.
 fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
     match method {
         Method::ConfigurationGet { target, .. }
+        | Method::ConfigurationValueRead { target, .. }
+        | Method::ConfigurationPage { target, .. }
         | Method::ModelGet { target, .. }
         | Method::ModelCatalog { target, .. }
         | Method::ModelSet { target, .. }
+        | Method::ModelSelect { target, .. }
         | Method::Capability { target, .. }
         | Method::AgentArtifactRead { target, .. }
         | Method::ArtifactRead { target, .. }
@@ -1560,7 +2301,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::JobCancel { target, .. }
         | Method::AgentStatus { target, .. }
         | Method::AgentList { target, .. }
-        | Method::AgentConversation { target, .. }
+        | Method::AgentObserve { target, .. }
         | Method::AgentStatistics { target, .. }
         | Method::AgentSendMessage { target, .. }
         | Method::AgentWait { target, .. }
@@ -1572,7 +2313,10 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::AgentTurns { target, .. }
         | Method::CompactContext { target, .. }
         | Method::SessionBoundaries { target, .. }
-        | Method::SessionSnapshot { target, .. }
+        | Method::SessionCheckpoint { target, .. }
+        | Method::ConversationContentRead { target, .. }
+        | Method::ConversationCheckpointPage { target, .. }
+        | Method::ConversationCheckpointValueRead { target, .. }
         | Method::SessionSubscribe { target, .. }
         | Method::TurnStart { target, .. }
         | Method::TurnSteer { target, .. }
@@ -1581,7 +2325,57 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::TurnCancel { target, .. }
         | Method::InteractionRespond { target, .. }
         | Method::InteractionCancel { target, .. } => Some(target),
-        _ => None,
+        Method::AgentDeliveryRead { .. }
+        | Method::AgentDeliveryLocate { .. }
+        | Method::DeliveryRead { .. }
+        | Method::DeliveryLocate { .. }
+        | Method::DeliveryCancel { .. }
+        | Method::SessionSwitchNode { .. }
+        | Method::AgentObserveCancel { .. }
+        | Method::Initialize(_)
+        | Method::ServerInfo { .. }
+        | Method::ServerDiagnostics { .. }
+        | Method::SessionExportPrepare { .. }
+        | Method::SessionList { .. }
+        | Method::SessionCreate { .. }
+        | Method::SessionRead { .. }
+        | Method::SessionHistory { .. }
+        | Method::SessionTraceHistory { .. }
+        | Method::SessionTraceHistoryDetail { .. }
+        | Method::SessionTracePage { .. }
+        | Method::SessionTraceValueRead { .. }
+        | Method::SessionTraceContentRead { .. }
+        | Method::SessionHistoryContentRead { .. }
+        | Method::SessionHistoryPage { .. }
+        | Method::SessionHistoryValueRead { .. }
+        | Method::SessionStatistics { .. }
+        | Method::SessionSummary { .. }
+        | Method::SessionName { .. }
+        | Method::SessionNode { .. }
+        | Method::SessionNodeOriginHistory { .. }
+        | Method::SessionNodeValueRead { .. }
+        | Method::SessionTree { .. }
+        | Method::SessionFork { .. }
+        | Method::SessionForkProjection { .. }
+        | Method::SessionBranch { .. }
+        | Method::SessionDeletePreview { .. }
+        | Method::SessionDelete { .. }
+        | Method::SessionRecoverDeletion { .. }
+        | Method::SessionAttach { .. }
+        | Method::SessionEditorRead { .. }
+        | Method::SessionDetach { .. }
+        | Method::SessionAttachmentStatus { .. }
+        | Method::SourcesRead { .. }
+        | Method::McpProbe { .. }
+        | Method::SourcesPage { .. }
+        | Method::SourcesValueRead { .. }
+        | Method::SourcesWrite { .. }
+        | Method::SettingsRead { .. }
+        | Method::SettingsValueRead { .. }
+        | Method::ConfigurationReconcile { .. }
+        | Method::SessionApplicationValueRead { .. }
+        | Method::SessionConfiguration { .. }
+        | Method::AdoptConfiguration { .. } => None,
     }
 }
 
@@ -1593,17 +2387,68 @@ async fn dispatch_runtime(
     changed: Arc<tokio::sync::Notify>,
     sessions: SessionController,
     manager: crate::local_runtime::session_runtime_manager::SessionRuntimeManager,
+    configuration: Option<
+        crate::local_runtime::session_runtime_manager::ConfigurationObservationSource,
+    >,
     upload_host: AppServerHost,
-    observation_cancel: Option<tokio_util::sync::CancellationToken>,
+    observation_cancel: Option<super::admission::ObservationControl>,
 ) -> Result<MethodResult, RpcError> {
     match method {
         Method::ConfigurationGet { target } => {
-            let mut projection = authority.configuration().map_err(client_error)?;
-            projection.application = manager.configuration_application(&target.session_id);
-            projection.process_bindings = Some(manager.process_policy());
+            let projection = tokio::task::spawn_blocking(move || {
+                let view = configuration
+                    .as_ref()
+                    .and_then(|source| source.read(&manager, &target.session_id))
+                    .ok_or("configuration source unavailable".to_owned())?;
+                crate::local_runtime::configuration::effective_observation::bounded(&view)
+            })
+            .await
+            .map_err(|_| domain(ErrorData::OperationFailed))?
+            .map_err(|error| source_read_error(&error))?;
             Ok(MethodResult::EffectiveConfiguration {
                 projection: Box::new(projection),
             })
+        }
+        Method::ConfigurationValueRead {
+            target,
+            reference,
+            offset,
+            max_bytes,
+        } => {
+            let chunk = tokio::task::spawn_blocking(move || {
+                let view = configuration
+                    .as_ref()
+                    .and_then(|source| source.read(&manager, &target.session_id))
+                    .ok_or("configuration source unavailable".to_owned())?;
+                crate::local_runtime::configuration::effective_observation::read(
+                    &view, &reference, offset, max_bytes,
+                )
+            })
+            .await
+            .map_err(|_| domain(ErrorData::OperationFailed))?
+            .map_err(|error| source_read_error(&error))?;
+            Ok(MethodResult::ConfigurationValueChunk { chunk })
+        }
+        Method::ConfigurationPage {
+            target,
+            revision,
+            field,
+            offset,
+            limit,
+        } => {
+            let page = tokio::task::spawn_blocking(move || {
+                let view = configuration
+                    .as_ref()
+                    .and_then(|source| source.read(&manager, &target.session_id))
+                    .ok_or("configuration source unavailable".to_owned())?;
+                crate::local_runtime::configuration::effective_observation::page(
+                    &view, &revision, field, offset, limit,
+                )
+            })
+            .await
+            .map_err(|_| domain(ErrorData::OperationFailed))?
+            .map_err(|error| source_read_error(&error))?;
+            Ok(MethodResult::ConfigurationPage { page })
         }
         Method::AgentArtifactRead {
             agent_id,
@@ -1643,17 +2488,25 @@ async fn dispatch_runtime(
                     .map_err(|_| domain(ErrorData::InvalidParams))?;
             Ok(MethodResult::UploadStatus { outcome })
         }
-        Method::ModelGet { target: _ } => native_result(authority.model_get()),
-        Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),
-        Method::ModelSet { target, config } => Ok(MethodResult::Model {
-            model: Box::new(
-                manager
-                    .set_model(&target.session_id, *config)
-                    .await
-                    .map_err(model_selection_error)?,
-            ),
-        }),
-        Method::Capability { target: _ } => native_result(authority.capability()),
+        Method::ModelGet { target: _ } => read_domain(authority, "model".into()).await,
+        Method::ModelCatalog { target: _ } => {
+            read_domain(authority, "model_catalog.models".into()).await
+        }
+        Method::ModelSet { target, config } => {
+            let (_, settings_revision) = manager
+                .set_model(&target.session_id, *config)
+                .await
+                .map_err(model_selection_error)?;
+            Ok(MethodResult::ModelSet { settings_revision })
+        }
+        Method::ModelSelect { target, choice } => {
+            let (_, settings_revision) = manager
+                .select_catalog_model(&target.session_id, choice)
+                .await
+                .map_err(model_selection_error)?;
+            Ok(MethodResult::ModelSet { settings_revision })
+        }
+        Method::Capability { target: _ } => read_domain(authority, "capabilities".into()).await,
         Method::Projections { after, limit, .. } => {
             native_result(authority.projection_page(after, limit))
         }
@@ -1694,27 +2547,35 @@ async fn dispatch_runtime(
                 .conversation_turns(offset, limit)
                 .map_err(client_error)?,
         }),
+        Method::Goal {
+            control: crate::goal::GoalControl::Show,
+            ..
+        } => read_domain(authority, "goal".into()).await,
         Method::Goal { target: _, control } => native_result(authority.goal_control(control)),
-        Method::JobStatus { job_id, .. } => native_result(authority.job_status(&job_id)),
-        Method::JobList { .. } => native_result(Ok(authority.job_list())),
-        Method::JobWait { job_id, .. } => native_result(authority.job_wait(&job_id, false).await),
-        Method::JobCancel { job_id, .. } => native_result(authority.job_wait(&job_id, true).await),
-        Method::AgentConversation {
+        Method::JobStatus { job_id, .. } => {
+            read_domain(authority, format!("jobs.{}", job_id.as_str())).await
+        }
+        Method::JobList { .. } => read_domain(authority, "jobs".into()).await,
+        Method::JobWait { job_id, .. } => native_result(authority.job_wait(&job_id).await),
+        Method::JobCancel { job_id, .. } => native_result(authority.job_cancel_intent(&job_id)),
+        Method::AgentObserve {
             agent_id, after, ..
         } => {
-            let read = authority.agent_conversation(&agent_id, after);
-            if let Some(cancel) = observation_cancel {
+            let control = observation_cancel.expect("Observe owns synchronous request admission");
+            let read = authority.agent_observe_with_deadline(&agent_id, after, control.deadline);
+            let cancel = control.cancel;
+            {
                 tokio::select! {
                     biased;
                     () = cancel.cancelled() => Err(domain(ErrorData::ObservationCancelled)),
                     result = read => native_result(result),
                 }
-            } else {
-                native_result(read.await)
             }
         }
-        Method::AgentStatus { agent_id, .. } => native_result(authority.agent_status(&agent_id)),
-        Method::AgentList { .. } => native_result(authority.agent_list()),
+        Method::AgentStatus { agent_id, .. } => {
+            read_domain(authority, format!("agents.{}", agent_id.as_str())).await
+        }
+        Method::AgentList { .. } => read_domain(authority, "agents".into()).await,
         Method::AgentSendMessage {
             target,
             agent_id,
@@ -1740,11 +2601,9 @@ async fn dispatch_runtime(
                     .await,
             )
         }
-        Method::AgentWait { agent_id, .. } => {
-            native_result(authority.agent_wait(&agent_id, false).await)
-        }
+        Method::AgentWait { agent_id, .. } => native_result(authority.agent_wait(&agent_id).await),
         Method::AgentInterrupt { agent_id, .. } => {
-            native_result(authority.agent_wait(&agent_id, true).await)
+            native_result(authority.agent_interrupt_intent(&agent_id))
         }
         Method::AgentStatistics { agent_id, .. } => {
             native_result(authority.agent_statistics(&agent_id).await)
@@ -1812,24 +2671,119 @@ async fn dispatch_runtime(
                 next_offset,
             })
         }
-        Method::SessionSnapshot {
+        Method::ConversationCheckpointValueRead {
+            target: _,
+            agent_id,
+            cut,
+            domain: collection,
+            item_offset,
+            path,
+            offset,
+            max_bytes,
+        } => {
+            if path.len() > 32 || path.iter().any(|part| part.len() > 256) || collection.len() > 256
+            {
+                return Err(domain(ErrorData::InvalidParams));
+            }
+            let chunk = if let Some(agent_id) = agent_id {
+                authority
+                    .agent_checkpoint_value_read(
+                        &agent_id,
+                        &cut,
+                        &collection,
+                        item_offset,
+                        &path,
+                        (offset, max_bytes),
+                    )
+                    .await
+            } else {
+                authority
+                    .checkpoint_value_read_async(
+                        &cut,
+                        &collection,
+                        item_offset,
+                        &path,
+                        (offset, max_bytes),
+                    )
+                    .await
+            }
+            .map_err(client_error)?;
+            Ok(MethodResult::CheckpointValueChunk { chunk })
+        }
+        Method::ConversationContentRead {
+            target: _,
+            agent_id,
+            content_ref,
+            offset,
+            max_bytes,
+        } => {
+            let chunk = if let Some(agent_id) = agent_id {
+                authority
+                    .agent_content_read(&agent_id, &content_ref, offset, max_bytes)
+                    .await
+            } else {
+                tokio::task::spawn_blocking(move || {
+                    authority.content_read(&content_ref, offset, max_bytes)
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?
+            }
+            .map_err(client_error)?;
+            Ok(MethodResult::ContentChunk { chunk })
+        }
+        Method::ConversationCheckpointPage {
+            target: _,
+            agent_id,
+            cut,
+            domain: collection,
+            offset,
+            limit,
+        } => {
+            let page = if let Some(agent_id) = agent_id {
+                authority
+                    .agent_checkpoint_page(&agent_id, &cut, &collection, offset, limit)
+                    .await
+            } else {
+                authority
+                    .checkpoint_page_async(&cut, &collection, offset, limit)
+                    .await
+            }
+            .map_err(client_error)?;
+            Ok(MethodResult::CheckpointPage { page })
+        }
+        Method::SessionCheckpoint {
             target: _,
             trace_records,
-        } => native_result(
-            authority
-                .snapshot_with_trace(&trace_records)
-                .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
-        ),
+        } => {
+            let checkpoint = tokio::task::spawn_blocking(move || {
+                authority.checkpoint_with_trace(&trace_records)
+            })
+            .await
+            .map_err(|_| domain(ErrorData::OperationFailed))?
+            .map_err(client_error)?;
+            Ok(MethodResult::Checkpoint {
+                checkpoint: Box::new(checkpoint),
+            })
+        }
         Method::SessionSubscribe {
             target: _,
             after_cursor,
         } => {
-            route
-                .attachment
-                .subscribe_events(after_cursor)
-                .map_err(client_error)?;
+            let registration = route.registration.replace(
+                || {
+                    route
+                        .attachment
+                        .subscribe_events(after_cursor)
+                        .map_err(client_error)
+                },
+                after_cursor,
+            )?;
             changed.notify_one();
-            Ok(MethodResult::Subscribed { after_cursor })
+            Ok(MethodResult::Subscribed {
+                registration_id: registration.id,
+                target: route.target.clone(),
+                after_cursor,
+            })
         }
         Method::TurnStart { target, content } | Method::TurnSteer { target, content } => {
             let receipts: Vec<_> = content
@@ -1883,18 +2837,41 @@ async fn dispatch_runtime(
             interaction,
         } => native_result(authority.cancel_interaction(&interaction).await),
 
-        _ => unreachable!("only admitted runtime methods"),
+        _ => Err(domain(ErrorData::OperationFailed)),
     }
 }
 
-fn transition(
+async fn read_domain(
+    authority: Arc<crate::runtime_client::host::ClientInner>,
+    collection: String,
+) -> Result<MethodResult, RpcError> {
+    native_result(
+        tokio::task::spawn_blocking(move || authority.domain_page(&collection, 0, 32))
+            .await
+            .map_err(|_| {
+                domain(ErrorData::ObservationUnavailable {
+                    diagnostic: "domain materialization interrupted".into(),
+                })
+            })?,
+    )
+}
+
+async fn transition(
     result: crate::local_runtime::session_controller::SessionTransitionResult,
-) -> MethodResult {
-    MethodResult::SessionTransition {
+    sessions: &SessionController,
+) -> Result<MethodResult, RpcError> {
+    let node = sessions
+        .observe_node(&result.session.id, &result.session.active_node)
+        .await
+        .map_err(|_| domain(ErrorData::OutcomeUnknown))?;
+    let editor = super::editor_read::locator(result.session.id.clone(), &node);
+    Ok(MethodResult::SessionTransition {
         session: result.session,
-        editor_content: result.editor_content,
-        durability_diagnostic: result.durability_diagnostic,
-    }
+        editor,
+        durability_diagnostic: result
+            .durability_diagnostic
+            .map(|_| "Committed; durable barrier not confirmed".into()),
+    })
 }
 fn deletion(result: crate::local_runtime::session::deletion::SessionDeleteResult) -> MethodResult {
     MethodResult::Deletion {
@@ -1909,20 +2886,22 @@ fn native_result(
     result: Result<RuntimeClientResult, RuntimeClientError>,
 ) -> Result<MethodResult, RpcError> {
     Ok(match result.map_err(client_error)? {
-        RuntimeClientResult::Model { model } | RuntimeClientResult::ModelSet { model } => {
-            MethodResult::Model { model }
+        RuntimeClientResult::DomainPage { page } => MethodResult::DomainPage { page },
+        RuntimeClientResult::CheckpointValueChunk { chunk } => {
+            MethodResult::CheckpointValueChunk { chunk }
         }
-        RuntimeClientResult::ModelCatalog { catalog } => MethodResult::Models { catalog },
-        RuntimeClientResult::Capability { capabilities } => {
-            MethodResult::Capabilities { capabilities }
+        RuntimeClientResult::InteractionFields { .. }
+        | RuntimeClientResult::InteractionValueChunk { .. } => {
+            return Err(domain(ErrorData::OperationFailed));
         }
-        RuntimeClientResult::ContextCompacted { context } => MethodResult::Context { context },
+        RuntimeClientResult::ContextCompacted { compaction } => {
+            MethodResult::ContextCompacted { compaction }
+        }
         RuntimeClientResult::ProjectionPage { page } => MethodResult::Projections { page },
         RuntimeClientResult::ProjectionDetail { detail } => {
             MethodResult::ProjectionDetail { detail }
         }
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
-        RuntimeClientResult::TraceDetail { detail } => MethodResult::TraceDetail { detail },
         RuntimeClientResult::TraceToolLocation { location } => {
             MethodResult::TraceToolLocation { location }
         }
@@ -1930,46 +2909,29 @@ fn native_result(
             unreachable!("App Server transcript reads use cut-bound windows")
         }
         RuntimeClientResult::TranscriptWindow { window } => {
-            MethodResult::TranscriptWindow { window }
+            MethodResult::TranscriptWindow { window: *window }
         }
         RuntimeClientResult::ConversationTurns { page } => MethodResult::ConversationTurns { page },
-        RuntimeClientResult::Goal { view } => MethodResult::Goal { view },
-        RuntimeClientResult::Job { job } => MethodResult::Job { job },
-        RuntimeClientResult::Jobs {
-            jobs,
-            returned,
-            matched,
-            limit,
-            truncated,
-        } => MethodResult::Jobs {
-            jobs,
-            returned,
-            matched,
-            limit,
-            truncated,
+        RuntimeClientResult::GoalMutation { reference } => MethodResult::GoalMutation { reference },
+        RuntimeClientResult::JobCancellationAccepted { job_id } => {
+            MethodResult::JobCancellationAccepted { job_id }
+        }
+        RuntimeClientResult::AgentInterruptionAccepted {
+            agent_id,
+            activation_id,
+        } => MethodResult::AgentInterruptionAccepted {
+            agent_id,
+            activation_id,
         },
-        RuntimeClientResult::Agent { agent } => MethodResult::Agent {
-            agent: Box::new(agent),
-        },
-        RuntimeClientResult::AgentConversation { conversation } => {
-            MethodResult::AgentConversation { conversation }
+        RuntimeClientResult::JobOutcome { job_id, state } => {
+            MethodResult::JobOutcome { job_id, state }
+        }
+        RuntimeClientResult::AgentObserve { observation } => {
+            MethodResult::AgentObserve { observation }
         }
         RuntimeClientResult::AgentStatistics { metrics } => {
             MethodResult::AgentStatistics { metrics }
         }
-        RuntimeClientResult::Agents {
-            agents,
-            returned,
-            matched,
-            limit,
-            truncated,
-        } => MethodResult::Agents {
-            agents,
-            returned,
-            matched,
-            limit,
-            truncated,
-        },
         RuntimeClientResult::AgentMessage { accepted } => MethodResult::AgentMessage {
             agent_id: accepted.agent_id,
             activation_id: accepted.activation_id,
@@ -1979,17 +2941,12 @@ fn native_result(
             agent_id,
             activation_id,
             outcome,
-            agent,
         } => MethodResult::AgentWait {
             agent_id,
             activation_id,
             outcome,
-            agent: Box::new(agent),
         },
-        RuntimeClientResult::Snapshot { snapshot, cursor } => MethodResult::Snapshot {
-            snapshot: Box::new(snapshot),
-            cursor,
-        },
+
         RuntimeClientResult::InboundAccepted {
             message_id,
             inbound_sequence,
@@ -2039,6 +2996,19 @@ pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
         RuntimeClientError::AttachmentInUse { .. } => ErrorData::ControllerInUse,
         RuntimeClientError::NotAttached => ErrorData::StaleAttachment,
         RuntimeClientError::ResyncRequired { .. } => ErrorData::ResyncRequired,
+        RuntimeClientError::ObservationUnavailable { message } => {
+            let mut end = message.len().min(512);
+            while !message.is_char_boundary(end) {
+                end -= 1;
+            }
+            ErrorData::ObservationUnavailable {
+                diagnostic: message[..end].into(),
+            }
+        }
+        RuntimeClientError::ObservationCapacityExceeded => ErrorData::ObservationCapacityExceeded,
+        RuntimeClientError::ContentSourceUnavailable => ErrorData::ContentSourceUnavailable,
+        RuntimeClientError::InvalidRange => ErrorData::InvalidRange,
+        RuntimeClientError::ReadCutExpired => ErrorData::ReadCutExpired,
         RuntimeClientError::InvalidRequest { .. }
         | RuntimeClientError::InteractionInvalidResponse { .. } => ErrorData::InvalidParams,
         _ => ErrorData::InvalidState,
@@ -2081,7 +3051,7 @@ fn model_selection_error(
     }
 }
 
-fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError {
+pub(super) fn session_error(error: crate::local_runtime::session::SessionError) -> RpcError {
     use crate::local_runtime::session::SessionError;
     domain(match error {
         SessionError::UnknownSession { session_id } => ErrorData::UnknownSession { session_id },
@@ -2152,9 +3122,13 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
     rpc_error(-32000, message, Some(data))
 }
 fn rpc_error(code: i32, message: &str, data: Option<ErrorData>) -> RpcError {
+    let mut end = message.len().min(512);
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
     RpcError {
         code,
-        message: message.into(),
+        message: message[..end].into(),
         data,
     }
 }
@@ -2192,6 +3166,122 @@ fn source_error(error: crate::local_runtime::configuration::settings::SettingsEr
     })
 }
 
+fn history_checkpoint_cut(
+    cut: crate::durable::observation::ObservationReadCut,
+) -> crate::runtime_client::checkpoint::CheckpointReadCut {
+    crate::runtime_client::checkpoint::CheckpointReadCut {
+        canonical_foreground: None,
+        live_publication: None,
+        conversation_id: cut.read.conversation_id.clone(),
+        activation_id: None,
+        revision: 0,
+        through: cut.read.journal,
+        source_cut: Some(cut),
+        domain_revisions: std::collections::BTreeMap::new(),
+        collection_cuts: std::collections::BTreeMap::new(),
+    }
+}
+
+fn history_anchor(
+    at: crate::durable::reading::ConversationWindowAt,
+    upper: Option<&crate::runtime_client::checkpoint::CheckpointReadCut>,
+) -> Result<crate::durable::reading::ConversationWindowAt, RpcError> {
+    use crate::durable::reading::ConversationWindowAt as At;
+    if matches!(&at, At::Canonical { locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId { message_id }, .. } if message_id.as_str().len()>256)
+    {
+        return Err(domain(ErrorData::InvalidParams));
+    }
+    let Some(upper) = upper else { return Ok(at) };
+    let cut = &upper
+        .source_cut
+        .as_ref()
+        .ok_or_else(|| domain(ErrorData::ReadCutExpired))?
+        .read;
+    let check = |selected: &crate::durable::reading::ConversationReadCut| {
+        if selected.reconstructible_from(cut) {
+            Ok(())
+        } else {
+            Err(domain(ErrorData::ReadCutExpired))
+        }
+    };
+    Ok(match at {
+        At::Latest => At::Older {
+            before: crate::durable::TranscriptCursor::new(
+                cut.transcript
+                    .checked_add(1)
+                    .ok_or_else(|| domain(ErrorData::ReadCutExpired))?,
+            ),
+            cut: Some(cut.clone()),
+        },
+        At::Older { before, cut: None } => At::Older {
+            before,
+            cut: Some(cut.clone()),
+        },
+        At::Older {
+            before,
+            cut: Some(selected),
+        } => {
+            check(&selected)?;
+            At::Older {
+                before,
+                cut: Some(selected),
+            }
+        }
+        At::Canonical { locator, cut: None } => At::Canonical {
+            locator,
+            cut: Some(cut.clone()),
+        },
+        At::Canonical {
+            locator,
+            cut: Some(selected),
+        } => {
+            check(&selected)?;
+            At::Canonical {
+                locator,
+                cut: Some(selected),
+            }
+        }
+        At::Message { id, cut: None } => At::Message {
+            id,
+            cut: Some(cut.clone()),
+        },
+        At::Message {
+            id,
+            cut: Some(selected),
+        } => {
+            check(&selected)?;
+            At::Message {
+                id,
+                cut: Some(selected),
+            }
+        }
+        At::Newer {
+            after,
+            cut: selected,
+        } => {
+            check(&selected)?;
+            At::Newer {
+                after,
+                cut: selected,
+            }
+        }
+        At::Turn { id, cut: selected } => {
+            check(&selected)?;
+            At::Turn { id, cut: selected }
+        }
+        At::TurnOrdinal {
+            ordinal,
+            cut: selected,
+        } => {
+            check(&selected)?;
+            At::TurnOrdinal {
+                ordinal,
+                cut: selected,
+            }
+        }
+    })
+}
+
 fn source_settings_error(
     error: crate::local_runtime::session_runtime_manager::SourceSettingsError,
 ) -> RpcError {
@@ -2200,6 +3290,18 @@ fn source_settings_error(
             source_error(error)
         }
     }
+}
+
+fn source_read_error(error: &str) -> RpcError {
+    domain(if error == "source read cut expired" {
+        ErrorData::ReadCutExpired
+    } else if error == "configuration source unavailable" {
+        ErrorData::ObservationUnavailable {
+            diagnostic: "configuration source unavailable".into(),
+        }
+    } else {
+        ErrorData::InvalidParams
+    })
 }
 
 #[cfg(test)]
@@ -2250,27 +3352,37 @@ mod capacity_tests {
     }
 
     #[test]
-    fn job_listing_preserves_omission_metadata_on_the_wire() {
-        let result = super::native_result(Ok(
-            crate::runtime_client::types::RuntimeClientResult::Jobs {
-                jobs: Vec::new(),
-                returned: 0,
-                matched: 67,
-                limit: 64,
-                truncated: true,
+    fn job_listing_preserves_bounded_page_metadata_on_the_wire() {
+        let page = crate::runtime_client::checkpoint::CheckpointPage {
+            collections: Vec::new(),
+            cursor: crate::runtime_client::types::RuntimeClientCursor::new(0),
+            read_cut: crate::runtime_client::checkpoint::CheckpointReadCut {
+                canonical_foreground: None,
+                live_publication: None,
+                collection_cuts: std::collections::BTreeMap::new(),
+                conversation_id: crate::runtime::identity::ConversationId::new(
+                    "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+                ),
+                activation_id: None,
+                revision: 0,
+                through: 0,
+                source_cut: None,
+                domain_revisions: std::collections::BTreeMap::default(),
             },
+            domain: "jobs".into(),
+            total: 67,
+            items: Vec::new(),
+            next_offset: Some(32),
+        };
+        let result = super::native_result(Ok(
+            crate::runtime_client::types::RuntimeClientResult::DomainPage { page },
         ))
         .unwrap();
-        assert!(matches!(
-            result,
-            super::MethodResult::Jobs {
-                returned: 0,
-                matched: 67,
-                limit: 64,
-                truncated: true,
-                ..
-            }
-        ));
+        let super::MethodResult::DomainPage { page } = result else {
+            panic!("page");
+        };
+        assert_eq!(page.total, 67);
+        assert_eq!(page.next_offset, Some(32));
     }
 
     #[test]

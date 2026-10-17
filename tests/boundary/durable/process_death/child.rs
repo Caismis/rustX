@@ -14,6 +14,8 @@
 //!
 //! [`process_death`]: crate::runtime::process_death
 
+mod event_recorder;
+
 use crate::launch_fixture::LaunchFixture;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,7 +38,7 @@ use crate::runtime::identity::{
     AgentId, ConversationId, MessageId, SubagentId, ToolCallId, ToolId,
 };
 use crate::runtime::interaction::InteractionResponse;
-use crate::runtime::observation::{ConversationObservation, PendingObservations};
+use crate::runtime::observation::PendingObservations;
 use crate::runtime::process_death;
 use crate::tools::types::ToolCallStart;
 use rustx::local_runtime::composition::{
@@ -245,6 +247,7 @@ enum Seen {
 struct Log {
     seen: Mutex<Vec<Seen>>,
     notify: tokio::sync::Notify,
+    runtime: Mutex<Option<ConversationRuntime>>,
 }
 
 impl Log {
@@ -252,6 +255,7 @@ impl Log {
         Arc::new(Self {
             seen: Mutex::new(Vec::new()),
             notify: tokio::sync::Notify::new(),
+            runtime: Mutex::new(None),
         })
     }
 
@@ -280,6 +284,15 @@ impl Log {
     /// Blocks until `count` attempt terminal facts are recorded.
     async fn wait_settled(&self, count: usize) {
         self.wait_for(|seen| terminal_count(seen) >= count).await;
+        let runtime = self
+            .runtime
+            .lock()
+            .expect("fixture runtime")
+            .clone()
+            .expect("bound fixture runtime");
+        runtime
+            .child_attempt_settlement(u64::try_from(count).unwrap().saturating_sub(1))
+            .await;
     }
 }
 
@@ -452,6 +465,7 @@ type BeforeActivation = Box<dyn FnOnce(&ConversationRuntime) + Send>;
 
 /// One composed child runtime.
 struct Child {
+    _observer: Option<event_recorder::ObserverTask>,
     headless: HeadlessConversationRuntime,
     model: Arc<FakeModel>,
     log: Arc<Log>,
@@ -588,24 +602,16 @@ impl Child {
         .map_err(|error| format!("{error:?}"))?;
 
         let log = Log::new();
-        if client {
-            let observations = Arc::new(PendingObservations::new());
-            core.runtime()
-                .install_observation_bridge(Arc::clone(&observations))
-                .map_err(|error| format!("{error:?}"))?;
-            // Native interactions are published only to a capable attachment.
-            // A conformance child *is* that attachment: it observes the request
-            // through the same bridge a Runtime Client uses and answers through
-            // the same narrow runtime seam.
-            core.runtime().set_interaction_provider_available(true);
-            let runtime = core.runtime().clone();
-            spawn_observer(&observations, Arc::clone(&log), runtime, approve);
-        }
+        *log.runtime.lock().expect("fixture runtime") = Some(core.runtime().clone());
+        let observer = client
+            .then(|| event_recorder::bind(&core, Arc::clone(&log), approve))
+            .transpose()?;
         if let Some(before_activation) = before_activation {
             before_activation(core.runtime());
         }
         let headless = core.into_headless();
         Ok(Self {
+            _observer: observer,
             headless,
             model,
             log,
@@ -676,48 +682,6 @@ impl Child {
             .await
             .expect("the scripted model park watch stays open");
     }
-}
-
-/// Folds the runtime observation stream into the child's log, answering
-/// native interactions when this child is an approving child.
-fn spawn_observer(
-    observations: &Arc<PendingObservations>,
-    log: Arc<Log>,
-    runtime: ConversationRuntime,
-    approve: bool,
-) {
-    let observations = Arc::clone(observations);
-    tokio::spawn(async move {
-        loop {
-            observations.wait().await;
-            for observation in observations.drain() {
-                match observation {
-                    ConversationObservation::Event { event, .. } => {
-                        log.push(Seen::Event(Box::new(event)));
-                    }
-                    ConversationObservation::InteractionPending { interaction, .. } => {
-                        let id = interaction.interaction.clone();
-                        log.push(Seen::InteractionPending);
-                        if approve {
-                            runtime
-                                .respond_interaction(
-                                    &id,
-                                    InteractionResponse::Approval {
-                                        decision: ApprovalDecision::Allow,
-                                    },
-                                )
-                                .await
-                                .expect("answer the pending approval");
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if observations.is_closed() {
-                return;
-            }
-        }
-    });
 }
 
 /// Composes one **catalog-owning** child.
@@ -2013,7 +1977,7 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
     }
     if reopening {
         child
-            .runtime()
+            .headless
             .shutdown()
             .await
             .expect("recovered runtime shutdown");

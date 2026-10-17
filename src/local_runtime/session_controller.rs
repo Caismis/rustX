@@ -17,6 +17,15 @@ pub struct SessionTransitionResult {
     pub durability_diagnostic: Option<String>,
 }
 
+/// One native cold statistics cut, independent of runtime admission.
+#[derive(Debug)]
+pub(crate) struct SessionStatisticsReading {
+    pub(crate) conversation_id: crate::runtime::identity::ConversationId,
+    pub(crate) statistics: crate::runtime_client::response::ConversationStatistics,
+    pub(crate) occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+    pub(crate) read_cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+}
+
 /// Retained allocation admission. Different Conversations may be held together.
 /// Delete either wins before acquisition (explicit failure), or cannot pass
 /// preflight until this access and all storage/runtime clones release it.
@@ -29,6 +38,23 @@ pub struct SessionAccess {
     /// Identity-derived database path, valid while allocation access is retained.
     pub database_path: std::path::PathBuf,
     pub allocation: Arc<ConversationAccess>,
+}
+
+/// Allocation retention for display reads. It never clones native Node origin
+/// strings or authored Session model/settings bodies.
+#[derive(Debug)]
+pub(crate) struct SessionReadAccess {
+    pub(crate) conversation_id: crate::runtime::identity::ConversationId,
+    pub(crate) database_path: std::path::PathBuf,
+    pub(crate) allocation: Arc<ConversationAccess>,
+}
+#[derive(Debug, Clone)]
+pub(crate) struct SessionReadOrigin {
+    pub(crate) source_session: SessionId,
+    pub(crate) source_node: SessionNodeId,
+    pub(crate) source_surface_revision: crate::conversation::SurfaceRevision,
+    pub(crate) source_locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub(crate) side: super::session::LineageSide,
 }
 
 /// The outcome of the explicit display-preview repair seam (Issue #386).
@@ -395,23 +421,27 @@ impl SessionController {
         ),
         SessionError,
     > {
-        let access = self.acquire_session(id, node).await?;
+        let access = self.acquire_read(id, node).await?;
         tokio::task::spawn_blocking(move || {
             let store = crate::durable::SqliteConversationStore::open_existing(
-                access.node.conversation_id.clone(),
+                access.conversation_id.clone(),
                 &access.database_path,
             )
             .map_err(SessionError::Store)?
             .with_lifecycle(access.allocation);
             let read = store
-                .conversation_window(&at, limit)
+                .read_window_headers(&at, limit.min(32))
                 .map_err(SessionError::Store)?;
-            let mut page = crate::runtime_client::snapshot::transcript_page_view(read.page)
-                .map_err(|detail| SessionError::Catalog { detail })?;
-            crate::runtime_client::response::decorate_window(&store, &mut page, read.cut.journal)
-                .map_err(SessionError::Store)?;
+            let mut page = crate::runtime_client::snapshot::transcript_header_view(read.page);
+            crate::runtime_client::response::decorate_window(
+                &store,
+                &mut page,
+                read.cut.read.journal,
+            )
+            .map_err(SessionError::Store)?;
             if !read
                 .cut
+                .read
                 .reconstructible_from(&store.conversation_read_cut().map_err(SessionError::Store)?)
             {
                 return Err(SessionError::Catalog {
@@ -419,9 +449,9 @@ impl SessionController {
                 });
             }
             Ok((
-                access.node.conversation_id,
+                access.conversation_id,
                 crate::runtime_client::snapshot::ConversationWindow {
-                    cut: read.cut,
+                    cut: read.cut.read,
                     page,
                     newer_cursor: read.newer_cursor.map(Into::into),
                     target: read.target,
@@ -439,27 +469,33 @@ impl SessionController {
         id: &SessionId,
         node: Option<&SessionNodeId>,
     ) -> Result<
-        (
-            crate::runtime::identity::ConversationId,
-            crate::runtime_client::response::ConversationStatistics,
-            Option<crate::context::occupancy::ContextOccupancy>,
-        ),
+        Result<SessionStatisticsReading, crate::runtime_client::RuntimeClientError>,
         SessionError,
     > {
-        let access = self.acquire_session(id, node).await?;
+        let access = self.acquire_read(id, node).await?;
         tokio::task::spawn_blocking(move || {
             let store = crate::durable::SqliteConversationStore::open_existing(
-                access.node.conversation_id.clone(),
+                access.conversation_id.clone(),
                 &access.database_path,
             )
             .map_err(SessionError::Store)?
             .with_lifecycle(access.allocation);
-            let through = store.presentation_frontier().map_err(SessionError::Store)?;
-            let occupancy =
-                crate::context::occupancy::read(&store, through).map_err(SessionError::Store)?;
-            let statistics = crate::runtime_client::response::statistics(&store, through)
-                .map_err(SessionError::Store)?;
-            Ok((access.node.conversation_id, statistics, occupancy))
+            let reading = || {
+                use crate::runtime_client::RuntimeClientError;
+                let read_cut = crate::runtime_client::trace_observation::history_cut(&store)?;
+                let through = read_cut.through;
+                let occupancy = crate::runtime_client::occupancy::read(&store, through)
+                    .map_err(RuntimeClientError::observation_store_error)?;
+                let statistics = crate::runtime_client::response::statistics(&store, through)
+                    .map_err(RuntimeClientError::observation_store_error)?;
+                Ok(SessionStatisticsReading {
+                    conversation_id: access.conversation_id,
+                    statistics,
+                    occupancy,
+                    read_cut,
+                })
+            };
+            Ok(reading())
         })
         .await
         .map_err(|error| SessionError::Catalog {
@@ -477,10 +513,10 @@ impl SessionController {
         + Send
         + 'static,
     ) -> Result<(crate::runtime::identity::ConversationId, T), SessionError> {
-        let access = self.acquire_session(id, node).await?;
+        let access = self.acquire_read(id, node).await?;
         tokio::task::spawn_blocking(move || {
             let store = crate::durable::SqliteConversationStore::open_existing(
-                access.node.conversation_id.clone(),
+                access.conversation_id.clone(),
                 &access.database_path,
             )
             .map_err(SessionError::Store)?
@@ -488,7 +524,40 @@ impl SessionController {
             let projection = crate::runtime_client::trace::TraceProjection::new(&store)
                 .map_err(SessionError::Store)?;
             let result = read(projection).map_err(SessionError::Store)?;
-            Ok((access.node.conversation_id, result))
+            Ok((access.conversation_id, result))
+        })
+        .await
+        .map_err(|error| SessionError::Catalog {
+            detail: error.to_string(),
+        })?
+    }
+    /// Execute a bounded native trace read under this exact node's storage access.
+    pub(crate) async fn read_trace_observation<T: Send + 'static>(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        read: impl FnOnce(
+            &dyn crate::durable::ConversationStore,
+        ) -> Result<T, crate::runtime_client::RuntimeClientError>
+        + Send
+        + 'static,
+    ) -> Result<
+        (
+            crate::runtime::identity::ConversationId,
+            Result<T, crate::runtime_client::RuntimeClientError>,
+        ),
+        SessionError,
+    > {
+        let access = self.acquire_read(id, node).await?;
+        tokio::task::spawn_blocking(move || {
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.conversation_id.clone(),
+                &access.database_path,
+            )
+            .map_err(SessionError::Store)?
+            .with_lifecycle(access.allocation);
+            let result = read(&store);
+            Ok((access.conversation_id, result))
         })
         .await
         .map_err(|error| SessionError::Catalog {
@@ -773,6 +842,23 @@ impl SessionController {
     ) -> Result<SessionAccess, SessionError> {
         self.catalog.lock().await.acquire_session(id, node)
     }
+    pub(crate) async fn acquire_read(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+    ) -> Result<SessionReadAccess, SessionError> {
+        self.catalog.lock().await.acquire_read(id, node)
+    }
+    pub(crate) async fn acquire_read_origin(
+        &self,
+        id: &SessionId,
+        node: &SessionNodeId,
+    ) -> Result<(SessionReadAccess, SessionReadOrigin), SessionError> {
+        let catalog = self.catalog.lock().await;
+        let origin = catalog.read_origin(id, node)?;
+        let access = catalog.acquire_read(id, Some(node))?;
+        Ok((access, origin))
+    }
     /// Resolve durable identity without taking allocation authority. The runtime
     /// manager must register its flight before acquiring the selected allocation.
     pub(crate) async fn resolve_session_target(
@@ -832,6 +918,82 @@ impl SessionController {
         limit: usize,
     ) -> Result<super::session::SessionNodePage, SessionError> {
         self.catalog.lock().await.node_page(id, offset, limit)
+    }
+    /// Read finite immutable catalog metadata without opening a Runtime or Store.
+    /// # Errors
+    /// Unknown or deleting Sessions and unknown Nodes are rejected.
+    pub async fn observe_node(
+        &self,
+        id: &SessionId,
+        node: &SessionNodeId,
+    ) -> Result<super::session::observation::SessionNodeObservation, SessionError> {
+        self.catalog.lock().await.observe_node(id, node)
+    }
+    /// Read a finite native tree page.
+    /// # Errors
+    /// Unknown Sessions and invalid page limits are rejected.
+    pub async fn observe_tree(
+        &self,
+        id: &SessionId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<
+        (
+            Vec<super::session::observation::SessionNodeObservation>,
+            Option<usize>,
+        ),
+        SessionError,
+    > {
+        self.catalog.lock().await.observe_tree(id, offset, limit)
+    }
+    /// Slice at most 64 KiB from a retained immutable catalog value.
+    /// # Errors
+    /// Unknown identities, changed immutable evidence and invalid ranges are rejected.
+    pub async fn node_value_read(
+        &self,
+        reference: &super::session::observation::SessionNodeValueRef,
+        offset: u64,
+        max_bytes: u32,
+    ) -> Result<super::session::observation::SessionNodeValueChunk, SessionError> {
+        self.catalog
+            .lock()
+            .await
+            .node_value_read(reference, offset, max_bytes)
+    }
+    /// Resolve a finite historical boundary at the existing native Surface owner.
+    /// # Errors
+    /// Unknown allocations and mismatched immutable boundary evidence are rejected.
+    pub(crate) async fn resolve_boundary(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        revision: crate::conversation::SurfaceRevision,
+        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        side: super::session::LineageSide,
+    ) -> Result<crate::runtime::identity::MessageId, SessionError> {
+        let access = self.acquire_session(id, node).await?;
+        let locator = locator.clone();
+        tokio::task::spawn_blocking(move || {
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                access.node.conversation_id.clone(),
+                &access.database_path,
+            )
+            .map_err(SessionError::Store)?
+            .with_lifecycle(access.allocation);
+            match side {
+                super::session::LineageSide::Before => {
+                    store.surface_boundary_message_id(revision, &locator)
+                }
+                super::session::LineageSide::After => {
+                    store.canonical_boundary_message_id(revision, &locator)
+                }
+            }
+            .map_err(SessionError::Store)
+        })
+        .await
+        .map_err(|error| SessionError::Catalog {
+            detail: error.to_string(),
+        })?
     }
     /// Select the current node inside an explicitly addressed Session graph.
     /// # Errors
@@ -1035,6 +1197,24 @@ impl SessionController {
             }
         }
         let (mut prepared, editor_content, origin) = if let Some(message) = boundary {
+            // Resolve the immutable Ledger position once at the existing lineage
+            // mutation boundary. Display reads never bind a giant original ID.
+            let store = crate::durable::SqliteConversationStore::open_existing(
+                node.conversation_id.clone(),
+                &snapshot.database_path(id, &node.conversation_id),
+            )
+            .map_err(SessionError::Store)?;
+            let position = store
+                .message_ledger_position(message)
+                .map_err(SessionError::Store)?
+                .filter(|position| *position <= source.read_cut.ledger_through)
+                .ok_or_else(|| SessionError::Seed {
+                    detail: "Exact canonical lineage boundary is unavailable".into(),
+                })?;
+            let source_locator =
+                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                    position,
+                };
             let (prepared, editor) = if tree {
                 snapshot.prepare_tree_node(id, settings, source, message, side)?
             } else {
@@ -1048,6 +1228,7 @@ impl SessionController {
                     source_node: node.id.clone(),
                     source_surface_revision: revision,
                     source_message: message.clone(),
+                    source_locator,
                     side,
                 },
             )
@@ -1307,6 +1488,7 @@ impl SessionController {
 
 #[cfg(test)]
 mod tests {
+    include!("session_controller/cold_statistics_tests.rs");
     use super::super::configuration::SessionConfigInput;
     use super::super::session::deletion::SessionDeleteResult;
     use super::*;
@@ -1607,8 +1789,18 @@ mod tests {
                 .await
                 .is_err()
         );
-        let (owner, statistics, occupancy) =
-            controller.read_statistics(&session.id, None).await.unwrap();
+        let SessionStatisticsReading {
+            conversation_id: owner,
+            statistics,
+            occupancy,
+            read_cut,
+        } = controller
+            .read_statistics(&session.id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read_cut.conversation_id, owner);
+        assert!(read_cut.activation_id.is_none());
         assert_eq!(owner, session.active_conversation_id);
         assert_eq!(statistics.turns, 0);
         assert!(occupancy.is_none());

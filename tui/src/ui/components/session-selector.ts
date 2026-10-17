@@ -13,7 +13,7 @@ import {
 
 import type {
   SessionSummaryView,
-  SessionUserMessageBoundaryView,
+  SessionUserMessageBoundaryObservation,
 } from "../../protocol/app-server.ts";
 import { sessionRowLabel } from "../../presentation/selectors.ts";
 import { role, style } from "../theme.ts";
@@ -218,19 +218,19 @@ export class SessionSelector implements PopupContent, Focusable {
 }
 
 export interface BoundarySelectorOptions {
-  boundaries: SessionUserMessageBoundaryView[];
+  boundaries: SessionUserMessageBoundaryObservation[];
   title: string;
   nextOffset?: number;
 }
 
 export class BoundarySelector implements PopupContent, Focusable {
   focused = false;
-  onSelect?: (boundary: SessionUserMessageBoundaryView) => void;
+  onSelect?: (boundary: SessionUserMessageBoundaryObservation) => void;
   onCancel?: () => void;
   onChange?: () => void;
   onLoadMore?: () => void;
 
-  #boundaries: SessionUserMessageBoundaryView[];
+  #boundaries: SessionUserMessageBoundaryObservation[];
   #nextOffset: number | undefined;
   readonly #title: string;
   #query = "";
@@ -272,7 +272,7 @@ export class BoundarySelector implements PopupContent, Focusable {
 
   /** Appends one bounded native history page. */
   appendPage(
-    boundaries: SessionUserMessageBoundaryView[],
+    boundaries: SessionUserMessageBoundaryObservation[],
     nextOffset?: number,
   ): void {
     this.#boundaries = [...this.#boundaries, ...boundaries];
@@ -281,7 +281,7 @@ export class BoundarySelector implements PopupContent, Focusable {
     this.onChange?.();
   }
 
-  private visible(): SessionUserMessageBoundaryView[] {
+  private visible(): SessionUserMessageBoundaryObservation[] {
     if (this.#query.length === 0) return this.#boundaries;
     return this.#boundaries.filter((boundary) =>
       fuzzyMatch(this.#query, boundarySearchText(boundary)).matches,
@@ -380,11 +380,12 @@ function sessionSearchText(session: SessionSummaryView): string {
   return `${sessionRowLabel(session)} ${session.id} ${session.active_node}`;
 }
 
-function boundarySearchText(boundary: SessionUserMessageBoundaryView): string {
-  return `${boundary.message.id} ${boundary.surface_revision} ${previewUserMessage(boundary)}`;
+function boundarySearchText(boundary: SessionUserMessageBoundaryObservation): string {
+  return `${JSON.stringify(boundary.locator)} ${boundary.surface_revision} ${previewUserMessage(boundary)}`;
 }
 
-function previewUserMessage(boundary: SessionUserMessageBoundaryView): string {
+function previewUserMessage(boundary: SessionUserMessageBoundaryObservation): string {
+  if (!boundary.message) return `deferred user message (${boundary.block_count} blocks)`;
   return boundary.message.content
     .map((block) => (block.type === "text" ? block.text : `[${block.type}]`))
     .join(" ")

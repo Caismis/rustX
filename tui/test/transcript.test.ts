@@ -1,3 +1,4 @@
+import { contentAdvance } from './support/fixtures.ts';
 /**
  * The semantic transcript contract.
  *
@@ -65,13 +66,7 @@ describe("assistant text", () => {
         attempt_id: "a1",
         message_id: "m1",
       },
-      {
-        type: "assistant_text_delta" as const,
-        attempt_id: "a1",
-        message_id: "m1",
-        block_index: 0,
-        delta: "final answer",
-      },
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'text',delta:"final answer"}, 0, 1),
     ]) {
       streaming = reduce(streaming, {
         cursor: nextCursor(streaming.cursor),
@@ -436,6 +431,22 @@ describe("durable transcript audits", () => {
       "a publication audit never becomes a ToolCard or foreground Tool Plane row",
     );
     assert.equal(correlateTools(state).byCallId.size, 0);
+  });
+
+  it("T14 T19 displays retained deferred publication facts without inventing execution settlement", () => {
+    const readCut: import('../../protocol/app-server/v50.ts').ObservationReadCut = {
+      read:{conversation_id:"conv_fa9ad201-0211-7faa-814a-edfd1f23f3e2",journal:"0",transcript:"7",mutation_revision:"0",ledger_through:"0",surface_revision:"0",transcript_total:"1",pending_through:"0",pending_total:"0"},
+      ledger_through:"0",transcript_total:"1",surface_revision:"0",inherited_through:"0",
+    };
+    const record = {settlement:{stream_id:null,message_id:null,attempt_id:null,turn_id:null,request_id:null,kind:"incomplete" as const,settled_at:"2026-08-24T12:00:00Z",block_count:"100"},transcript_cursor:"7",read_cut:readCut};
+    const state = stateOf({publication_settlements:[record]});
+    const rendered = transcriptString(state);
+    assert.match(rendered, /Publication incomplete · 100 blocks · retained content deferred/);
+    assert.equal(state.attempt, undefined);
+    assert.equal(correlateTools(state).byCallId.size, 0);
+    const loaded = stateOf({publication_settlements:[record],transcript:{entries:[{cursor:"7",item:{type:"publication_audit",audit:publicationAudit}}]}});
+    assert.doesNotMatch(transcriptString(loaded), /retained content deferred/);
+    assert.match(transcriptString(loaded), /assistant output · incomplete · noncanonical/);
   });
 
   it("renders historical interaction audits without restoring an actionable prompt", () => {

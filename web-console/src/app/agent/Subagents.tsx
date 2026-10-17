@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
-import { useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v49';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v50';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
@@ -16,33 +16,76 @@ const NO_AGENTS: RuntimeClientAgent[] = [];
 export function SubagentScope({ client, sessionId, children, openAside, onMode }: { client: AppServerClient; sessionId?: string; children: ReactNode; onMode?: (mode: 'chat' | 'trajectory') => void; openAside?: (agent: RuntimeClientAgent) => void }) {
   const tx = useTranslation();
   const agents = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.agents : undefined) ?? NO_AGENTS;
+  const agentRevision = useClientSelector(client, state => sessionId ? state.views[sessionId]?.checkpoint?.read_cut.domain_revisions.agents : undefined);
   const generation = useClientSelector(client, state => state.generation);
   const target = useClientSelector(client, state => sessionId ? state.views[sessionId]?.target : undefined);
   const intent = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentIntent : undefined);
   const admission = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentObservation : undefined);
   const owner = JSON.stringify([generation, sessionId, target, admission]);
+  const inventoryRef = useRef(agents);
   const scope = useMemo<MeterScope>(() => ({
     target,
     current: () => !!sessionId && client.isAttachmentObservationCurrent(sessionId, admission),
-    inventory: () => (sessionId ? client.getSnapshot().views[sessionId]?.snapshot?.agents : undefined) ?? [],
+    inventory: () => inventoryRef.current,
   }), [client, owner, admission]);
-  const [selection, setSelection] = useState<{ owner: string; id?: string; opened: string[] }>();
+  const [headerError, setHeaderError] = useState<{owner:string;id:string;lease?:object;message:string}>();
+  const [headerWork, setHeaderWork] = useState(0);
+  const headerReads = useRef<{owner:string;seen:Map<string,{revision:string;lease?:object}>;flight?:object}>({owner,seen:new Map()});
+  const currentOwner = useRef(owner); currentOwner.current = owner;
+  if(headerReads.current.owner !== owner) { headerReads.current.owner=owner; headerReads.current.seen.clear(); }
+  const [selection, setSelection] = useState<{ owner: string; id?: string; opened: RuntimeClientAgent[]; leases?:Map<string,object>; full?: boolean }>();
   const id = selection?.owner === owner ? selection.id : undefined;
-  const open = (id?: string) => setSelection(previous => ({ owner, id, opened: [...new Set([...(previous?.owner === owner ? previous.opened : []), ...(id ? [id] : [])])] }));
+  const residents = selection?.owner === owner ? selection.opened : NO_AGENTS;
+  const residentLeases = useRef(selection); residentLeases.current=selection;
+  const inventory = [...agents, ...residents.filter(value => !agents.some(agent => agent.agent_id === value.agent_id))];
+  inventoryRef.current = inventory;
+  const open = (id?: string, source?: RuntimeClientAgent) => setSelection(previous => {
+    const opened = previous?.owner === owner ? previous.opened : [];
+    const leases=previous?.owner===owner ? previous.leases??new Map<string,object>() : new Map<string,object>();
+    if (!id) return { owner, opened, leases };
+    const agent = source ?? agents.find(value => value.agent_id === id) ?? opened.find(value => value.agent_id === id);
+    if (!agent) return previous;
+    if (opened.some(value => value.agent_id === id)) return { owner, id, opened, leases };
+    if (opened.length === 8) return { owner, id: previous?.id, opened, leases, full: true };
+    return { owner, id, opened: [...opened, agent], leases:new Map([...leases,[id,{}]]) };
+  });
+  const close = (id: string) => setSelection(previous => previous?.owner === owner ? { owner, id: previous.id === id ? undefined : previous.id, opened: previous.opened.filter(value => value.agent_id !== id), leases:new Map([...previous.leases??[]].filter(([key])=>key!==id)) } : previous);
+  // Retained off-head views refresh their own finite native header. One actual
+  // read stays charged across source/view replacement; no per-revision queue.
+  useEffect(() => {
+    const reads=headerReads.current, residentIds=new Set(residents.map(value=>value.agent_id));
+    for(const id of reads.seen.keys()) if(!residentIds.has(id)) reads.seen.delete(id);
+    if(reads.flight || !target || !scope.current()) return;
+    const revision=agentRevision??'0';
+    const source=residents.find(value=>!agents.some(agent=>agent.agent_id===value.agent_id)&&(reads.seen.get(value.agent_id)?.revision!==revision||reads.seen.get(value.agent_id)?.lease!==selection?.leases?.get(value.agent_id)));
+    if(!source) return;
+    const lease=selection?.leases?.get(source.agent_id);
+    const token={};reads.flight=token;reads.seen.set(source.agent_id,{revision,lease});
+    const current=()=>currentOwner.current===owner&&residentLeases.current?.leases?.get(source.agent_id)===lease&&scope.current()&&inventoryRef.current.some(value=>value.agent_id===source.agent_id)&&(sessionId?client.getSnapshot().views[sessionId]?.checkpoint?.read_cut.domain_revisions.agents:undefined)===agentRevision;
+    void client.request({method:'agent/status',params:{target,agent_id:source.agent_id}},'domain_page',undefined,current).then(({page})=>{
+      if(!current()) return;
+      if(page.read_cut.domain_revisions.agents!==revision) return;
+      const value=page.items[0]?.value;
+      if(page.items.length!==1 || page.read_cut.conversation_id!==target.conversation_id || !value || typeof value!=='object' || !('agent_id' in value) || value.agent_id!==source.agent_id || !('activation_id' in value) || !('child_conversation_id' in value)) throw new Error('Native Agent header source changed.');
+      const header=value as unknown as RuntimeClientAgent;
+      setSelection(previous=>previous?.owner===owner&&previous.leases?.get(source.agent_id)===lease?{...previous,opened:previous.opened.map(agent=>agent.agent_id===header.agent_id?header:agent)}:previous);
+      setHeaderError(previous=>previous?.owner===owner&&previous.lease===lease?undefined:previous);
+    }).catch(error=>{if(current())setHeaderError({owner,id:source.agent_id,lease,message:String(error).slice(0,512)});}).finally(()=>{if(reads.flight===token)reads.flight=undefined;setHeaderWork(value=>value+1);});
+  },[client,owner,target,scope,agentRevision,agents,residents,headerWork]);
   const attached = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachment : undefined);
   const deleting = useClientSelector(client, state => sessionId ? state.views[sessionId]?.deleting : undefined);
   useLayoutEffect(() => () => client.agentMeters.retire(scope), [client, scope]);
   useLayoutEffect(() => { client.agentMeters.update(scope, id); }, [client, scope, agents, attached, intent, deleting, id]);
   const readings = useSyncExternalStore(client.agentMeters.subscribe, client.agentMeters.getSnapshot);
   const metrics: Record<string, AgentStatistics> = {}, metricErrors: Record<string, string> = {};
-  if (readings.scope === scope && scope.current()) for (const agent of agents) {
+  if (readings.scope === scope && scope.current()) for (const agent of inventory) {
     const reading = readings.readings.get(agent.agent_id);
     if (reading?.demand === meterDemand(agent)) {
       if (reading.metrics) metrics[agent.agent_id] = reading.metrics;
       if (reading.error) metricErrors[agent.agent_id] = reading.error;
     } else if (readings.blocked) metricErrors[agent.agent_id] = tx('agent:usage.reads-unresolved');
   }
-  return <Context value={{ client, sessionId, onMode, agents, metrics, metricErrors, selected: agents.find(agent => agent.agent_id === id), openAside: openAside ? (id: string) => { const agent = agents.find(agent => agent.agent_id === id); if (agent) openAside(agent); } : undefined, opened: agents.filter(agent => selection?.owner === owner && selection.opened.includes(agent.agent_id)), open }}>{children}</Context>;
+  return <Context value={{ client, sessionId, onMode, agents: inventory, metrics, metricErrors, full: selection?.owner === owner && selection.full, headerError: headerError?.owner===owner&&selection?.leases?.get(headerError.id)===headerError.lease?headerError.message:undefined, close, selected: inventory.find(agent => agent.agent_id === id), openAside: openAside ? (id: string) => { const agent = inventory.find(agent => agent.agent_id === id); if (agent) openAside(agent); } : undefined, opened: residents.map(value => agents.find(agent => agent.agent_id === value.agent_id) ?? value), open }}>{children}</Context>;
 }
 export function SubagentHeader({ title }: { title: string }) {
   const tx = useTranslation(), scope = useSubagents();
@@ -62,11 +105,12 @@ export function SubagentHeader({ title }: { title: string }) {
         {!!siblings.length && <SubagentMenu agents={siblings} label={tx('common:subagents.count', { count: siblings.length })} openChild={open}/>}</>}
   </div>;
 }
-/** Retain each visited child's draft and reading position, like a resident DSH conversation. */
+/** Eight resident Child views retain drafts until explicitly closed. */
 export function SubagentSurface({ children, mode = 'chat' }: { children: ReactNode; mode?: 'chat' | 'trajectory' }) {
-  const scope = useSubagents();
-  return <><div className={css.parentSurface} hidden={!!scope?.selected}>{children}</div>
+  const scope = useSubagents(), tx = useTranslation();
+  return <>{scope?.full && <p role="status">{tx('common:subagents.view-capacity')}</p>}{scope?.headerError && <p role="alert">{scope.headerError}</p>}<div className={css.parentSurface} hidden={!!scope?.selected}>{children}</div>
     {scope?.opened.map(agent => <div key={`${scope.sessionId}:${agent.agent_id}`} hidden={scope.selected?.agent_id !== agent.agent_id} className={`${conversationCss.scrollBody} ${css.childSurface}`} data-conversation-scroll>
+      <button type="button" onClick={() => scope.close(agent.agent_id)}>{tx('common:subagents.close-view')}</button>
       <AgentCard onMode={scope.onMode} mode={mode} visible={scope.selected?.agent_id === agent.agent_id} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/>
     </div>)}</>;
 }

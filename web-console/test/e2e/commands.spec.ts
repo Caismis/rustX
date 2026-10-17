@@ -157,16 +157,21 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(errors).toEqual([]); passed = true;
   } catch (error) {
     // Capture before shutdown: teardown closes the socket and can otherwise
-    // obscure whether branch, attach, admission or provider settlement stalled.
-    await test.info().attach('retry-native-frontier', {
-      contentType: 'application/json',
-      body: JSON.stringify({ phase, diagnostics: fixture.diagnostics(),
-        facts: await facts.innerText(),
-        notices: await page.locator('.notice').allTextContents(),
-        wire: await page.locator('.protocol-log pre').allTextContents(),
-        provider: await Promise.allSettled(['state', 'requests', 'observations'].map(path => fixture.control(path))),
-      }, null, 2),
-    });
+    // obscure the original failure. Read the current DOM without locator waits:
+    // the inspector can legitimately be closed, including by timeout teardown.
+    try {
+      const browser = page.isClosed() ? { closed: true } : await page.evaluate(() => ({
+        facts: document.querySelector('[aria-label="Native diagnostic JSON"]')?.textContent ?? null,
+        notices: Array.from(document.querySelectorAll('.notice'), node => node.textContent),
+        wire: Array.from(document.querySelectorAll('.protocol-log pre'), node => node.textContent),
+      }));
+      await test.info().attach('retry-native-frontier', {
+        contentType: 'application/json',
+        body: JSON.stringify({ phase, diagnostics: fixture.diagnostics(), browser }, null, 2),
+      });
+    } catch {
+      // Failure diagnostics must never replace the original test exception.
+    }
     throw error;
   } finally {
     // Close the browser connection before shutting down its Host so reconnect

@@ -1,3 +1,5 @@
+import {applicationReceipt} from './fixture';
+import { settingsReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -67,7 +69,7 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
 });
 it('Workspace settings have no trust gate; names and unregister stay Host-owned', async () => {
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   const host = await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
@@ -306,12 +308,12 @@ it('stale or unloaded snapshots cannot claim running work', () => {
   expect(sessionObservation(translator('en'), { ...server.client.getSnapshot(), views: { A: view }, connection: 'disconnected' }, 'A')).toBe('Connection interrupted');
 });
 it('sidebar Fork uses the exact native boundary and late completion cannot undo Workspace focus', async () => {
-  const boundary = { surface_revision: '37', message: { id: 'user-cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Fork this native boundary' }] } };
+  const boundary = { surface_revision: '37', locator:{type:'by_message_id' as const,message_id:'user-cut'},block_count:'1',content:[],collections:[], message: { id: 'user-cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Fork this native boundary' }] } };
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '37', boundaries: [boundary] }));
   server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }] }));
   server.handlers.set('session/fork', request => {
     if (request.method !== 'session/fork') throw new Error('wrong request');
-    expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: '37', boundary: 'user-cut' });
+    expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: '37', boundary:{type:'by_message_id',message_id:'user-cut'} });
     server.snapshots.set('fork-child', snapshot('fork-child'));
     return { type: 'session_transition', session: { id: 'fork-child', active_node: 'node-child', active_conversation_id: 'conversation-fork-child', node_count: 1, created_at: '0', updated_at: '0' } };
   });
@@ -348,7 +350,7 @@ it('late native rename completion cannot replace a newer metadata query', async 
 
 it('registered authorization is checked from current native settings before exactly one cold attach', async () => {
   const host = await mount();
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   vi.mocked(host.classifyLocations).mockClear();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(host.classifyLocations).toHaveBeenCalledWith(['/workspace/A'], endpoint, 'fixture-host', undefined);
@@ -371,7 +373,7 @@ it('unregister retains authorization and permits ungrouped cold open without rec
 });
 it('stale authorized summary cannot authorize current outside cwd', async () => {
   const host = await mount();
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/outside/roots' },'0')));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('not authorized'))).toBe(true);
   expect(screen.getByRole('button', { name: 'Open Session A' })).toBeTruthy();
@@ -382,7 +384,7 @@ it('stale authorized summary cannot authorize current outside cwd', async () => 
 it('unauthorized saved views cannot cold attach on initial restoration or reconnect', async () => {
   const host = hostFixture();
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ authorityId: 'fixture-host', endpoint, openViews: ['A'] }));
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/outside/roots' },'0')));
   await act(async () => { render(<App client={server.client} workspaceHost={host} />); await server.connect(); });
   await act(async () => { server.client.disconnect(); await server.connect(); });
   expect(host.classifyLocations).toHaveBeenCalledWith(['/outside/roots'], endpoint, 'fixture-host', undefined);
@@ -393,7 +395,7 @@ it('toolbar cold resume and sidebar Fork share admission and refuse an unauthori
   await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => server.client.release('A'));
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/outside/roots' },'0')));
   const baseline = methods().filter(method => method === 'session/attach').length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
@@ -424,7 +426,7 @@ it('Sidebar selection synchronizes Workspace context and /new drafts in A after 
     expect(request.params.settings.cwd).toBe('/workspace/A'); server.snapshots.set('child', snapshot('child'));
     return { type: 'session_transition', session: { id: 'child', active_node: 'node-child', active_conversation_id: 'conversation-child', node_count: 1, created_at: '0', updated_at: '0' } };
   });
-  server.handlers.set('session/settings', request => ({ type: 'settings', revision: '0', settings: { cwd: request.method === 'session/settings' && request.params.session_id === 'B' ? '/workspace/B' : '/workspace/A' } }));
+  server.handlers.set('session/settings', request => (settingsReceipt({ cwd: request.method === 'session/settings' && request.params.session_id === 'B' ? '/workspace/B' : '/workspace/A' },'0')));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
   expect(screen.getByRole('button', { name: 'Select Workspace Workspace B' }).getAttribute('aria-current')).toBe('page');
@@ -458,14 +460,14 @@ it('browser binding accepts the same URL normalization as Host routing', async (
 });
 
 it('an already attached source cannot Fork a child after current cwd authorization is refused', async () => {
-  const boundary = { surface_revision: '1', message: { id: 'cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Native Fork boundary' }] } };
+  const boundary = { surface_revision: '1', locator:{type:'by_message_id' as const,message_id:'cut'},block_count:'1',content:[],collections:[], message: { id: 'cut', kind: 'message' as const, source: 'human' as const, content: [{ type: 'text' as const, text: 'Native Fork boundary' }] } };
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: '1', boundaries: [boundary] }));
   server.handlers.set('session/tree', () => ({ type: 'tree', nodes: [{ id: 'node-A', conversation_id: 'conversation-A', ordinal: '1', origin: { type: 'new' } }] }));
   await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Session actions for Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Fork session' })));
   const popup = screen.getByRole('dialog', { name: '/fork' });
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '1', settings: { cwd: '/outside/roots' } }));
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/outside/roots' },'1')));
   await act(async () => fireEvent.click(within(popup).getByRole('option', { name: /Native Fork boundary/ })));
   expect(methods()).not.toContain('session/fork');
   expect(server.loaded.has('A')).toBe(true); // No hot revocation/unload.
@@ -546,14 +548,14 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v49').SourceTarget[], host = hostFixture()) {
-  server.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: '/workspace/A' } }));
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v50').SourceTarget[], host = hostFixture()) {
+  server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
     // A real Session application: `scope` is the Session identity the App
     // Server read it under, and the authored owners are a separate fact.
-    application: { scope: 'A', sources: [...sources], version: '2', desired: { input_revision: 'input-1', attempt: '1' },
-      units: { capabilities: { status: 'failed', diagnostic: 'resource failed' } }, candidate: null, eligibility: { status: 'unavailable' } },
+    projection:(applicationReceipt(({ scope: 'A', sources: [...sources], version: '2', desired: { input_revision: 'input-1', attempt: '1' },
+      units: { capabilities: { status: 'failed', diagnostic: 'resource failed' } }, candidate: null }))),
   }));
   await mount(host);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace A' })));
@@ -605,7 +607,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by its dedicated actor. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v49').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v50').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();

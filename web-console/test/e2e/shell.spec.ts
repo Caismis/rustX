@@ -390,15 +390,15 @@ test('authoritative narrow navigation commits while a background snapshot is hel
   expect(before.views.A.authoritative && before.views.B.authoritative).toBe(true);
   const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
   await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
-  await page.evaluate(() => window.sessionFixture.holdSnapshot());
-  const snapshots = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length;
+  await page.evaluate(() => window.sessionFixture.holdBackgroundCheckpoint());
+  const snapshots = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/checkpoint').length;
   await page.locator('button[data-session-id="B"]').click();
   await expect(page.getByLabel('Session title')).toHaveText('Session B');
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
   await expect(page.locator('main')).not.toHaveAttribute('inert');
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Interactive before snapshot settlement');
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeFocused();
-  expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length).toBe(snapshots);
+  expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/checkpoint').length).toBe(snapshots);
   expect(nativeMutations(await page.evaluate(() => window.sessionFixture.requests()))).toEqual(mutations);
   expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
   await page.evaluate(() => window.sessionFixture.settleSnapshot());
@@ -407,7 +407,7 @@ test('authoritative narrow navigation commits while a background snapshot is hel
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v49').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v50').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });
@@ -562,7 +562,7 @@ for (const width of [390, 1440]) for (const destination of ['A', 'B']) test(`idl
   }
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
-  const snapshots = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length;
+  const snapshots = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/checkpoint').length;
   await page.evaluate(() => window.sessionFixture.captureNavigation());
   for (const workspace of [false, true]) {
     await openFixtureSettings(page, workspace);
@@ -574,7 +574,7 @@ for (const width of [390, 1440]) for (const destination of ['A', 'B']) test(`idl
   }
   expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
   expect(nativeMutations(await page.evaluate(() => window.sessionFixture.requests()))).toEqual(mutations);
-  expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/snapshot').length).toBe(snapshots);
+  expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/checkpoint').length).toBe(snapshots);
   if (width === 1440) await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
 });
 
@@ -630,7 +630,7 @@ for (const failure of ['node', 'history'] as const) test(`Fork ownership failure
   expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
   expect(nativeMutations(delta).map(request => request.method)).toEqual([]);
-  expect(delta.filter(request => request.method === 'session/snapshot')).toHaveLength(0);
+  expect(delta.filter(request => request.method === 'session/checkpoint')).toHaveLength(0);
   await proveCommittedControls(page); expect(errors).toEqual([]);
 });
 
@@ -650,7 +650,7 @@ for (const workspace of [false, true]) for (const stage of ['node', 'history'] a
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
   expect(nativeMutations(delta).map(request => request.method)).toEqual([]);
   expect(after.views.C).toBeUndefined();
-  expect(delta.filter(request => request.method === 'session/snapshot' && request.params.target.session_id === 'A')).toHaveLength(0);
+  expect(delta.filter(request => request.method === 'session/checkpoint' && request.params.target.session_id === 'A')).toHaveLength(0);
   await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await proveCommittedControls(page); expect(errors).toEqual([]);
@@ -666,7 +666,7 @@ for (const width of [390, 1440]) test(`idle Settings keeps committed Stop and up
   }
   expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => request.method === 'session/snapshot')).toEqual([]);
+  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => request.method === 'session/checkpoint')).toEqual([]);
   await proveCommittedControls(page); expect(errors).toEqual([]);
 });
 
@@ -697,7 +697,7 @@ test('successful View Source commits read-only exact Node and Message while pres
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
   const after = await page.evaluate(() => window.sessionFixture.navigationFacts()); expect(after).toEqual(before);
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length); expect(nativeMutations(delta)).toEqual([]);
-  expect(delta.filter(request => request.method === 'session/history').map(request => request.params)).toEqual([{ session_id: 'C', node_id: 'source-node-C', at: { type: 'message', id: 'source-message' }, limit: 64 }]);
+  expect(delta.filter(request => request.method === 'session/history').map(request => request.params)).toEqual([{ session_id: 'C', node_id: 'source-node-C', at: { type: 'message', id: 'source-message' }, limit: 32 }]);
   await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
   await expect(page.getByLabel('Session title')).toHaveText('Session A'); await proveCommittedControls(page); expect(errors).toEqual([]);
 });
@@ -724,7 +724,7 @@ for (const width of [390, 1440]) test(`catalog search owns preparation without r
   if (width === 390) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => request.method === 'session/snapshot')).toEqual([]);
+  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => request.method === 'session/checkpoint')).toEqual([]);
   await proveCommittedControls(page); expect(errors).toEqual([]);
 });
 
@@ -760,7 +760,7 @@ for (const width of [390, 1440]) for (const back of ['return', 'sidebar'] as con
     expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
   }
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => ['session/snapshot', 'session/uploadPrepare', 'session/uploadStatus'].includes(request.method))).toEqual([]);
+  expect(nativeMutations(delta)).toEqual([]); expect(delta.filter(request => ['session/checkpoint', 'session/uploadPrepare', 'session/uploadStatus'].includes(request.method))).toEqual([]);
   await page.screenshot({ path: `/tmp/pr458-history-draft-${back}-${width}.png` });
   await editor.focus(); await editor.press('Escape'); await editor.press('Escape');
   await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'turn/cancel').length)).toBe(1);

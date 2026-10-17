@@ -164,7 +164,7 @@ fn claim_mutation_race(mutation: Operation, claim_first: bool, retain_another: b
     let selected = first.select_pending_batch().unwrap().unwrap();
     let expected = PendingInboundRef {
         sequence: accepted.sequence,
-        message_id: accepted.message_id.clone(),
+
         revision: 0,
     };
     let (first_operation, second_operation) = if claim_first {
@@ -191,14 +191,13 @@ fn claim_mutation_race(mutation: Operation, claim_first: bool, retain_another: b
     let Outcome::Mutation(outcome) = mutation_outcome else {
         panic!("mutation outcome")
     };
-    assert_eq!(
-        outcome,
-        if claim_first {
-            PendingMutationOutcome::NotPending
-        } else {
-            PendingMutationOutcome::Applied
-        }
-    );
+    if claim_first {
+        assert_eq!(outcome, PendingMutationOutcome::NotPending);
+    } else {
+        assert!(
+            matches!(outcome, PendingMutationOutcome::Applied { read_cut, .. } if read_cut.mutation_revision == 1)
+        );
+    }
 
     let mut expected_receipt = selected.items.clone();
     if !claim_first {

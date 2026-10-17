@@ -131,8 +131,27 @@ struct Driver {
     target: AttachmentTarget,
     access: SessionAccess,
     store: Arc<SqliteConversationStore>,
-    events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<RuntimeClientEvent>>,
+    events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<NotificationMethod>>,
+    submitted_after: std::sync::atomic::AtomicU64,
+    consumed_cursor: std::sync::atomic::AtomicU64,
     relay: tokio::task::JoinHandle<()>,
+}
+
+/// Retain complete wire records; semantic assertions borrow their original facts.
+#[derive(Debug, Default)]
+struct ObservedEvents {
+    records: Vec<NotificationMethod>,
+}
+impl ObservedEvents {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = &RuntimeClientEvent> {
+        self.records.iter().flat_map(|record| match record {
+            NotificationMethod::Event { event, .. } => event.facts(),
+            _ => &[],
+        })
+    }
+    fn last(&self) -> Option<&RuntimeClientEvent> {
+        self.iter().next_back()
+    }
 }
 
 /// How a driver's catalog and session are shaped.
@@ -280,9 +299,22 @@ impl Driver {
         )
         .await
         .expect("attach durable Session");
-        let MethodResult::Attached { target, cursor, .. } = attached else {
-            panic!("attach returns the snapshot");
+        let MethodResult::Attached { target, .. } = attached else {
+            panic!("attach returns its bounded identity receipt");
         };
+        let checkpoint = rpc(
+            &connection,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: Vec::new(),
+            },
+        )
+        .await
+        .expect("bounded native checkpoint");
+        let MethodResult::Checkpoint { checkpoint } = checkpoint else {
+            panic!("checkpoint response");
+        };
+        let cursor = checkpoint.cursor;
         rpc(
             &connection,
             Method::SessionSubscribe {
@@ -313,9 +345,9 @@ impl Driver {
         let relay = tokio::spawn(async move {
             loop {
                 match notifications.next_notification().await.notification {
-                    NotificationMethod::Event { event, .. } => {
-                        if send.send(*event).is_err() {
-                            break;
+                    record @ NotificationMethod::Event { .. } => {
+                        if send.send(record).is_err() {
+                            return;
                         }
                     }
                     NotificationMethod::Closed { .. }
@@ -333,6 +365,8 @@ impl Driver {
             access,
             store,
             events: tokio::sync::Mutex::new(events),
+            submitted_after: std::sync::atomic::AtomicU64::new(0),
+            consumed_cursor: std::sync::atomic::AtomicU64::new(cursor.get()),
             relay,
         }
     }
@@ -346,7 +380,61 @@ impl Driver {
         ),
         RuntimeManagerError,
     > {
-        self.client.snapshot()
+        self.client
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+    }
+
+    /// Explicit original-history oracle, independent of the checkpoint's body cache.
+    /// Every selected immutable body belongs to one captured native Ledger prefix.
+    fn canonical_history(&self) -> Vec<MessageBlock> {
+        let cut = self
+            .store
+            .observation_read_cut()
+            .expect("native history cut");
+        let mut offset = 0;
+        let mut messages = Vec::new();
+        loop {
+            let page = self
+                .store
+                .message_header_page(&cut, Some(offset), 32)
+                .expect("bounded canonical history page");
+            assert_eq!(page.cut, cut);
+            assert_eq!(page.offset, offset);
+            assert_eq!(page.total, cut.ledger_through);
+            assert!(page.headers.len() <= 32);
+            let ids: Vec<_> = page
+                .headers
+                .iter()
+                .enumerate()
+                .map(|(index, header)| {
+                    assert_eq!(
+                        header.ledger_position,
+                        Some(offset + u64::try_from(index).expect("bounded header ordinal") + 1)
+                    );
+                    header
+                        .identity
+                        .clone()
+                        .expect("small original fixture identity")
+                })
+                .collect();
+            let originals = self
+                .store
+                .load_messages(&ids)
+                .expect("selected original bodies");
+            assert_eq!(originals.len(), ids.len());
+            for (original, identity) in originals.iter().zip(&ids) {
+                assert_eq!(original.id(), identity);
+            }
+            messages.extend(originals);
+            offset += u64::try_from(page.headers.len()).expect("bounded page count");
+            assert_eq!(page.next_offset, (offset < page.total).then_some(offset));
+            if page.next_offset.is_none() {
+                assert_eq!(u64::try_from(messages.len()).unwrap(), cut.ledger_through);
+                return messages;
+            }
+            assert!(!page.headers.is_empty(), "native continuation advances");
+        }
     }
 
     fn request_history(&self) -> rustx::runtime::request_history::RequestHistory {
@@ -409,6 +497,12 @@ impl Driver {
 
     /// Submits one fixed user turn.
     fn submit(&self, text: &str) {
+        self.submitted_after.store(
+            self.store
+                .presentation_frontier()
+                .expect("original pre-submit J cut"),
+            std::sync::atomic::Ordering::SeqCst,
+        );
         self.client
             .submit_inbound(vec![UserContentBlock::Text(TextBlock {
                 text: text.to_owned(),
@@ -422,31 +516,199 @@ impl Driver {
     /// The settlement uniqueness invariant is asserted here rather than
     /// assumed: a second `AttemptSettled` fails, and the terminal event must
     /// be the last event of the attempt.
-    async fn settle(&self) -> (Vec<RuntimeClientEvent>, RuntimeClientOutcome) {
-        let mut observed = Vec::new();
-        let mut events = self.events.lock().await;
-        loop {
-            match tokio::time::timeout(std::time::Duration::from_secs(30), events.recv()).await {
-                Ok(Some(event)) => {
-                    if let RuntimeClientEvent::AttemptSettled { outcome, .. } = &event {
-                        let outcome = outcome.clone();
-                        observed.push(event);
-                        assert!(
-                            !matches!(
-                                events.try_recv(),
-                                Ok(RuntimeClientEvent::AttemptSettled { .. })
-                            ),
-                            "an attempt settles exactly once"
-                        );
-                        return (observed, outcome);
-                    }
-                    observed.push(event);
+    fn submitted_attempt(&self) -> Option<(u64, rustx::runtime::identity::AttemptId)> {
+        use rustx::durable::presentation::{FactQuery, FactScope};
+        let through = self
+            .store
+            .presentation_frontier()
+            .expect("original attempt Journal frontier");
+        // The original start is immutable J evidence. Pending adoption may
+        // expire an independent transcript cut while this attempt executes.
+        let starts = self
+            .store
+            .read_presentation_events(&FactQuery {
+                scope: FactScope::All,
+                kinds: vec!["attempt_started"],
+                before: None,
+                after: self
+                    .submitted_after
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                ascending: true,
+                through,
+                limit: 1,
+            })
+            .expect("bounded original Attempt start");
+        starts.into_iter().next().map(|start| {
+            let rustx::events::types::RuntimeEvent::AttemptStarted { attempt_id } = start.event
+            else {
+                panic!("original indexed AttemptStarted kind")
+            };
+            assert_eq!(start.attempt_id.as_ref(), Some(&attempt_id));
+            assert_eq!(start.conversation_id, self.target.conversation_id);
+            assert!(start.sequence <= through);
+            (start.sequence, attempt_id)
+        })
+    }
+
+    fn assert_original_terminal(&self, start: u64, owner: &rustx::runtime::identity::AttemptId) {
+        use rustx::durable::presentation::{FactQuery, FactScope};
+        use rustx::events::types::RuntimeEvent as E;
+        let through = self
+            .store
+            .presentation_frontier()
+            .expect("native terminal Journal frontier");
+        let query = FactQuery {
+            scope: FactScope::Attempt(owner.clone()),
+            kinds: vec![
+                "attempt_completed",
+                "attempt_failed",
+                "attempt_cancelled",
+                "attempt_timed_out",
+                "attempt_limit_exceeded",
+            ],
+            before: None,
+            after: start,
+            ascending: false,
+            through,
+            limit: 2,
+        };
+        let terminal = self
+            .store
+            .read_presentation_events(&query)
+            .expect("original terminal uniqueness");
+        assert_eq!(
+            terminal.len(),
+            1,
+            "one native terminal, regardless of checkpoint repaint"
+        );
+        let (E::AttemptCompleted { attempt_id, .. }
+        | E::AttemptFailed { attempt_id, .. }
+        | E::AttemptCancelled { attempt_id, .. }
+        | E::AttemptTimedOut { attempt_id }
+        | E::AttemptLimitExceeded { attempt_id, .. }) = &terminal[0].event
+        else {
+            panic!("original indexed terminal kind")
+        };
+        assert_eq!(attempt_id, owner);
+        assert_eq!(terminal[0].attempt_id.as_ref(), Some(owner));
+        assert_eq!(terminal[0].conversation_id, self.target.conversation_id);
+        assert!(start < terminal[0].sequence && terminal[0].sequence <= through);
+        // This independent oracle reads every original J kind through the
+        // same captured immutable frontier, including nonterminal owner facts.
+        let mut after = start;
+        let mut last_owned = None;
+        let mut original_terminals = Vec::new();
+        while after < through {
+            let page = self
+                .store
+                .read_events(Some(after), 32)
+                .expect("original Journal page");
+            assert!(
+                !page.events.is_empty(),
+                "captured original J prefix remains readable"
+            );
+            assert_eq!(
+                page.next_sequence,
+                page.events.last().map(|event| event.sequence)
+            );
+            for envelope in page.events {
+                assert!(envelope.sequence > after, "original J advances");
+                after = envelope.sequence;
+                if after > through {
+                    break;
                 }
+                assert_eq!(envelope.conversation_id, self.target.conversation_id);
+                if envelope.attempt_id.as_ref() == Some(owner) {
+                    last_owned = Some(envelope.sequence);
+                    if matches!(
+                        envelope.event,
+                        E::AttemptCompleted { .. }
+                            | E::AttemptFailed { .. }
+                            | E::AttemptCancelled { .. }
+                            | E::AttemptTimedOut { .. }
+                            | E::AttemptLimitExceeded { .. }
+                    ) {
+                        original_terminals.push(envelope.sequence);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            original_terminals,
+            [terminal[0].sequence],
+            "one exact original native terminal"
+        );
+        assert_eq!(
+            last_owned,
+            Some(terminal[0].sequence),
+            "terminal is the last original owner fact"
+        );
+    }
+
+    async fn settle(&self) -> (ObservedEvents, RuntimeClientOutcome) {
+        let mut observed = ObservedEvents::default();
+        let mut events = self.events.lock().await;
+        let mut owner = None;
+        loop {
+            let record = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                events.recv(),
+            )
+            .await
+            {
+                Ok(Some(record)) => record,
                 Ok(other) => panic!("the observation stream ended early: {other:?}"),
                 Err(elapsed) => panic!(
-                    "the attempt never settled ({elapsed}); observed {} event(s): {observed:?}",
-                    observed.len()
+                    "the attempt never settled ({elapsed}); {} complete records, cursor={}, owner={owner:?}",
+                    observed.records.len(),
+                    self.consumed_cursor
+                        .load(std::sync::atomic::Ordering::SeqCst)
                 ),
+            };
+            let NotificationMethod::Event { cursor, event, .. } = &record else {
+                unreachable!()
+            };
+            let previous = self
+                .consumed_cursor
+                .swap(cursor.get(), std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                cursor.get(),
+                previous + 1,
+                "complete native records stay contiguous"
+            );
+            if let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.as_ref() {
+                assert_eq!(metadata.read_cut.revision, cursor.get());
+            }
+            if owner.is_none() {
+                owner = self.submitted_attempt();
+            }
+            let outcome = owner.as_ref().and_then(|(start, expected)| {
+                event.facts().iter().find_map(|fact| match fact {
+                    RuntimeClientEvent::AttemptSettled {
+                        attempt_id,
+                        outcome,
+                    } if attempt_id == expected => Some(outcome.clone()),
+                    RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. }
+                        if checkpoint.read_cut.through >= *start =>
+                    {
+                        let attempt = checkpoint.snapshot.attempt.as_ref()?;
+                        if attempt.attempt_id.as_ref() != Some(expected) {
+                            return None;
+                        }
+                        if let RuntimeClientAttemptPhase::Settled { outcome } = &attempt.phase {
+                            Some(outcome.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                })
+            });
+            observed.records.push(record);
+            if let Some(outcome) = outcome {
+                let (start, attempt_id) = owner.as_ref().unwrap();
+                self.assert_original_terminal(*start, attempt_id);
+                return (observed, outcome);
             }
         }
     }
@@ -627,8 +889,11 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             events
                 .iter()
                 .filter_map(|event| match event {
-                    RuntimeClientEvent::AssistantReasoningDelta { delta, .. } =>
-                        Some(delta.as_str()),
+                    RuntimeClientEvent::BlockContentAdvanced {
+                        kind,
+                        inline_delta: Some(delta),
+                        ..
+                    } if kind == "reasoning" => Some(delta.as_str()),
                     _ => None,
                 })
                 .collect::<String>(),
@@ -857,12 +1122,29 @@ async fn a_provider_failure_settles_once_without_a_retry() {
     driver.submit(TURN_ONE);
     let (events, outcome) = driver.settle().await;
 
-    let RuntimeClientOutcome::Failed { error } = &outcome else {
+    let RuntimeClientOutcome::Failed {
+        error,
+        error_deferred,
+        error_source,
+    } = &outcome
+    else {
         panic!("a provider failure settles as Failed: {outcome:?}");
     };
+    assert!(
+        !error_deferred,
+        "the finite normalized provider failure is complete"
+    );
+    assert!(
+        error_source.is_none(),
+        "a complete failure needs no deferred source"
+    );
     let RuntimeClientAttemptFailure::Model { message, .. } = error else {
         panic!("the failure is projected as a model failure: {error:?}");
     };
+    assert!(
+        !message.is_empty(),
+        "the normalized model failure retains its diagnostic"
+    );
     assert!(
         !message.contains(CREDENTIAL_VALUE),
         "the projected failure never carries a credential"
@@ -1073,6 +1355,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             "{scenario}: one compaction generation"
         );
 
+        let canonical = driver.canonical_history();
         let head = snapshot
             .context
             .projection_head
@@ -1085,7 +1368,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         // Compaction never rewrote the ledger: the retired original is still
         // there, byte for byte.
         assert!(
-            snapshot.messages.iter().any(|message| matches!(
+            canonical.iter().any(|message| matches!(
                 message,
                 MessageBlock::Assistant(assistant)
                     if serde_json::to_string(assistant)
@@ -1187,7 +1470,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
         // Exactly two committed compactions, in generation order.
         let generations: Vec<u64> = events_two
             .iter()
-            .chain(&events_three)
+            .chain(events_three.iter())
             .filter_map(|event| match event {
                 RuntimeClientEvent::ContextCompacted { context, .. } => context
                     .latest_compaction
@@ -1224,7 +1507,8 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             .expect("second projection");
         assert_eq!(head.activation_id.0, 2);
         assert_eq!(head.derived_items, 1, "one effective Derived Summary");
-        let ledger = serde_json::to_string(&snapshot.messages).expect("serialize the ledger");
+        let ledger =
+            serde_json::to_string(&driver.canonical_history()).expect("serialize the ledger");
         assert!(
             ledger.contains(FILLER_ONE_MARKER) && ledger.contains(FILLER_TWO_MARKER),
             "{scenario}: the ledger retains both retired fillers verbatim"
@@ -1712,7 +1996,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
     assert!(body_text(&requests[1]).contains(&data));
     assert!(body_text(&requests[1]).contains("image/png"));
-    let canonical_image = driver.snapshot().unwrap().0.messages.into_iter()
+    let canonical_image = driver.canonical_history().into_iter()
         .find(|message| matches!(message, MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-image"))
         .expect("native image result committed canonically");
     assert!(
@@ -1776,12 +2060,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
         1
     );
     assert!(
-        driver
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
-            .contains(&canonical_image),
+        driver.canonical_history().contains(&canonical_image),
         "text projection preserves the exact canonical result"
     );
     assert!(
@@ -1831,14 +2110,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
         "child does not inherit parent history"
     );
     assert!(!body_text(&requests[5]).contains("read_image"));
-    assert!(
-        driver
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
-            .contains(&canonical_image)
-    );
+    assert!(driver.canonical_history().contains(&canonical_image));
 
     // Manual compaction invokes the production summary request builder and
     // adapter over the image-bearing canonical span, not a helper-only mock.
@@ -1853,12 +2125,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     assert!(!summary.contains("\"type\":\"image\""));
     assert!(!summary.contains("image_url"));
     assert!(
-        driver
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
-            .contains(&canonical_image),
+        driver.canonical_history().contains(&canonical_image),
         "compaction preserves the canonical ledger"
     );
     assert_eq!(
@@ -1937,7 +2204,9 @@ async fn cross_turn_image_projection_reconciles_native_coverage_before_frozen_re
             requests[2]["body"].get("previous_response_id").is_none(),
             "stale stored coverage was cleared"
         );
-        let canonical = driver.snapshot().unwrap().0.messages;
+        // Accepted-output uniqueness belongs to the complete original Ledger,
+        // independently of the bounded checkpoint body cache.
+        let canonical = driver.canonical_history();
         assert_eq!(
             canonical
                 .iter()
@@ -2034,7 +2303,8 @@ async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_r
             .contains("seventeenth-image"),
         "summary selection did not receive the retired continuation anchor"
     );
-    let canonical = driver.snapshot().unwrap().0.messages;
+    // Count immutable accepted output, not the bounded checkpoint head.
+    let canonical = driver.canonical_history();
     assert_eq!(
         canonical
             .iter()
@@ -2122,7 +2392,7 @@ async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request
     };
     driver.submit("Read sixteen images, then one more.");
     let outcome = driver.settle().await.1;
-    let RuntimeClientOutcome::Failed { error } = outcome else {
+    let RuntimeClientOutcome::Failed { error, .. } = outcome else {
         panic!("missing native replay must fail")
     };
     assert!(
@@ -2144,23 +2414,16 @@ async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request
         2,
         "failed preflight commits no third request start"
     );
+    let canonical = driver.canonical_history();
     assert_eq!(
-        driver
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
+        canonical
             .iter()
             .filter(|m| matches!(m, MessageBlock::Tool(_)))
             .count(),
         17
     );
     assert_eq!(
-        driver
-            .snapshot()
-            .unwrap()
-            .0
-            .messages
+        canonical
             .iter()
             .filter(|m| matches!(m, MessageBlock::Assistant(_)))
             .count(),
@@ -2291,9 +2554,9 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
         }
     }
 
-    let snapshot = driver.snapshot().unwrap().0;
+    let canonical = driver.canonical_history();
     let mut ids = std::collections::BTreeSet::new();
-    for message in &snapshot.messages {
+    for message in &canonical {
         if let rustx::message::types::MessageBlock::Tool(tool) = message {
             for block in &tool.result.content {
                 if let rustx::tools::types::ToolResultContent::Image(image) = block {
@@ -2338,9 +2601,9 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
         assert!(!body_text(&requests[2]).contains(&encoded));
         assert_eq!(body_text(&requests[3]).matches(&encoded).count(), 16);
         // Original successful canonical Tool results remain immutable.
-        let after = driver.snapshot().unwrap().0;
-        for message in &snapshot.messages {
-            assert!(after.messages.contains(message));
+        let after = driver.canonical_history();
+        for message in &canonical {
+            assert!(after.contains(message));
         }
     }
     await_history_len(&driver, if text_model.is_some() { 4 } else { 2 }).await;

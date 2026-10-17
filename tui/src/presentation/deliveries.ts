@@ -14,7 +14,10 @@
  */
 
 import type {
-  MessageId,
+  CanonicalContentLocator,
+  CheckpointReadCut,
+  RuntimeClientDeliveryHead,
+  RuntimeClientDeliveryItem,
   RuntimeClientTranscriptCursor,
   RuntimeClientTranscriptPage,
   SessionFileReference,
@@ -23,12 +26,14 @@ import type {
 /** One committed delivery and its stable native address. */
 export interface DeliveryRecord {
   /** The committed canonical Tool-result message that declared it. */
-  messageId: MessageId;
+  locator: CanonicalContentLocator;
+  conversationId:string;
   /** Its position in that result's ordered `deliveries`. */
   index: number;
   /** Total deliveries of that result, for an `i/n` identity. */
-  count: number;
-  file: SessionFileReference;
+  count: number | string;
+  file?: SessionFileReference;
+  metadata?:{item:RuntimeClientDeliveryItem;cut:CheckpointReadCut};
 }
 
 /**
@@ -48,6 +53,8 @@ export interface DeliveryPage {
   records: DeliveryRecord[];
   /** The exclusive cursor for the next older transcript page. */
   next?: RuntimeClientTranscriptCursor;
+  cut?:CheckpointReadCut;
+  collections?:{head:RuntimeClientDeliveryHead;cut:CheckpointReadCut}[];
 }
 
 /**
@@ -56,7 +63,7 @@ export interface DeliveryPage {
  * Newest committed result first, and within one result its canonical order.
  * Non-success results contribute nothing, even if a field is present.
  */
-export function pageDeliveries(page: RuntimeClientTranscriptPage): DeliveryPage {
+export function pageDeliveries(page: RuntimeClientTranscriptPage,conversationId:string): DeliveryPage {
   const records: DeliveryRecord[] = [];
   for (const entry of [...(page.entries ?? [])].reverse()) {
     if (entry.item.type !== "message") continue;
@@ -64,7 +71,7 @@ export function pageDeliveries(page: RuntimeClientTranscriptPage): DeliveryPage 
     if (message.role !== "tool" || message.result.status.type !== "success") continue;
     const files = message.result.deliveries ?? [];
     files.forEach((file, index) => {
-      records.push({ messageId: message.id, index, count: files.length, file });
+      records.push({ conversationId,locator:{type:"by_message_id",message_id:message.id}, index, count: files.length, file });
     });
   }
   const next = page.next_cursor ?? undefined;
@@ -73,8 +80,9 @@ export function pageDeliveries(page: RuntimeClientTranscriptPage): DeliveryPage 
 
 /** A short delivery identity for display: `<message>#<index+1>/<count>`. */
 export function deliveryIdentity(record: DeliveryRecord): string {
-  const id = record.messageId.length > 12 ? `…${record.messageId.slice(-12)}` : record.messageId;
-  return `${id}#${record.index + 1}/${record.count}`;
+  const original=record.locator.type==="by_message_id"?record.locator.message_id:`L${record.locator.position}`;
+  const id=original.length>12?`…${original.slice(-12)}`:original;
+  return `${id}#${BigInt(record.index) + 1n}/${record.count}`;
 }
 
 /** The display file type: the extension, or the inert MIME classification. */

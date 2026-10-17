@@ -78,9 +78,9 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
 use futures_util::future::BoxFuture;
 
+#[cfg(test)]
 use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
 #[cfg(test)]
@@ -92,8 +92,8 @@ use crate::runtime::interaction::{
     InteractionAdmissionError, InteractionPublicationPermit, InteractionRef, InteractionRoute,
     InteractionRouteError, InteractionRouteEvent,
 };
-use crate::runtime::observation::{ConversationObservation, PendingObservations};
-use crate::runtime::subagent::activity::SubagentObservationProjector;
+#[cfg(test)]
+use crate::runtime::observation::PendingObservations;
 use crate::runtime::subagent::ipc::{
     ActivityFrame, ChildFrame, ChildGuidanceOutcome, ChildGuidanceRefusal, ChildResultStatus,
     DiagnosticFrame, GuidanceResultFrame, ParentFrame, ReadyFrame, ResultFrame,
@@ -123,6 +123,9 @@ impl ChildInteractionRoute {
     fn frame(event: InteractionRouteEvent) -> ChildFrame {
         match event {
             InteractionRouteEvent::Requested(request) => ChildFrame::InteractionRequested(request),
+            InteractionRouteEvent::Removed { interaction } => {
+                ChildFrame::InteractionRemoved { interaction }
+            }
             InteractionRouteEvent::Settled {
                 interaction,
                 outcome,
@@ -369,8 +372,11 @@ async fn run_child_inner(
     // activation cut, so live non-durable state belongs to the child's own
     // projection instead of being reconstructed from SQLite or tunneled as a
     // transcript through the parent observation lane.
-    let (interactive, observations) = core
-        .into_subagent_child_with_route(Arc::new(ChildInteractionRoute::new(handle.clone())))
+    let interactive = core
+        .into_subagent_child_with_route(
+            spec.subagent_id.clone(),
+            Arc::new(ChildInteractionRoute::new(handle.clone())),
+        )
         .map_err(|error| ChildExit::Startup(error.to_string()))?;
     let runtime = interactive.runtime().clone();
     let host = interactive.host().clone();
@@ -403,6 +409,7 @@ async fn run_child_inner(
     let live_server = match LiveConversationInspectionServer::bind(
         child_conversation_inspection_socket_path(parent_runtime_root, &spec.child_conversation_id),
         host,
+        spec.subagent_id.clone(),
     ) {
         Ok(server) => Some(server),
         Err(error) => {
@@ -430,7 +437,6 @@ async fn run_child_inner(
             handle,
             spec.parent_agent_id,
             runtime.clone(),
-            observations,
             workflow_output,
         )
         .await
@@ -440,8 +446,17 @@ async fn run_child_inner(
     // extend the child's semantic lifetime. Once the child reports its
     // bounded result (or loses its parent), close the endpoint and remove
     // exactly its disposable socket path.
-    if let Some(live_server) = live_server {
-        live_server.shutdown().await;
+    if let Some(mut live_server) = live_server
+        && let Err(error) = live_server.shutdown().await
+    {
+        // The already published semantic result is independent. This is
+        // not proof of physical release; the parent still requires reap.
+        eprintln!("subagent child: inspection cleanup: {error}");
+    }
+    // The semantic result was already decided and, when accepted, published.
+    // Join downstream observation ownership without reclassifying that result.
+    if let Err(error) = interactive.shutdown().await {
+        eprintln!("subagent child: composition cleanup: {error}");
     }
     drop(interactive);
     drop(live_lease);
@@ -464,7 +479,6 @@ pub(crate) async fn serve_child_delegation(
     handle: &ChildControlHandle,
     parent_agent_id: crate::runtime::identity::AgentId,
     runtime: crate::runtime::conversation_runtime::ConversationRuntime,
-    observations: Arc<PendingObservations>,
     workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
 ) -> Result<(), ChildExit> {
     // The start gate: no semantic work before the delegation arrives.
@@ -563,7 +577,11 @@ pub(crate) async fn serve_child_delegation(
         .send_reliable(ChildFrame::DelegateAccepted)
         .await
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+    #[cfg(test)]
+    native_terminal_fixture_stage("before releasing child turn permit");
     runtime.release_child_turn();
+    #[cfg(test)]
+    native_terminal_fixture_stage("child turn permit released; entering terminal control");
 
     // Observe the attempt to its canonical terminal event while serving
     // Cancel frames through the ordinary cancellation path.
@@ -614,10 +632,10 @@ pub(crate) async fn serve_child_delegation(
         let mut terminal = await_terminal(
             dispatcher,
             &runtime,
-            &observations,
             handle,
             &parent_agent_id,
             &mut cancelled,
+            observed_terminals,
         )
         .await?;
         // Workflow completion is authoritative at its committed attempt terminal.
@@ -1046,26 +1064,46 @@ enum AttemptTerminal {
     Orphaned,
 }
 
-/// Drives the attempt to its terminal event, serving cancellation through
-/// the ordinary runtime path and folding every drained observation into the
-/// live activity projection (Issue #178). Applied transitions are published
-/// through the dispatcher's disposable activity lane: synchronous and
-/// non-blocking, so the agent loop never waits on observation delivery.
+impl AttemptTerminal {
+    fn from_native(receipt: crate::runtime::conversation_runtime::NativeAttemptSettlement) -> Self {
+        use crate::runtime::conversation_runtime::NativeAttemptOutcome;
+        match receipt.outcome {
+            NativeAttemptOutcome::Completed => Self::Completed(receipt.attempt_id),
+            NativeAttemptOutcome::Cancelled => Self::Cancelled,
+            NativeAttemptOutcome::TimedOut => {
+                Self::Failed("the child attempt exceeded its time budget".into())
+            }
+            NativeAttemptOutcome::LimitExceeded => {
+                Self::Failed("the child attempt exceeded an execution limit".into())
+            }
+            NativeAttemptOutcome::ModelFailed => Self::Failed(
+                "the child model request failed; native diagnostics are deferred".into(),
+            ),
+            NativeAttemptOutcome::RuntimeFailed => Self::Failed(
+                "the child runtime attempt failed; native diagnostics are deferred".into(),
+            ),
+        }
+    }
+}
+
+/// Drives the existing native execution handoff while serving ordinary control.
+/// Activity reads one producer-owned watch slot; source SQL, client checkpoints,
+/// transport failures and display cancellation cannot choose the terminal.
 async fn await_terminal(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
-    observations: &Arc<PendingObservations>,
     handle: &ChildControlHandle,
     parent_agent_id: &crate::runtime::identity::AgentId,
     cancelled: &mut bool,
+    observed_terminals: u64,
 ) -> Result<AttemptTerminal, ChildExit> {
     await_terminal_inner(
         dispatcher,
         runtime,
-        observations,
         handle,
         parent_agent_id,
         cancelled,
+        observed_terminals,
         |_| {},
     )
     .await
@@ -1075,7 +1113,6 @@ async fn await_terminal(
 async fn await_terminal_with_probe(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
-    observations: &Arc<PendingObservations>,
     handle: &ChildControlHandle,
     cancellation_before_admission: Arc<tokio::sync::Notify>,
     cancellation_after_admission: Arc<tokio::sync::Notify>,
@@ -1083,10 +1120,10 @@ async fn await_terminal_with_probe(
     await_terminal_inner(
         dispatcher,
         runtime,
-        observations,
         handle,
         &crate::runtime::identity::AgentId::new("agent-parent"),
         &mut false,
+        0,
         move |delivered| {
             if delivered {
                 cancellation_after_admission.notify_one();
@@ -1102,10 +1139,10 @@ async fn await_terminal_with_probe(
 async fn await_terminal_inner<F>(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
-    observations: &Arc<PendingObservations>,
     handle: &ChildControlHandle,
     parent_agent_id: &crate::runtime::identity::AgentId,
     cancelled: &mut bool,
+    observed_terminals: u64,
     on_cancellation: F,
 ) -> Result<AttemptTerminal, ChildExit>
 where
@@ -1114,7 +1151,13 @@ where
     // The child-owned live projector. Only applied transitions are
     // published, and the publication is a `watch` overwrite in place
     // (latest-value coalescing) that never waits on the consumer.
-    let mut projector = SubagentObservationProjector::default();
+    // Control consumes only the existing native latest-activity slot. Source
+    // SQL and Client projection recovery never execute on this select path.
+    #[cfg(test)]
+    native_terminal_fixture_stage("await_terminal_inner entered; subscribe native activity");
+    let mut activity = runtime.child_activity();
+    #[cfg(test)]
+    native_terminal_fixture_stage("native activity subscribed; poll control and terminal receipt");
     loop {
         tokio::select! {
             biased;
@@ -1128,6 +1171,8 @@ where
             event = dispatcher.next_event() => {
                 match event {
                     Some(ChildControlEvent::Cancel { reason }) => {
+                        #[cfg(test)]
+                        native_terminal_fixture_stage("Cancel frame consumed by terminal control");
                         // The cancellation commits directly into the
                         // runtime-owned one-shot intent under the
                         // coordinator lock: a current attempt is cancelled
@@ -1146,7 +1191,11 @@ where
                             ));
                         };
                         *cancelled = true;
+                        #[cfg(test)]
+                        native_terminal_fixture_stage("before native cancellation owner call");
                         let delivered = runtime.cancel_current_or_next_attempt(reason).is_some();
+                        #[cfg(test)]
+                        native_terminal_fixture_stage("native cancellation owner returned; notify fixture");
                         #[cfg(test)]
                         let _ = CANCELLATION_OBSERVED.try_with(|signal| signal.notify_one());
                         on_cancellation(delivered);
@@ -1199,55 +1248,33 @@ where
                     None => return Ok(AttemptTerminal::Orphaned),
                 }
             }
-            () = observations.wait() => {
-                for observation in observations.drain() {
-                    // The activity tap runs first so even the terminal
-                    // event's own transition is projected before this loop
-                    // returns. The publication is synchronous and
-                    // non-blocking (a `watch` overwrite): it can never
-                    // disturb the attempt.
-                    if projector.fold(&observation, Utc::now()) {
-                        handle.publish_activity(ActivityFrame {
-                            observation: projector.observation().clone(),
-                        });
-                    }
-                    match observation {
-                        ConversationObservation::Event { event, .. } => {
-                            match event {
-                                RuntimeEvent::AttemptCompleted { attempt_id, .. } => {
-                                    return Ok(AttemptTerminal::Completed(attempt_id));
-                                }
-                                RuntimeEvent::AttemptCancelled { .. } => {
-                                    return Ok(AttemptTerminal::Cancelled);
-                                }
-                                RuntimeEvent::AttemptFailed { error, .. } => {
-                                    return Ok(AttemptTerminal::Failed(format!(
-                                        "the child attempt failed: {error:?}"
-                                    )));
-                                }
-                                RuntimeEvent::AttemptTimedOut { .. } => {
-                                    return Ok(AttemptTerminal::Failed(
-                                        "the child attempt exceeded its time budget"
-                                            .to_owned(),
-                                    ));
-                                }
-                                RuntimeEvent::AttemptLimitExceeded { limit, .. } => {
-                                    return Ok(AttemptTerminal::Failed(format!(
-                                        "the child attempt exceeded its {limit:?} limit"
-                                    )));
-                                }
-                                _ => {}
-                            }
-                        }
-                        ConversationObservation::Shutdown => {
-                            return Ok(AttemptTerminal::Cancelled);
-                        }
-                        _ => {}
-                    }
+            receipt = native_terminal_receipt(runtime, observed_terminals) => {
+                return Ok(AttemptTerminal::from_native(receipt));
+            }
+            result = activity.changed() => {
+                if result.is_ok() {
+                    handle.publish_activity(ActivityFrame { observation: activity.borrow_and_update().clone() });
                 }
             }
         }
     }
+}
+
+async fn native_terminal_receipt(
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    observed: u64,
+) -> crate::runtime::conversation_runtime::NativeAttemptSettlement {
+    let receipt = runtime.child_attempt_settlement(observed).await;
+    #[cfg(test)]
+    if let Ok(gate) = NATIVE_TERMINAL_GATE.try_with(Arc::clone) {
+        gate.entered.notify_one();
+        let mut release = gate.release.subscribe();
+        release
+            .wait_for(|released| *released)
+            .await
+            .expect("native terminal fixture gate remains owned");
+    }
+    receipt
 }
 
 /// The bounded final assistant answer of the settled attempt.
@@ -1334,7 +1361,32 @@ fn take_observation_channel() -> std::io::Result<tokio::net::UnixStream> {
 #[cfg(test)]
 tokio::task_local! {
     static CANCELLATION_OBSERVED: Arc<tokio::sync::Notify>;
+    static NATIVE_TERMINAL_GATE: Arc<NativeTerminalGate>;
     pub(crate) static GUIDANCE_ACK_LOSS: bool;
+}
+
+#[cfg(test)]
+fn native_terminal_fixture_stage(stage: &str) {
+    let _ = NATIVE_TERMINAL_GATE.try_with(|_| eprintln!("native-terminal-control: {stage}"));
+}
+
+#[cfg(test)]
+struct NativeTerminalGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::watch::Sender<bool>,
+}
+#[cfg(test)]
+impl NativeTerminalGate {
+    fn new() -> Arc<Self> {
+        let (release, _) = tokio::sync::watch::channel(false);
+        Arc::new(Self {
+            entered: tokio::sync::Notify::new(),
+            release,
+        })
+    }
+    fn release(&self) {
+        self.release.send_replace(true);
+    }
 }
 
 #[cfg(test)]
@@ -1588,7 +1640,6 @@ pub(crate) mod tests {
         .await
         .expect("parent sends Cancel");
         let child_runtime = runtime.clone();
-        let child_observations = Arc::clone(&observations);
         let cancellation_before_admission = Arc::new(tokio::sync::Notify::new());
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let before_probe = Arc::clone(&cancellation_before_admission);
@@ -1599,7 +1650,6 @@ pub(crate) mod tests {
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
-                &child_observations,
                 &handle,
                 before_probe,
                 after_probe,
@@ -1715,7 +1765,6 @@ pub(crate) mod tests {
         .await
         .expect("parent sends Cancel");
         let child_runtime = runtime.clone();
-        let child_observations = Arc::clone(&observations);
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
@@ -1724,7 +1773,6 @@ pub(crate) mod tests {
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
-                &child_observations,
                 &handle,
                 Arc::new(tokio::sync::Notify::new()),
                 after_probe,
@@ -1831,7 +1879,6 @@ pub(crate) mod tests {
         .await
         .expect("parent sends Cancel");
         let child_runtime = runtime.clone();
-        let child_observations = Arc::clone(&observations);
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
@@ -1840,7 +1887,6 @@ pub(crate) mod tests {
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
-                &child_observations,
                 &handle,
                 Arc::new(tokio::sync::Notify::new()),
                 after_probe,
@@ -2256,6 +2302,7 @@ pub(crate) mod tests {
     struct SealFixture {
         parent: tokio::net::UnixStream,
         serve: tokio::task::JoinHandle<Result<(), ChildExit>>,
+        observations: Arc<PendingObservations>,
     }
 
     fn serve_child(runtime: &ConversationRuntime) -> SealFixture {
@@ -2340,14 +2387,42 @@ pub(crate) mod tests {
                 &handle,
                 AgentId::new("agent-parent"),
                 child_runtime,
-                observations,
                 workflow_output,
             )
             .await;
             dispatcher.shutdown().await;
             result
         });
-        SealFixture { parent, serve }
+        SealFixture {
+            parent,
+            serve,
+            observations,
+        }
+    }
+
+    /// Cancelling the entire display reader cannot prevent native Child settlement.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn t10_t18_t19_closed_observation_source_preserves_native_child_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = Arc::new(FakeModel::new(vec![answer("native execution completed")]));
+        let runtime =
+            child_test_runtime(&dir, None, None, ConversationId::generate(), model.clone()).await;
+        let mut fixture = serve_child(&runtime);
+        fixture.observations.close();
+        delegate(
+            &mut fixture.parent,
+            "finish through native execution ownership",
+        )
+        .await;
+        let result = read_result(&mut fixture.parent).await;
+        assert_eq!(result.status, ChildResultStatus::Succeeded);
+        assert_eq!(
+            result.content.as_deref(),
+            Some("native execution completed")
+        );
+        assert_eq!(model.requests().len(), 1);
+        fixture.serve.await.unwrap().unwrap();
+        runtime.shutdown().await.unwrap();
     }
 
     async fn delegate(parent: &mut tokio::net::UnixStream, task: &str) {
@@ -2430,63 +2505,23 @@ pub(crate) mod tests {
         assert!(model.requests().is_empty());
     }
 
-    /// Receiver-contract coverage for the typed terminal vocabulary: the
-    /// current Agent Loop emits Completed/Cancelled/Failed only. These typed
-    /// terminal facts are nevertheless part of the native observation contract
-    /// and must enter the same absorbing Failed branch exercised end to end by
-    /// `failed_activation_preserves_admitted_guidance_for_the_next_activation`.
-    #[tokio::test]
-    async fn time_and_turn_limit_terminal_observations_map_to_failed_activation() {
-        use crate::events::types::AttemptLimit;
-        use crate::runtime::identity::AttemptId;
-
-        let attempt_id = AttemptId::new("bounded-attempt");
-        let events = [
-            RuntimeEvent::AttemptTimedOut {
-                attempt_id: attempt_id.clone(),
-            },
-            RuntimeEvent::AttemptLimitExceeded {
-                attempt_id: attempt_id.clone(),
-                limit: AttemptLimit::MaxTurns,
-            },
-            RuntimeEvent::AttemptLimitExceeded {
-                attempt_id: attempt_id.clone(),
-                limit: AttemptLimit::MaxToolCalls,
-            },
-            RuntimeEvent::AttemptLimitExceeded {
-                attempt_id: attempt_id.clone(),
-                limit: AttemptLimit::MaxRuntimeSeconds,
-            },
-        ];
-        for event in events {
-            let dir = tempfile::tempdir().unwrap();
-            let model = Arc::new(FakeModel::new(Vec::new()));
-            let runtime =
-                child_test_runtime(&dir, None, None, ConversationId::generate(), model.clone())
-                    .await;
-            let (_parent, child) = tokio::net::UnixStream::pair().unwrap();
-            let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
-            let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
-            let handle = dispatcher.handle();
-            let observations = Arc::new(PendingObservations::new());
-            observations.push(ConversationObservation::Event {
-                attempt_id: attempt_id.clone(),
-                event,
-            });
-            let terminal = await_terminal(
-                &mut dispatcher,
-                &runtime,
-                &observations,
-                &handle,
-                &AgentId::new("agent-parent"),
-                &mut false,
-            )
-            .await
-            .unwrap();
-            assert!(matches!(terminal, AttemptTerminal::Failed(_)));
-            assert_eq!(runtime.seal_probe_calls(), 0);
-            assert!(model.requests().is_empty());
-            dispatcher.shutdown().await;
+    /// Native handoff classifications cannot be mistaken for successful completion.
+    #[test]
+    fn time_and_turn_limit_native_handoffs_map_to_failed_activation() {
+        use crate::runtime::conversation_runtime::{NativeAttemptOutcome, NativeAttemptSettlement};
+        for outcome in [
+            NativeAttemptOutcome::TimedOut,
+            NativeAttemptOutcome::LimitExceeded,
+        ] {
+            let receipt = NativeAttemptSettlement {
+                ordinal: 1,
+                attempt_id: crate::runtime::identity::AttemptId::new("bounded-attempt"),
+                outcome,
+            };
+            assert!(matches!(
+                AttemptTerminal::from_native(receipt),
+                AttemptTerminal::Failed(_)
+            ));
         }
     }
 
@@ -2571,7 +2606,6 @@ pub(crate) mod tests {
                     &handle,
                     AgentId::new("agent-parent"),
                     serving_runtime,
-                    observations,
                     None,
                 )
                 .await;
@@ -2615,7 +2649,14 @@ pub(crate) mod tests {
             let failed = read_result(&mut parent).await;
             assert_eq!(failed.status, ChildResultStatus::Failed);
             assert!(failed.content.is_none());
-            assert!(failed.diagnostic.unwrap().contains("child attempt failed"));
+            assert_eq!(
+                failed.diagnostic.as_deref(),
+                Some("the child model request failed; native diagnostics are deferred")
+            );
+            assert!(matches!(
+                runtime.child_attempt_settlement(0).await.outcome,
+                crate::runtime::conversation_runtime::NativeAttemptOutcome::ModelFailed
+            ));
             assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
             serve.await.unwrap().unwrap();
             assert_eq!(
@@ -2677,7 +2718,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // One end-to-end cancellation/observation interleaving.
-    async fn cancel_before_completed_observation_never_reopens_activation() {
+    async fn cancel_before_native_terminal_consumption_never_reopens_activation() {
         use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
         let dir = tempfile::tempdir().unwrap();
@@ -2699,49 +2740,46 @@ pub(crate) mod tests {
         )
         .await;
         let committed = Arc::new(PendingObservations::new());
-        let delivered = Arc::new(PendingObservations::new());
+        let gate = NativeTerminalGate::new();
         runtime
             .install_observation_bridge(committed.clone())
             .unwrap();
+        let mut original =
+            crate::scripted_suites::support::native_journal::OriginalJournal::install(
+                &runtime,
+                &runtime.tool_runtime().durable_store(),
+                &committed,
+            );
         runtime.gate_child_turns();
         runtime.activate();
         let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
         let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
         let cancelled = Arc::new(tokio::sync::Notify::new());
-        let serve = tokio::spawn(CANCELLATION_OBSERVED.scope(cancelled.clone(), {
-            let runtime = runtime.clone();
-            let delivered = delivered.clone();
-            async move {
-                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
-                let handle = dispatcher.handle();
-                let result = serve_child_delegation(
-                    &mut dispatcher,
-                    &handle,
-                    AgentId::new("agent-parent"),
-                    runtime,
-                    delivered,
-                    None,
-                )
-                .await;
-                dispatcher.shutdown().await;
-                result
-            }
-        }));
+        let serve = tokio::spawn(NATIVE_TERMINAL_GATE.scope(
+            gate.clone(),
+            CANCELLATION_OBSERVED.scope(cancelled.clone(), {
+                let runtime = runtime.clone();
+                async move {
+                    let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                    let handle = dispatcher.handle();
+                    let result = serve_child_delegation(
+                        &mut dispatcher,
+                        &handle,
+                        AgentId::new("agent-parent"),
+                        runtime,
+                        None,
+                    )
+                    .await;
+                    dispatcher.shutdown().await;
+                    result
+                }
+            }),
+        ));
         delegate(&mut parent, "first task").await;
-        let terminal = loop {
-            committed.wait().await;
-            if let Some(terminal) = committed.drain().into_iter().find(|observation| {
-                matches!(
-                    observation,
-                    ConversationObservation::Event {
-                        event: RuntimeEvent::AttemptCompleted { .. },
-                        ..
-                    }
-                )
-            }) {
-                break terminal;
-            }
-        };
+        original
+            .wait_for(|event| matches!(event.event, RuntimeEvent::AttemptCompleted { .. }))
+            .await;
+        gate.entered.notified().await;
         write_parent_frame(
             &mut parent,
             &ParentFrame::Guidance(GuidanceFrame {
@@ -2770,7 +2808,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         cancelled.notified().await;
-        delivered.push(terminal);
+        gate.release();
         let Some(ChildFrame::Result(result)) = read_child_frame(&mut parent).await.unwrap() else {
             panic!("cancelled activation must report its result without reopening negotiation");
         };
@@ -2863,7 +2901,6 @@ pub(crate) mod tests {
                 &handle,
                 AgentId::new("agent-parent"),
                 serving_runtime,
-                observations,
                 None,
             )
             .await;
@@ -3585,6 +3622,15 @@ pub(crate) mod tests {
         ]
     }
 
+    // The task-local holds its own Arc: an assertion must release that task
+    // even when the test's normal terminal-consumption path is not reached.
+    struct ReleaseNativeTerminal(Arc<NativeTerminalGate>);
+    impl Drop for ReleaseNativeTerminal {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
     /// Runs both semantic orderings through the real reserved output tool,
     /// durable attempt journal and child dispatcher. The registry test forwards
     /// this actual result through its native driver and publication path.
@@ -3592,6 +3638,8 @@ pub(crate) mod tests {
     pub(crate) async fn workflow_cancellation_ordering(late: bool) -> ResultFrame {
         use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{read_child_frame, write_parent_frame};
+        let stage = |name: &str| eprintln!("workflow-cancellation late={late}: {name}");
+        stage("construct native child runtime");
         let dir = tempfile::tempdir().unwrap();
         let id = ConversationId::generate();
         let store =
@@ -3623,56 +3671,59 @@ pub(crate) mod tests {
         )
         .await;
         let committed = Arc::new(PendingObservations::new());
-        let delivered = Arc::new(PendingObservations::new());
+        let gate = NativeTerminalGate::new();
+        let _release_on_unwind = ReleaseNativeTerminal(gate.clone());
         runtime
             .install_observation_bridge(committed.clone())
             .unwrap();
+        let mut original =
+            crate::scripted_suites::support::native_journal::OriginalJournal::install(
+                &runtime,
+                &runtime.tool_runtime().durable_store(),
+                &committed,
+            );
         runtime.gate_child_turns();
         runtime.activate();
         runtime.arm_seal_probe_failures(1);
         let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
         let (_observation_parent, observation_child) = tokio::net::UnixStream::pair().unwrap();
         let cancelled = Arc::new(tokio::sync::Notify::new());
-        let serve = tokio::spawn(CANCELLATION_OBSERVED.scope(cancelled.clone(), {
-            let runtime = runtime.clone();
-            let delivered = delivered.clone();
-            let latch = latch.clone();
-            async move {
-                let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
-                let handle = dispatcher.handle();
-                let result = serve_child_delegation(
-                    &mut dispatcher,
-                    &handle,
-                    AgentId::new("agent-parent"),
-                    runtime,
-                    delivered,
-                    Some(latch),
-                )
-                .await;
-                dispatcher.shutdown().await;
-                result
-            }
-        }));
-        delegate(&mut parent, "produce workflow output").await;
-        let held = if late {
-            loop {
-                committed.wait().await;
-                if let Some(terminal) = committed.drain().into_iter().find(|observation| {
-                    matches!(
-                        observation,
-                        ConversationObservation::Event {
-                            event: RuntimeEvent::AttemptCompleted { .. },
-                            ..
-                        }
+        let serve = tokio::spawn(NATIVE_TERMINAL_GATE.scope(
+            gate.clone(),
+            CANCELLATION_OBSERVED.scope(cancelled.clone(), {
+                let runtime = runtime.clone();
+                let latch = latch.clone();
+                async move {
+                    let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
+                    let handle = dispatcher.handle();
+                    let result = serve_child_delegation(
+                        &mut dispatcher,
+                        &handle,
+                        AgentId::new("agent-parent"),
+                        runtime,
+                        Some(latch),
                     )
-                }) {
-                    break Some(terminal);
+                    .await;
+                    dispatcher.shutdown().await;
+                    result
                 }
-            }
+            }),
+        ));
+        stage("await DelegateAccepted");
+        delegate(&mut parent, "produce workflow output").await;
+        stage("DelegateAccepted");
+        if late {
+            stage("await original AttemptCompleted");
+            original
+                .wait_for(|event| matches!(event.event, RuntimeEvent::AttemptCompleted { .. }))
+                .await;
+            stage("await native terminal receipt gate");
+            gate.entered.notified().await;
         } else {
+            stage("await native pre-start ordinal 1");
             before_start.as_mut().unwrap().await_park(1).await;
-            None
-        };
+        }
+        stage("native terminal or pre-start boundary reached");
         assert_eq!(latch.committed_value(), late.then(|| value.clone()));
         assert_eq!(
             store
@@ -3692,32 +3743,22 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+        stage("await cancellation owner callback");
         cancelled.notified().await;
-        if let Some(terminal) = held {
-            delivered.push(terminal);
-        } else {
+        stage("cancellation owner callback observed");
+        if !late {
             before_start.take().unwrap().release();
-            loop {
-                committed.wait().await;
-                let observations = committed.drain();
-                let terminal = observations.iter().any(|observation| {
-                    matches!(
-                        observation,
-                        ConversationObservation::Event {
-                            event: RuntimeEvent::AttemptCancelled { .. },
-                            ..
-                        }
-                    )
-                });
-                for observation in observations {
-                    delivered.push(observation);
-                }
-                if terminal {
-                    break;
-                }
-            }
+            stage("await original AttemptCancelled");
+            original
+                .wait_for(|event| matches!(event.event, RuntimeEvent::AttemptCancelled { .. }))
+                .await;
+            stage("original AttemptCancelled observed; await native terminal receipt gate");
+            gate.entered.notified().await;
         }
+        stage("native terminal receipt gate reached; release");
+        gate.release();
         // Any seal/reopen frame fails this exact protocol assertion.
+        stage("await Result");
         let Some(ChildFrame::Result(result)) = read_child_frame(&mut parent).await.unwrap() else {
             panic!("Workflow must finish at its first terminal without seal negotiation");
         };
@@ -3733,8 +3774,11 @@ pub(crate) mod tests {
             result.content,
             late.then(|| serde_json::to_string(&value).unwrap())
         );
+        stage("Result observed; await control EOF");
         assert_eq!(read_child_frame(&mut parent).await.unwrap(), None);
+        stage("control EOF observed; join serve");
         serve.await.unwrap().unwrap();
+        stage("serve joined");
         assert_eq!(latch.committed_value(), late.then_some(value));
         assert_eq!(model.requests().len(), usize::from(late));
         assert_eq!(runtime.seal_probe_calls(), 0);

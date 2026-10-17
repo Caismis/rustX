@@ -90,6 +90,128 @@ impl FramingAdapter {
     }
 }
 
+fn framed_checkpoint(
+    value: serde_json::Value,
+) -> Box<rustx::runtime_client::checkpoint::RuntimeClientCheckpoint> {
+    let response: RuntimeClientResponse =
+        serde_json::from_value(value).expect("typed framed response");
+    let Some(rustx::runtime_client::RuntimeClientResult::Checkpoint { checkpoint }) =
+        response.result
+    else {
+        panic!("independent bounded checkpoint");
+    };
+    assert_eq!(checkpoint.read_cut.revision, checkpoint.cursor.get());
+    assert_eq!(
+        &checkpoint.read_cut.conversation_id,
+        checkpoint.snapshot.conversation_id()
+    );
+    checkpoint
+}
+
+fn assert_event_cut(event: &rustx::runtime_client::RuntimeClientProtocolEvent) {
+    match &event.event {
+        rustx::runtime_client::RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
+            assert_eq!(metadata.read_cut.revision, event.cursor.get());
+        }
+        rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+            assert_eq!(checkpoint.cursor, event.cursor);
+            assert_eq!(checkpoint.read_cut.revision, event.cursor.get());
+        }
+        _ => panic!("whole native publication required"),
+    }
+}
+
+fn assert_read_suffix(
+    event: &rustx::runtime_client::RuntimeClientProtocolEvent,
+    terminal: &rustx::runtime::identity::AttemptId,
+) {
+    match &event.event {
+        rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+            let attempt = checkpoint.snapshot.attempt.as_ref().expect("retained native Attempt");
+            assert_eq!(attempt.attempt_id.as_ref(), Some(terminal));
+            assert!(matches!(attempt.phase, rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }));
+        }
+        _ => assert!(event.event.facts().iter().all(|fact| matches!(fact,
+            rustx::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. } |
+            rustx::runtime_client::RuntimeClientEvent::TraceChanged |
+            rustx::runtime_client::RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
+        )), "only read-domain/adoption suffix follows the native terminal"),
+    }
+}
+
+async fn receive_terminal(
+    adapter: &FramingAdapter,
+    mut expected: u64,
+) -> (u64, rustx::runtime::identity::AttemptId) {
+    // Whole native records retain their original cursor and publication cut.
+    let mut terminal = None;
+    while terminal.is_none() {
+        let frame = tokio::time::timeout(std::time::Duration::from_mins(2), adapter.notification())
+            .await
+            .expect("the notification stream must not stall")
+            .expect("subscription stays open");
+        assert!(
+            frame.get("id").is_none(),
+            "notifications never fabricate request ids"
+        );
+        let event: rustx::runtime_client::RuntimeClientProtocolEvent =
+            serde_json::from_value(frame).expect("complete native event frame");
+        expected += 1;
+        assert_eq!(event.cursor.get(), expected);
+        assert_event_cut(&event);
+        for fact in event.event.facts() {
+            if let rustx::runtime_client::RuntimeClientEvent::AttemptSettled {
+                attempt_id, ..
+            } = fact
+            {
+                assert!(
+                    terminal.replace(attempt_id.clone()).is_none(),
+                    "exactly one terminal settlement"
+                );
+            }
+        }
+        if let rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } =
+            &event.event
+            && let Some(attempt) = &checkpoint.snapshot.attempt
+            && matches!(
+                attempt.phase,
+                rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
+            )
+        {
+            terminal = Some(
+                attempt
+                    .attempt_id
+                    .clone()
+                    .expect("normal native execution identity"),
+            );
+        }
+    }
+    (expected, terminal.expect("actual recorded terminal"))
+}
+
+async fn drain_read_suffix(
+    adapter: &FramingAdapter,
+    mut expected: u64,
+    through: u64,
+    terminal: &rustx::runtime::identity::AttemptId,
+) -> u64 {
+    while expected < through {
+        let event: rustx::runtime_client::RuntimeClientProtocolEvent = serde_json::from_value(
+            adapter
+                .notification()
+                .await
+                .expect("derived native publication suffix"),
+        )
+        .expect("whole native frame");
+        expected += 1;
+        assert_eq!(event.cursor.get(), expected);
+        assert_event_cut(&event);
+        assert_read_suffix(&event, terminal);
+    }
+    assert_eq!(expected, through);
+    expected
+}
+
 /// A host over one conversation with the given model script.
 ///
 /// Construction is the shared Runtime Client fixture, so this file and the
@@ -124,7 +246,7 @@ fn one_turn_stop() -> Vec<FakeStep> {
 
 /// An `initialize` frame is by itself sufficient to establish the active
 /// attachment: the semantic endpoint performs negotiation, admission, and
-/// identity allocation, and returns the linearized initial snapshot.
+/// identity allocation, and returns the bounded read-only identity receipt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn initialize_alone_establishes_the_attachment() {
     let host = host("conv_bec42b36-775e-75ba-95e2-701564095b4a", Vec::new()).await;
@@ -132,7 +254,7 @@ async fn initialize_alone_establishes_the_attachment() {
 
     // Before initialize the endpoint is unattached, and it says so with the
     // correlated typed error rather than by any transport-side check.
-    let response = adapter.exchange(r#"{"method":"snapshot_get","id":1}"#);
+    let response = adapter.exchange(r#"{"method":"checkpoint_get","id":1}"#);
     assert_eq!(response["id"], 1);
     assert_eq!(response["error"]["type"], "not_attached");
     assert!(response.get("result").is_none());
@@ -153,17 +275,26 @@ async fn initialize_alone_establishes_the_attachment() {
         "conv_bec42b36-775e-75ba-95e2-701564095b4a"
     );
     assert_eq!(response["result"]["agent_id"], "agent-a");
-    assert!(
-        response["result"]["snapshot"].is_object(),
-        "initialize returns the snapshot linearized with its cursor"
+    assert!(response["result"].get("snapshot").is_none());
+    assert!(response["result"].get("cursor").is_none());
+    assert_eq!(response["result"]["read_only"], false);
+    assert_eq!(
+        response["result"]["protocol_version"],
+        RUNTIME_CLIENT_PROTOCOL_VERSION
     );
-    assert!(response["result"]["cursor"].is_u64());
+    assert!(response["result"]["capabilities"].is_array());
 
     // The attachment is live: an ordinary request now succeeds, and no
     // out-of-band attach ever happened.
-    let response = adapter.exchange(r#"{"method":"snapshot_get","id":3}"#);
+    let response = adapter.exchange(r#"{"method":"checkpoint_get","id":3}"#);
     assert!(response.get("error").is_none());
-    assert_eq!(response["result"]["type"], "snapshot");
+    assert_eq!(response["result"]["type"], "checkpoint");
+    let independent = framed_checkpoint(response);
+    assert_eq!(
+        independent.snapshot.conversation_id().as_str(),
+        "conv_bec42b36-775e-75ba-95e2-701564095b4a"
+    );
+    assert_eq!(independent.read_cut.revision, independent.cursor.get());
     assert_eq!(
         host.endpoint().attachment_id(),
         None,
@@ -221,7 +352,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
         );
         assert_eq!(response["error"]["requested"], version);
         assert_eq!(adapter.endpoint.attachment_id(), None);
-        let application = adapter.exchange(r#"{"method":"snapshot_get","id":99}"#);
+        let application = adapter.exchange(r#"{"method":"checkpoint_get","id":99}"#);
         assert_eq!(application["error"]["type"], "not_attached");
         assert_eq!(adapter.endpoint.attachment_id(), None);
     }
@@ -465,7 +596,7 @@ async fn a_second_initialize_is_rejected_without_eviction() {
 
     // The first attachment was never evicted: it still serves requests
     // under its original identity.
-    let response = first.exchange(r#"{"method":"snapshot_get","id":3}"#);
+    let response = first.exchange(r#"{"method":"checkpoint_get","id":3}"#);
     assert!(response.get("error").is_none());
     assert_eq!(
         first
@@ -500,110 +631,92 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     .await;
     let adapter = FramingAdapter::new(&host);
 
-    let response = adapter.initialize(1);
-    let cursor = response["result"]["cursor"]
-        .as_u64()
-        .expect("initialize returns the cursor to resume after");
-
-    let response = adapter.exchange(&format!(
-        r#"{{"method":"subscribe_events","id":2,"after_cursor":{cursor}}}"#
-    ));
+    let initialized = adapter.initialize(1);
+    assert_eq!(initialized["result"]["type"], "initialized");
+    assert!(initialized["result"].get("snapshot").is_none());
+    let initial = framed_checkpoint(adapter.exchange(r#"{"method":"checkpoint_get","id":10}"#));
+    let cursor = initial.cursor;
+    let response = adapter.exchange(
+        &serde_json::json!({"method":"subscribe_events","id":2,"after_cursor":cursor}).to_string(),
+    );
     assert_eq!(response["result"]["type"], "subscribed");
+    assert_eq!(
+        response["result"]["after_cursor"],
+        serde_json::to_value(cursor).unwrap()
+    );
 
     let response = adapter.exchange(
         r#"{"method":"submit_inbound","id":3,"content":[{"type":"text","text":"hello"}]}"#,
     );
     assert_eq!(response["result"]["type"], "inbound_accepted");
     assert!(response["result"]["message_id"].is_string());
-    assert!(response["result"]["inbound_sequence"].is_u64());
-
-    // Notifications are frames too: cursor plus typed payload, no request
-    // id, strictly contiguous.
-    let mut expected = cursor;
-    let mut settled = false;
-    let mut decorated = false;
-    while !settled || !decorated {
-        // Liveness guard only: the notification wait itself is exact.
-        let frame = tokio::time::timeout(std::time::Duration::from_mins(2), adapter.notification())
-            .await
-            .expect("the notification stream must not stall")
-            .expect("the subscription stays open");
-        expected += 1;
-        assert_eq!(frame["cursor"].as_u64(), Some(expected));
-        assert!(
-            frame.get("id").is_none(),
-            "notifications never fabricate request ids"
-        );
-        settled |= frame["event"]["type"] == "attempt_settled";
-        // A settled attempt can still have its finite presentation read in
-        // flight. Observe that owner's terminal-response publication before
-        // asserting that detach/reconnect sees an unchanged cursor.
-        decorated |= frame["event"]["type"] == "read_domains_updated"
-            && frame["event"]["transcript"]["entries"]
-                .as_array()
-                .is_some_and(|entries| {
-                    entries
-                        .iter()
-                        .any(|entry| entry.get("completed_response").is_some())
-                });
-    }
-
-    let response = adapter.exchange(r#"{"method":"capability_get","id":4}"#);
-    assert_eq!(response["result"]["type"], "capability");
-
-    let response = adapter.exchange(r#"{"method":"snapshot_get","id":5}"#);
-    let snapshot_cursor = response["result"]["cursor"].as_u64().unwrap();
-    while expected < snapshot_cursor {
-        let frame = adapter
-            .notification()
-            .await
-            .expect("derived publication suffix");
-        expected += 1;
-        assert_eq!(frame["cursor"].as_u64(), Some(expected));
-        assert!(matches!(
-            frame["event"]["type"].as_str(),
-            Some("trace_changed" | "read_domains_updated")
-        ));
-    }
-    assert_eq!(snapshot_cursor, expected);
-
-    // Detach is never cancellation: the settled attempt and the canonical
-    // history survive it, and re-initializing observes exactly that state.
-    let response = adapter.exchange(r#"{"method":"detach","id":6}"#);
-    assert_eq!(response["result"]["type"], "detached");
-    let response = adapter.exchange(r#"{"method":"snapshot_get","id":7}"#);
-    assert_eq!(response["error"]["type"], "not_attached");
-
-    let response = adapter.initialize(8);
-    let reattached = response["result"]["cursor"].as_u64().unwrap();
-    adapter.exchange(&format!(
-        r#"{{"method":"subscribe_events","id":9,"after_cursor":{expected}}}"#
-    ));
-    while expected < reattached {
-        let frame = adapter
-            .notification()
-            .await
-            .expect("derived suffix across detach");
-        expected += 1;
-        assert_eq!(frame["cursor"].as_u64(), Some(expected));
-        assert!(matches!(
-            frame["event"]["type"].as_str(),
-            Some("read_domains_updated" | "trace_changed")
-        ));
-    }
-    assert_eq!(reattached, expected);
-    let messages = response["result"]["snapshot"]["messages"]
-        .as_array()
-        .expect("the snapshot carries canonical history");
     assert_eq!(
-        messages.len(),
+        response["result"]["inbound_sequence"],
+        serde_json::to_value(rustx::runtime::inbound::InboundSequence::new(1)).unwrap()
+    );
+    assert!(
+        response["result"]["inbound_sequence"].is_u64(),
+        "the internal Runtime Client sequence preserves its native numeric wire domain"
+    );
+
+    let (mut expected, terminal) = receive_terminal(&adapter, cursor.get()).await;
+    let response = adapter.exchange(r#"{"method":"capability_get","id":4}"#);
+    assert_eq!(response["result"]["type"], "domain_page");
+    assert_eq!(response["result"]["page"]["domain"], "capabilities");
+    let history = adapter.exchange(r#"{"method":"transcript_page_get","id":11,"limit":32}"#);
+    let history: RuntimeClientResponse =
+        serde_json::from_value(history).expect("bounded transcript response");
+    let Some(rustx::runtime_client::RuntimeClientResult::TranscriptPage { page }) = history.result
+    else {
+        panic!("explicit bounded canonical transcript");
+    };
+    assert!(page.source_cut.is_some());
+    assert!(
+        page.entries
+            .iter()
+            .any(|entry| entry.completed_response.is_some())
+            || page.deferred_entries.iter().any(|item| item
+                .value
+                .as_ref()
+                .and_then(|value| value.get("completed_response"))
+                .is_some_and(|value| !value.is_null())),
+        "the canonical reader carries positive native completed response evidence"
+    );
+
+    let checkpoint = framed_checkpoint(adapter.exchange(r#"{"method":"checkpoint_get","id":5}"#));
+    expected = drain_read_suffix(&adapter, expected, checkpoint.cursor.get(), &terminal).await;
+    assert_eq!(
+        adapter.exchange(r#"{"method":"detach","id":6}"#)["result"]["type"],
+        "detached"
+    );
+    assert_eq!(
+        adapter.exchange(r#"{"method":"checkpoint_get","id":7}"#)["error"]["type"],
+        "not_attached"
+    );
+    assert_eq!(adapter.initialize(8)["result"]["type"], "initialized");
+    let reattached = framed_checkpoint(adapter.exchange(r#"{"method":"checkpoint_get","id":12}"#));
+    let receipt = adapter.exchange(&serde_json::json!({"method":"subscribe_events","id":9,"after_cursor":rustx::runtime_client::RuntimeClientCursor::new(expected)}).to_string());
+    assert_eq!(receipt["result"]["type"], "subscribed");
+    expected = drain_read_suffix(&adapter, expected, reattached.cursor.get(), &terminal).await;
+    assert_eq!(
+        expected,
+        reattached.cursor.get(),
+        "complete drain reaches the actual reattached frontier"
+    );
+    assert_eq!(expected, reattached.read_cut.revision);
+    assert_eq!(
+        reattached.snapshot.messages.len(),
         3,
         "one inbound message, one admitted Agent Status fact, and one agent reply"
     );
     assert_eq!(
-        host.snapshot().expect("snapshot").0.messages.len(),
+        host.checkpoint()
+            .expect("native checkpoint")
+            .snapshot
+            .messages
+            .len(),
         3,
-        "the framed view matches the authoritative projection"
+        "the framed view matches the independent native projection"
     );
 }
 
@@ -633,7 +746,12 @@ async fn shutdown_is_not_detach_and_reaches_quiescence() {
     let adapter = FramingAdapter::new(&host);
     adapter.initialize(1);
 
-    let before: Vec<MessageBlock> = host.snapshot().expect("snapshot").0.messages;
+    let before: Vec<MessageBlock> = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot")
+        .0
+        .messages;
     let response = adapter
         .exchange_async(r#"{"method":"shutdown","id":2}"#)
         .await;
@@ -646,7 +764,14 @@ async fn shutdown_is_not_detach_and_reaches_quiescence() {
 
     // Still attached (shutdown is not detach), and canonical history is
     // untouched by this idle shutdown.
-    let response = adapter.exchange(r#"{"method":"snapshot_get","id":4}"#);
+    let response = adapter.exchange(r#"{"method":"checkpoint_get","id":4}"#);
     assert!(response.get("error").is_none());
-    assert_eq!(host.snapshot().expect("snapshot").0.messages, before);
+    assert_eq!(
+        host.checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .expect("snapshot")
+            .0
+            .messages,
+        before
+    );
 }

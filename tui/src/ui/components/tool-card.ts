@@ -1,3 +1,4 @@
+import { unsignedQuantity } from '../../protocol/quantities.ts';
 /**
  * The one visual entity of one logical tool call.
  *
@@ -135,8 +136,10 @@ export function renderToolCard(
     pushResult(lines, renderer, tool, args, context);
     return drawable(lines);
   }
-  if (tool.lifecycle?.type === "settled" && tool.lifecycle.result.workflow != null) {
-    const identity = tool.lifecycle.result.workflow;
+  const committedWorkflow = tool.committedResult?.workflow
+    ?? (tool.lifecycle?.type === "settled" ? tool.lifecycle.result.workflow : undefined);
+  if (committedWorkflow != null) {
+    const identity = committedWorkflow;
     lines.push(`${role.meta("◇")} ${sanitizeLine(tool.name)} · Workflow invocation`);
     if (part !== "call") {
       lines.push(`  admitted Workflow ${identity.workflow_id} · program ${identity.program_digest}`);
@@ -238,6 +241,8 @@ function drawableTool(tool: CorrelatedTool): CorrelatedTool {
     lifecycle: sanitizeData(tool.lifecycle) as ToolLifecycle,
     committed: tool.committed,
     resultCommitted: tool.resultCommitted,
+    committedResultDeferred:tool.committedResultDeferred,
+    committedResult:tool.committedResult == null ? undefined : sanitizeData(tool.committedResult) as CorrelatedTool["committedResult"],
     workflow: sanitizeData(tool.workflow) as CorrelatedTool["workflow"],
   };
 }
@@ -314,11 +319,11 @@ function pushResult(
   args: unknown,
   context: ToolRenderContext,
 ): void {
-  if (tool.lifecycle.type !== "settled") {
-    return;
-  }
-  const result = tool.lifecycle.result;
-  for (const line of resultBody(renderer, result, tool.resultCommitted, args, context)) {
+  const result=tool.committedResult ?? (tool.lifecycle.type==='settled'?tool.lifecycle.result:undefined);
+  if(tool.resultCommitted && tool.lifecycle.type!=='settled')lines.push(`  Result committed · execution ${tool.lifecycle.type}`);
+  if(tool.committedResultDeferred)lines.push('  Canonical result content deferred · /content loads original bytes');
+  if(result==null)return;
+  for (const line of resultBody(renderer, result, tool.committedResult != null, args, context)) {
     lines.push(`  ${line}`);
   }
   for (const line of terminalDetail(result)) {
@@ -586,16 +591,11 @@ export function describeProgress(
  * independently. Rounding once and deriving both components from that single
  * value makes the seconds component 0–59 by construction.
  */
-export function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) {
-    return `${durationMs}ms`;
-  }
-  const tenths = Math.round(durationMs / 100);
-  if (tenths < 600) {
-    return `${(tenths / 10).toFixed(1)}s`;
-  }
-  const totalSeconds = Math.round(durationMs / 1_000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+export function formatDuration(durationMs: string | number): string {
+  const duration = unsignedQuantity(durationMs);
+  if (duration < 1_000n) return `${duration}ms`;
+  const tenths = (duration + 50n) / 100n;
+  if (tenths < 600n) return `${tenths / 10n}.${tenths % 10n}s`;
+  const totalSeconds = (duration + 500n) / 1_000n;
+  return `${totalSeconds / 60n}m${String(totalSeconds % 60n).padStart(2, '0')}s`;
 }

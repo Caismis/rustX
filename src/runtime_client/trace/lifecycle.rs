@@ -27,7 +27,7 @@ use super::types::{TraceLifecycle, TraceRequestOutcome, TraceToolOutcomeUpdate};
 /// immutable presentation block can no longer push a record's mutable
 /// outcome off its own update, because it is not projected here at all.
 // Two bounded 512-byte location IDs may each expand sixfold under JSON escaping.
-const TRACE_LIFECYCLE_BYTES: usize = 8192;
+const TRACE_LIFECYCLE_BYTES: usize = 65_536;
 
 impl AnchorFacts {
     /// Projects the mutable lifecycle vocabulary of one refreshed record.
@@ -35,7 +35,9 @@ impl AnchorFacts {
     /// The identity bounds match the summary projection's: an oversized
     /// native identity is omitted whole rather than shortened, because a
     /// shortened identity is a different identity that refers to nothing.
-    pub(super) fn lifecycle(self) -> TraceLifecycle {
+    pub(super) fn lifecycle(
+        self,
+    ) -> Result<TraceLifecycle, crate::durable::ConversationStoreError> {
         let mut truncated = self.truncated;
         let mut location = self.location;
         if location
@@ -58,34 +60,15 @@ impl AnchorFacts {
         truncated |= self
             .originating_tool_call_id
             .is_some_and(|id| !identity_fits(id.as_str()));
-        let request = self.request.and_then(|request| {
-            // The summary row drops a request block whose own identities do
-            // not fit; its lifecycle says the same thing, so a client is
-            // never told about an outcome it cannot attribute.
-            if identity_fits(request.frozen.request_id.as_str())
-                && identity_fits(request.frozen.provisional_message_id.as_str())
-            {
-                Some(TraceRequestOutcome {
-                    failure_kind: request.failure_kind,
-                    usage: request.usage,
-                    generation: request.generation,
-                })
-            } else {
-                truncated = true;
-                None
-            }
+        let request = self.request.map(|request| TraceRequestOutcome {
+            failure_kind: request.failure_kind,
+            usage: request.usage,
+            generation: request.generation,
         });
-        let tool = self.tool.and_then(|tool| {
-            if identity_fits(tool.call_id.as_str()) && identity_fits(tool.tool_id.as_str()) {
-                Some(TraceToolOutcomeUpdate {
-                    started: tool.started,
-                    outcome: tool.outcome,
-                    detail: tool.detail,
-                })
-            } else {
-                truncated = true;
-                None
-            }
+        let tool = self.tool.map(|tool| TraceToolOutcomeUpdate {
+            started: tool.started,
+            outcome: tool.outcome,
+            detail: tool.detail,
         });
         let mut message_id = self.message_id;
         if message_id
@@ -100,6 +83,8 @@ impl AnchorFacts {
         attachments.retain(|reference| identity_fits(reference.artifact_id.as_str()));
         truncated |= references != attachments.len();
         let mut update = TraceLifecycle {
+            fields: self.fields,
+            collections: self.collections,
             id: self.id,
             location,
             state: self.state,
@@ -112,11 +97,21 @@ impl AnchorFacts {
         };
         // Oversized optional references become visibly partial; they never
         // justify omitting a loaded active record's lifecycle.
-        if encoded_len(&update) > TRACE_LIFECYCLE_BYTES {
-            update.attachments.clear();
-            update.message_id = None;
-            update.truncated = true;
+        if encoded_len(&update) <= TRACE_LIFECYCLE_BYTES {
+            return Ok(update);
         }
-        update
+        update.attachments.clear();
+        update.message_id = None;
+        update.truncated = true;
+        if encoded_len(&update) <= TRACE_LIFECYCLE_BYTES {
+            return Ok(update);
+        }
+        if let Some(tool) = &mut update.tool {
+            tool.detail = None;
+        }
+        if encoded_len(&update) > TRACE_LIFECYCLE_BYTES {
+            return Err(crate::durable::ConversationStoreError::ObservationCapacityExceeded);
+        }
+        Ok(update)
     }
 }

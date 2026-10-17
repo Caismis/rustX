@@ -204,7 +204,8 @@ pub(super) fn materialize(
                 // Message identities were remapped before materialization. Artifact IDs
                 // are content references, so copying them cannot change native ownership.
                 .with_turns(seed.turns().to_vec())?
-                .with_projections(projections)?,
+                .with_projections(projections)?
+                .with_raw_tool_arguments(seed.raw_tool_arguments().to_vec())?,
         )
     };
     copy().map_err(|e| SessionError::Io {

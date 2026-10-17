@@ -412,10 +412,15 @@ pub fn scripted_call(
 /// Unwraps the successful result of a response, or panics with the error.
 #[must_use]
 pub fn result(response: RuntimeClientResponse) -> RuntimeClientResult {
+    let id = response.id;
     match (response.result, response.error) {
         (Some(result), None) => result,
-        (None, Some(error)) => panic!("expected a successful result, got error {error:?}"),
-        other => panic!("a response carries exactly one of result/error, got {other:?}"),
+        (None, Some(error)) => {
+            panic!("expected a successful result for request {id:?}, got error {error:?}");
+        }
+        other => panic!(
+            "a response for request {id:?} carries exactly one of result/error, got {other:?}"
+        ),
     }
 }
 
@@ -441,13 +446,10 @@ pub async fn initialize(
         })
         .await;
     assert_eq!(response.id, RequestId::new(id));
-    let RuntimeClientResult::Initialized {
-        snapshot, cursor, ..
-    } = result(response)
-    else {
+    let RuntimeClientResult::Initialized { .. } = result(response) else {
         panic!("initialize returns the initialized result");
     };
-    (snapshot, cursor)
+    snapshot(driver, id).await
 }
 
 /// Subscribes one session after a cursor.
@@ -489,16 +491,115 @@ pub async fn snapshot(
     driver: &mut dyn RuntimeClientProtocolDriver,
     id: u64,
 ) -> (RuntimeClientSnapshot, RuntimeClientCursor) {
-    let RuntimeClientResult::Snapshot { snapshot, cursor } = result(
+    let RuntimeClientResult::Checkpoint { checkpoint } = result(
         driver
-            .request(RuntimeClientRequest::SnapshotGet {
+            .request(RuntimeClientRequest::CheckpointGet {
                 id: RequestId::new(id),
             })
             .await,
     ) else {
-        panic!("snapshot_get returns the snapshot result");
+        panic!("checkpoint_get returns the independent checkpoint result");
     };
-    (snapshot, cursor)
+    (checkpoint.snapshot, checkpoint.cursor)
+}
+
+pub async fn transcript_page(
+    driver: &mut dyn RuntimeClientProtocolDriver,
+    id: u64,
+) -> rustx::runtime_client::RuntimeClientTranscriptPage {
+    let RuntimeClientResult::TranscriptPage { page } = result(
+        driver
+            .request(RuntimeClientRequest::TranscriptPageGet {
+                id: RequestId::new(id),
+                before_cursor: None,
+                limit: 32,
+            })
+            .await,
+    ) else {
+        panic!("bounded native transcript page");
+    };
+    assert!(
+        page.source_cut.is_some(),
+        "the page carries its original immutable Source cut"
+    );
+    page
+}
+
+/// Read only one advertised small native capability field at the original page cut.
+async fn capability_field<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+    driver: &mut dyn RuntimeClientProtocolDriver,
+    id: u64,
+    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    domain: &str,
+    item_offset: u64,
+    field: &str,
+) -> T {
+    use base64::Engine as _;
+    let path = vec![field.to_owned()];
+    let RuntimeClientResult::CheckpointValueChunk { chunk } = result(
+        driver
+            .request(RuntimeClientRequest::CheckpointValueRead {
+                id: RequestId::new(id),
+                cut: cut.clone(),
+                domain: domain.to_owned(),
+                item_offset,
+                path: path.clone(),
+                offset: 0,
+                max_bytes: 65_536,
+            })
+            .await,
+    ) else {
+        panic!("selected bounded capability field");
+    };
+    assert_eq!(&chunk.cut, cut);
+    assert_eq!(chunk.domain, domain);
+    assert_eq!(chunk.item_offset, item_offset);
+    assert_eq!(chunk.path, path);
+    assert_eq!(chunk.offset, 0);
+    assert!(
+        chunk.next_offset.is_none(),
+        "this fixture's selected scalar fits one bounded chunk"
+    );
+    assert!(chunk.bytes_base64.len() <= 87_384);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&chunk.bytes_base64)
+        .expect("native bounded base64");
+    assert!(bytes.len() <= 65_536);
+    assert_eq!(bytes.len() as u64, chunk.readable_end);
+    let value = match chunk.representation {
+        rustx::runtime_client::checkpoint::CheckpointValueRepresentation::Utf8Text => {
+            serde_json::Value::String(String::from_utf8(bytes).expect("original native text"))
+        }
+        rustx::runtime_client::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1 => {
+            serde_json::from_slice(&bytes).expect("original native structural field")
+        }
+    };
+    rustx::runtime_client::checkpoint::decode_domain_value(value)
+        .expect("typed original capability field")
+}
+
+/// Positive per-canonical Assistant carriers keep C results distinct from J state.
+pub fn transcript_tool_slots(
+    page: &rustx::runtime_client::RuntimeClientTranscriptPage,
+) -> Vec<rustx::runtime_client::ForegroundToolExecution> {
+    let mut slots: Vec<_> = page
+        .entries
+        .iter()
+        .flat_map(|entry| entry.tool_calls.iter().cloned())
+        .collect();
+    for item in &page.deferred_entries {
+        let Some(value) = &item.value else {
+            continue;
+        };
+        if value.get("tool_calls").is_none() {
+            continue;
+        }
+        let descriptor: rustx::runtime_client::snapshot::RuntimeClientMessageDescriptor =
+            rustx::runtime_client::checkpoint::decode_domain_value(value.clone())
+                .expect("typed finite native message descriptor");
+        slots.extend(descriptor.tool_calls);
+    }
+    slots
 }
 
 /// Receives notifications until the predicate matches, asserting strictly
@@ -519,6 +620,20 @@ pub async fn receive_until(
                 expected,
                 "one subscription observes strictly contiguous cursors"
             );
+            match &event.event {
+                RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
+                    assert_eq!(metadata.read_cut.revision, event.cursor.get());
+                }
+                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                    assert_eq!(checkpoint.cursor, event.cursor);
+                    assert_eq!(checkpoint.read_cut.revision, event.cursor.get());
+                    assert_eq!(
+                        checkpoint.read_cut.conversation_id,
+                        *checkpoint.snapshot.conversation_id()
+                    );
+                }
+                _ => panic!("one complete native transition"),
+            }
             let matched = predicate(&event);
             seen.push(event);
             if matched {
@@ -544,12 +659,16 @@ async fn receive_read_domain_suffix(
         return;
     }
     let suffix = receive_until(driver, after, |event| event.cursor == through).await;
-    assert!(suffix.iter().all(|event| matches!(
-        event.event,
-        RuntimeClientEvent::TraceChanged
-            | RuntimeClientEvent::ReadDomainsUpdated { .. }
-            | RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
-    )));
+    assert!(
+        suffix
+            .iter()
+            .all(|event| event.event.facts().iter().any(|fact| matches!(
+                fact,
+                RuntimeClientEvent::TraceChanged
+                    | RuntimeClientEvent::ReadDomainsUpdated { .. }
+                    | RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
+            )))
+    );
 }
 
 /// Counts the terminal attempt settlements in an observed event sequence.
@@ -557,7 +676,13 @@ async fn receive_read_domain_suffix(
 pub fn settlements(events: &[RuntimeClientProtocolEvent]) -> usize {
     events
         .iter()
-        .filter(|event| matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }))
+        .filter(|event| {
+            event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+        })
         .count()
 }
 
@@ -578,18 +703,61 @@ pub async fn await_model_parked(model: &FakeModel) {
 // Protocol / session scenarios
 // ---------------------------------------------------------------------------
 
-/// `initialize` alone admits the attachment and returns the runtime-owned
-/// identities plus the snapshot linearized with its cursor.
+/// `initialize` admits the attachment with its finite native identity receipt;
+/// a separate checkpoint supplies the complete captured read cut.
 pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
+    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+
     let fixture = ConformanceFixture::builder(&conversation(factory, "init"))
         .build()
         .await;
+    // Join activation's original publication before comparing two reads. The
+    // builder activates the runtime, but its queued Eligible fact can otherwise
+    // arrive between the Stdio checkpoints without either read publishing.
+    let (observer, _) = fixture
+        .host
+        .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("the startup observer attaches read-only");
+    let subscription = observer
+        .subscribe_events(RuntimeClientCursor::new(0))
+        .expect("the startup observer follows native activation");
+    tokio::time::timeout(LIVENESS_GUARD, async {
+        loop {
+            let EventDelivery::Event(event) = subscription.next().await else {
+                panic!("the startup subscription retains activation's publication");
+            };
+            if event.event.facts().iter().any(|fact| match fact {
+                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
+                    *eligibility == AdoptionEligibility::Eligible
+                }
+                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                    assert_eq!(checkpoint.cursor, event.cursor);
+                    checkpoint.snapshot.configuration_adoption_eligibility
+                        == AdoptionEligibility::Eligible
+                }
+                _ => false,
+            }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("activation publishes its native eligible state");
+    drop(subscription);
+    observer.detach();
+    fixture.host.projection_settled().await;
+    let inner = fixture
+        .host
+        .weak_inner()
+        .upgrade()
+        .expect("the fixture owns its resident host");
+    inner.park_projection_worker();
     let mut driver = connect(&fixture, factory);
 
     // Before initialize every other method is the typed not-attached error;
     // the transport never decides this.
     let response = driver
-        .request(RuntimeClientRequest::SnapshotGet {
+        .request(RuntimeClientRequest::CheckpointGet {
             id: RequestId::new(1),
         })
         .await;
@@ -606,8 +774,7 @@ pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
         attachment_id,
         conversation_id,
         agent_id,
-        snapshot,
-        cursor,
+        ..
     } = result(response)
     else {
         panic!("initialize returns the initialized result");
@@ -618,11 +785,17 @@ pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
     );
     assert_eq!(conversation_id.as_str(), conversation(factory, "init"));
     assert_eq!(agent_id.as_str(), "agent-a");
+    let (snapshot, cursor) = snapshot(&mut *driver, 2).await;
     assert_eq!(snapshot.conversation_id(), &conversation_id);
+    assert_eq!(
+        snapshot.configuration_adoption_eligibility,
+        AdoptionEligibility::Eligible
+    );
 
     // The attachment is live and the snapshot cursor is stable.
     let (_, again) = snapshot_of(&mut *driver, 3).await;
     assert_eq!(again, cursor);
+    inner.unpark_projection_worker();
 }
 
 /// An unsupported protocol version stays the typed semantic error and
@@ -688,7 +861,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
     // A rejected negotiation admitted nothing, and the supported version
     // still attaches.
     let response = driver
-        .request(RuntimeClientRequest::SnapshotGet {
+        .request(RuntimeClientRequest::CheckpointGet {
             id: RequestId::new(8),
         })
         .await;
@@ -707,7 +880,7 @@ pub async fn responses_correlate_request_ids(factory: &dyn DriverFactory) {
 
     for id in [7_u64, 3, 4096, u64::MAX, 3] {
         let response = driver
-            .request(RuntimeClientRequest::SnapshotGet {
+            .request(RuntimeClientRequest::CheckpointGet {
                 id: RequestId::new(id),
             })
             .await;
@@ -772,7 +945,11 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     subscribe(&mut *driver, 2, cursor).await;
     submit(&mut *driver, 3, "hello").await;
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let event_cursor = events.last().expect("at least one event").cursor;
@@ -787,7 +964,7 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     assert_eq!(result(response), RuntimeClientResult::Detached);
 
     let response = driver
-        .request(RuntimeClientRequest::SnapshotGet {
+        .request(RuntimeClientRequest::CheckpointGet {
             id: RequestId::new(5),
         })
         .await;
@@ -801,15 +978,11 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
             protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
-    let RuntimeClientResult::Initialized {
-        snapshot,
-        cursor: reattached,
-        ..
-    } = result(response)
-    else {
+    let RuntimeClientResult::Initialized { .. } = result(response) else {
         panic!("initialized");
     };
-    // A request-owned snapshot does not wait for the background materializer.
+    let (snapshot, reattached) = snapshot(&mut *driver, 6).await;
+    // A request-owned checkpoint does not wait for the background materializer.
     // Only its derived suffix may appear across detach; no semantic replay.
     subscribe(&mut *driver, 7, settled_cursor).await;
     receive_read_domain_suffix(&mut *driver, settled_cursor, reattached).await;
@@ -839,10 +1012,22 @@ pub async fn shutdown_is_not_detach(factory: &dyn DriverFactory) {
 
     // The runtime shutdown observation is runtime-originated.
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::RuntimeShutdown)
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::RuntimeShutdown))
     })
     .await;
-    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events
+            .iter()
+            .flat_map(|event| event.event.facts())
+            .filter(|fact| matches!(fact, RuntimeClientEvent::RuntimeShutdown))
+            .count(),
+        1,
+        "exactly one native shutdown fact, independent of ancillary publications"
+    );
 
     // Still attached: reads work, new inbound is refused with the typed
     // semantic error, and canonical history is untouched.
@@ -856,15 +1041,14 @@ pub async fn shutdown_is_not_detach(factory: &dyn DriverFactory) {
 
     let (after, _) = snapshot_of(&mut *driver, 5).await;
     assert_eq!(after.messages, before.messages);
-    let RuntimeClientResult::Capability { .. } = result(
-        driver
-            .request(RuntimeClientRequest::CapabilityGet {
-                id: RequestId::new(6),
-            })
-            .await,
-    ) else {
-        panic!("reads stay available after shutdown");
-    };
+    let _: rustx::runtime_client::snapshot::CapabilityView =
+        super::super::common::native_domain_single(result(
+            driver
+                .request(RuntimeClientRequest::CapabilityGet {
+                    id: RequestId::new(6),
+                })
+                .await,
+        ));
 }
 
 // ---------------------------------------------------------------------------
@@ -917,7 +1101,11 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
     // The model is parked, so the publications that happened are fixed: the
     // attempt started, and nothing settled.
     let observed = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
     })
     .await;
     await_model_parked(&fixture.model).await;
@@ -930,7 +1118,11 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
 
     release.send_replace(true);
     let rest = receive_until(&mut *driver, last, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(
@@ -940,16 +1132,19 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
     );
     assert!(
         rest.iter()
-            .any(|event| matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. })),
+            .any(|event| event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))),
         "streaming assistant output is projected"
     );
-    assert!(rest.iter().any(|event| matches!(
-        event.event,
-        RuntimeClientEvent::AttemptSettled {
-            outcome: RuntimeClientOutcome::Completed { .. },
-            ..
-        }
-    )));
+    assert!(
+        rest.iter()
+            .any(|event| event.event.facts().iter().any(|fact| matches!(
+                fact,
+                RuntimeClientEvent::AttemptSettled {
+                    outcome: RuntimeClientOutcome::Completed { .. },
+                    ..
+                }
+            )))
+    );
 
     // The authoritative snapshot reflects committed state at its cursor.
     let (snapshot, snapshot_cursor) = snapshot_of(&mut *driver, 4).await;
@@ -988,7 +1183,11 @@ pub async fn inbound_batches_and_drains(factory: &dyn DriverFactory) {
 
     submit(&mut *driver, 3, "first").await;
     let started = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
     })
     .await;
     let observed = started.last().expect("the attempt started").cursor;
@@ -1013,13 +1212,18 @@ pub async fn inbound_batches_and_drains(factory: &dyn DriverFactory) {
 
     release.send_replace(true);
     let events = receive_until(&mut *driver, observed, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     // The drain is one finite, runtime-committed boundary.
     let drains: Vec<_> = events
         .iter()
-        .filter_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
             RuntimeClientEvent::InboundDrained {
                 watermark,
                 count,
@@ -1033,7 +1237,14 @@ pub async fn inbound_batches_and_drains(factory: &dyn DriverFactory) {
         .find(|(watermark, _, _)| *watermark == inbound_sequence)
         .expect("the queued message drains into the next turn");
     assert_eq!(drained.1, 1);
-    assert_eq!(drained.2, vec![queued_id]);
+    assert!(
+        drained.2.is_empty(),
+        "the finite native drain carries its watermark/count, not copied message identities"
+    );
+    let requests = fixture.model.requests();
+    assert!(requests.iter().skip(1).any(|request| request.messages.iter().any(|message| matches!(
+        message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == queued_id
+    ))), "the actual adopted continuation contains the exact admitted message");
 
     let (settled, _) = snapshot_of(&mut *driver, 6).await;
     assert!(
@@ -1074,7 +1285,11 @@ pub async fn cancellation_is_acceptance_not_settlement(factory: &dyn DriverFacto
 
     submit(&mut *driver, 4, "go").await;
     let started = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
     })
     .await;
     let last = started.last().expect("started").cursor;
@@ -1090,16 +1305,19 @@ pub async fn cancellation_is_acceptance_not_settlement(factory: &dyn DriverFacto
     };
 
     let events = receive_until(&mut *driver, last, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(settlements(&events), 1);
-    assert!(events.iter().any(|event| matches!(
-        &event.event,
-        RuntimeClientEvent::AttemptSettled {
+    assert!(events.iter().any(|event| event.event.facts().iter().any(
+        |fact| matches!(fact, RuntimeClientEvent::AttemptSettled {
             attempt_id: settled,
             outcome: RuntimeClientOutcome::Cancelled { .. },
-        } if *settled == attempt_id
+        } if *settled == attempt_id)
     )));
 }
 
@@ -1202,35 +1420,50 @@ pub async fn before_start_cancellation_repairs_runtime_client(factory: &dyn Driv
     release.send_replace(true);
 
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(settlements(&events), 1);
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event.event, RuntimeClientEvent::ToolExecutionStarted { .. }))
+            .filter(|event| event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::ToolExecutionStarted { .. })))
             .count(),
         0,
         "BeforeStart publishes no execution-start fact"
     );
     let settlements: Vec<_> = events
         .iter()
-        .filter_map(|event| match &event.event {
-            RuntimeClientEvent::ToolExecutionSettled {
-                tool_call_id,
-                result,
-                ..
-            } => Some((tool_call_id, result)),
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
+            RuntimeClientEvent::ToolResultCommitted {
+                occurrence, result, ..
+            } => Some((occurrence, result)),
             _ => None,
         })
         .collect();
     assert_eq!(
         settlements.len(),
         1,
-        "the canonical commit repairs the slot with one client settlement"
+        "one canonical result commits without inventing an execution settlement"
     );
-    assert_eq!(settlements[0].0.as_str(), "call-before-start");
+    assert_eq!(
+        events
+            .iter()
+            .flat_map(|event| event.event.facts())
+            .filter(|fact| matches!(fact, RuntimeClientEvent::ToolExecutionSettled { .. }))
+            .count(),
+        0,
+        "BeforeStart has no native execution-terminal Journal fact"
+    );
     assert!(matches!(
         settlements[0].1.status,
         ToolExecutionStatus::Cancelled {
@@ -1266,14 +1499,28 @@ pub async fn before_start_cancellation_repairs_runtime_client(factory: &dyn Driv
         }
     ));
     let attempt = snapshot.attempt.expect("attempt");
-    let foreground = &attempt.foreground;
+    let page = transcript_page(&mut *driver, 6).await;
+    let foreground = transcript_tool_slots(&page);
     assert_eq!(foreground.len(), 1);
-    let ForegroundToolState::Settled { result, .. } = &foreground[0].state else {
-        panic!("the snapshot repairs the foreground slot as settled");
-    };
-    assert_eq!(result, &tool_message.result);
-    assert_eq!(result, settlements[0].1);
-    assert_eq!(attempt_id, attempt.attempt_id);
+    assert_eq!(
+        foreground[0]
+            .call_id
+            .as_ref()
+            .expect("small fixture call ID")
+            .as_str(),
+        "call-before-start"
+    );
+    assert_eq!(&foreground[0].occurrence, settlements[0].0);
+    assert!(
+        matches!(foreground[0].state, ForegroundToolState::Assembled { .. }),
+        "canonical cancellation must not fabricate execution settlement"
+    );
+    assert_eq!(
+        foreground[0].committed_result.as_ref(),
+        Some(&tool_message.result)
+    );
+    assert_eq!(&tool_message.result, settlements[0].1);
+    assert_eq!(Some(&attempt_id), attempt.attempt_id.as_ref());
     assert!(calls.borrow().is_empty(), "the executor was never invoked");
 }
 
@@ -1312,7 +1559,11 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     submit(&mut *driver, 3, "run the tool").await;
 
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -1320,7 +1571,8 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     // identities throughout.
     let lifecycle: Vec<&str> = events
         .iter()
-        .filter_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
             RuntimeClientEvent::ToolCallStarted { .. } => Some("call_started"),
             RuntimeClientEvent::ToolCallAssembled { .. } => Some("call_assembled"),
             RuntimeClientEvent::ToolExecutionStarted { .. } => Some("execution_started"),
@@ -1337,8 +1589,8 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
             "execution_settled"
         ]
     );
-    for event in &events {
-        match &event.event {
+    for event in events.iter().flat_map(|event| event.event.facts()) {
+        match event {
             RuntimeClientEvent::ToolExecutionStarted {
                 tool_call_id,
                 tool_id,
@@ -1349,8 +1601,17 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
                 tool_id,
                 ..
             } => {
-                assert_eq!(tool_call_id.as_str(), "call-1");
-                assert_eq!(tool_id.as_str(), "tool-alpha");
+                assert_eq!(
+                    tool_call_id
+                        .as_ref()
+                        .expect("small fixture call ID")
+                        .as_str(),
+                    "call-1"
+                );
+                assert_eq!(
+                    tool_id.as_ref().expect("small fixture tool ID").as_str(),
+                    "tool-alpha"
+                );
             }
             _ => {}
         }
@@ -1369,9 +1630,21 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     );
 
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
-    let foreground = &snapshot.attempt.expect("attempt").foreground;
+    assert!(
+        snapshot.attempt.expect("attempt").foreground.is_empty(),
+        "the later stopping request has no foreground calls"
+    );
+    let page = transcript_page(&mut *driver, 5).await;
+    let foreground = transcript_tool_slots(&page);
     assert_eq!(foreground.len(), 1);
-    assert_eq!(foreground[0].call_id.as_str(), "call-1");
+    assert_eq!(
+        foreground[0]
+            .call_id
+            .as_ref()
+            .expect("bounded inline native call id fixture")
+            .as_str(),
+        "call-1"
+    );
 }
 
 /// Two parallel tool calls keep independent identities, and the
@@ -1441,26 +1714,38 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
     subscribe(&mut *driver, 2, cursor).await;
     submit(&mut *driver, 3, "run both").await;
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     controller.await.expect("controller");
 
     let started: Vec<&str> = events
         .iter()
-        .filter_map(|event| match &event.event {
-            RuntimeClientEvent::ToolExecutionStarted { tool_call_id, .. } => {
-                Some(tool_call_id.as_str())
-            }
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
+            RuntimeClientEvent::ToolExecutionStarted { tool_call_id, .. } => Some(
+                tool_call_id
+                    .as_ref()
+                    .expect("small fixture call ID")
+                    .as_str(),
+            ),
             _ => None,
         })
         .collect();
     let settled: Vec<&str> = events
         .iter()
-        .filter_map(|event| match &event.event {
-            RuntimeClientEvent::ToolExecutionSettled { tool_call_id, .. } => {
-                Some(tool_call_id.as_str())
-            }
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
+            RuntimeClientEvent::ToolExecutionSettled { tool_call_id, .. } => Some(
+                tool_call_id
+                    .as_ref()
+                    .expect("small fixture call ID")
+                    .as_str(),
+            ),
             _ => None,
         })
         .collect();
@@ -1472,10 +1757,29 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
     );
 
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
-    let foreground = snapshot.attempt.expect("attempt").foreground;
+    assert!(
+        snapshot.attempt.expect("attempt").foreground.is_empty(),
+        "the later stopping request has no foreground calls"
+    );
+    let page = transcript_page(&mut *driver, 5).await;
+    let foreground = transcript_tool_slots(&page);
     assert_eq!(foreground.len(), 2);
-    assert_eq!(foreground[0].call_id.as_str(), "call-a");
-    assert_eq!(foreground[1].call_id.as_str(), "call-b");
+    assert_eq!(
+        foreground[0]
+            .call_id
+            .as_ref()
+            .expect("bounded inline native call id fixture")
+            .as_str(),
+        "call-a"
+    );
+    assert_eq!(
+        foreground[1]
+            .call_id
+            .as_ref()
+            .expect("bounded inline native call id fixture")
+            .as_str(),
+        "call-b"
+    );
 }
 
 /// Background execution is conversation-owned: dispatch is accepted inside
@@ -1523,21 +1827,52 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
 
     // Dispatch is observed as a runtime registry transition.
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::JobUpdated { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { .. }))
     })
     .await;
-    let RuntimeClientEvent::JobUpdated { job: execution } =
-        &events.last().expect("a dispatch transition").event
+    let RuntimeClientEvent::JobUpdated { job: execution, .. } = events
+        .last()
+        .expect("a dispatch transition")
+        .event
+        .facts()
+        .iter()
+        .find(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { .. }))
+        .expect("native job fact")
     else {
         panic!("background transition");
     };
     let execution_id = execution.job_id.clone();
-    assert_eq!(execution.tool_id.as_str(), "tool-bg");
+    assert_eq!(
+        execution
+            .tool_id
+            .as_ref()
+            .expect("finite fixture identity")
+            .as_str(),
+        "tool-bg"
+    );
     let mut last = events.last().expect("dispatch").cursor;
+
+    // Dispatch acceptance can precede executor startup. Read status after this
+    // parked Job's actual Running publication, when its registry cut is stable.
+    let running = |event: &RuntimeClientProtocolEvent| {
+        event.event.facts().iter().any(|fact| {
+            matches!(fact, RuntimeClientEvent::JobUpdated { job, .. }
+                if job.job_id == execution_id
+                    && job.state == rustx::tools::background::BackgroundLifecycle::Running)
+        })
+    };
+    if !events.iter().any(running) {
+        let started = receive_until(&mut *driver, last, running).await;
+        last = started.last().expect("the same Job reached Running").cursor;
+    }
 
     // The registry is inspectable by identity, and an unknown identity is
     // the typed semantic error.
-    let RuntimeClientResult::Job { job: execution } = result(
+    let RuntimeClientResult::DomainPage { page } = result(
         driver
             .request(RuntimeClientRequest::JobStatus {
                 id: RequestId::new(4),
@@ -1545,8 +1880,14 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
             })
             .await,
     ) else {
-        panic!("background_status returns the registry snapshot");
+        panic!("background_status returns the bounded native registry page");
     };
+    assert_eq!(page.items.len(), 1);
+    let execution: rustx::runtime_client::RuntimeClientJob =
+        rustx::runtime_client::structural_json::decode(
+            page.items[0].value.clone().expect("small job inline"),
+        )
+        .expect("native job");
     assert_eq!(execution.job_id, execution_id);
     let response = driver
         .request(RuntimeClientRequest::JobStatus {
@@ -1561,9 +1902,8 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
         }
     );
 
-    // Cancellation waits for physical settlement; the owner also publishes
-    // terminal state proactively on the observation stream.
-    let RuntimeClientResult::Job { .. } = result(
+    // Cancellation accepts native intent; physical completion remains a separate wait.
+    let RuntimeClientResult::JobCancellationAccepted { job_id } = result(
         driver
             .request(RuntimeClientRequest::JobCancel {
                 id: RequestId::new(6),
@@ -1573,17 +1913,40 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     ) else {
         panic!("background_cancel is accepted");
     };
+    assert_eq!(job_id, execution_id);
+    let RuntimeClientResult::JobOutcome { job_id, state } = result(
+        driver
+            .request(RuntimeClientRequest::JobWait {
+                id: RequestId::new(7),
+                job_id: execution_id.clone(),
+            })
+            .await,
+    ) else {
+        panic!("the separate native wait observes physical terminal settlement");
+    };
+    assert_eq!(job_id, execution_id);
+    assert!(state.is_terminal());
 
     // Terminal settlement stays runtime-originated and arrives on the
     // observation stream.
     loop {
         let events = receive_until(&mut *driver, last, |event| {
-            matches!(event.event, RuntimeClientEvent::JobUpdated { .. })
+            event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { .. }))
         })
         .await;
         last = events.last().expect("a transition").cursor;
-        let RuntimeClientEvent::JobUpdated { job: execution } =
-            &events.last().expect("a transition").event
+        let RuntimeClientEvent::JobUpdated { job: execution, .. } = events
+            .last()
+            .expect("a transition")
+            .event
+            .facts()
+            .iter()
+            .find(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { .. }))
+            .expect("native job fact")
         else {
             panic!("background transition");
         };
@@ -1624,22 +1987,31 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     };
 
     let events = receive_until(&mut *driver, cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let composed: Vec<_> = events
         .iter()
-        .filter_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
             RuntimeClientEvent::AgentStatusComposed { turn, status, .. } => Some((
                 *turn,
-                status.status_message_id.clone(),
+                status
+                    .status_message_id
+                    .clone()
+                    .expect("native inline status identity"),
                 status
                     .opportunities
                     .fresh_inbound
                     .as_ref()
                     .expect("FreshInbound is populated by the current producer")
                     .target_message_id
-                    .clone(),
+                    .clone()
+                    .expect("native inline FreshInbound identity"),
                 status.clone(),
             )),
             _ => None,
@@ -1665,7 +2037,10 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
             .opportunities
             .fresh_inbound
             .as_ref()
-            .is_some_and(|fresh| !fresh.target_message_id.as_str().is_empty()),
+            .is_some_and(|fresh| fresh
+                .target_message_id
+                .as_ref()
+                .is_some_and(|id| !id.as_str().is_empty())),
         "a FreshInbound composition publishes the message identity that places it"
     );
     assert!(
@@ -1720,53 +2095,118 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
         })
         .build()
         .await;
+    fixture.host.projection_settled().await;
     let mut driver = connect(&fixture, factory);
     initialize(&mut *driver, 1).await;
 
-    let RuntimeClientResult::Capability { capabilities } = result(
+    let RuntimeClientResult::DomainPage { page } = result(
         driver
             .request(RuntimeClientRequest::CapabilityGet {
                 id: RequestId::new(2),
             })
             .await,
     ) else {
-        panic!("capability_get returns the projection");
+        panic!("bounded capability page");
     };
-    assert!(capabilities.revision.get() >= 1, "an activated revision");
-    assert_eq!(
-        capabilities
-            .tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["ls", "read"]
+    assert_eq!(page.domain, "capabilities");
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items.len(), 1);
+    let (captured, _) = snapshot_of(&mut *driver, 4).await;
+    let capabilities = captured.capabilities;
+    let revision: rustx::runtime::identity::CapabilityRevision = capability_field(
+        &mut *driver,
+        15,
+        &page.read_cut,
+        "capabilities",
+        0,
+        "revision",
+    )
+    .await;
+    assert_eq!(revision, capabilities.revision);
+    assert!(revision.get() >= 1, "an activated revision");
+    assert!(
+        page.items[0].deferred,
+        "the aggregate declaration body is an explicit original source, not an assumed inline header"
     );
-    assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
-    assert_eq!(capabilities.skills.len(), 1);
-    assert_eq!(capabilities.skills[0].name, "skill-readme");
     assert_eq!(
-        capabilities.skills[0].location,
+        page.collections
+            .iter()
+            .find(|frontier| frontier.domain == "capabilities.tools")
+            .expect("native tools frontier")
+            .total,
+        2
+    );
+    assert_eq!(
+        page.collections
+            .iter()
+            .find(|frontier| frontier.domain == "capabilities.skills")
+            .expect("native Skill frontier")
+            .total,
+        1
+    );
+    let mut names = Vec::new();
+    for index in 0..2 {
+        names.push(
+            capability_field::<String>(
+                &mut *driver,
+                10 + index,
+                &page.read_cut,
+                "capabilities.tools",
+                index,
+                "name",
+            )
+            .await,
+        );
+    }
+    assert_eq!(names, ["ls", "read"]);
+    let origin: ToolOrigin = capability_field(
+        &mut *driver,
+        12,
+        &page.read_cut,
+        "capabilities.tools",
+        0,
+        "origin",
+    )
+    .await;
+    assert_eq!(origin, ToolOrigin::Builtin);
+    let skill: String = capability_field(
+        &mut *driver,
+        13,
+        &page.read_cut,
+        "capabilities.skills",
+        0,
+        "name",
+    )
+    .await;
+    assert_eq!(skill, "skill-readme");
+    let location: String = capability_field(
+        &mut *driver,
+        14,
+        &page.read_cut,
+        "capabilities.skills",
+        0,
+        "location",
+    )
+    .await;
+    assert_eq!(
+        location,
         skill_location(
             fixture.runtime.tool_runtime().workspace().root(),
-            "skill-readme",
+            "skill-readme"
         )
     );
 
-    // Deterministic: a second read is byte-identical, and the snapshot
-    // carries the same view.
-    let RuntimeClientResult::Capability {
-        capabilities: again,
-    } = result(
+    // Deterministic finite header/frontiers; unloaded declaration fields remain sources.
+    let RuntimeClientResult::DomainPage { page: again } = result(
         driver
             .request(RuntimeClientRequest::CapabilityGet {
                 id: RequestId::new(3),
             })
             .await,
-    )
-    else {
-        panic!("capability_get returns the projection");
+    ) else {
+        panic!("bounded capability page");
     };
-    assert_eq!(again, capabilities);
+    assert_eq!(again, page);
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
     assert_eq!(snapshot.capabilities, capabilities);
 
@@ -1818,15 +2258,14 @@ pub async fn capability_projection_covers_python_origins() {
     for factory in all_driver_factories() {
         let mut driver = connect(&fixture, &*factory);
         initialize(&mut *driver, 1).await;
-        let RuntimeClientResult::Capability { capabilities } = result(
-            driver
-                .request(RuntimeClientRequest::CapabilityGet {
-                    id: RequestId::new(2),
-                })
-                .await,
-        ) else {
-            panic!("capability_get returns the projection");
-        };
+        let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+            super::super::common::native_domain_single(result(
+                driver
+                    .request(RuntimeClientRequest::CapabilityGet {
+                        id: RequestId::new(2),
+                    })
+                    .await,
+            ));
         let python = capabilities
             .tools
             .iter()
@@ -1904,15 +2343,14 @@ pub async fn capability_projection_covers_mcp_origins(
     let mut driver = connect(&fixture, factory);
     initialize(&mut *driver, 1).await;
 
-    let RuntimeClientResult::Capability { capabilities } = result(
-        driver
-            .request(RuntimeClientRequest::CapabilityGet {
-                id: RequestId::new(2),
-            })
-            .await,
-    ) else {
-        panic!("capability_get returns the projection");
-    };
+    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+        super::super::common::native_domain_single(result(
+            driver
+                .request(RuntimeClientRequest::CapabilityGet {
+                    id: RequestId::new(2),
+                })
+                .await,
+        ));
     let mcp: Vec<_> = capabilities
         .tools
         .iter()
@@ -1976,7 +2414,11 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
     subscribe(&mut *driver, 4, mid_cursor).await;
     release.send_replace(true);
     let events = receive_until(&mut *driver, mid_cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert!(!events.is_empty());
@@ -2017,9 +2459,9 @@ pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
     // Barrier: the model parked and the projection settled, so the admission
     // burst is complete — including the derived Trace and read-domain
     // publications its worker makes asynchronously — and nothing more is
-    // published until this test acts. Parking alone is not enough: a read
-    // that installs pending read domains would publish after the repaired
-    // cursor, and with the ring of two the next admission and its own
+    // published until this test acts. Parking alone is not enough: the
+    // worker's pending read-domain installation would publish after the
+    // repaired cursor, and with the ring of two the next admission and its
     // read-domain update would then evict the event after that cursor.
     await_model_parked(&fixture.model).await;
     fixture.host.projection_settled().await;
@@ -2060,13 +2502,23 @@ pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
         panic!("accepted");
     };
     let events = receive_until(&mut *driver, repaired_cursor, |event| {
-        matches!(event.event, RuntimeClientEvent::InboundEnqueued { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::InboundEnqueued { .. }))
     })
     .await;
-    let RuntimeClientEvent::InboundEnqueued { sequence, .. } =
-        &events.last().expect("the enqueue").event
+    let RuntimeClientEvent::InboundEnqueued { sequence, .. } = events
+        .last()
+        .expect("the enqueue")
+        .event
+        .facts()
+        .iter()
+        .find(|fact| matches!(fact, RuntimeClientEvent::InboundEnqueued { .. }))
+        .expect("original enqueue within complete native transition")
     else {
-        panic!("enqueued");
+        unreachable!()
     };
     assert_eq!(*sequence, inbound_sequence);
 

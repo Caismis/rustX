@@ -24,7 +24,7 @@ for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sa
             const response = JSON.parse(event.data), method = this.methods.get(response.id);
             if (method === 'session/create') { mark('T3'); evidence.identities.created = response.result?.session; }
             if (method === 'session/attach') { evidence.identities.attached = response.result?.target; mark('T6'); if (response.result?.snapshot?.model) mark('T7'); }
-            if (response.method === 'session/event' && ['assistant_text_delta', 'assistant_reasoning_delta', 'assistant_refusal_delta', 'tool_call_arguments_delta'].includes(response.params.event.type)) mark('T10');
+            if (response.method === 'session/event' && (response.params.event.type === 'block_content_advanced' || response.params.event.type === 'projection_transition' && response.params.event.events.some((event: {type:string}) => event.type === 'block_content_advanced'))) mark('T10');
             const trace = response.result?.snapshot?.trace?.records;
             if (trace) evidence.providerTimings = trace.filter((r: any) => r.request?.generation).map((r: any) => ({ request_id: r.request.request_id, generation: r.request.generation }));
             if (method === 'turn/start') mark('T9');

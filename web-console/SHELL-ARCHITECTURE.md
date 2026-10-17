@@ -61,7 +61,7 @@ See [the complete classification](PRODUCT-SURFACE.md).
 
 `bindings/session-product.ts` is a pure projection, shared by Session status and
 Sidebar observation. It carries no transitions, timers or guessed settlement.
-Transport reconnect, attachment open and snapshot refresh remain distinct actions.
+Transport reconnect, attachment open and bounded checkpoint refresh remain distinct actions.
 Inspector accepts observations and `ProtocolLog` only, so its controls cannot
 dispatch runtime operations. Unresolved evidence stays in the client; reading,
 filtering, clearing or pausing the log cannot acknowledge it.

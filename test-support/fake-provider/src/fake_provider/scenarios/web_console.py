@@ -249,6 +249,19 @@ def web_reading_surface() -> Scenario:
 SCENARIOS["web_reading_surface"] = web_reading_surface
 
 
+def web_reading_scale_1000() -> Scenario:
+    """Independent scaling measurement; the browser's 300-Attempt script is unchanged."""
+    return Scenario("web_reading_scale_1000", *[
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=(f"Reading {i}",)),
+             Stream(Text(f"Native reading answer {i}\n\n" + "Readable history paragraph."), Finish()))
+        for i in range(1000)
+    ])
+
+
+SCENARIOS["web_reading_scale_1000"] = web_reading_scale_1000
+
+
 def web_file_delivery() -> Scenario:
     """Ordinary Write/Bash/present Tool settlement; the browser owns no file facts."""
     markdown = '# Delivered report\r\n\r\n**Original** Unicode bytes.\r\n\r\n<script>globalThis.PWNED=1</script>\r\n\r\n![blocked](https://example.org/tracker)\r\n'

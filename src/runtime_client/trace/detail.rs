@@ -142,7 +142,7 @@ impl TraceProjection<'_> {
         anchor_sequence: u64,
     ) -> Result<Option<TraceRequestDetail>, ConversationStoreError> {
         let frozen = self.store.load_request_snapshot(request_id)?;
-        let end = self.ending(
+        let end = self.original_ending(
             FactScope::Request(request_id.to_string()),
             &["model_request_completed", "model_request_failed"],
         )?;
@@ -150,7 +150,7 @@ impl TraceProjection<'_> {
             self.store,
             &frozen,
             request_outcome(end.as_ref()),
-            &self.previous_request(anchor_sequence)?,
+            &self.original_previous_request(anchor_sequence)?,
         )
     }
 
@@ -200,7 +200,7 @@ impl TraceProjection<'_> {
         let (Some(attempt), Some(turn)) = (&anchor.attempt_id, &anchor.turn_id) else {
             return Ok(None);
         };
-        let commits = self.facts(
+        let commits = self.original_facts(
             FactScope::Step(attempt.clone(), turn.clone()),
             &["assistant_message_committed"],
             None,
@@ -243,7 +243,7 @@ impl TraceProjection<'_> {
         let (Some(attempt), Some(turn)) = (&anchor.attempt_id, &anchor.turn_id) else {
             return Ok(None);
         };
-        let starts = self.facts(
+        let starts = self.original_facts(
             FactScope::Step(attempt.clone(), turn.clone()),
             &["model_request_started"],
             None,
@@ -268,7 +268,7 @@ impl TraceProjection<'_> {
         call_id: &ToolCallId,
         tool_id: &ToolId,
     ) -> Result<Option<crate::message::types::ToolMessageBlock>, ConversationStoreError> {
-        let Some(commit) = self.ending(
+        let Some(commit) = self.original_ending(
             FactScope::ToolCall {
                 call_id: call_id.to_string(),
                 attempt: anchor.attempt_id.clone(),

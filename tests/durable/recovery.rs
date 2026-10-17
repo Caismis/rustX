@@ -212,6 +212,8 @@ fn envelope(
     event: RuntimeEvent,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(event_id),
         sequence: 0,

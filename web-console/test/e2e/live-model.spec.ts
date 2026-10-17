@@ -2,11 +2,12 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v49';
+import type { SessionModelConfig } from '../../../protocol/app-server/v50';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, showInspector } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 
 async function chooseCurrentModel(page: Page, model: string) {
   await page.getByRole('button', { name: 'Model and profile', exact: true }).click();
@@ -64,9 +65,13 @@ max_output_tokens = { mode = "limit", tokens = 333 }
       await openExistingSession(page, id, width);
       const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
       expect(attached.type).toBe('attached');
-      expect(attached.snapshot.model.configured).toEqual(complete);
-      const snapshot = () => wire.read('session/snapshot', attached.target);
-      const configuration = async () => (await wire.read('session/effectiveConfiguration', attached.target)).projection;
+      expect(attached).not.toHaveProperty('snapshot');
+      expect((await wire.read('session/checkpoint', attached.target)).checkpoint.snapshot.model!.configured).toEqual(complete);
+      const checkpoint = () => wire.read('session/checkpoint', attached.target);
+      const configuration = async () => materializeEffective(
+        (await wire.read('session/effectiveConfiguration', attached.target)).projection,
+        (reference, offset) => wire.effectiveValueRead(attached.target, reference, offset), () => true,
+      );
       const trigger = page.getByRole('button', { name: 'Model and profile', exact: true });
       await expect(trigger).toContainText('high');
       expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(0);
@@ -74,19 +79,19 @@ max_output_tokens = { mode = "limit", tokens = 333 }
       await chooseCurrentModel(page, complete.model);
       await expect.poll(() => wire.responses.filter(response => response.method === 'session/setModel').length).toBe(1);
       expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([complete]);
-      expect(wire.responses.filter(response => response.method === 'session/setModel')[0].result).toMatchObject({ type: 'model', model: { configured: complete } });
+      expect(wire.responses.filter(response => response.method === 'session/setModel')[0].result).toMatchObject({ type: 'model_set', settings_revision: (BigInt(before.revision) + 1n).toString() });
       const explicit = await remote.readSettings(id);
       expect(explicit.settings.model).toEqual(complete);
       expect(BigInt(explicit.revision)).toBe(BigInt(before.revision) + 1n);
-      expect((await snapshot()).snapshot.model?.configured).toEqual(complete);
+      expect((await checkpoint()).checkpoint.snapshot.model?.configured).toEqual(complete);
       expect((await configuration()).session_model).toEqual(complete);
       await expect.poll(async () => {
         const application = (await configuration()).application;
         return Object.values(application?.units ?? {}).some(unit => unit?.status === 'preparing');
       }).toBe(false);
-      // Finish snapshot's own read-domain repairs before measuring native NoOp.
-      await snapshot();
-      const stableSnapshot = await snapshot();
+      // Finish the checkpoint's native read-domain repairs before measuring native NoOp.
+      await checkpoint();
+      const stableSnapshot = await checkpoint();
       const stableConfiguration = await configuration();
       const catalogPath = join(fixture.directory, 'runtime/sessions/catalog.json');
       const stableBytes = readFileSync(catalogPath);
@@ -101,13 +106,13 @@ max_output_tokens = { mode = "limit", tokens = 333 }
       await expect(input).toHaveValue('');
       await expect.poll(() => wire.responses.filter(response => response.method === 'session/setModel').length).toBe(2);
       expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([complete, complete]);
-      expect(wire.responses.filter(response => response.method === 'session/setModel')[1].result).toMatchObject({ type: 'model', model: { configured: complete } });
+      expect(wire.responses.filter(response => response.method === 'session/setModel')[1].result).toMatchObject({ type: 'model_set', settings_revision: (BigInt(before.revision) + 1n).toString() });
       expect(await remote.readSettings(id)).toEqual(explicit);
       expect(readFileSync(catalogPath)).toEqual(stableBytes);
-      const repeated = await snapshot();
-      expect(repeated.cursor).toBe(stableSnapshot.cursor);
-      expect(repeated.snapshot.model).toEqual(stableSnapshot.snapshot.model);
-      expect(repeated.snapshot.resources).toEqual(stableSnapshot.snapshot.resources);
+      const repeated = await checkpoint();
+      expect(repeated.checkpoint.cursor).toEqual(stableSnapshot.checkpoint.cursor);
+      expect(repeated.checkpoint.snapshot.model).toEqual(stableSnapshot.checkpoint.snapshot.model);
+      expect(repeated.checkpoint.snapshot.resources).toEqual(stableSnapshot.checkpoint.snapshot.resources);
       expect(await configuration()).toEqual(stableConfiguration);
       // Internal Ready identity/preparation-worker invariants remain owned by
       // model_selection_noop.rs; this boundary checks their public projection.
@@ -163,14 +168,14 @@ for (const width of [1440, 390]) for (const acknowledgement of ['received', 'los
       const trigger = page.getByRole('button', { name: 'Model and profile', exact: true });
       await expect(trigger).toBeEnabled();
       const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
-      const original = attached.snapshot.model.configured;
+      const original = (await wire.read('session/checkpoint', attached.target)).checkpoint.snapshot.model!.configured;
       await running.click();
       const admittedFrozen = JSON.parse(await page.locator('[data-running-model-details] pre').innerText());
       await running.click();
       await chooseCurrentModel(page, original.model);
       await expect.poll(() => wire.responses.filter(response => response.method === 'session/setModel').length).toBe(1);
       expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([original]);
-      expect(wire.responses.filter(response => response.method === 'session/setModel')[0].result).toMatchObject({ type: 'model', model: { configured: original } });
+      expect(wire.responses.filter(response => response.method === 'session/setModel')[0].result).toMatchObject({ type: 'model_set' });
       await expect(running).toHaveText('Running: fixture/integration-model / high');
       if (acknowledgement === 'lost') wire.loseNext('session/setModel');
       await trigger.click();

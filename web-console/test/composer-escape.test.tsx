@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 beforeEach(() => vi.useFakeTimers()); afterEach(() => { cleanup(); vi.useRealTimers(); });
-const props = () => ({ binding: 'binding-A', cancellationScope: { authority: {}, identity: 'generation-1/session-A/conversation-A/attempt-A' }, cancellationAvailable: true,
+const props = () => ({ binding: 'binding-A', cancellationOnly: false, cancellationScope: { authority: {}, identity: 'generation-1/session-A/conversation-A/attempt-A' }, cancellationAvailable: true,
   disabled: false, busy: false, active: true, onSend: vi.fn(async () => false), onUpload: vi.fn(async () => []), onCancel: vi.fn(), onCommand: vi.fn() });
 function mount(p = props()) {
   const ui = render(<AgentComposer {...p} />); const input = screen.getByLabelText('Message'); act(() => input.focus());
@@ -37,8 +37,27 @@ it('command-menu Escape dismisses only and never carries an earlier arm', () => 
   escape(); expect(p.onCancel).not.toHaveBeenCalled();
 });
 it.each(['unavailable', 'inactive', 'no Attempt'] as const)('%s scope cannot cancel', mode => {
-  const p = props(); const { escape } = mount({ ...p, cancellationAvailable: mode !== 'unavailable', active: mode !== 'inactive', cancellationScope: mode === 'no Attempt' ? undefined! : p.cancellationScope });
+  const p = props(); const { escape } = mount({ ...p, cancellationAvailable: mode !== 'unavailable' && mode !== 'inactive', active: mode !== 'inactive', cancellationScope: mode === 'no Attempt' ? undefined! : p.cancellationScope });
   escape(); escape(); expect(p.onCancel).not.toHaveBeenCalled();
+});
+it.each([false, true])('a composer without native cancellation authority keeps blocked Send with disabled=%s', disabled => {
+  const onCancel = vi.fn(), onSend = vi.fn(async () => false);
+  render(<AgentComposer disabled={disabled} submitDisabled busy={false} active={false} onCancel={onCancel} onSend={onSend} onUpload={async () => []}/>);
+  const input = screen.getByLabelText('Message') as HTMLTextAreaElement;
+  expect(input.disabled).toBe(disabled);
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+  expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  if (!disabled) {
+    act(() => input.focus()); fireEvent.change(input, { target: { value: 'retained draft' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Escape' }); fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input.value).toBe('retained draft');
+  }
+  expect(onCancel).not.toHaveBeenCalled(); expect(onSend).not.toHaveBeenCalled();
+});
+it('an unavailable inactive presentation with an exact native cancellation scope remains cancellable', () => {
+  const p = props(); const { escape } = mount({ ...p, active: false, disabled: true, cancellationOnly: true });
+  escape(); escape(); expect(p.onCancel).toHaveBeenCalledTimes(1);
 });
 it('focus outside the editor and window blur invalidate old arms', () => {
   const { p, input, escape } = mount(); escape(); act(() => screen.getByRole('button', { name: 'Add' }).focus());

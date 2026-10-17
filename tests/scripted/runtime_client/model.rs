@@ -17,7 +17,9 @@ use rustx::model::catalog::{
     ProviderId,
 };
 use rustx::model::invocation::ModelBindingRegistry;
-use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelView};
+use rustx::model::session::{
+    SessionModelConfig, SessionModelState, SessionModelView, SummaryModelView,
+};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 use rustx::runtime_client::{
@@ -26,6 +28,183 @@ use rustx::runtime_client::{
 };
 use support::fake::{FakeModel, FakeStep};
 use support::model::{FixtureModel, MappedAdapterFactory, fixture_catalog_document};
+
+fn model_source<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    page: &rustx::runtime_client::checkpoint::CheckpointPage,
+    item_offset: u64,
+) -> T {
+    use base64::Engine as _;
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let response = attachment.handle_request(RuntimeClientRequest::CheckpointValueRead {
+            id: RequestId::new(900),
+            cut: page.read_cut.clone(),
+            domain: page.domain.clone(),
+            item_offset,
+            path: Vec::new(),
+            offset,
+            max_bytes: 65_536,
+        });
+        let Some(RuntimeClientResult::CheckpointValueChunk { chunk }) = response.result else {
+            panic!("same-cut original model bytes: {:?}", response.error);
+        };
+        assert_eq!(chunk.cut, page.read_cut);
+        assert_eq!(chunk.domain, page.domain);
+        assert_eq!(chunk.item_offset, item_offset);
+        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.offset, offset);
+        assert_eq!(
+            chunk.representation,
+            rustx::runtime_client::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1
+        );
+        assert!(chunk.bytes_base64.len() <= 87_384);
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.bytes_base64)
+            .unwrap();
+        assert!(part.len() <= 65_536);
+        bytes.extend_from_slice(&part);
+        assert!(bytes.len() <= 786_432, "finite original model fixture");
+        let Some(next) = chunk.next_offset else {
+            assert_eq!(bytes.len() as u64, chunk.readable_end);
+            break;
+        };
+        assert!(next > offset);
+        assert_eq!(next, bytes.len() as u64);
+        offset = next;
+    }
+    rustx::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
+        .expect("exact original native model value")
+}
+
+fn model_value(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    result: Option<RuntimeClientResult>,
+) -> SessionModelView {
+    let Some(RuntimeClientResult::DomainPage { page }) = result else {
+        panic!("model_get returns one bounded native domain page");
+    };
+    assert_eq!(page.domain, "model");
+    assert_eq!(page.items.len(), 1);
+    assert!(page.next_offset.is_none());
+    model_source(attachment, &page, page.items[0].offset)
+}
+
+fn read_model(attachment: &rustx::runtime_client::RuntimeAttachment, id: u64) -> SessionModelView {
+    model_value(
+        attachment,
+        attachment
+            .handle_request(RuntimeClientRequest::ModelGet {
+                id: RequestId::new(id),
+            })
+            .result,
+    )
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CatalogHeader {
+    #[serde(flatten)]
+    model: rustx::model::catalog::CatalogModelView,
+    profile_count: u64,
+    profiles_deferred: bool,
+}
+
+fn catalog_profiles(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    model_offset: u64,
+    total: u64,
+) -> Vec<rustx::model::catalog::ModelProfileView> {
+    let mut profiles = Vec::new();
+    let mut offset = 0;
+    loop {
+        let domain = format!("model_catalog.models.{model_offset}.profiles");
+        let response = attachment.handle_request(RuntimeClientRequest::CheckpointPageGet {
+            id: RequestId::new(901),
+            cut: cut.clone(),
+            domain: domain.clone(),
+            offset,
+            limit: 32,
+        });
+        let Some(RuntimeClientResult::CheckpointPage { page }) = response.result else {
+            panic!("same-cut native profile page: {:?}", response.error)
+        };
+        assert_eq!(page.read_cut, *cut);
+        assert_eq!(page.domain, domain);
+        assert_eq!(page.total, total);
+        assert!(page.items.len() <= 32);
+        for item in &page.items {
+            assert_eq!(item.offset, profiles.len() as u64);
+            profiles.push(model_source(attachment, &page, item.offset));
+        }
+        let Some(next) = page.next_offset else {
+            assert_eq!(profiles.len() as u64, total);
+            return profiles;
+        };
+        assert!(next > offset);
+        assert_eq!(next, profiles.len() as u64);
+        offset = next;
+    }
+}
+
+fn catalog_value(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    result: Option<RuntimeClientResult>,
+) -> rustx::model::catalog::ModelCatalogView {
+    let Some(RuntimeClientResult::DomainPage { page }) = result else {
+        panic!("model_catalog_get returns a bounded native collection page");
+    };
+    assert_eq!(page.domain, "model_catalog.models");
+    assert!(
+        page.next_offset.is_none(),
+        "the small fixture fits one page"
+    );
+    let models = page
+        .items
+        .iter()
+        .map(|item| {
+            let mut header: CatalogHeader = model_source(attachment, &page, item.offset);
+            assert!(header.model.profiles.len() <= 32);
+            assert_eq!(
+                header.profiles_deferred,
+                (header.model.profiles.len() as u64) < header.profile_count
+            );
+            if header.profile_count > 0 {
+                let frontier = page
+                    .collections
+                    .iter()
+                    .find(|frontier| {
+                        frontier.domain == format!("model_catalog.models.{}.profiles", item.offset)
+                    })
+                    .expect("advertised native profile frontier");
+                assert_eq!(frontier.total, header.profile_count);
+                assert_eq!(frontier.loaded, 0);
+                assert_eq!(frontier.next_offset, Some(0));
+                let profiles = catalog_profiles(
+                    attachment,
+                    &page.read_cut,
+                    item.offset,
+                    header.profile_count,
+                );
+                for inline in &header.model.profiles {
+                    assert_eq!(
+                        profiles.iter().find(|profile| profile.id == inline.id),
+                        Some(inline),
+                        "the finite header preserves original profile semantics"
+                    );
+                }
+                if !header.profiles_deferred {
+                    assert_eq!(header.model.profiles, profiles);
+                }
+                header.model.profiles = profiles;
+            }
+            header.model
+        })
+        .collect();
+    rustx::model::catalog::ModelCatalogView { models }
+}
 
 const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 
@@ -132,29 +311,32 @@ async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientH
 async fn standalone_model_selection_remains_writable_through_host_attachment_and_request() {
     let (provider, host) = runtime(vec![]).await;
     let (attachment, _) = host.attach(RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
-    let initial_cursor = host.snapshot().unwrap().1;
+    let initial_cursor = host.checkpoint().unwrap().cursor;
     let b = SessionModelConfig::of(model_ref("beta/model-b"));
-    let RuntimeClientResult::ModelSet { model } = host.model_set(b.clone()).unwrap() else {
+    let RuntimeClientResult::ModelSet = host.model_set(b.clone()).unwrap() else {
         panic!("host model selection")
     };
-    assert_eq!(model.configured, b);
+    assert_eq!(
+        model_value(&attachment, Some(host.model_get().unwrap())).configured,
+        b
+    );
     let a = SessionModelConfig::of(model_ref("alpha/model-a"));
-    let RuntimeClientResult::ModelSet { model } = attachment.model_set(a.clone()).unwrap() else {
+    let RuntimeClientResult::ModelSet = attachment.model_set(a.clone()).unwrap() else {
         panic!("attachment model selection")
     };
-    assert_eq!(model.configured, a);
+    assert_eq!(read_model(&attachment, 2).configured, a);
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(1),
         config: Box::new(b.clone()),
     });
     assert!(response.error.is_none());
-    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
+    let Some(RuntimeClientResult::ModelSet) = response.result else {
         panic!("request model selection")
     };
-    assert_eq!(model.configured, b);
-    let (snapshot, cursor) = host.snapshot().unwrap();
-    assert_eq!(snapshot.model.unwrap().configured, b);
-    assert!(cursor > initial_cursor);
+    assert_eq!(read_model(&attachment, 3).configured, b);
+    let checkpoint = host.checkpoint().unwrap();
+    assert_eq!(checkpoint.snapshot.model.unwrap().configured, b);
+    assert!(checkpoint.cursor > initial_cursor);
     assert!(provider.requests().is_empty());
     host.shutdown().await.unwrap();
 }
@@ -186,18 +368,22 @@ fn text(value: &str) -> Vec<UserContentBlock> {
     })]
 }
 
-/// `initialize` returns a snapshot whose session model section is complete
-/// and redacted.
+/// An identity receipt and its independent bounded checkpoint preserve the
+/// exact redacted session model state.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_initialize_snapshot_carries_the_redacted_session_model() {
+async fn the_identity_receipt_and_checkpoint_keep_the_redacted_session_model() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (_attachment, result) = host
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
-    let RuntimeClientResult::Initialized { snapshot, .. } = result else {
-        panic!("initialize returns the initial snapshot");
+    let RuntimeClientResult::Initialized { .. } = result else {
+        panic!("initialize returns the bounded identity receipt");
     };
 
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("explicit checkpoint read");
     let model = snapshot.model.as_ref().unwrap();
     assert_eq!(model.configured.model, model_ref("alpha/model-a"));
     assert_eq!(
@@ -266,9 +452,7 @@ async fn the_catalog_query_exposes_safe_selectable_models() {
     let response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(1),
     });
-    let Some(RuntimeClientResult::ModelCatalog { catalog }) = response.result else {
-        panic!("model_catalog_get returns the public catalog: {response:?}");
-    };
+    let catalog = catalog_value(&attachment, response.result);
 
     let references: Vec<String> = catalog
         .models
@@ -358,10 +542,11 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
         id: RequestId::new(1),
         config: Box::new(desired.clone()),
     });
-    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
-        panic!("model_set returns the session state: {response:?}");
-    };
-    let model = *model;
+    assert!(
+        matches!(response.result, Some(RuntimeClientResult::ModelSet)),
+        "{response:?}"
+    );
+    let model = read_model(&attachment, 100);
     assert_eq!(model.configured, desired);
     assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 1_000);
     assert!(!model.effective.as_ref().unwrap().reasoning_enabled);
@@ -381,23 +566,49 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
     );
 
     let events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::SessionModelChanged { .. }))
     })
     .await;
     let changes = events
         .iter()
-        .filter(|event| matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. }))
+        .filter(|event| {
+            event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::SessionModelChanged { .. }))
+        })
         .count();
     assert_eq!(changes, 1, "exactly one model-configuration change");
-    let RuntimeClientEvent::SessionModelChanged { model: published } =
-        &events.last().expect("an event").event
-    else {
-        panic!("the terminal event is the model change");
-    };
-    assert_eq!(**published, model, "the event carries the same state");
+    let published = events
+        .last()
+        .expect("an event")
+        .event
+        .facts()
+        .iter()
+        .find_map(|fact| {
+            if let RuntimeClientEvent::SessionModelChanged { model, .. } = fact {
+                Some(model)
+            } else {
+                None
+            }
+        })
+        .expect("the terminal transition contains the model change");
+    assert_eq!(
+        published.as_deref().expect("finite fixture model"),
+        &model,
+        "the event carries the same state"
+    );
 
     // The snapshot folds to the same value.
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(snapshot.model, Some(model));
     let serialized = serde_json::to_string(&events).expect("events serialize");
     assert!(!serialized.contains(FIXTURE_SECRET));
@@ -416,10 +627,7 @@ async fn model_get_returns_the_authoritative_session_state() {
         let response = attachment.handle_request(RuntimeClientRequest::ModelGet {
             id: RequestId::new(id),
         });
-        match response.result {
-            Some(RuntimeClientResult::Model { model }) => *model,
-            other => panic!("model_get returns the session model: {other:?}"),
-        }
+        model_value(&attachment, response.result)
     };
 
     let before = read(1);
@@ -488,9 +696,11 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         id: RequestId::new(2),
         config: Box::new(selected.clone()),
     });
-    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
-        panic!("primary selection returns the replacement: {response:?}");
-    };
+    assert!(
+        matches!(response.result, Some(RuntimeClientResult::ModelSet)),
+        "{response:?}"
+    );
+    let model = read_model(&attachment, 100);
 
     assert_eq!(model.configured, selected);
     assert_eq!(
@@ -510,7 +720,10 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         serde_json::json!("keep")
     );
 
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(snapshot.model.as_ref().unwrap().configured, selected);
     assert_eq!(
         snapshot.model.as_ref().unwrap().summary,
@@ -530,18 +743,18 @@ async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
         id: RequestId::new(1),
         config: Box::new(SessionModelConfig::of(model_ref("always/always-on"))),
     });
-    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
-        panic!("model_set returns the session model: {response:?}");
-    };
+    assert!(
+        matches!(response.result, Some(RuntimeClientResult::ModelSet)),
+        "{response:?}"
+    );
+    let model = read_model(&attachment, 100);
     assert_eq!(model.effective.as_ref().unwrap().profile, None);
     assert!(model.effective.as_ref().unwrap().reasoning_enabled);
 
     let catalog_response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
     });
-    let Some(RuntimeClientResult::ModelCatalog { catalog }) = catalog_response.result else {
-        panic!("model_catalog_get returns the catalog: {catalog_response:?}");
-    };
+    let catalog = catalog_value(&attachment, catalog_response.result);
     let always_on = catalog
         .models
         .iter()
@@ -579,9 +792,13 @@ async fn a_reconnecting_client_recovers_model_state_from_the_snapshot() {
     let (_second, result) = host
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("re-attach");
-    let RuntimeClientResult::Initialized { snapshot, .. } = result else {
+    let RuntimeClientResult::Initialized { .. } = result else {
         panic!("initialize returns the snapshot");
     };
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("explicit reconnect checkpoint read");
     assert_eq!(snapshot.model.as_ref().unwrap().configured, desired);
     assert_eq!(
         snapshot
@@ -629,7 +846,11 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
             .is_none()
     );
     receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -644,7 +865,10 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
             .is_none()
     );
 
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot.model.as_ref().unwrap().configured.model,
         model_ref("beta/model-b")
@@ -664,7 +888,7 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
 /// The incremental A -> B invariant, proven from the event stream alone.
 ///
 /// A continuously subscribed client must be able to answer "which model is
-/// the running attempt actually using" without a second `snapshot_get` and
+/// the running attempt actually using" without another bounded checkpoint read and
 /// without inferring anything from ordering. `attempt_started` therefore
 /// carries the frozen attempt model:
 ///
@@ -710,14 +934,25 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
             .is_none()
     );
     let observed = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
     })
     .await;
     let Some(RuntimeClientEvent::AttemptStarted {
         attempt_id: first_attempt,
         model: Some(first_model),
         ..
-    }) = observed.last().map(|event| event.event.clone())
+    }) = observed.last().and_then(|event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .find(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
+            .cloned()
+    })
     else {
         panic!("the first attempt started");
     };
@@ -741,20 +976,29 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
         "live selection commits: {response:?}"
     );
     let changed = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::SessionModelChanged { .. }))
     })
     .await;
     assert!(
-        !changed
+        !changed.iter().any(|event| event
+            .event
+            .facts()
             .iter()
-            .any(|event| matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })),
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))),
         "selection does not readmit or rewrite the running Attempt"
     );
 
     // The running attempt is still, truthfully, on A.
-    let (during, _) = host.snapshot().expect("snapshot");
+    let (during, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     let attempt = during.attempt.as_ref().expect("the running attempt");
-    assert_eq!(attempt.attempt_id, first_attempt);
+    assert_eq!(attempt.attempt_id.as_ref(), Some(&first_attempt));
     assert_eq!(
         attempt.model.as_ref().unwrap().primary.model,
         model_ref("alpha/model-a"),
@@ -767,13 +1011,22 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
 
     release.send_replace(true);
     let settled = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
-    assert!(matches!(
-        settled.last().expect("settlement").event,
-        RuntimeClientEvent::AttemptSettled { .. }
-    ));
+    assert!(
+        settled
+            .last()
+            .expect("settlement")
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+    );
 
     // The next admission uses B, announced on the same self-contained event.
     assert!(
@@ -786,14 +1039,25 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
             .is_none()
     );
     let next = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
     })
     .await;
     let Some(RuntimeClientEvent::AttemptStarted {
         attempt_id: second_attempt,
         model: Some(second_model),
         ..
-    }) = next.last().map(|event| event.event.clone())
+    }) = next.last().and_then(|event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .find(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
+            .cloned()
+    })
     else {
         panic!("the second attempt started");
     };
@@ -879,7 +1143,10 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
     let (attachment, _) = host
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
-    let (before, _) = host.snapshot().expect("snapshot");
+    let (before, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     for (id, config, layer) in [
         (
             1,
@@ -895,7 +1162,7 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
         ),
     ] {
         let config: SessionModelConfig =
-            serde_json::from_value(config).expect("Runtime Client JSON");
+            rustx::runtime_client::structural_json::decode(config).expect("Runtime Client JSON");
         let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
             id: RequestId::new(id),
             config: Box::new(config),
@@ -912,7 +1179,10 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
         for spelling in ["request_params", "requestParams", "TOML", "toml"] {
             assert!(!message.contains(spelling), "{message}");
         }
-        let (after, _) = host.snapshot().expect("snapshot");
+        let (after, _) = host
+            .checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+            .expect("snapshot");
         assert_eq!(
             before.model, after.model,
             "rejection must not publish model state"

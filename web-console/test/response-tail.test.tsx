@@ -1,20 +1,20 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { ConversationStats } from '../src/app/agent/UsageStats';
+import { TurnUsage, ConversationStats } from '../src/app/agent/UsageStats';
 import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v49';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v50';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });
-const response: CompletedResponseView = { closing_message_id: 'final-a', origin: { conversation_id: 'origin-conversation', closing_message_id: 'final-a', attempt_id: 'attempt-a' }, completed_at: '2026-09-19T08:00:00Z', surface_revision: '42', retry_message_id: 'input-a', usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } };
+const response: CompletedResponseView = {closing_locator:{type:'by_message_id',message_id:'final-a'},deferred_fields:[],retry_locator:{type:'by_message_id',message_id:'input-a'}, closing_message_id: 'final-a', origin: {attempt_id_source:null, conversation_id: 'origin-conversation', closing_message_id: 'final-a', attempt_id: 'attempt-a' }, completed_at: '2026-09-19T08:00:00Z', surface_revision: '42', retry_message_id: 'input-a', usage: { input_tokens: "100", output_tokens: "20", total_tokens: "120" } };
 function conversation(): RuntimeClientSnapshot {
   return { ...snapshot(), transcript: { entries: [
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'input-a', source: 'human', timestamp: '2026-09-19T07:59:00Z', content: [{ type: 'text', text: 'Question' }] } } },
     { cursor: '2', item: { type: 'message', message: { role: 'assistant', id: 'internal-a', content: [{ type: 'text', text: 'Intermediate prose' }] } } },
     { cursor: '3', completed_response: response, item: { type: 'message', message: { role: 'assistant', id: 'final-a', content: [{ type: 'reasoning', text: 'Private reasoning' }, { type: 'text', text: 'Final ' }, { type: 'refusal', text: 'answer' }] } } },
-  ], statistics: { turns: '12', steps: '34', completed_responses: '12', model_requests: '34', requests_with_usage: '34', reported_usage: { input_tokens: 1000, output_tokens: 200, total_tokens: 1200 } } } };
+  ], statistics: { turns: '12', steps: '34', completed_responses: '12', model_requests: '34', requests_with_usage: '34', reported_usage: { input_tokens: "1000", output_tokens: "200", total_tokens: "1200" } } } };
 }
 it('durable User chrome has Copy and only the native timestamp, without primary lineage actions', () => {
   const ui=render(<AgentTranscript snapshot={conversation()} onHistorical={vi.fn()}/>);
@@ -67,8 +67,8 @@ it('paging during live refresh preserves exact response facts and freshest nativ
 it('composer pills read native totals and the last measured request, never the loaded transcript', async () => {
   const state=conversation(); state.transcript.entries=[];
   const statistics={...state.transcript.statistics!,timing:{model_ms:20500,tool_ms:9652000,mean_ttft_ms:3100,output_tokens_per_second:49.2},
-    reported_usage:{input_tokens:22297,output_tokens:543,total_tokens:22840,details:{cached_input_tokens:13568}}};
-  const occupancy={estimated: false, input_tokens:7700,context_window_tokens:262144,model:'historical-model',breakdown:{system_tokens:1900,tool_tokens:6000,message_tokens:0}};
+    reported_usage:{input_tokens:'22297',output_tokens:'543',total_tokens:'22840',details:{cached_input_tokens:'13568'}}};
+  const occupancy={estimated: false, model_deferred:false, model_source:null, input_tokens:'7700',context_window_tokens:'262144',model:'historical-model',breakdown:{system_tokens:'1900',tool_tokens:'6000',message_tokens:'0'}};
   act(()=>localeController.setLocale('zh'));
   const ui=render(<ConversationStats statistics={statistics} occupancy={occupancy}/>);
   fireEvent.click(ui.getByRole('button',{name:'12 轮 34 步 · 49 词元/秒'}));
@@ -84,7 +84,7 @@ it('composer pills read native totals and the last measured request, never the l
   expect(context.getByText('7.7K / 262K')).toBeTruthy(); expect(context.getByText('~6K')).toBeTruthy();
   // A zero part draws no segment: the bar keeps only the system and tool parts.
   expect(document.querySelectorAll('[role="dialog"] [style*="width"]')).toHaveLength(2);
-  ui.rerender(<ConversationStats statistics={{...statistics,timing:undefined,requests_with_usage:'33',reported_usage:{input_tokens:100,output_tokens:20,total_tokens:120}}}/>);
+  ui.rerender(<ConversationStats statistics={{...statistics,timing:undefined,requests_with_usage:'33',reported_usage:{input_tokens:"100",output_tokens:"20",total_tokens:"120"}}}/>);
   expect(ui.getByText('12 轮 34 步').closest('button')).toBeNull();
   expect(ui.queryByRole('button',{name:/上下文已用/})).toBeNull();
   fireEvent.click(ui.getByRole('button',{name:'120 词元'}));
@@ -104,7 +104,7 @@ it('an unresolved response outside the fresh window is reread instead of freezin
 it('the Turn usage dialog splits cached input and names the requests\' models', async () => {
   const state = conversation();
   state.transcript.entries![2].completed_response = { ...response, models: ['kimi-k3', 'deepseek-v4'], timing: { total_duration_ms: 19000 },
-    usage: { input_tokens: 15055, output_tokens: 406, total_tokens: 15461, details: { cached_input_tokens: 7168, reasoning_tokens: 120 } } };
+    usage: { input_tokens: "15055", output_tokens: "406", total_tokens: "15461", details: { cached_input_tokens: "7168", reasoning_tokens: "120" } } };
   const ui = render(<AgentTranscript snapshot={state}/>);
   fireEvent.click(ui.getByRole('button', { name: 'Usage 15.5K token' }));
   const detail = within(await ui.findByRole('dialog', { name: 'Turn usage' }));
@@ -116,4 +116,16 @@ it('the Turn usage dialog splits cached input and names the requests\' models', 
   expect(detail.getByText('(120 token reasoning)')).toBeTruthy();
   // The process header owns the Turn duration; the actions carry no timing pill.
   expect(ui.queryByRole('button', { name: /Ran for/ })).toBeNull();
+});
+
+it('T14 the real usage dialog renders u64MAX and a one-token cache miss exactly', async () => {
+  const maximum = '18446744073709551615';
+  const ui = render(<TurnUsage models={[]} usage={{input_tokens:maximum,output_tokens:'0',total_tokens:maximum,details:{cached_input_tokens:'18446744073709551614'}}}/>);
+  fireEvent.click(ui.getByRole('button'));
+  const dialog = await ui.findByRole('dialog');
+  expect(dialog.textContent).toContain('18,446,744,073,709,551,615');
+  expect(dialog.textContent).toContain('18,446,744,073,709,551,614');
+  expect(dialog.textContent).toContain('99.99999999999999999%');
+  expect(dialog.textContent).toContain('Uncached input1 token');
+  expect(dialog.textContent).not.toContain('18,446,744,073,709,552,000');
 });

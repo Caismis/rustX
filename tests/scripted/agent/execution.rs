@@ -670,7 +670,7 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             result: success_result("listed"),
         },
         RuntimeEvent::ToolMessageCommitted {
-            message_id: MessageId::new("attempt-1-tool-1-call-1"),
+            message_id: MessageId::new("attempt-1-tool-1-0"),
             tool_call_id: ToolCallId::new("call-1"),
         },
         RuntimeEvent::TurnCompleted,
@@ -2655,7 +2655,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
         .collect();
     assert_eq!(
         ids,
-        vec!["msg-user-1", "attempt-1-agent-1", "attempt-1-tool-1-call-1"],
+        vec!["msg-user-1", "attempt-1-agent-1", "attempt-1-tool-1-0"],
         "the continuation carries input + Assistant + tool result only"
     );
 }
@@ -2741,7 +2741,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
         vec![
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
             "attempt-1-agent-2".to_owned(),
@@ -2852,15 +2852,17 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
         vec![
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             "msg-corr-1".to_owned(),
             "msg-corr-2".to_owned(),
         ],
         "A then B in inbound sequence order, never a request containing only A"
     );
     assert_eq!(
-        requests[1].messages[3..]
+        requests[1]
+            .messages
             .iter()
+            .skip(3)
             .filter(|block| {
                 matches!(
                     block,
@@ -3428,10 +3430,10 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
         vec![
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
-            "attempt-1-tool-1-call-1".to_owned(),
+            "attempt-1-tool-1-0".to_owned(),
             "msg-batch-a".to_owned(),
             "attempt-1-agent-2".to_owned(),
-            "attempt-1-tool-2-call-2".to_owned(),
+            "attempt-1-tool-2-0".to_owned(),
             "msg-batch-c".to_owned(),
             "attempt-1-agent-3".to_owned(),
         ],

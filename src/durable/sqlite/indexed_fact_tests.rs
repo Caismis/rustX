@@ -48,6 +48,41 @@ fn execution_cost(connection: &Connection, query: &FactQuery) -> (usize, i32) {
     (count, steps)
 }
 
+fn freeze_indexed_input(store: &SqliteConversationStore, snapshot: &mut RequestSnapshot) {
+    let history = store.projected_history().unwrap();
+    // Query-cost fixtures use the same certified selection as native request
+    // assembly; cold freeze and reconstruction have dedicated coverage.
+    let (messages, selected) = crate::model::input::assemble_selected_model_input(
+        store.conversation_id(),
+        &history.messages,
+        &history.input_manifest,
+        &[],
+        None,
+        None,
+    )
+    .unwrap();
+    let request = ModelRequest {
+        continuation_source: None,
+        images: crate::model::images::ResolvedImages::new(),
+        invocation: snapshot.invocation.clone(),
+        messages,
+        tools: snapshot.tool_definitions.clone(),
+        effective_system_prompt: snapshot.effective_system_prompt.clone(),
+        continuation: snapshot.continuation.clone(),
+    };
+    snapshot.history_cut = history.cut.clone();
+    snapshot.tool_associations = crate::model::occurrence::freeze_associations(
+        &history,
+        &snapshot.request_id,
+        &request,
+        None,
+    )
+    .unwrap();
+    snapshot
+        .freeze_selected_input(store.conversation_id(), &request, &selected)
+        .unwrap();
+}
+
 fn terminal(store: &SqliteConversationStore, retry: u32, measured: bool) -> RuntimeEventEnvelope {
     let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
     // These are separate native Steps, not thousands of retries in one Step.
@@ -55,7 +90,7 @@ fn terminal(store: &SqliteConversationStore, retry: u32, measured: bool) -> Runt
     snapshot.identity.retry_number = 0;
     snapshot.request_id = snapshot.identity.request_id();
     snapshot.provisional_message_id = snapshot.identity.provisional_message_id();
-    freeze_test_input(store, &mut snapshot, &[]);
+    freeze_indexed_input(store, &mut snapshot);
     store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap();
@@ -204,7 +239,9 @@ fn indexed_occupancy_propagates_missing_and_corrupt_evidence() {
     store
         .lock()
         .unwrap()
-        .execute("DELETE FROM request_snapshots", [])
+        .execute_batch(
+            "PRAGMA foreign_keys=OFF; DELETE FROM request_snapshots; PRAGMA foreign_keys=ON",
+        )
         .unwrap();
     assert!(crate::context::occupancy::read(&store, event.sequence).is_err());
     store.lock().unwrap().execute("UPDATE events SET event_json=json_set(event_json, '$.event.usage', 'corrupt') WHERE sequence=?1", [event.sequence]).unwrap();
@@ -347,7 +384,6 @@ fn inherited_seed(count: usize, measured_last: bool) -> LineageSeed {
                 ..Default::default()
             }),
         });
-
     }
     LineageSeed::replayed(canonical, history)
         .unwrap()
@@ -387,9 +423,7 @@ fn inherited_lookup_cost(store: &SqliteConversationStore) -> (i32, usize) {
 #[test]
 fn inherited_occupancy_is_constant_cost_after_large_atomic_bootstrap_and_cold_reopen() {
     let small = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-    small
-        .initialize_lineage(&inherited_seed(8, true))
-        .unwrap();
+    small.initialize_lineage(&inherited_seed(8, true)).unwrap();
     let small_cost = inherited_lookup_cost(&small);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("destination.sqlite");
@@ -398,7 +432,8 @@ fn inherited_occupancy_is_constant_cost_after_large_atomic_bootstrap_and_cold_re
     let seed = inherited_seed(2048, true);
     assert_eq!(seed.surface_history().len(), 2048);
     destination.initialize_lineage(&seed).unwrap();
-    let expected = crate::context::occupancy::inherit(seed.turns(), seed.canonical(), seed.projections());
+    let expected =
+        crate::context::occupancy::inherit(seed.turns(), seed.canonical(), seed.projections());
     assert_eq!(destination.load_inherited_occupancy().unwrap(), expected);
     let large_cost = inherited_lookup_cost(&destination);
     assert_eq!(large_cost, small_cost);
@@ -409,13 +444,10 @@ fn inherited_occupancy_is_constant_cost_after_large_atomic_bootstrap_and_cold_re
     let selected = destination
         .read_lineage_cut(destination.load_head().unwrap().revision)
         .unwrap();
-    let second_seed = LineageSeed::replayed(
-        selected.canonical,
-        selected.surface_history,
-    )
-    .unwrap()
-    .with_turns(selected.turns)
-    .unwrap();
+    let second_seed = LineageSeed::replayed(selected.canonical, selected.surface_history)
+        .unwrap()
+        .with_turns(selected.turns)
+        .unwrap();
     let second_path = directory.path().join("second.sqlite");
     let second_id = ConversationId::generate();
     let second = SqliteConversationStore::open(second_id.clone(), &second_path).unwrap();
@@ -434,35 +466,64 @@ fn inherited_occupancy_is_constant_cost_after_large_atomic_bootstrap_and_cold_re
 
 #[test]
 fn inherited_occupancy_absence_and_selected_projection_are_authoritative() {
-    use crate::scripted_suites::support::context::{checkpoint_fixture,checkpoint_commit_fixture};
-    for (compacted,measured,present) in [(false,true,true),(false,false,false),(true,true,false),(true,false,false)] {
-        let source=SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-        let seed=inherited_seed(8,measured);
+    use crate::scripted_suites::support::context::{checkpoint_commit_fixture, checkpoint_fixture};
+    for (compacted, measured, present) in [
+        (false, true, true),
+        (false, false, false),
+        (true, true, false),
+        (true, false, false),
+    ] {
+        let source = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let seed = inherited_seed(8, measured);
         source.initialize_lineage(&seed).unwrap();
         if compacted {
-            source.commit_projection(checkpoint_commit_fixture(&source,checkpoint_fixture(&source,"P1",1,"earlier context"),None)).unwrap();
+            source
+                .commit_projection(checkpoint_commit_fixture(
+                    &source,
+                    checkpoint_fixture(&source, "P1", 1, "earlier context"),
+                    None,
+                ))
+                .unwrap();
         }
-        let destination=SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
-        let mut inherited=source.projection_timeline(crate::context::checkpoint::ProjectionActivationId(0),64).unwrap();
+        let destination = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        let mut inherited = source
+            .projection_timeline(crate::context::checkpoint::ProjectionActivationId(0), 64)
+            .unwrap();
         for checkpoint in &mut inherited {
-            checkpoint.candidate.read_cut.conversation_id=destination.conversation_id().clone();
-            checkpoint.candidate.read_cut.journal=crate::context::resources::JournalFrontier(0);
-            checkpoint.candidate.read_cut.transcript=crate::durable::TranscriptCursor::new(0);
-            checkpoint.activation.destination_installation=Some(crate::runtime::identity::LineageInstallationId::new("installation:occupancy"));
+            checkpoint.candidate.read_cut.conversation_id = destination.conversation_id().clone();
+            checkpoint.candidate.read_cut.journal = crate::context::resources::JournalFrontier(0);
+            checkpoint.candidate.read_cut.transcript = crate::durable::TranscriptCursor::new(0);
+            checkpoint.activation.destination_installation = Some(
+                crate::runtime::identity::LineageInstallationId::new("installation:occupancy"),
+            );
             for item in &mut checkpoint.candidate.items {
                 match &mut item.message {
-                    crate::context::checkpoint::CheckpointMessage::Original(reference)=>reference.conversation_id=destination.conversation_id().clone(),
-                    crate::context::checkpoint::CheckpointMessage::Derived(derived)=>for reference in &mut derived.sources {reference.conversation_id=destination.conversation_id().clone();},
+                    crate::context::checkpoint::CheckpointMessage::Original(reference) => {
+                        reference.conversation_id = destination.conversation_id().clone();
+                    }
+                    crate::context::checkpoint::CheckpointMessage::Derived(derived) => {
+                        for reference in &mut derived.sources {
+                            reference.conversation_id = destination.conversation_id().clone();
+                        }
+                    }
                 }
             }
-            checkpoint.fingerprint=checkpoint.candidate.fingerprint();
+            checkpoint.fingerprint = checkpoint.candidate.fingerprint();
         }
-        let seed=seed.with_projections(inherited).unwrap();
+        let seed = seed.with_projections(inherited).unwrap();
         destination.initialize_lineage(&seed).unwrap();
         destination.initialize(seed.canonical()).unwrap();
-        assert_eq!(destination.load_inherited_occupancy().unwrap().is_some(),present);
-        assert_eq!(crate::context::occupancy::read(&destination,0).unwrap().is_some(),present);
-        assert_eq!(destination.presentation_frontier().unwrap(),0);
+        assert_eq!(
+            destination.load_inherited_occupancy().unwrap().is_some(),
+            present
+        );
+        assert_eq!(
+            crate::context::occupancy::read(&destination, 0)
+                .unwrap()
+                .is_some(),
+            present
+        );
+        assert_eq!(destination.presentation_frontier().unwrap(), 0);
     }
 }
 
@@ -544,12 +605,10 @@ fn inherited_occupancy_rejects_invalid_seed_and_missing_durable_shape() {
         .unwrap()
         .context_window_tokens = 0;
     assert!(
-        LineageSeed::replayed(
-            seed.canonical().to_vec(),
-            seed.surface_history().to_vec())
-        .unwrap()
-        .with_turns(turns)
-        .is_err()
+        LineageSeed::replayed(seed.canonical().to_vec(), seed.surface_history().to_vec())
+            .unwrap()
+            .with_turns(turns)
+            .is_err()
     );
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.lock().unwrap().execute_batch("CREATE TRIGGER reject_marker BEFORE UPDATE OF bootstrap_initialized ON rustx_store BEGIN SELECT RAISE(ABORT,'scripted marker failure'); END;").unwrap();
@@ -582,17 +641,33 @@ fn inherited_occupancy_rejects_invalid_seed_and_missing_durable_shape() {
 
 #[test]
 fn bootstrap_reinitialization_rejects_changed_canonical_bytes_with_the_same_reading() {
-    let seed=inherited_seed(3,true);
-    let mut canonical=seed.canonical().to_vec();
-    let MessageBlock::Assistant(message)=&mut canonical[1] else {unreachable!()};
-    message.content=vec![AssistantContentBlock::Text(TextBlock {text:"changed immutable input".into()})];
-    let other=LineageSeed::replayed(canonical,seed.surface_history().to_vec()).unwrap().with_turns(seed.turns().to_vec()).unwrap();
-    assert_eq!(crate::context::occupancy::inherit(seed.turns(),seed.canonical(),seed.projections()),crate::context::occupancy::inherit(other.turns(),other.canonical(),other.projections()));
-    let store=SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let seed = inherited_seed(3, true);
+    let mut canonical = seed.canonical().to_vec();
+    let MessageBlock::Assistant(message) = &mut canonical[1] else {
+        unreachable!()
+    };
+    message.content = vec![AssistantContentBlock::Text(TextBlock {
+        text: "changed immutable input".into(),
+    })];
+    let other = LineageSeed::replayed(canonical, seed.surface_history().to_vec())
+        .unwrap()
+        .with_turns(seed.turns().to_vec())
+        .unwrap();
+    assert_eq!(
+        crate::context::occupancy::inherit(seed.turns(), seed.canonical(), seed.projections()),
+        crate::context::occupancy::inherit(other.turns(), other.canonical(), other.projections())
+    );
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.initialize_lineage(&seed).unwrap();
-    assert!(matches!(store.initialize_lineage(&other),Err(ConversationStoreError::InitialHistoryMismatch)));
+    assert!(matches!(
+        store.initialize_lineage(&other),
+        Err(ConversationStoreError::InitialHistoryMismatch)
+    ));
     store.initialize(seed.canonical()).unwrap();
-    assert_eq!(store.load_inherited_occupancy().unwrap(),crate::context::occupancy::inherit(seed.turns(),seed.canonical(),seed.projections()));
+    assert_eq!(
+        store.load_inherited_occupancy().unwrap(),
+        crate::context::occupancy::inherit(seed.turns(), seed.canonical(), seed.projections())
+    );
 }
 
 #[test]
@@ -780,6 +855,27 @@ fn measured_vm<T>(store: &SqliteConversationStore, read: impl FnOnce() -> T) -> 
     (result, count.load(Ordering::Relaxed))
 }
 
+// Bridge only the complete cut returned by the same original native window
+// transaction. A Journal number alone cannot authorize canonical decoration.
+fn decorate_original_window(
+    store: &SqliteConversationStore,
+    window: crate::durable::reading::DurableConversationWindow,
+) -> crate::runtime_client::snapshot::RuntimeClientTranscriptPage {
+    let inherited_through = window.page.inherited_through;
+    let read = window.cut;
+    let through = read.journal;
+    let mut page = crate::runtime_client::snapshot::transcript_page_view(window.page).unwrap();
+    page.source_cut = Some(crate::durable::observation::ObservationReadCut {
+        ledger_through: read.ledger_through,
+        transcript_total: read.transcript_total,
+        surface_revision: read.surface_revision,
+        inherited_through,
+        read,
+    });
+    crate::runtime_client::response::decorate_window(store, &mut page, through).unwrap();
+    page
+}
+
 #[test]
 #[allow(clippy::too_many_lines)] // One query-work comparison across immutable seed sizes.
 fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
@@ -835,7 +931,7 @@ fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
             println!("{plan}");
             assert!(
                 plan.contains(
-                    "SEARCH m USING INDEX sqlite_autoindex_inherited_message_membership_1"
+                    "SEARCH m USING INDEX sqlite_autoindex_inherited_message_membership_2"
                 ),
                 "{plan}"
             );
@@ -858,15 +954,22 @@ fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
                     1,
                 )
                 .unwrap();
-            let mut page =
-                crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
-            crate::runtime_client::response::decorate_window(&store, &mut page, read.cut.journal)
-                .unwrap();
-            assert_eq!(page.inherited_through.unwrap().get(), seed.canonical().len() as u64);
-            // This immutable lineage-wide metadata intentionally differs with seed size;
-            // the selected historical payload and its query work remain identical.
-            page.inherited_through = None;
-            page
+            let page = decorate_original_window(&store, read);
+            assert_eq!(
+                page.inherited_through.unwrap().get(),
+                seed.canonical().len() as u64
+            );
+            let source = page.source_cut.as_ref().unwrap();
+            assert_eq!(&source.read.conversation_id, store.conversation_id());
+            assert_eq!(source.ledger_through, seed.canonical().len() as u64);
+            assert_eq!(
+                source.inherited_through.get(),
+                seed.canonical().len() as u64
+            );
+            assert_eq!(source.read, store.conversation_read_cut().unwrap());
+            // Only semantic selected entries are compared across distinct native
+            // destinations; each complete source cut was independently checked.
+            page.entries
         });
         if let Some(expected) = &expected {
             assert_eq!(&window, expected);
@@ -978,33 +1081,66 @@ fn inherited_provenance_corruption_and_mismatched_reinitialization_fail_closed()
     assert!(store.lock().unwrap().execute("UPDATE inherited_message_membership SET turn_ordinal=999 WHERE assistant_message_id='inherited-0'",[]).is_err());
     let mut turns = seed.turns().to_vec();
     turns[0].started_at = chrono::DateTime::from_timestamp(1_700_000_002, 0);
-    let different = LineageSeed::replayed(
-        seed.canonical().to_vec(),
-        seed.surface_history().to_vec(),
-    )
-    .unwrap()
-    .with_turns(turns)
-    .unwrap()
-    .with_completed_responses(seed.completed_responses().to_vec())
-    .unwrap();
+    let different =
+        LineageSeed::replayed(seed.canonical().to_vec(), seed.surface_history().to_vec())
+            .unwrap()
+            .with_turns(turns)
+            .unwrap()
+            .with_completed_responses(seed.completed_responses().to_vec())
+            .unwrap();
     assert!(matches!(
         store.initialize_lineage(&different),
         Err(ConversationStoreError::InitialHistoryMismatch)
     ));
     let mut responses = seed.completed_responses().to_vec();
     responses[0].models.push("other/model".into());
-    let different = LineageSeed::replayed(
-        seed.canonical().to_vec(),
-        seed.surface_history().to_vec(),
-    )
-    .unwrap()
-    .with_turns(seed.turns().to_vec())
-    .unwrap()
-    .with_completed_responses(responses)
-    .unwrap();
+    let different =
+        LineageSeed::replayed(seed.canonical().to_vec(), seed.surface_history().to_vec())
+            .unwrap()
+            .with_turns(seed.turns().to_vec())
+            .unwrap()
+            .with_completed_responses(responses)
+            .unwrap();
     assert!(matches!(
         store.initialize_lineage(&different),
         Err(ConversationStoreError::InitialHistoryMismatch)
+    ));
+}
+
+#[test]
+fn bootstrap_marker_and_provenance_are_atomic_before_inherited_index_reads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bootstrap-order.sqlite");
+    let id = ConversationId::generate();
+    let seed = response_seed(2);
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
+    assert_eq!(
+        store.load_inherited_responses().unwrap(),
+        seed.completed_responses()
+    );
+    store.initialize_lineage(&seed).unwrap();
+    drop(store);
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE rustx_store SET bootstrap_initialized=0 WHERE id=1",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let store = SqliteConversationStore::open(id, &path).unwrap();
+    assert!(matches!(
+        store.load_inherited_occupancy(),
+        Err(ConversationStoreError::Storage(_))
+    ));
+    assert!(matches!(
+        store.initialize_lineage(&seed),
+        Err(ConversationStoreError::Storage(_))
     ));
 }
 
@@ -1044,11 +1180,13 @@ fn inherited_provenance_selected_cuts_survive_destination_only_cold_reopen() {
             &selected.surface_history,
             &selected.completed_responses,
             &selected.turns,
+            &selected.raw_tool_arguments,
         )
         .unwrap();
         assert_eq!(
             seed.completed_responses().len(),
-            usize::try_from(revision.saturating_sub(2)).unwrap() - usize::from(incomplete && revision > 2)
+            usize::try_from(revision.saturating_sub(2)).unwrap()
+                - usize::from(incomplete && revision > 2)
         );
         assert_eq!(
             seed.turns()[0].outcome,
@@ -1082,7 +1220,14 @@ fn inherited_provenance_selected_cuts_survive_destination_only_cold_reopen() {
             destination
                 .inherited_responses_for(&seed.turns()[0].process_message_ids)
                 .unwrap(),
-            seed.completed_responses().iter().filter(|r| r.process_message_ids.iter().any(|id| seed.turns()[0].process_message_ids.contains(id))).cloned().collect::<Vec<_>>()
+            seed.completed_responses()
+                .iter()
+                .filter(|r| r
+                    .process_message_ids
+                    .iter()
+                    .any(|id| seed.turns()[0].process_message_ids.contains(id)))
+                .cloned()
+                .collect::<Vec<_>>()
         );
         destination.initialize(seed.canonical()).unwrap();
         assert_eq!(destination.presentation_frontier().unwrap(), 0);
@@ -1122,9 +1267,7 @@ fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
                 3,
             )
             .unwrap();
-        let mut page = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
-        crate::runtime_client::response::decorate_window(&store, &mut page, cut.journal).unwrap();
-        page
+        decorate_original_window(&store, read)
     };
     let before = window();
     for (before, limit, expected) in [(1, 3, 0), (2, 1, 1), (4, 1, 1), (6, 4, 4)] {
@@ -1137,8 +1280,7 @@ fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
                 limit,
             )
             .unwrap();
-        let mut page = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
-        crate::runtime_client::response::decorate_window(&store, &mut page, cut.journal).unwrap();
+        let page = decorate_original_window(&store, read);
         assert_eq!(page.entries.len(), expected);
         if before == 2 {
             assert!(page.entries[0].turn_process.is_none());
@@ -1206,8 +1348,7 @@ fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
     let read = store
         .conversation_window(&ConversationWindowAt::Latest, 3)
         .unwrap();
-    let mut mixed = crate::runtime_client::snapshot::transcript_page_view(read.page).unwrap();
-    crate::runtime_client::response::decorate_window(&store, &mut mixed, read.cut.journal).unwrap();
+    let mixed = decorate_original_window(&store, read);
     assert_eq!(
         store.presentation_frontier().unwrap(),
         frontier,
@@ -1271,6 +1412,303 @@ fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_54() {
     ));
 }
 
+// A descriptor validates only its own finite provenance evidence. Exact native
+// membership is validated when this actual bounded transcript member is read.
+fn materialized_member_process(
+    store: &SqliteConversationStore,
+    id: &str,
+) -> Result<Option<crate::runtime_client::response::TurnProcessView>, ConversationStoreError> {
+    let transcript: u64 = store.lock().unwrap().query_row(
+        "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+        [id], |row| row.get(0),
+    ).unwrap();
+    let cut = store.observation_read_cut()?;
+    store.observation_transcript_process(&cut, transcript)
+}
+
+fn deny_unloaded_turn_members(
+    context: rusqlite::hooks::AuthContext<'_>,
+) -> rusqlite::hooks::Authorization {
+    use rusqlite::hooks::{AuthAction, Authorization};
+    match context.action {
+        AuthAction::Read {
+            table_name: "inherited_message_membership",
+            ..
+        }
+        | AuthAction::Read {
+            table_name: "inherited_turn_provenance",
+            column_name: "payload",
+        }
+        | AuthAction::Read {
+            table_name: "message_ledger",
+            column_name: "message_json",
+        } => Authorization::Deny,
+        _ => Authorization::Allow,
+    }
+}
+
+#[test]
+fn inherited_turn_descriptors_validate_finite_evidence_without_enumerating_owner_members() {
+    let mut costs = Vec::new();
+    for count in [8, 128, 2048] {
+        let base = inherited_seed(count, true);
+        let mut turn = base.turns()[0].clone();
+        turn.process_message_ids = base
+            .turns()
+            .iter()
+            .flat_map(|turn| turn.process_message_ids.clone())
+            .collect();
+        let seed =
+            LineageSeed::replayed(base.canonical().to_vec(), base.surface_history().to_vec())
+                .unwrap()
+                .with_turns(vec![turn])
+                .unwrap();
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .authorizer(Some(deny_unloaded_turn_members));
+        provenance::take_turn_header_validations();
+        provenance::take_turn_header_read_work();
+        provenance::take_turn_validation_counts();
+        let (page, work) = measured_vm(&store, || store.observation_turns(Some(0), 1).unwrap());
+        assert_eq!(page.total, 1);
+        assert_eq!(page.turns.len(), 1);
+        assert_eq!(page.turns[0].ordinal, 1);
+        assert_eq!(
+            page.turns[0].id.attempt_id.as_ref(),
+            Some(&seed.turns()[0].id.attempt_id)
+        );
+        assert_eq!(provenance::take_turn_header_validations(), 1);
+        let (rows, materialized) = provenance::take_turn_header_read_work();
+        assert_eq!(rows, 1);
+        assert!(materialized <= 16_384 + 64 + 32);
+        assert_eq!(provenance::take_turn_validation_counts(), (0, 0));
+        store.lock().unwrap().authorizer(
+            None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+        );
+        store
+            .lock()
+            .unwrap()
+            .authorizer(Some(super::deny_selected_original_columns));
+        for id in [
+            &seed.turns()[0].process_message_ids[0],
+            seed.turns()[0].process_message_ids.last().unwrap(),
+        ] {
+            let process = materialized_member_process(&store, id.as_str())
+                .unwrap()
+                .unwrap();
+            assert_eq!(process.message_count, u32::try_from(count).unwrap());
+            assert_eq!(
+                process.attempt_id.as_ref(),
+                Some(&seed.turns()[0].id.attempt_id)
+            );
+        }
+        store.lock().unwrap().authorizer(
+            None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+        );
+        assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
+        costs.push(work);
+    }
+    assert!(costs.iter().all(|work| *work == costs[0]), "{costs:?}");
+}
+
+fn tamper_finite_turn_headers(store: &SqliteConversationStore, damage: &str) {
+    let connection = store.lock().unwrap();
+    for column in ["observation_json", "observation_turn_display"] {
+        let bytes: Vec<u8> = connection
+            .query_row(
+                &format!("SELECT {column} FROM inherited_turn_provenance WHERE ordinal=0"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        match damage {
+            "owner" => value["value"]["id"]["attempt_id"] = "another-real-owner".into(),
+            "preview" => value["value"]["response"] = "another finite preview".into(),
+            "cursor" => value["value"]["cursor"] = 3.into(),
+            "bytes" => {}
+            _ => unreachable!(),
+        }
+        let mut changed = serde_json::to_vec(&value).unwrap();
+        if damage == "bytes" {
+            changed.push(b' ');
+        }
+        connection
+            .execute(
+                &format!("UPDATE inherited_turn_provenance SET {column}=?1 WHERE ordinal=0"),
+                [changed],
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn inherited_turn_row_witness_rejects_changed_owner_preview_cursor_and_encoded_bytes() {
+    let seed = inherited_seed(8, true);
+    for damage in ["owner", "preview", "cursor", "bytes"] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        let cut = store.observation_read_cut().unwrap();
+        let evidence = || {
+            store.lock().unwrap().query_row(
+            "SELECT ordinal,payload_digest,observation_json_witness,observation_turn_display_witness FROM inherited_turn_provenance WHERE ordinal=0",
+            [], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,row.get::<_,Vec<u8>>(2)?,row.get::<_,Vec<u8>>(3)?)),
+        ).unwrap()
+        };
+        let native = evidence();
+        tamper_finite_turn_headers(&store, damage);
+        assert_eq!(
+            evidence(),
+            native,
+            "{damage}: original row evidence changed"
+        );
+        store
+            .lock()
+            .unwrap()
+            .authorizer(Some(deny_unloaded_turn_members));
+        provenance::take_turn_header_read_work();
+        assert!(store.conversation_turns(0, 1).is_err(), "{damage}");
+        assert!(store.observation_turns(Some(0), 1).is_err(), "{damage}");
+        let (rows, materialized) = provenance::take_turn_header_read_work();
+        assert_eq!(rows, 2);
+        assert!(materialized <= 2 * (16_384 + 64 + 32));
+        store
+            .lock()
+            .unwrap()
+            .authorizer(Some(super::deny_selected_original_columns));
+        assert!(
+            store.observation_transcript_process(&cut, 1).is_err(),
+            "{damage}"
+        );
+        store.lock().unwrap().authorizer(
+            None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+        );
+        assert_eq!(
+            store.load_inherited_turns().unwrap(),
+            seed.turns(),
+            "auxiliary corruption must not change native provenance"
+        );
+    }
+}
+
+#[test]
+fn inherited_turn_evidence_sql_bounds_precede_rust_metadata_allocation() {
+    let seed = inherited_seed(8, true);
+    for (column, value) in [
+        (
+            "observation_json",
+            rusqlite::types::Value::Blob(vec![b'x'; 16_385]),
+        ),
+        (
+            "observation_turn_display",
+            rusqlite::types::Value::Blob(vec![b'x'; 16_385]),
+        ),
+        (
+            "payload_digest",
+            rusqlite::types::Value::Text("a".repeat(1_048_576)),
+        ),
+        (
+            "observation_json_witness",
+            rusqlite::types::Value::Blob(vec![0; 1_048_576]),
+        ),
+        (
+            "observation_turn_display_witness",
+            rusqlite::types::Value::Blob(vec![0; 1_048_576]),
+        ),
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute_batch("PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                &format!("UPDATE inherited_turn_provenance SET {column}=?1 WHERE ordinal=0"),
+                [value],
+            )
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute_batch("PRAGMA ignore_check_constraints=OFF")
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .authorizer(Some(deny_unloaded_turn_members));
+        provenance::take_turn_header_read_work();
+        let result = if column.starts_with("observation_turn_display") {
+            store.observation_turns(Some(0), 1).map(|_| ())
+        } else {
+            store.conversation_turns(0, 1).map(|_| ())
+        };
+        assert!(result.is_err(), "{column}");
+        let (rows, materialized) = provenance::take_turn_header_read_work();
+        assert_eq!(rows, 1);
+        assert!(materialized <= 16_384 + 64 + 32, "{column}: {materialized}");
+        store.lock().unwrap().authorizer(
+            None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+        );
+    }
+}
+
+#[test]
+fn inherited_turn_header_row_witness_failure_preserves_original_bootstrap() {
+    let seed = inherited_seed(8, true);
+    for column in [
+        "observation_json_witness",
+        "observation_turn_display_witness",
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.lock().unwrap().execute_batch(&format!(
+            "CREATE TRIGGER optional_turn_witness BEFORE UPDATE OF {column} ON inherited_turn_provenance BEGIN SELECT RAISE(FAIL,'optional turn witness'); END;"
+        )).unwrap();
+        store.initialize_lineage(&seed).unwrap();
+        assert_eq!(store.load_canonical().unwrap(), seed.canonical());
+        assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
+        assert_eq!(store.presentation_frontier().unwrap(), 0);
+        let result = if column == "observation_json_witness" {
+            store.conversation_turns(0, 1).map(|_| ())
+        } else {
+            store.observation_turns(Some(0), 1).map(|_| ())
+        };
+        assert!(matches!(
+            crate::runtime_client::types::RuntimeClientError::observation_store_error(
+                result.unwrap_err()
+            ),
+            crate::runtime_client::types::RuntimeClientError::ObservationUnavailable { .. },
+        ));
+    }
+}
+
+#[test]
+fn inherited_turn_header_row_witness_columns_are_required_by_schema() {
+    for column in [
+        "observation_json_witness",
+        "observation_turn_display_witness",
+    ] {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "ALTER TABLE inherited_turn_provenance DROP COLUMN {column}"
+            ))
+            .unwrap();
+        assert!(matches!(
+            verify_schema_shape(&store.lock().unwrap()),
+            Err(ConversationStoreError::IncompatibleSchema(_))
+        ));
+    }
+}
+
 #[test]
 fn turn_directory_validates_only_selected_payloads_across_large_cold_lineages() {
     let directory = tempfile::tempdir().unwrap();
@@ -1291,11 +1729,13 @@ fn turn_directory_validates_only_selected_payloads_across_large_cold_lineages() 
             (count - 1, 64),
         ] {
             provenance::take_turn_validation_counts();
+            provenance::take_turn_header_validations();
             let page = store.conversation_turns(offset, limit).unwrap();
             let counts = provenance::take_turn_validation_counts();
             let offset = offset.min(count.saturating_sub(1) / limit * limit);
             let selected = limit.min(count - offset);
-            assert_eq!(counts, (selected, selected));
+            assert_eq!(counts, (0, 0));
+            assert_eq!(provenance::take_turn_header_validations(), selected);
             assert_eq!(
                 (page.total, page.offset, page.turns.len()),
                 (count, offset, selected)
@@ -1313,7 +1753,7 @@ fn turn_directory_validates_only_selected_payloads_across_large_cold_lineages() 
                 counts.0, counts.1
             );
         }
-        let plan=store.lock().unwrap().prepare("EXPLAIN QUERY PLAN SELECT payload,payload_digest FROM inherited_turn_provenance WHERE ordinal=?1").unwrap().query_map([0],|row|row.get::<_,String>(3)).unwrap().collect::<Result<Vec<_>,_>>().unwrap().join("\n");
+        let plan=store.lock().unwrap().prepare("EXPLAIN QUERY PLAN SELECT observation_json,payload_digest FROM inherited_turn_provenance WHERE ordinal=?1").unwrap().query_map([0],|row|row.get::<_,String>(3)).unwrap().collect::<Result<Vec<_>,_>>().unwrap().join("\n");
         assert!(
             plan.contains("SEARCH inherited_turn_provenance USING INTEGER PRIMARY KEY"),
             "{plan}"
@@ -1358,7 +1798,12 @@ fn turn_directory_selected_corruption_fails_without_hydrating_unrelated_turns() 
         store.initialize_lineage(&seed).unwrap();
         store.lock().unwrap().execute_batch(&format!("PRAGMA foreign_keys=OFF; {damage};")).unwrap();
         provenance::take_turn_validation_counts();
-        assert!(store.conversation_turns(0,1).is_err(),"{damage}");
+        if damage.contains("inherited_message_membership") {
+            assert!(store.conversation_turns(0,1).is_ok(), "unloaded membership: {damage}");
+            assert!(materialized_member_process(&store, "inherited-0").is_err(), "{damage}");
+        } else {
+            assert!(store.conversation_turns(0,1).is_err(),"{damage}");
+        }
         let counts=provenance::take_turn_validation_counts();
         assert!(counts.0<=1 && counts.1<=1,"{damage}: {counts:?}");
         assert!(store.load_inherited_turns().is_err(),"{damage}");
@@ -1378,12 +1823,120 @@ fn turn_directory_selected_corruption_fails_without_hydrating_unrelated_turns() 
         .unwrap();
     provenance::take_turn_validation_counts();
     assert_eq!(store.conversation_turns(0, 1).unwrap(), expected);
-    assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+    assert_eq!(provenance::take_turn_validation_counts(), (0, 0));
+    assert!(provenance::take_turn_header_validations() > 0);
     assert!(store.load_inherited_turns().is_err());
     assert!(store.initialize_lineage(&seed).is_err());
     assert!(store.read_lineage_cut(SurfaceRevision::new(1)).is_err());
     assert!(store.archive_frontiers().is_err());
+    // Raw payload corruption is the full native reader's responsibility. The
+    // finite descriptor does not claim to rehash an unloaded payload.
+    assert!(store.conversation_turns(7, 1).is_ok());
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE inherited_turn_provenance SET observation_json=NULL WHERE ordinal=7",
+            [],
+        )
+        .unwrap();
     assert!(store.conversation_turns(7, 1).is_err());
+}
+
+#[test]
+fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without_local_j() {
+    use crate::durable::reading::{InheritedTurnOutcome, TurnProcessOutcome};
+    let base = response_seed(8);
+    let mut turns = base.turns().to_vec();
+    let mut terminal = turns[0].clone();
+    terminal.id.attempt_id = AttemptId::new("imported-terminal-only");
+    terminal.process_message_ids.clear();
+    terminal.preceding_message_id = Some(MessageId::new("inherited-0"));
+    terminal.outcome = InheritedTurnOutcome::Cancelled;
+    let original_id = terminal.id.clone();
+    turns.push(terminal);
+    let seed = LineageSeed::replayed(base.canonical().to_vec(), base.surface_history().to_vec())
+        .unwrap()
+        .with_turns(turns)
+        .unwrap()
+        .with_completed_responses(base.completed_responses().to_vec())
+        .unwrap();
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize_lineage(&seed).unwrap();
+    let transcript: u64 = store.lock().unwrap().query_row(
+        "SELECT position FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id='8'",
+        [], |row| row.get(0),
+    ).unwrap();
+    let cut = store.observation_read_cut().unwrap();
+    assert_eq!(cut.read.journal, 0);
+    store
+        .lock()
+        .unwrap()
+        .authorizer(Some(super::deny_selected_original_columns));
+    provenance::take_turn_header_read_work();
+    let process = store
+        .observation_transcript_process(&cut, transcript)
+        .unwrap()
+        .unwrap();
+    assert_eq!(process.conversation_id, original_id.conversation_id);
+    assert_eq!(process.attempt_id.as_ref(), Some(&original_id.attempt_id));
+    assert_eq!(process.attempt_id_source, None);
+    assert_eq!(process.outcome, TurnProcessOutcome::Cancelled);
+    assert_eq!(process.control_cursor.get(), transcript);
+    assert_eq!((process.message_count, process.tool_call_count), (0, 0));
+    assert!(process.final_message_id.is_none() && process.final_message_locator.is_none());
+    let (rows, bytes) = provenance::take_turn_header_read_work();
+    assert_eq!(rows, 1);
+    assert!(bytes <= 16_384 + 64 + 32);
+    store
+        .lock()
+        .unwrap()
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+    store
+        .append_canonical(&assistant_message(
+            "later-original-c",
+            "later canonical bytes",
+        ))
+        .unwrap();
+    assert_eq!(
+        store
+            .observation_transcript_process(&cut, transcript)
+            .unwrap()
+            .unwrap(),
+        process
+    );
+    assert_eq!(store.read_events(None, 64).unwrap().events.len(), 0);
+    assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE transcript_order SET reference_id='0' WHERE position=?1",
+            [transcript],
+        )
+        .unwrap();
+    assert!(
+        store
+            .observation_transcript_process(&cut, transcript)
+            .is_err(),
+        "a different real turn cannot alias the original terminal seat"
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE transcript_order SET reference_id='8' WHERE position=?1",
+            [transcript],
+        )
+        .unwrap();
+    store.lock().unwrap().execute(
+        "UPDATE inherited_turn_provenance SET observation_turn_display_witness=NULL WHERE ordinal=8", [],
+    ).unwrap();
+    assert!(
+        store
+            .observation_transcript_process(&cut, transcript)
+            .is_err()
+    );
 }
 
 #[test]
@@ -1397,15 +1950,12 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
     terminal.preceding_message_id = Some(MessageId::new("inherited-0"));
     terminal.outcome = InheritedTurnOutcome::Failed;
     turns.push(terminal);
-    let seed = LineageSeed::replayed(
-        base.canonical().to_vec(),
-        base.surface_history().to_vec(),
-    )
-    .unwrap()
-    .with_turns(turns)
-    .unwrap()
-    .with_completed_responses(base.completed_responses().to_vec())
-    .unwrap();
+    let seed = LineageSeed::replayed(base.canonical().to_vec(), base.surface_history().to_vec())
+        .unwrap()
+        .with_turns(turns)
+        .unwrap()
+        .with_completed_responses(base.completed_responses().to_vec())
+        .unwrap();
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.initialize_lineage(&seed).unwrap();
     let old = store.conversation_turns(8, 1).unwrap();
@@ -1413,6 +1963,7 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
     assert!(old.turns[0].cursor.is_some());
     assert_eq!(old.turns[0].response, "");
     provenance::take_turn_validation_counts();
+    provenance::take_turn_header_validations();
     let window = store
         .conversation_window(
             &ConversationWindowAt::Turn {
@@ -1422,8 +1973,10 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
             1,
         )
         .unwrap();
-    // One targeted navigation validation and the materialized terminal transcript item.
-    assert_eq!(provenance::take_turn_validation_counts(), (2, 2));
+    // The selected target uses finite evidence; only the actual terminal
+    // transcript item invokes the independent full native materializer.
+    assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+    assert_eq!(provenance::take_turn_header_validations(), 1);
     assert!(matches!(
         window.page.entries[0].item,
         TranscriptItem::InheritedTurn { .. }
@@ -1453,8 +2006,10 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
         }
     }
     provenance::take_turn_validation_counts();
+    provenance::take_turn_header_validations();
     let mixed = store.conversation_turns(8, 3).unwrap();
-    assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+    assert_eq!(provenance::take_turn_validation_counts(), (0, 0));
+    assert_eq!(provenance::take_turn_header_validations(), 1);
     assert_eq!(mixed.total, 11);
     assert_eq!(mixed.turns[0], old.turns[0]);
     assert!(mixed.turns[1].cursor.is_some());
@@ -1541,8 +2096,9 @@ fn inherited_turn_membership_is_exact_in_both_directions_with_valid_payload_dige
             }
             _ => unreachable!(),
         }
-        // Payload corruption must reach membership checks, not merely fail
-        // because a previous digest was left stale.
+        // The independent full native reader must reach membership checks,
+        // rather than reject merely because a previous digest was left stale.
+        // Finite descriptors compare the captured native digest separately.
         let payload = serde_json::to_string(&turn).unwrap();
         let digest = hash(&format!("rustx-inherited-turn\n0\n{payload}"));
         connection
@@ -1553,10 +2109,26 @@ fn inherited_turn_membership_is_exact_in_both_directions_with_valid_payload_dige
             .unwrap();
         drop(connection);
         provenance::take_turn_validation_counts();
-        assert!(store.conversation_turns(0, 1).is_err(), "{damage}");
+        if matches!(damage, "omitted" | "extra" | "duplicate") {
+            assert!(store.conversation_turns(0, 1).is_err(), "{damage}");
+        } else {
+            assert!(
+                store.conversation_turns(0, 1).is_ok(),
+                "unloaded membership: {damage}"
+            );
+            let selected = if damage == "reverse-extra" {
+                "inherited-1"
+            } else {
+                "early-closing"
+            };
+            assert!(
+                materialized_member_process(&store, selected).is_err(),
+                "{damage}"
+            );
+        }
         assert_eq!(
             provenance::take_turn_validation_counts(),
-            (1, 1),
+            (0, 0),
             "{damage}"
         );
         assert!(
@@ -1598,8 +2170,10 @@ fn inherited_turn_reverse_corruption_is_scoped_to_materialized_records() {
         )
         .unwrap();
     provenance::take_turn_validation_counts();
+    provenance::take_turn_header_validations();
     assert_eq!(store.conversation_turns(0, 1).unwrap(), expected);
-    assert_eq!(provenance::take_turn_validation_counts(), (1, 1));
+    assert_eq!(provenance::take_turn_validation_counts(), (0, 0));
+    assert_eq!(provenance::take_turn_header_validations(), 1);
     assert_eq!(
         store
             .inherited_turns_for(&[MessageId::new("inherited-0")])

@@ -87,7 +87,9 @@ export function renderResourceBanner(
     const names = [extensions.agent_status && "Agent Status", extensions.todo && "Todo", extensions.goal && "Goal"].filter((name): name is string => typeof name === "string");
     if (names.length) sections.push(section("Extensions", names));
   }
-  const main = state.resources.inspection.main;
+  const inspection = state.resources.inspection;
+  if(inspection == null)sections.push(`${style.heading('[Resources]')}\n${role.meta('  Inspection deferred · /observation resources reads bounded native fields')}`);
+  const main = inspection?.main;
   if (main != null) {
     if (main.agents.length) sections.push(section("Agents", main.agents));
     // The runtime composes these five controls from the Agents admission

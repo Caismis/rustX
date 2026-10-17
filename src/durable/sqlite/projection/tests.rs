@@ -12,6 +12,65 @@ use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::MessageId;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 
+fn assert_fresh_receipt_replays_original(
+    original: &ProjectionCommitReceipt,
+    mut replayed: ProjectionCommitReceipt,
+) {
+    assert!(original.newly_committed);
+    assert!(!replayed.newly_committed);
+    // Only physical delivery differs; compare every original native field.
+    replayed.newly_committed = true;
+    assert_eq!(&replayed, original);
+    assert_eq!(
+        serde_json::to_value(&replayed).unwrap(),
+        serde_json::to_value(original).unwrap()
+    );
+    assert_original_publication_replays(&original.completed, &replayed.completed);
+}
+
+fn assert_original_publication_replays(
+    original: &RuntimeEventEnvelope,
+    replayed: &RuntimeEventEnvelope,
+) {
+    use crate::durable::observation::NativeObservationTransition;
+    let original = original
+        .observation
+        .as_ref()
+        .expect("fresh original publication evidence");
+    let replayed = replayed
+        .observation
+        .as_ref()
+        .expect("replayed original publication evidence");
+    assert_eq!(original.read_cut, replayed.read_cut);
+    assert_eq!(original.ready_before, replayed.ready_before);
+    assert_eq!(original.ready_t_through, replayed.ready_t_through);
+    assert_eq!(original.trace_total, replayed.trace_total);
+    assert_eq!(original.source_unavailable, replayed.source_unavailable);
+    assert_eq!(original.journal_range, replayed.journal_range);
+    assert_eq!(original.failure, replayed.failure);
+    assert_eq!(original.failure_deferred, replayed.failure_deferred);
+    assert_eq!(original.failure_readable_end, replayed.failure_readable_end);
+    assert_eq!(original.failure_sequence, replayed.failure_sequence);
+    assert_eq!(
+        original.finish_reason_deferred,
+        replayed.finish_reason_deferred
+    );
+    assert!(original.finish_reason.is_none() && replayed.finish_reason.is_none());
+    assert!(original.canonical.is_none() && replayed.canonical.is_none());
+    assert!(original.pending.is_none() && replayed.pending.is_none());
+    let (
+        NativeObservationTransition::Single(original),
+        NativeObservationTransition::Single(replayed),
+    ) = (&original.transition, &replayed.transition)
+    else {
+        panic!("original single compaction transition")
+    };
+    assert_eq!(
+        serde_json::to_value(original).unwrap(),
+        serde_json::to_value(replayed).unwrap()
+    );
+}
+
 fn message(n: u64) -> MessageBlock {
     MessageBlock::User(UserMessageBlock {
         id: MessageId::new(format!("M{n}")),
@@ -166,7 +225,10 @@ fn operation_receipts_are_idempotent_conflicting_and_never_rewind_a_newer_head()
         &CancellationSignal::new(),
     );
     let receipt = store.commit_projection(first.clone()).unwrap();
-    assert_eq!(store.commit_projection(first.clone()).unwrap(), receipt);
+    assert_fresh_receipt_replays_original(
+        &receipt,
+        store.commit_projection(first.clone()).unwrap(),
+    );
     let second = store
         .commit_projection(commit_input(
             &store,
@@ -175,10 +237,10 @@ fn operation_receipts_are_idempotent_conflicting_and_never_rewind_a_newer_head()
             &CancellationSignal::new(),
         ))
         .unwrap();
-    assert_eq!(
+    // Replay remains the exact historical receipt even after a newer head.
+    assert_fresh_receipt_replays_original(
+        &receipt,
         store.commit_projection(first.clone()).unwrap(),
-        receipt,
-        "receipt remains historical after another activation"
     );
     assert_eq!(store.projection_head().unwrap().unwrap(), second.checkpoint);
     let mut conflicting = first;
@@ -213,6 +275,8 @@ fn unrelated_journal_appends_and_post_base_canonical_growth_do_not_stale_a_candi
     );
     store
         .append_event(RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(""),
             sequence: 0,
@@ -418,6 +482,8 @@ fn execution_owner_transition_fences_a_prepared_checkpoint_grant() {
     let attempt = AttemptId::new("new-owner");
     store
         .append_event(RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(""),
             sequence: 0,
@@ -482,7 +548,7 @@ fn activation_ledger_is_commit_time_frontier_and_not_checkpoint_base() {
     assert_eq!(at.projections.len(), 1);
     let history = store.projected_history().unwrap();
     assert_eq!(
-        history.messages.last().unwrap().canonical_id(),
+        history.messages.iter().last().unwrap().canonical_id(),
         Some(&MessageId::new("M2"))
     );
 }
@@ -1059,6 +1125,8 @@ fn historical_head_validation_preserves_growth_same_ledger_and_old_receipts() {
     );
     store
         .append_event(RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(""),
             sequence: 0,
@@ -1089,7 +1157,7 @@ fn historical_head_validation_preserves_growth_same_ledger_and_old_receipts() {
         second.checkpoint.activation.activation,
         third.checkpoint.activation.activation
     );
-    assert_eq!(store.commit_projection(first_input).unwrap(), first);
+    assert_fresh_receipt_replays_original(&first, store.commit_projection(first_input).unwrap());
     assert_eq!(store.projection_head().unwrap().unwrap(), third.checkpoint);
 }
 
@@ -1190,11 +1258,11 @@ fn parent_only_and_combined_immutable_provenance_commit_and_recover_receipts() {
         });
         let input = commit_input(&store, id, next, &CancellationSignal::new());
         let receipt = store.commit_projection(input.clone()).unwrap();
-        assert_eq!(store.commit_projection(input).unwrap(), receipt);
+        assert_fresh_receipt_replays_original(&receipt, store.commit_projection(input).unwrap());
         assert_eq!(store.projected_history().unwrap().messages.len(), 1);
     }
     let newest = store.projection_head().unwrap();
-    assert_eq!(store.commit_projection(first_input).unwrap(), first);
+    assert_fresh_receipt_replays_original(&first, store.commit_projection(first_input).unwrap());
     assert_eq!(store.projection_head().unwrap(), newest);
     assert_eq!(store.load_canonical().unwrap(), [message(1)]);
 }
@@ -1320,6 +1388,7 @@ fn published_history_cut_excludes_future_bodies_before_hydration() {
     )
     .unwrap();
     store.initialize(&[message(1)]).unwrap();
+    let mut retained_cut = None;
     for n in 1..=6 {
         let value = candidate(&store, &format!("P{n}"), vec![summary("history")]);
         store
@@ -1330,7 +1399,12 @@ fn published_history_cut_excludes_future_bodies_before_hydration() {
                 &CancellationSignal::new(),
             ))
             .unwrap();
+        if n == 2 {
+            retained_cut =
+                Some(crate::runtime_client::trace_observation::history_store_cut(&store).unwrap());
+        }
     }
+    let retained_cut = retained_cut.unwrap();
     let inherited = ["P1", "P2"]
         .into_iter()
         .map(|id| {
@@ -1374,7 +1448,7 @@ fn published_history_cut_excludes_future_bodies_before_hydration() {
     assert!(
         crate::runtime_client::projection_history::detail(
             &destination,
-            0,
+            &crate::runtime_client::trace_observation::history_store_cut(&destination).unwrap(),
             &CheckpointId::new("P2"),
             0,
             1
@@ -1408,7 +1482,7 @@ fn published_history_cut_excludes_future_bodies_before_hydration() {
     assert!(
         crate::runtime_client::projection_history::detail(
             &store,
-            cut,
+            &retained_cut,
             &CheckpointId::new("P1"),
             0,
             1
@@ -1437,7 +1511,7 @@ fn published_history_cut_excludes_future_bodies_before_hydration() {
     assert!(
         crate::runtime_client::projection_history::detail(
             &store,
-            cut,
+            &retained_cut,
             &CheckpointId::new("P3"),
             0,
             1
@@ -1876,7 +1950,7 @@ fn n1_original_detail_does_not_validate_an_unrelated_future_activation_payload()
     )
     .unwrap();
     store.initialize(&[message(1)]).unwrap();
-    let mut cut = 0;
+    let mut cut = None;
     for n in 1..=4 {
         let items = if n == 1 {
             vec![CheckpointItem {
@@ -1890,7 +1964,7 @@ fn n1_original_detail_does_not_validate_an_unrelated_future_activation_payload()
         } else {
             vec![summary("history")]
         };
-        let receipt = store
+        store
             .commit_projection(commit_input(
                 &store,
                 &format!("O{n}"),
@@ -1899,9 +1973,11 @@ fn n1_original_detail_does_not_validate_an_unrelated_future_activation_payload()
             ))
             .unwrap();
         if n == 2 {
-            cut = receipt.checkpoint.activation.origin.completed_journal.0;
+            cut =
+                Some(crate::runtime_client::trace_observation::history_store_cut(&store).unwrap());
         }
     }
+    let cut = cut.unwrap();
     store
         .lock()
         .unwrap()
@@ -1914,7 +1990,7 @@ fn n1_original_detail_does_not_validate_an_unrelated_future_activation_payload()
     take_candidate_decodes();
     let detail = crate::runtime_client::projection_history::detail(
         &store,
-        cut,
+        &cut,
         &CheckpointId::new("P1"),
         0,
         1,
@@ -2342,3 +2418,5 @@ fn current_head_validation_is_bounded_by_publication_not_timeline_length() {
         "the pointer mismatch fails before either candidate body"
     );
 }
+
+mod trace_preview_tests;

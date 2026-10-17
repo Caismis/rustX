@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut writer = store.open_writer(&id)?;
         writer.write_all(&bytes)?;
-        writer.flush()?;
+        writer.finish()?;
     }
     println!("{id}");
     Ok(())

@@ -87,7 +87,7 @@ impl ToolExecutor for CountingExecutor {
 struct RecordingRoute {
     events: Mutex<Vec<String>>,
     /// Every routed request exactly as the root surface receives it.
-    routed: Mutex<Vec<InteractionRequest>>,
+    routed: Mutex<Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>>,
 }
 
 impl RecordingRoute {
@@ -95,7 +95,7 @@ impl RecordingRoute {
         self.events.lock().expect("route lock").clone()
     }
 
-    fn routed(&self) -> Vec<InteractionRequest> {
+    fn routed(&self) -> Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader> {
         self.routed.lock().expect("route lock").clone()
     }
 }
@@ -121,10 +121,14 @@ impl InteractionRoute for RecordingRoute {
     ) -> futures_util::future::BoxFuture<'static, Result<(), InteractionRouteError>> {
         self.events.lock().expect("route lock").push(match &event {
             InteractionRouteEvent::Requested(routed) => {
-                self.routed.lock().expect("route lock").push(routed.clone());
+                self.routed
+                    .lock()
+                    .expect("route lock")
+                    .push(*routed.clone());
                 "requested".to_owned()
             }
             InteractionRouteEvent::Settled { .. } => "settled".to_owned(),
+            InteractionRouteEvent::Removed { .. } => "removed".to_owned(),
         });
         Box::pin(async { Ok(()) })
     }
@@ -201,10 +205,12 @@ struct PendingSink {
 impl InteractionObserver for PendingSink {
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &std::sync::Arc<crate::runtime::interaction::PendingInteractionSource>,
         _audit: &RuntimeEventEnvelope,
         _transcript_cursor: TranscriptCursor,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
+        let request = source.request();
         let _ = self.sender.send(request.clone());
     }
 
@@ -213,6 +219,7 @@ impl InteractionObserver for PendingSink {
         _id: &InteractionId,
         _outcome: &crate::runtime::interaction::InteractionOutcome,
         _audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
     }
 }
@@ -1726,7 +1733,16 @@ async fn a_routed_child_coordinator_still_owns_the_mrtr_questionnaire() {
     // who asked — an MCP server, named canonically.
     let routed = route.routed();
     assert_eq!(routed.len(), 1);
-    let routed_requester = requester_of(&routed[0]);
+    assert_eq!(routed[0].interaction, request.interaction_ref());
+    assert_eq!(
+        routed[0].kind,
+        crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+    );
+    assert!(
+        routed[0].body.is_none(),
+        "child control carries finite identity; original requester remains native authority"
+    );
+    let routed_requester = requester_of(&request);
     assert_eq!(routed_requester.tool_name, MRTR_CONFIRM_TOOL);
     assert_eq!(
         routed_requester.origin,

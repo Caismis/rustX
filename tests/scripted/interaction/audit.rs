@@ -266,10 +266,12 @@ impl RespondingObserver {
 impl InteractionObserver for RespondingObserver {
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &std::sync::Arc<rustx::runtime::interaction::PendingInteractionSource>,
         _audit: &rustx::events::types::RuntimeEventEnvelope,
         _transcript_cursor: rustx::durable::TranscriptCursor,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
+        let request = source.request();
         // The durable read happens *inside* the prompt-release callback, so
         // what it sees is exactly what was committed before any client could
         // learn the prompt exists.
@@ -296,6 +298,7 @@ impl InteractionObserver for RespondingObserver {
             rustx::events::types::RuntimeEventEnvelope,
             rustx::durable::TranscriptCursor,
         )>,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
         self.settled
             .lock()

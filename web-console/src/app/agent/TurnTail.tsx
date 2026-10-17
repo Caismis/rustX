@@ -1,7 +1,9 @@
+import { AttemptIdentityValue } from './JournalValue';
+import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from MessageIconActions; see PROVENANCE.md. */
 import { useEffect, useState } from 'react';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v49';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v50';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { IconCopyOutline16, IconCheckOutline16, IconBranchOutline16, IconRefreshOutline16 } from '../../presentation/primitives/icons';
@@ -29,14 +31,15 @@ export function CopyMessage({ text }: { text: string }) {
 }
 export function TurnTail({ text, response, onHistorical, disabled, lineageSwitchSafe, latest = false }: { text: string; response: CompletedResponseView; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; disabled?: boolean; lineageSwitchSafe: boolean; latest?: boolean }) {
   const tx = useTranslation();
-  return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={JSON.stringify([response.origin.conversation_id, response.origin.attempt_id])}>
+  return <div className={css.actions} aria-label={tx('agent:turn-tail.completed-turn')} data-chat-turn-owner={turnAnchor(response.origin)} data-response-reveal={latest ? 'always' : 'hover'} data-turn-tail={attemptOwnerKey(response.origin)}>
     <CopyMessage text={text}/>
     {onHistorical && <>
       {/* rustX's Retry replays the original input on a sibling branch; it sits
           where Harness seats extra actions, between copy and branch. */}
-      {response.retry_message_id && <Tooltip label={tx('agent:turn-tail.retry')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
+      {response.retry_locator && <Tooltip label={tx('agent:turn-tail.retry')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.retry')} disabled={disabled || !lineageSwitchSafe} onClick={() => onHistorical('retry', response)}><IconRefreshOutline16/></button></Tooltip>}
       <Tooltip label={tx('agent:turn-tail.branch')} side="bottom"><button className={css.action} type="button" aria-label={tx('agent:turn-tail.branch')} disabled={disabled} onClick={() => onHistorical('fork', response)}><IconBranchOutline16/></button></Tooltip>
     </>}
+    <AttemptIdentityValue field={response.origin.attempt_id_source}/>
     {response.usage && <TurnUsage usage={response.usage} models={response.models ?? []}/>}
     <MessageTime time={response.completed_at}/>
   </div>;

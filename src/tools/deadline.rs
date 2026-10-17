@@ -215,7 +215,9 @@ pub enum ToolDeadlineKind {
 /// reached the execution, never the settlement outcome. The canonical
 /// outcome is selected from the executor's typed settlement evidence at the
 /// terminal result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCancellationCause {
     /// The owning attempt's cancellation won arbitration; the payload is the
@@ -238,7 +240,9 @@ pub enum ToolCancellationCause {
 /// its own typed fact
 /// ([`crate::events::types::RuntimeEvent::ToolExecutionSettlementControlFailed`]),
 /// never as `Unconfirmed` certainty.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSettlementCertainty {
     /// The executor proved its physical operation terminal.

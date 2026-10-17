@@ -151,7 +151,9 @@ pub(crate) fn terminal(status: ToolExecutionStatus) -> ToolExecutionResult {
 }
 
 /// Facts selected by the invocation owner, independently of caller framing.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InvocationFact {
     Deadline { kind: ToolDeadlineKind },
@@ -161,7 +163,7 @@ pub enum InvocationFact {
 }
 
 /// Native execution facts for callers without canonical `ToolCall` framing.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NativeInvocationFact {
     Prepared {

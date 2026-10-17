@@ -1,3 +1,8 @@
+import {traceFieldKey} from '../../../protocol/app-server/trace-identity.ts';
+import { attemptIdentityField, attemptIdentitySourceKey } from '../../../protocol/app-server/attempt-identity.ts';
+import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
+import { ContentCache } from '../../../protocol/app-server/content-cache.ts';
+import { materializeSource } from '../../../protocol/app-server/source-observation.ts';
 import { isAttemptActive } from "../presentation/state.ts";
 import { archiveDestination } from "../app-server/archive.ts";
 import { renderRepairInspection, type SourceRepairObservation } from "../presentation/source-repairs.ts";
@@ -48,7 +53,7 @@ import {
 import { isTodoComposed, selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
-import { renderTodoInspection } from "../ui/components/todos.ts";
+import { renderTodoInspection, deferredTodoRecords } from "../ui/components/todos.ts";
 import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
   CatalogModelView,
@@ -56,7 +61,7 @@ import type {
   SessionNodeView,
   SessionSettings,
   SessionSummaryView,
-  SessionUserMessageBoundaryView,
+  SessionUserMessageBoundaryObservation,
   SessionView,
   ToolCallId,
   ToolExecutionId,
@@ -67,6 +72,7 @@ import type {
 export type CommandOutcome =
   | { kind: "none" }
   | { kind: "inspect"; title: string; body: string }
+  | { kind: "inspect_agent"; agentId: string }
   | { kind: "transient"; level: "info" | "error"; text: string }
   | { kind: "choose_model"; models: CatalogModelView[] }
   | {
@@ -77,7 +83,7 @@ export type CommandOutcome =
     }
   | {
       kind: "choose_fork";
-      boundaries: SessionUserMessageBoundaryView[];
+      boundaries: SessionUserMessageBoundaryObservation[];
       nextOffset?: number;
     }
   | {
@@ -85,7 +91,7 @@ export type CommandOutcome =
       session: SessionView;
       nodes: SessionNodeView[];
       nextNodeOffset?: number;
-      boundaries: SessionUserMessageBoundaryView[];
+      boundaries: SessionUserMessageBoundaryObservation[];
       nextHistoryOffset?: number;
     }
   /**
@@ -182,11 +188,19 @@ export interface DebugDiagnostics {
 const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
 
 export class CommandDispatcher {
+  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut}>();
+  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v50.ts').CheckpointReadCut}>();
+  #inspectionView = {};
+  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v50.ts').CheckpointPage>();
+  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v50.ts').CheckpointPage>();
   #context: DispatcherContext;
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
   readonly #agentMessageSubmissions = new WeakSet<AppServerSession>();
-  #inspected = new Map<string, import('../../../protocol/app-server/v49.ts').AvailableConfiguration>();
+  readonly #observationReads = new WeakMap<AppServerSession,object>();
+  readonly #contentDecoders = new WeakMap<AppServerSession, { identity: string; end: number; extent?:number; representation?:string;view?:object; decoder: InstanceType<typeof TextDecoder> }>();
+  readonly #contentCaches = new WeakMap<AppServerSession, ContentCache>();
+  #inspected = new Map<string, import('../../../protocol/app-server/v50.ts').AvailableConfiguration>();
 
   constructor(context: DispatcherContext) {
     this.#context = context;
@@ -205,6 +219,7 @@ export class CommandDispatcher {
   }
 
   setSession(session: AppServerSession | undefined): void {
+    if(this.#context.session!==session)this.#inspectionView={};
     this.#context.session = session;
   }
 
@@ -255,9 +270,145 @@ export class CommandDispatcher {
         }
         case "/help":
           return inspect("Help", renderHelp());
+        case '/observation': {
+          this.#observationReads.set(session,{});
+          const [domain,rawOffset='0',...extra]=argument.trim().split(/\s+/);
+          if(!domain)return inspect('Observation domains',session.observationCollections.map(({frontier})=>`${frontier.domain} · ${frontier.total} items · /observation ${frontier.domain}`).join('\n')+'\n'+(session.checkpoint?.snapshot.trace.records??[]).map(record=>`${record.id} · ${record.kind} · /observation trace ${record.id}`).join('\n')+'\n/observation <domain> [page-offset] reads one native bounded page.');
+          if(domain==='trace'){
+            if(rawOffset==='0'||extra.length)return usage('/observation trace <native-record-id>');
+            const view=this.#inspectionView;
+            const {head,page}=await session.inspectTrace(rawOffset,()=>view===this.#inspectionView&&this.#context.session===session);
+            if(this.#context.session!==session)return {kind:'none'};
+            this.#observationPages.set(session,page);
+            const definition=head.content.type==='tool'?`\nTool definition: ${head.content.definition.type}.`:'';
+            const messages=head.content.type==='messages'?`\n${head.content.page.total} original canonical messages · /observation ${head.content.page.domain}`:'';
+            return inspect(`Trace · ${head.id}`,`${head.kind} · ${head.record.state}\n${head.record.preview?.text??''}${definition}${messages}\n/content lists the selected original fields; each read retains this native inspection cut.`);
+          }
+          const offset=Number(rawOffset),previous=offset?this.#observationPages.get(session):undefined;
+          if(!Number.isSafeInteger(offset)||offset<0||offset&&previous?.domain!==domain)return usage('/observation <domain> [displayed-page-offset]');
+          const view=this.#inspectionView,operation={};this.#observationReads.set(session,operation);
+          const page=await session.observationPage(domain,offset,previous,()=>this.#context.session===session&&view===this.#inspectionView&&this.#observationReads.get(session)===operation);
+          if(this.#context.session!==session||view!==this.#inspectionView||this.#observationReads.get(session)!==operation)return {kind:'none'};
+          this.#observationPages.set(session,page);
+          return inspect(`Observation · ${domain}`,page.items.map(item=>`${item.offset}. ${item.identity} · ${JSON.stringify(item.value)}${item.deferred?' · deferred content':''}`).join('\n')+(page.next_offset==null?'\nEnd of page domain.':`\n/observation ${domain} ${page.next_offset} reads the next bounded page.`)+(/^messages\..+\.(?:blocks|tools)$/.test(domain)?'\n/content lists the exact advertised original byte references.':'\n/observation-value <item-offset> <byte-offset> [path-json] reads selected source bytes.'));
+        }
+        case '/observation-value': {
+          const match=/^(\d+)\s+(\d+)(?:\s+(.+))?$/.exec(argument.trim()),page=this.#observationPages.get(session);
+          if(!match||!page)return usage('/observation-value <displayed-item-offset> <byte-offset> [path-json]');
+          const itemOffset=Number(match[1]),offset=Number(match[2]);
+          const path:unknown=match[3]?JSON.parse(match[3]):[];
+          if(!Array.isArray(path)||path.length>32||path.some(part=>typeof part!=='string'))return usage('/observation-value <displayed-item-offset> <byte-offset> [path-json]');
+          const identity=`observation:${JSON.stringify(page.read_cut)}:${page.domain}:${itemOffset}:${JSON.stringify(path)}`,prior=this.#contentDecoders.get(session),view=this.#inspectionView,operation={};
+          if(offset&&(!prior||prior.identity!==identity||prior.view!==view||prior.end!==offset||prior.extent==null))throw new Error('Read the selected observation from byte zero first.');
+          this.#observationReads.set(session,operation);
+          const current=()=>this.#context.session===session&&this.#inspectionView===view&&this.#observationPages.get(session)===page&&this.#observationReads.get(session)===operation;
+          const range=await session.observationValue(page,itemOffset,path,offset,current,offset?prior?.extent:undefined);
+          if(!current())throw new Error('Observation viewport was replaced.');
+          if(offset&&prior?.representation!==range.representation)throw new Error('Selected observation representation changed.');
+          const decoder=offset&&prior?prior.decoder:new TextDecoder('utf-8', {ignoreBOM: true});
+          const text=decoder.decode(range.bytes,{stream:range.next!==undefined});this.#contentDecoders.set(session,{identity,end:offset+range.bytes.length,extent:range.end,representation:range.representation,view,decoder});
+          return inspect('Selected observation bytes',`${offset}–${offset+range.bytes.length} / ${range.end} bytes\n${text}\n${range.next===undefined?'End of selected value.':`/observation-value ${itemOffset} ${range.next} ${JSON.stringify(path)} reads the next byte range.`}`);
+        }
+        case '/context-model': {
+          const view=this.#inspectionView,operation={};this.#observationReads.set(session,operation);
+          const readCurrent=()=>this.#context.session===session&&this.#inspectionView===view&&this.#observationReads.get(session)===operation;
+          const occupancy = session.state.context.occupancy;
+          if (!occupancy) return inspect('Context model', 'No native context reading has been published.');
+          if (!occupancy.model_deferred) {
+            if (occupancy.model == null) throw new Error('Original context model unavailable.');
+            return inspect('Context model', occupancy.model);
+          }
+          const offset = argument.trim() === '' ? 0 : Number(argument);
+          if (!Number.isSafeInteger(offset) || offset < 0) return usage('/context-model [byte-offset]');
+          const previous = this.#occupancyCuts.get(session), domain = occupancy.model_source;
+          if (!domain || offset > 0 && previous?.domain !== domain) throw new Error('Load the original context model from byte zero first.');
+          const range = await session.readOccupancyModel(offset, offset === 0 ? undefined : previous?.cut);
+          if (!readCurrent() || session.state.context.occupancy?.model_source !== domain)
+            throw new Error('Context model viewport was replaced.');
+          this.#occupancyCuts.set(session,{domain,cut:range.cut});
+          const identity=`occupancy:${domain}:${JSON.stringify(range.cut)}`, prior=this.#contentDecoders.get(session);
+          const decoder=prior?.identity===identity && prior.end===offset ? prior.decoder : new TextDecoder('utf-8',{ignoreBOM:true});
+          const text=decoder.decode(range.bytes,{stream:range.next!==undefined});
+          this.#contentDecoders.set(session,{identity,end:offset+range.bytes.length,decoder});
+          return inspect('Original context model bytes',`${offset}–${offset+range.bytes.length} / ${range.end} bytes\n${text}\n${range.next===undefined?'End of model field.':`/context-model ${range.next} reads the next byte range.`}`);
+        }
+        case "/content": {
+          const view=this.#inspectionView,operation={};this.#observationReads.set(session,operation);
+          const readCurrent=()=>this.#context.session===session&&this.#inspectionView===view&&this.#observationReads.get(session)===operation;
+          const ranges = session.deferredContent;
+          const nativeFields=session.deferredJournalFields,attemptFields=session.deferredAttemptIdentities,traceFields=session.deferredTraceFields,observationFields=session.observationContent;
+          if (!argument) return inspect('Deferred content', [...ranges.map((binding, index) => `${index + 1}. ${binding.path.join('/')} · ${binding.content_ref.readable_end} bytes`),...nativeFields.map((field,index)=>`${ranges.length+index+1}. ${field.label} ${field.reference.sequence} · ${field.reference.encoded_bytes} bytes`),...attemptFields.map((field,index)=>`${ranges.length+nativeFields.length+index+1}. Turn owner identity · ${attemptIdentityField(field.source).encodedBytes} bytes`),...traceFields.map((field,index)=>`${ranges.length+nativeFields.length+attemptFields.length+index+1}. ${field.record} · ${field.source.field} · ${field.source.type==='value'?field.source.encoded_bytes:field.source.binding.content_ref.readable_end} bytes`),...observationFields.map((field,index)=>`${ranges.length+nativeFields.length+attemptFields.length+traceFields.length+index+1}. ${field.page.domain} · ${field.item}/${field.binding.path.join('/')} · ${field.binding.content_ref.readable_end} bytes`)].join('\n') + '\n/content <range-number> [byte-offset] reads one bounded range.');
+          const [selected, start = '0'] = argument.trim().split(/\s+/), index = Number(selected) - 1, offset = Number(start);
+          if (!Number.isSafeInteger(index) || index < 0 || !Number.isSafeInteger(offset) || offset < 0 || !ranges[index]&&!nativeFields[index-ranges.length]&&!attemptFields[index-ranges.length-nativeFields.length]&&!traceFields[index-ranges.length-nativeFields.length-attemptFields.length]&&!observationFields[index-ranges.length-nativeFields.length-attemptFields.length-traceFields.length]) return usage('/content <range-number> [byte-offset]');
+          const nativeField=nativeFields[index-ranges.length];
+          if(nativeField){
+            const identity=`journal:${JSON.stringify(nativeField.reference)}`,range=await session.readJournalField(nativeField.reference,offset);
+            if(!readCurrent() ||JSON.stringify(session.deferredJournalFields[index-ranges.length]?.reference)!==JSON.stringify(nativeField.reference))throw new Error('Native field view was replaced.');
+            const prior=this.#contentDecoders.get(session),decoder=prior?.identity===identity&&prior.end===offset?prior.decoder:new TextDecoder('utf-8', {ignoreBOM: true});
+            const text=decoder.decode(range.bytes,{stream:range.next!==undefined});this.#contentDecoders.set(session,{identity,end:offset+range.bytes.length,decoder});
+            return inspect(nativeField.label + ' bytes',`${offset}–${offset+range.bytes.length} / ${nativeField.reference.encoded_bytes} bytes\n${text}\n${range.next===undefined?'End of native field.':`/content ${index+1} ${range.next} loads the next byte range.`}`);
+          }
+          const attemptField=attemptFields[index-ranges.length-nativeFields.length];
+          if(attemptField){
+            const identity=attemptIdentitySourceKey(attemptField.source),previous=this.#attemptCuts.get(session);
+            if(offset>0&&previous?.identity!==identity)throw new Error('Read the original attempt identity from byte zero first.');
+            const range=await session.readAttemptIdentity(attemptField.source,offset,offset===0?undefined:previous?.cut);
+            const current=session.deferredAttemptIdentities[index-ranges.length-nativeFields.length];
+            if(!readCurrent()||!current||attemptIdentitySourceKey(current.source)!==identity)throw new Error('Native owner identity view was replaced.');
+            this.#attemptCuts.set(session,{identity,cut:range.cut});
+            const decoderIdentity=`attempt:${identity}:${JSON.stringify(range.cut)}`,prior=this.#contentDecoders.get(session),decoder=prior?.identity===decoderIdentity&&prior.end===offset?prior.decoder:new TextDecoder('utf-8',{ignoreBOM:true});
+            const text=decoder.decode(range.bytes,{stream:range.next!==undefined});this.#contentDecoders.set(session,{identity:decoderIdentity,end:offset+range.bytes.length,decoder});
+            return inspect('Original attempt identity bytes',`${offset}–${offset+range.bytes.length} / ${range.end} bytes\n${text}\n${range.next===undefined?'End of original identity.':`/content ${index+1} ${range.next} loads the next byte range.`}`);
+          }
+          const traceField=traceFields[index-ranges.length-nativeFields.length-attemptFields.length];
+          if(traceField){
+            const identity=`trace:${traceFieldKey(traceField.source)}:${JSON.stringify(traceField.cut)}`;
+            const range=await session.readTraceField(traceField,offset);
+            if(!readCurrent())throw new Error('Trace field view was replaced.');
+            const prior=this.#contentDecoders.get(session),decoder=prior?.identity===identity&&prior.end===offset?prior.decoder:new TextDecoder('utf-8',{ignoreBOM:true});
+            const text=range.representation==='binary_bytes'?`Binary bytes (Base64)\n${Buffer.from(range.bytes).toString('base64')}`:decoder.decode(range.bytes,{stream:range.next!==undefined});
+            this.#contentDecoders.set(session,{identity,end:offset+range.bytes.length,decoder});
+            return inspect(`Original Trace ${traceField.source.field} bytes`,`${offset}–${offset+range.bytes.length} / ${range.end} bytes\n${text}\n${range.next===undefined?'End of original field.':`/content ${index+1} ${range.next} loads the next byte range.`}`);
+          }
+          const observationField=observationFields[index-ranges.length-nativeFields.length-attemptFields.length-traceFields.length];
+          if(observationField){
+            const identity=`observation-content:${contentRefKey(observationField.binding.content_ref)}:${JSON.stringify(observationField.cut)}`;
+            const range=await session.readObservationContent(observationField,offset);
+            if(!readCurrent())throw new Error('Original observation content view was replaced.');
+            const prior=this.#contentDecoders.get(session),decoder=prior?.identity===identity&&prior.end===offset?prior.decoder:new TextDecoder('utf-8',{ignoreBOM:true});
+            const text=range.representation==='binary_bytes'?`Binary bytes (Base64)\n${Buffer.from(range.bytes).toString('base64')}`:decoder.decode(range.bytes,{stream:range.next!==undefined});
+            this.#contentDecoders.set(session,{identity,end:offset+range.bytes.length,decoder});
+            return inspect('Original observation content bytes',`${offset}–${offset+range.bytes.length} / ${range.end} bytes\n${text}\n${range.next===undefined?'End of original content.':`/content ${index+1} ${range.next} loads the next byte range.`}`);
+          }
+          let cache = this.#contentCaches.get(session);
+          if (!cache) { cache = new ContentCache((ref, at) => session.readContent(ref, at)); this.#contentCaches.set(session, cache); }
+          const ref = ranges[index]!.content_ref, identity = contentRefKey(ref);
+          const range = await cache.read(ref, offset, () => readCurrent() && session.deferredContent[index]!=null && contentRefKey(session.deferredContent[index]!.content_ref) === identity);
+          if(!readCurrent())throw new Error('Content view was replaced.');
+          let text: string;
+          if (ref.representation === 'binary_bytes') {
+            text = `Binary bytes (Base64)\n${Buffer.from(range.bytes).toString('base64')}`;
+          } else {
+            const prior = this.#contentDecoders.get(session);
+            const decoder = prior?.identity === identity && prior.end === offset ? prior.decoder : new TextDecoder('utf-8', {ignoreBOM: true});
+            text = decoder.decode(range.bytes, { stream: range.next !== undefined });
+            this.#contentDecoders.set(session, { identity, end: offset + range.bytes.length, decoder });
+          }
+          return inspect('Deferred content bytes', `${offset}–${offset + range.bytes.length} / ${ref.readable_end} bytes\n${text}\n${range.next === undefined ? 'End of content.' : `/content ${index + 1} ${range.next} loads the next byte range.`}`);
+        }
         case "/files":
           // One bounded native transcript page; older pages load on request.
           return { kind: "choose_delivery", page: await session.deliveryPage() };
+        case "/model-position": {
+          const values=argument.trim().split(/\s+/);
+          if(values.length<2||values.length>3||values.some(value=>!/^\d+$/.test(value)))return usage('/model-position <binding-revision> <model-position> [profile-position]');
+          const [revision,model,profile]=values;
+          if(BigInt(revision!)>18446744073709551615n)return usage('/model-position <binding-revision> <model-position> [profile-position]');
+          const modelPosition=Number(model),profilePosition=profile==null?null:Number(profile);
+          if(!Number.isSafeInteger(modelPosition)||profilePosition!=null&&!Number.isSafeInteger(profilePosition))return usage('/model-position <binding-revision> <model-position> [profile-position]');
+          const receipt=await session.modelSelect({binding_revision:revision!,model_position:modelPosition,profile_position:profilePosition});
+          return transient('info',`Native catalog selection confirmed · settings revision ${receipt.settings_revision}; future attempts use its defaults.`);
+        }
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":
@@ -281,7 +432,7 @@ export class CommandDispatcher {
         case "/todos":
           return inspect(
             "Todos",
-            renderTodoInspection(selectTodos(state), isTodoComposed(state)),
+            renderTodoInspection(selectTodos(state), isTodoComposed(state), deferredTodoRecords(session.checkpoint?.collections)),
           );
         case "/goal":
           return await this.#goal(session, argument);
@@ -294,8 +445,10 @@ export class CommandDispatcher {
             return inspect("Historical model projections", page.records.map(head => `${head.activation_id} · ${head.checkpoint_id} · base ${head.base_frontier} · activation Ledger ${head.activation_ledger} · ${head.destination_installation == null ? "local" : "inherited"} from ${head.origin.conversation_id}/${head.origin.activation}\n${head.summary_preview?.text ?? ""}`).join("\n\n") + (page.next_activation ? `\n\n/context history ${page.next_activation}` : ""));
           }
           if (action === "projection" && value) {
-            const detail = await session.projectionDetail(value, Number(offset ?? 0));
-            return inspect("Projected messages", detail.items.map(item => `${item.occurrence.item_index + 1} · ${item.content.role} · ${item.content.provenance.type}\n${JSON.stringify(item.content.blocks, null, 2)}`).join("\n\n") + (detail.next_item == null ? "" : `\n\n/context projection ${value} ${detail.next_item}`));
+            const view=this.#inspectionView;
+            const detail = await session.projectionDetail(value, Number(offset ?? 0),()=>view===this.#inspectionView&&this.#context.session===session);
+            if(view!==this.#inspectionView||this.#context.session!==session)return {kind:'none'};
+            return inspect("Projected messages", detail.items.map(item => `${item.occurrence.item_index + 1} · ${item.content.role} · ${item.content.provenance.type}\n${JSON.stringify(item.content.blocks, null, 2)}`).join("\n\n") + (detail.next_item == null ? "" : `\n\n/context projection ${value} ${detail.next_item}`) + "\n/content lists advertised original provenance fields at this returned cut.");
           }
           return usage("/context history [activation] | projection <checkpoint> [offset]");
         }
@@ -309,10 +462,19 @@ export class CommandDispatcher {
           return expandPreference(argument);
         case "/cancel":
           return await this.#cancel(session, argument);
-        case "/agents":
-          return inspect("Agents", state.agents.map(agent =>
-            `- ${agent.agent_id} · ${agent.agent} · ${agent.state} · activation ${agent.current_activation ?? "none"} · conversation ${agent.child_conversation_id}`,
-          ).join("\n") || "No child Agents.");
+        case "/agents": {
+          const offset=argument ? Number(argument) : 0;
+          if(!Number.isSafeInteger(offset)||offset<0)return usage('/agents [page-offset]');
+          const previous=offset ? this.#agentPages.get(session) : undefined;
+          if(offset&&!previous)return transient('error','Open /agents before following its continuation.');
+          const {page,agents}=await session.agentPage(offset,previous);
+          if(this.#context.session!==session)return {kind:'none'};
+          this.#agentPages.set(session,page);
+          return inspect('Agents', agents.map(agent=>`- ${agent.agent_id} · ${agent.agent} · ${agent.state} · activation ${agent.current_activation ?? "none"} · conversation ${agent.child_conversation_id}`).join('\n') + (page.next_offset==null?'\nEnd of Agents.':`\n/agents ${page.next_offset} loads the next bounded page.`) + '\n/agent-read <agent-id> opens its observation.');
+        }
+        case '/agent-read':
+          if(!argument.trim()||/\s/.test(argument.trim()))return usage('/agent-read <agent-id>');
+          return {kind:'inspect_agent',agentId:argument.trim()};
         case "/send-message": {
           const split = argument.indexOf(" ");
           if (split < 1 || !argument.slice(split + 1).trim()) return usage("/send-message <agent-id> <message>");
@@ -339,22 +501,23 @@ export class CommandDispatcher {
           const target = await session.interruptAgent(argument);
           return transient("info", target.activation_id == null
             ? `${target.agent_id} was inactive at the interrupt boundary.`
-            : target.outcome == null
-              ? `${target.agent_id}: admission ${target.activation_id} ended before an activation committed.`
-              : `${target.agent_id}: captured activation ${target.activation_id} settled (${target.outcome}).`);
+            : `${target.agent_id}: interruption intent accepted for ${target.activation_id}; settlement remains observable through /wait-agent.`);
         }
         case "/jobs": {
           const listing = await session.listJobs();
-          const rows = listing.jobs.map(job => `- ${job.job_id} · ${job.tool_name} · ${job.state}`).join("\n") || "No Jobs.";
+          const rows = listing.jobs.map(job => `- ${job.job_id} · ${job.tool_name} · ${job.state}${job.deferred_fields?.length ? "; fields deferred: " + (job.deferred_fields ?? []).map(path => path.join(".")).join(", ") + "; /observation loads bounded original bytes" : ""}`).join("\n") || "No Jobs.";
           return inspect("Jobs", `${rows}\nReturned ${listing.returned} of ${listing.matched} Jobs (limit ${listing.limit})${listing.truncated ? "; older Jobs omitted" : ""}.`);
         }
         case "/job-status":
         case "/job-wait":
         case "/job-cancel": {
           if (!argument) return usage(`${name} <job-id>`);
-          const job = name === "/job-status" ? await session.jobStatus(argument)
-            : name === "/job-wait" ? await session.waitJob(argument) : await session.cancelJob(argument);
-          return inspect("Job", `- ${job.job_id} · ${job.tool_name} · ${job.state}`);
+          if (name === "/job-cancel") {
+            const receipt = await session.cancelJob(argument);
+            return inspect("Job", `${receipt.job_id}: cancellation intent accepted; /job-status or /job-wait reads native settlement.`);
+          }
+          const job = name === "/job-status" ? await session.jobStatus(argument) : await session.waitJob(argument);
+          return inspect("Job", `- ${job.job_id} · ${job.tool_name} · ${job.state}${job.deferred_fields?.length ? "; fields deferred: " + (job.deferred_fields ?? []).map(path => path.join(".")).join(", ") + "; /observation loads bounded original bytes" : ""}`);
         }
         case "/quit":
           return { kind: "quit" };
@@ -382,7 +545,7 @@ export class CommandDispatcher {
 
   /** Creates an independent Session from an exact historical boundary. */
   async forkAt(
-    boundary: SessionUserMessageBoundaryView,
+    boundary: SessionUserMessageBoundaryObservation,
   ): Promise<CommandOutcome> {
     const session = this.#context.session;
     if (session === undefined) return transient("info", "choose a Session before submitting commands");
@@ -390,7 +553,7 @@ export class CommandDispatcher {
       const forked = await this.#context.host.forkSession(
         session.sessionId,
         boundary.surface_revision,
-        boundary.message.id,
+        boundary.locator,
         session.nodeId,
       );
       return focusTransition(forked, "forked");
@@ -401,7 +564,7 @@ export class CommandDispatcher {
 
   /** Creates a branch node inside the same Session graph. */
   async branchAt(
-    boundary: SessionUserMessageBoundaryView,
+    boundary: SessionUserMessageBoundaryObservation,
   ): Promise<CommandOutcome> {
     const session = this.#context.session;
     if (session === undefined) return transient("info", "choose a Session before submitting commands");
@@ -411,7 +574,7 @@ export class CommandDispatcher {
         session.sessionId,
         session.nodeId ?? current.active_node,
         boundary.surface_revision,
-        boundary.message.id,
+        boundary.locator,
       );
       return focusTransition(branched, "branched");
     } catch (error) {
@@ -486,14 +649,10 @@ export class CommandDispatcher {
     if (argument.length > 0) {
       return transient("error", "usage: /compact");
     }
-    const context = await session.compactContext();
-    const latest = context.latest_compaction;
-    if (latest == null) {
-      return transient("info", "context compacted");
-    }
+    const receipt = await session.compactContext();
     return transient(
       "info",
-      `context compacted to generation ${latest.generation}: ${latest.tokens_before.input_tokens} → ${latest.estimated_tokens_after} tokens`,
+      `context compacted to generation ${receipt.generation}: ${receipt.tokens_before.input_tokens} → ${receipt.estimated_tokens_after} tokens`,
     );
   }
 
@@ -524,7 +683,7 @@ export class CommandDispatcher {
     const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
     if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v49.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v50.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
@@ -532,15 +691,18 @@ export class CommandDispatcher {
     if (words[0] === "repairs") return words.length === 1 ? this.#repairs(target) : usage;
     const action = words.shift();
     const client = this.#context.host.client;
-    let source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
-    if (action === "rescan") await client.call("configuration/reconcile", { target }, "configuration_application");
+    const readSource = async () => materializeSource((await client.call('configuration/sourcesRead', { target }, 'source_settings')).projection,
+      async (reference, offset) => (await client.call('configuration/sourceValueRead', { target, reference, offset, max_bytes: 65_536 }, 'source_value_chunk')).chunk,
+      () => true);
+    let source = await readSource();
+    if (action === "rescan") await client.call("configuration/reconcile", { target }, "configuration_receipt");
     else if (action === "approval") {
       const mode = words.shift();
       if (mode !== "policy" && mode !== "full_access" && mode !== "inherit") return transient("error", "approval expects policy, full_access, or inherit");
       await client.call("configuration/sourceWrite", { target, expected_revision: source[target.kind]!.revision,
-        mutation: { kind: "config", mutation: { unit: "approval", authored: mode === "inherit" ? null : mode } } }, "source_settings");
+        mutation: { kind: "config", mutation: { unit: "approval", authored: mode === "inherit" ? null : mode } } }, "sources_written");
     } else if (action) return transient("error", "Unknown Settings action");
-    if (action) source = (await client.call("configuration/sourcesRead", { target }, "source_settings")).projection;
+    if (action) source = await readSource();
     return inspect(target.kind === "user" ? "User Settings" : "Workspace Settings", JSON.stringify(source, null, 2));
   }
 
@@ -559,10 +721,10 @@ export class CommandDispatcher {
    * retarget it, and a result from a replaced App Server is never shown.
    */
   async #repairs(
-    target: import("../../../protocol/app-server/v49.ts").SourceTarget | "current" | "current workspace",
+    target: import("../../../protocol/app-server/v50.ts").SourceTarget | "current" | "current workspace",
   ): Promise<CommandOutcome> {
     const { host, session } = this.#context;
-    let workspace: import("../../../protocol/app-server/v49.ts").SourceTarget | undefined;
+    let workspace: import("../../../protocol/app-server/v50.ts").SourceTarget | undefined;
     if (typeof target === "string") {
       if (session !== undefined) {
         const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");
@@ -697,9 +859,10 @@ export class CommandDispatcher {
     if (argument === "show") {
       return inspect("Model", withModelOutcomeNotice(session, renderModel(state)));
     }
-    const catalog = await session.modelCatalog();
+    const page = argument.match(/^page (\d+)$/);
+    const catalog = await session.modelCatalog(page ? Number(page[1]) : undefined);
     const models = catalog.models ?? [];
-    if (argument.length === 0 || argument === "list") {
+    if (argument.length === 0 || argument === "list" || page) {
       return { kind: "choose_model", models };
     }
 
@@ -825,6 +988,7 @@ function reasoningPreference(argument: string): CommandOutcome {
  * `/expand` — a visual collapse preference over all three identity domains.
  *
  * ```text
+ * /context-model [byte-offset]     inspect the original native context model
  * /expand                          toggle the latest tool call
  * /expand latest                   the same
  * /expand all                      expand every tool, background, and
@@ -897,17 +1061,18 @@ function usage(spelling: string): CommandOutcome {
  * whenever the runtime reaches an eligible idle boundary — there is no
  * separate arm/play/start step to report, and no inactive-but-active state
  * to render. The exact revision is kept for the CAS token users pass back. */
-export function goalSummary(view: import("../protocol/app-server.ts").GoalView): string {
+export function goalSummary(view: import("../protocol/app-server.ts").RuntimeClientGoalView): string {
   const goal = view.current;
   if (!goal) return "No current Goal.";
   const status = goal.phase[0]!.toUpperCase() + goal.phase.slice(1);
   const lines = [
-    `Goal: ${goal.objective}`,
+    `Goal: ${goal.objective_deferred?"Objective deferred; inspect its native Goal fields with /observation goal":goal.objective}`,
     `Status: ${status}`,
     `Progress: ${goal.autonomous_rounds_consumed}/${goal.autonomous_round_budget} autonomous rounds`,
     `Revision: ${goal.reference.id} r${goal.reference.revision}`,
   ];
-  if (goal.phase === "blocked" && goal.blocked_reason) lines.splice(2, 0, `Blocked: ${goal.blocked_reason}`);
+  if (goal.phase === "blocked" && goal.blocked_reason_deferred) lines.splice(2,0,'Blocked reason deferred; read the selected native Goal field.');
+  else if (goal.phase === "blocked" && goal.blocked_reason) lines.splice(2, 0, `Blocked: ${goal.blocked_reason}`);
   return lines.join("\n");
 }
 
@@ -1009,6 +1174,9 @@ export function renderHelp(): string {
  */
 export function renderModel(state: PresentationState): string {
   const session = state.sessionModel;
+  if (session === null && state.modelStatus?.body_deferred) {
+    return `Session model: ${state.modelStatus.available ? "available" : "unavailable"}; configuration content is deferred. Read /observation model at the current checkpoint. Model and Profile catalog choices remain available through /model-position.`;
+  }
   if (session === null) {
     return "Historical evidence is partial. Active Session model, approval, resources, and launch sources are unavailable. Consult retained Request Snapshots for request-specific evidence.";
   }

@@ -1,7 +1,7 @@
 import { translator } from '../src/locale/translation';
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v49';
+import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v50';
 import {
   applicationOwners, applicationScope, authoredUnit, catalogEntries, catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, documentAuthoring,
   effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
@@ -216,7 +216,7 @@ it('S1-15 owner navigation reads the native source owners, never the application
 
 it('S1-08 native per-unit observations stay independent and never pose as a classification', () => {
   const application = cfg3Application();
-  application.units = { capabilities: { status: 'preparing' }, instructions: { status: 'applied' }, provider: { status: 'failed', diagnostic: 'resource failed' }, process_bindings: { status: 'process_restart' }, shared_capacity: { status: 'ready', impact: 'unproven' } };
+  application.units = { capabilities: { status: 'preparing' }, instructions: { status: 'applied'}, provider: { status: 'failed', diagnostic: 'resource failed' }, process_bindings: { status: 'process_restart' }, shared_capacity: { status: 'ready', impact: 'unproven' } };
   expect(observedResultLabel(translator('en'), observedResult(unitApplication(application, 'capabilities')))).toBe('Preparing');
   expect(observedResultLabel(translator('en'), observedResult(unitApplication(application, 'instructions')))).toBe('Applied');
   expect(observedResult(unitApplication(application, 'provider'))).toEqual({ state: 'failed', diagnostic: 'resource failed' });

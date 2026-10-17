@@ -1,8 +1,10 @@
+import {applicationReceipt} from './fixture';
+import { contentAdvance } from './fixture';
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
-import type { AdoptionEligibility, ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v49';
+import type { AdoptionEligibility, ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v50';
 import { cfg3Application } from './cfg3-data';
 import { Server, snapshot } from './fixture';
 import { RpcFailure } from '../src/client/app-server';
@@ -11,7 +13,7 @@ afterEach(cleanup);
 const servers: Server[] = [];
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); });
 const reads = (s: Server) => s.requests.filter(item => item.request.method === 'session/configuration');
-const snapshotReads = (s: Server) => s.requests.filter(item => item.request.method === 'session/snapshot');
+const snapshotReads = (s: Server) => s.requests.filter(item => item.request.method === 'session/checkpoint');
 const adoptions = (s: Server) => s.requests.filter(item => item.request.method === 'session/adoptConfiguration');
 const unavailableLine = () => screen.queryByText(/Configuration status unavailable/);
 const adopt = () => screen.queryByRole('button', { name: 'Adopt configuration' }) as HTMLButtonElement | null;
@@ -29,7 +31,7 @@ function Harness({ s }: { s: Server }) {
 async function session(application: ConfigurationApplication | null, eligibility: AdoptionEligibility['status'] = 'eligible') {
   const s = new Server(); servers.push(s);
   s.snapshots.set('A', { ...snapshot('A'), configuration_adoption_eligibility: { status: eligibility } });
-  s.handlers.set('session/configuration', () => ({ type: 'session_configuration', application }));
+  s.handlers.set('session/configuration', () => ({type:'session_configuration',projection:applicationReceipt(application)}));
   await s.attached('A');
   render(<Harness s={s}/>);
   await waitFor(() => expect(reads(s)).toHaveLength(1));
@@ -51,7 +53,7 @@ it('C18 hundreds of streamed deltas never read Session configuration and never f
   await act(async () => emit(s, { type: 'assistant_message_started', attempt_id: 'attempt', message_id: 'message' }));
   const views = new Set<unknown>();
   for (let delta = 0; delta < 300; delta++) {
-    await act(async () => emit(s, { type: 'assistant_text_delta', attempt_id: 'attempt', message_id: 'message', block_index: 0, delta: 'x' }));
+    await act(async () => emit(s, contentAdvance({attempt_id:'attempt',message_id:'message',block_index:0,kind:'text',delta:'x'},delta,delta+1)));
     views.add(s.client.getSnapshot().views.A.snapshot);
     // Every frame: the same known observation, never "unavailable".
     expect(unavailableLine()).toBeNull();
@@ -63,7 +65,7 @@ it('C18 hundreds of streamed deltas never read Session configuration and never f
   expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks).toEqual([{ type: 'text', block_index: 0, text: 'x'.repeat(300) }]);
   // ...and none of them was a configuration fact.
   expect(reads(s)).toHaveLength(1);
-  expect(snapshotReads(s)).toHaveLength(0);
+  expect(snapshotReads(s)).toHaveLength(1);
   // Settlement: the runtime publishes Eligible; still no configuration read.
   await act(async () => emit(s, { type: 'attempt_settled', attempt_id: 'attempt', outcome: { type: 'completed', finish_reason: { type: 'stop' } } }));
   expect(adopt()?.disabled).toBe(true);
@@ -80,7 +82,7 @@ it('C18 with nothing to adopt the banner stays absent through a streamed answer'
   await act(async () => emit(s, { type: 'attempt_started', attempt_id: 'attempt' }));
   await act(async () => emit(s, { type: 'assistant_message_started', attempt_id: 'attempt', message_id: 'message' }));
   for (let delta = 0; delta < 200; delta++) {
-    await act(async () => emit(s, { type: 'assistant_text_delta', attempt_id: 'attempt', message_id: 'message', block_index: 0, delta: 'y' }));
+    await act(async () => emit(s, contentAdvance({attempt_id:'attempt',message_id:'message',block_index:0,kind:'text',delta:'y'}, 0, 1)));
     expect(screen.queryByLabelText('Session configuration')).toBeNull();
   }
   expect(reads(s)).toHaveLength(1);
@@ -90,8 +92,8 @@ it('C18 with nothing to adopt the banner stays absent through a streamed answer'
 // neither a configuration fact nor a browser-derived eligibility: only the
 // runtime's own eligibility publication enables adoption.
 it.each<[string, RuntimeClientEvent]>([
-  ['Job', { type: 'job_updated', job: { job_id: 'execution-1', tool_id: 'bash', tool_name: 'bash', state: 'succeeded' } }],
-  ['Agent', { type: 'agent_updated', agent: { title: 'worker',
+  ['Job', { type: 'job_updated', position:0, job: { job_id: 'execution-1', tool_id: 'bash', tool_name: 'bash', state: 'succeeded' } }],
+  ['Agent', { type: 'agent_updated', position:0, agent: { title: 'worker',
     activation_id: 'subagent-1', agent_id: 'agent-1', parent_agent_id: 'parent-agent', current_activation: null, activation_state: 'succeeded', child_conversation_id: 'conversation-child-1', agent: 'worker',
     definition_digest: 'definition-1', profile_digest: 'profile-1', state: 'inactive',
     observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
@@ -107,7 +109,7 @@ it.each<[string, RuntimeClientEvent]>([
   await act(async () => emit(s, { type: 'configuration_adoption_eligibility_changed', eligibility: { status: 'eligible' } }));
   await waitFor(() => expect(adopt()?.disabled).toBe(false));
   expect(reads(s)).toHaveLength(1);
-  expect(snapshotReads(s)).toHaveLength(0);
+  expect(snapshotReads(s)).toHaveLength(1);
   expect(adoptions(s)).toHaveLength(0);
 });
 
@@ -115,7 +117,7 @@ it('C19 a native configuration publication is folded as the observation, never r
   const s = await session(withCandidate());
   await waitFor(() => expect(adopt()).toBeTruthy());
   await act(async () => {
-    s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: { ...settled(), version: '3' } } });
+    s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: (applicationReceipt(({ ...settled(), version: '3' }))) } });
   });
   await waitFor(() => expect(screen.queryByLabelText('Session configuration')).toBeNull());
   expect(unavailableLine()).toBeNull();

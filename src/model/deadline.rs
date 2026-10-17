@@ -139,7 +139,7 @@ pub enum ModelDeadlinePhase {
 /// state type to this one: the only source of a [`ModelTimeoutPhase`] is
 /// [`ModelRequestDeadline::pending`], which yields one only while a deadline
 /// actually exists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelTimeoutPhase {
     /// The provider produced no generation progress at all.

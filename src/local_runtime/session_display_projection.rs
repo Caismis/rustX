@@ -3,10 +3,9 @@
 //! A fresh Session's persisted `display_preview` is `None` until its root
 //! lineage commits its first ordinary user message. The composition paths
 //! arm exactly one publisher per affected root runtime: a task that
-//! subscribes to the runtime's observation stream, waits for the first
-//! `ConversationObservation::Committed` carrying an ordinary
-//! (`InboundKind::Message`) user message, renders it with
-//! [`crate::local_runtime::session::preview_of`], and publishes the line
+//! reads the runtime's finite canonical metadata slot. That slot preserves
+//! the first ordinary User boundary, including a settled absent preview,
+//! and publishes its source-derived bounded line
 //! through the same once-only catalog mutation every other publication seam
 //! uses.
 //!
@@ -16,7 +15,7 @@
 //! no error toward the turn. Publication is one-shot: after the first
 //! qualifying commit the task exits whether or not that commit rendered text
 //! or the write succeeded, and later inputs never retrigger it. When the
-//! observation queue closes (runtime unloaded or dropped) before any
+//! metadata slot closes (runtime unloaded or dropped) before any
 //! qualifying commit, the task exits quietly.
 //!
 //! The publisher holds the Session's catalog through a *weak* handle, so an
@@ -27,9 +26,7 @@
 
 use std::sync::Weak;
 
-use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
 use crate::runtime::conversation_runtime::ConversationRuntime;
-use crate::runtime::observation::ConversationObservation;
 
 use super::session::{SessionCatalog, SessionId};
 
@@ -49,7 +46,7 @@ use super::session::{SessionCatalog, SessionId};
 ///
 /// The subscription is taken while the runtime is still inert (pre-
 /// activation), which is exactly when
-/// [`ConversationRuntime::subscribe_observations`] linearizes, so no commit
+/// [`ConversationRuntime::session_observation_metadata`] linearizes, so no commit
 /// can slip between arming and activation. Arming never fails the caller: a
 /// subscription error is logged and the Session simply keeps `None` until the
 /// explicit repair seam runs.
@@ -58,7 +55,7 @@ pub(crate) fn arm_display_projection(
     session_id: SessionId,
     runtime: &ConversationRuntime,
 ) {
-    let observations = match runtime.subscribe_observations() {
+    let mut observations = match runtime.session_observation_metadata() {
         Ok(observations) => observations,
         Err(error) => {
             tracing::warn!(
@@ -73,23 +70,21 @@ pub(crate) fn arm_display_projection(
     let probe = install_probe(&session_id);
     tokio::spawn(async move {
         // One-shot: this loop returns after handling the first qualifying
-        // commit (rendered or not, published or not) and when the queue
+        // commit (rendered or not, published or not) and when the slot
         // closes. It never outlives its purpose.
         loop {
-            observations.wait().await;
-            let mut subject: Option<UserMessageBlock> = None;
-            for observation in observations.drain() {
-                collect_first_user_boundary(&observation, &mut subject);
-            }
-            let Some(user) = subject else {
-                if observations.is_closed() {
+            let metadata = observations.borrow_and_update().clone();
+            let crate::runtime::observation::OpeningUserPreview::Observed { preview } =
+                metadata.opening_preview
+            else {
+                if metadata.closed || observations.changed().await.is_err() {
                     #[cfg(test)]
                     finish(&probe, false, false);
                     return;
                 }
                 continue;
             };
-            let Some(preview) = super::session::preview_of(&user) else {
+            let Some(preview) = preview else {
                 // The Session's first ordinary user message has no renderable
                 // text. That is a settled `None`, not a reason to wait for a
                 // later message.
@@ -135,33 +130,6 @@ pub(crate) fn arm_display_projection(
             return;
         }
     });
-}
-
-/// The first ordinary user commit inside one drained observation, unwrapping
-/// the queue's publication envelopes (`JournalBatch`, `Published`) so the
-/// publisher sees the same semantic stream every consumer sees.
-fn collect_first_user_boundary(
-    observation: &ConversationObservation,
-    subject: &mut Option<UserMessageBlock>,
-) {
-    if subject.is_some() {
-        return;
-    }
-    match observation {
-        ConversationObservation::Committed {
-            block: MessageBlock::User(user),
-            ..
-        } if user.kind == InboundKind::Message => *subject = Some(user.clone()),
-        ConversationObservation::JournalBatch { observations, .. } => {
-            for observation in observations {
-                collect_first_user_boundary(observation, subject);
-            }
-        }
-        ConversationObservation::Published { observation, .. } => {
-            collect_first_user_boundary(observation, subject);
-        }
-        _ => {}
-    }
 }
 
 /// What the armed publisher did, observable by tests without sleeps.

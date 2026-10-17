@@ -4,10 +4,11 @@
 //! of authoritative runtime state. It is a projection, never a second
 //! authority:
 //!
-//! - committed messages mirror the currently projected canonical Surface;
+//! - canonical Ledger headers and loaded body caches are finite display pages;
+//! - the native model-context Surface remains a separate read-cut domain;
 //! - the attempt view mirrors the current/latest attempt execution;
-//! - the in-flight output and foreground tool views carry enough state to
-//!   repair every client-visible streaming effect;
+//! - in-flight output carries bounded headers and released publication frontiers;
+//! - exact deferred bytes remain in their authoritative canonical/audit/live source;
 //! - background executions mirror the authoritative conversation registry;
 //! - the Agent Status window derives from the exact composed statuses;
 //! - inbound diagnostics mirror the authoritative mailbox;
@@ -16,10 +17,10 @@
 //! The snapshot carries no internal executors, no executor environment paths, no
 //! provider objects, and no synchronization identities.
 //!
-//! Snapshot semantics are frozen by the snapshot/cursor invariant: a
-//! snapshot returned at cursor `C` describes all Runtime Client state
-//! through `C`, and a subscription after `C` observes every subsequently
-//! published event or fails explicitly with `resync_required`.
+//! A checkpoint at cursor `C` captures one consistent native display cut and
+//! finite descriptors for its unloaded ranges. Continuous complete transitions
+//! after `C` converge with the endpoint checkpoint; a gap requires explicit
+//! recovery. Neither observation nor transport delivery owns execution.
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
@@ -37,7 +38,7 @@ use crate::runtime::identity::{
     RuntimeResourceRevision, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
-use crate::runtime::interaction::RoutedInteraction;
+use crate::runtime::interaction::{InteractionRef, InteractionRequest, InteractionSource};
 use crate::runtime::types::{ApprovalMode, TokenMeasurement};
 use crate::tools::background::BackgroundLifecycle;
 use crate::tools::todo::{TodoSnapshot, TodoStatus};
@@ -56,6 +57,82 @@ pub struct RuntimeDurabilityFailure {
     pub operation: String,
     /// The human-readable failure diagnostic.
     pub diagnostic: String,
+}
+
+/// Finite display identity of an actionable native request. A missing body is
+/// an explicit deferred source, never an empty or reconstructed Questionnaire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientInteractionHeader {
+    /// Exact native source offset, stable for this pending lifetime.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub source_offset: u64,
+    pub interaction: InteractionRef,
+    pub source: InteractionSource,
+    pub request_id: crate::runtime::identity::InteractionId,
+    pub conversation_id: ConversationId,
+    pub attempt_id: AttemptId,
+    pub turn: u32,
+    pub kind: RuntimeClientInteractionKind,
+    pub approval: Option<RuntimeClientApprovalSummary>,
+    pub body: Option<InteractionRequest>,
+    pub body_complete: bool,
+    pub workflow_node: Option<Box<crate::runtime::workflow::WorkflowNodeInstance>>,
+    pub workflow_node_deferred: bool,
+    pub workflow_node_path: Option<Vec<String>>,
+}
+/// Finite decision metadata; business arguments remain an exact deferred native source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientApprovalSummary {
+    pub tool_id: Option<ToolId>,
+    pub tool_name: String,
+    pub reason: String,
+    pub mode: crate::tools::types::ToolInvocationMode,
+    pub deferred_fields: Vec<Vec<String>>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeClientInteractionKind {
+    Approval,
+    Questionnaire,
+    Review,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientMessageDescriptor {
+    pub deliveries: Option<super::delivery::RuntimeClientDeliveryHead>,
+    pub identity: Option<MessageId>,
+    pub locator: super::content::CanonicalContentLocator,
+    pub role: String,
+    pub kind: String,
+    pub block_count: u64,
+    pub tool_call_count: u64,
+    /// Finite native Tool occurrences; remaining calls use the advertised frontier.
+    pub tool_calls: Vec<ForegroundToolExecution>,
+    pub turn_process: Option<super::response::TurnProcessView>,
+    pub completed_response: Option<super::response::CompletedResponseView>,
+    pub content: Vec<super::checkpoint::ContentBinding>,
+    pub collections: Vec<super::checkpoint::CollectionFrontier>,
+}
+impl RuntimeClientMessageDescriptor {
+    pub(crate) fn from_header(header: &crate::durable::observation::MessageHeader) -> Option<Self> {
+        Some(Self {
+            deliveries: header.deliveries.clone(),
+            identity: header.identity.clone(),
+            locator: header.locator.clone()?,
+            role: header.role.clone(),
+            kind: header.kind.clone(),
+            block_count: header.block_count,
+            tool_call_count: header.tool_call_count,
+            tool_calls: header.tool_calls.clone(),
+            turn_process: None,
+            completed_response: None,
+            content: header.content.clone(),
+            collections: header.collections.clone(),
+        })
+    }
 }
 
 /// The authoritative Runtime Client snapshot of one conversation runtime.
@@ -121,6 +198,10 @@ pub struct RuntimeClientSnapshot {
     /// current Surface working set, while historical Ledger pages remain
     /// available through `ConversationStore` APIs.
     pub messages: Vec<MessageBlock>,
+    pub message_descriptors: Vec<RuntimeClientMessageDescriptor>,
+    /// Native projection-selected settlement head; retained audit bodies remain in storage.
+    #[serde(default)]
+    pub publication_settlements: Vec<RuntimeClientPublicationSettlementRecord>,
     /// The bounded newest page of the derived durable transcript. This is
     /// distinct from `messages`: the latter is the current Surface working
     /// set, while this page remains readable after compaction excludes messages
@@ -140,7 +221,7 @@ pub struct RuntimeClientSnapshot {
     /// Live process-owned native interaction requests. This is projection
     /// state, never durable recovery input or client-owned truth.
     #[serde(default)]
-    pub pending_interactions: Vec<RoutedInteraction>,
+    pub pending_interactions: Vec<RuntimeClientInteractionHeader>,
     /// All background executions in execution allocation order, including
     /// terminal records retained by the authoritative registry.
     #[serde(default)]
@@ -209,6 +290,9 @@ pub struct RuntimeClientSnapshot {
     /// synchronization identity appears here.
     /// Absent when no live Session model authority exists (historical inspection).
     pub model: Option<SessionModelView>,
+    /// Admission availability remains explicit when growing model details are deferred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_status: Option<RuntimeClientModelStatus>,
     /// The conversation's task list, as of the newest committed `todo`
     /// result — present exactly when this runtime composes the **Todo**
     /// Agent Extension (Issue #259).
@@ -240,7 +324,7 @@ pub struct RuntimeClientSnapshot {
     pub todos: Option<TodoSnapshot>,
     /// Durable Goal read model at this projection cursor; absent when the
     /// extension is not composed. Journal facts never reconstruct it.
-    pub goal: Option<crate::goal::GoalView>,
+    pub goal: Option<crate::runtime_client::goal::RuntimeClientGoalView>,
 }
 
 /// One bounded newest-or-older page of derived transcript history.
@@ -248,6 +332,18 @@ pub struct RuntimeClientSnapshot {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptPage {
+    /// The exact native source cut from which bodies and evidence were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_cut: Option<crate::durable::observation::ObservationReadCut>,
+    /// Deferred bytes remain explicitly recoverable on older historical pages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<super::checkpoint::ContentBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collections: Vec<super::checkpoint::CollectionFrontier>,
+    /// Native items whose structural display requires bounded further reading.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred_entries: Vec<super::checkpoint::CheckpointPageItem>,
+
     /// Last native transcript position inherited by this lineage; zero for an empty prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_through: Option<RuntimeClientTranscriptCursor>,
@@ -415,11 +511,86 @@ pub(crate) fn transcript_page_view(
         .map(transcript_entry_view)
         .collect::<Result<Vec<_>, String>>()?;
     Ok(RuntimeClientTranscriptPage {
+        source_cut: None,
+        content: Vec::new(),
+        collections: Vec::new(),
+        deferred_entries: Vec::new(),
         inherited_through: Some(page.inherited_through.into()),
         statistics: None,
         entries,
         next_cursor: page.next_cursor.map(Into::into),
     })
+}
+
+/// Converts indexed native headers without loading canonical, audit, or event bodies.
+pub(crate) fn transcript_header_view(
+    page: crate::durable::observation::TranscriptHeaderPage,
+) -> RuntimeClientTranscriptPage {
+    let mut result = RuntimeClientTranscriptPage {
+        source_cut: Some(page.cut.clone()),
+        inherited_through: Some(page.cut.inherited_through.into()),
+        next_cursor: page.next_cursor.map(Into::into),
+        ..RuntimeClientTranscriptPage::default()
+    };
+    for header in page.headers {
+        if let Some(mut display) = header.display {
+            display.tool_calls = header.tool_calls;
+            let index = result.entries.len();
+            result.entries.push(display);
+            for mut binding in header.content {
+                if binding
+                    .path
+                    .first()
+                    .is_some_and(|segment| segment == "display")
+                {
+                    binding.path.remove(0);
+                }
+                let mut path = vec!["entries".to_owned(), index.to_string()];
+                path.append(&mut binding.path);
+                binding.path = path;
+                result.content.push(binding);
+            }
+            result.collections.extend(header.collections);
+        } else {
+            result.collections.extend(header.collections);
+            result
+                .deferred_entries
+                .push(super::checkpoint::CheckpointPageItem {
+                    body_complete: None,
+                    key: None,
+                    offset: header.cursor.get(),
+                    identity: header.reference_id,
+                    value: header
+                        .message
+                        .as_ref()
+                        .and_then(RuntimeClientMessageDescriptor::from_header)
+                        .map(|mut descriptor| {
+                            descriptor.tool_calls = header.tool_calls;
+                            descriptor
+                        })
+                        .as_ref()
+                        .and_then(super::checkpoint::structural_value)
+                        .or_else(|| {
+                            header
+                                .publication_settlement
+                                .as_ref()
+                                .and_then(super::checkpoint::structural_value)
+                        }),
+                    content: header.content,
+                    deferred: true,
+                });
+        }
+    }
+    result
+        .collections
+        .push(super::checkpoint::CollectionFrontier {
+            domain: "transcript.entries".into(),
+            revision: page.cut.read.journal,
+            total: page.total,
+            loaded: result.entries.len() as u64,
+            next_offset: page.next_cursor.map(crate::durable::TranscriptCursor::get),
+        });
+    result
 }
 
 fn transcript_entry_view(
@@ -428,7 +599,7 @@ fn transcript_entry_view(
     let item = match entry.item {
         crate::durable::TranscriptItem::InheritedTurn { provenance } => {
             RuntimeClientTranscriptItem::AttemptTerminal {
-                turn: inherited_terminal(provenance, entry.cursor.into()),
+                turn: inherited_terminal(provenance, entry.cursor.into())?,
             }
         }
         crate::durable::TranscriptItem::AttemptTerminal { event } => {
@@ -506,43 +677,61 @@ fn transcript_entry_view(
         tool_calls: entry
             .tool_calls
             .into_iter()
-            .map(|tool| {
-                let arguments =
-                    serde_json::to_string(&tool.call.arguments).expect("JSON arguments");
-                ForegroundToolExecution {
-                    message_id: tool.message_id,
-                    block_index: tool.block_index,
-                    call_id: tool.call.id,
-                    tool_id: tool.call.tool_id,
-                    name: tool.call.name,
-                    state: match tool.result {
-                        Some(result) => ForegroundToolState::Settled { arguments, result },
-                        None => ForegroundToolState::Assembled { arguments },
-                    },
-                }
-            })
+            .map(transcript_tool_view)
             .collect(),
         item,
     })
 }
 
+fn transcript_tool_view(tool: crate::durable::inbox::TranscriptTool) -> ForegroundToolExecution {
+    ForegroundToolExecution {
+        committed_result_deferred: false,
+        committed_result: tool.result,
+        result_source: None,
+        result_metadata_ref: None,
+        occurrence: RuntimeClientToolOccurrence {
+            locator: super::content::CanonicalContentLocator::ByMessageId {
+                message_id: tool.message_id.clone(),
+            },
+            block_index: tool.block_index,
+        },
+        message_id: inline_message_id(&tool.message_id),
+        block_index: tool.block_index,
+        call_id: inline_call_id(&tool.call.id),
+        metadata_ref: None,
+        assembly_complete: true,
+        tool_id: inline_tool_id(&tool.call.tool_id),
+        name: tool.call.name,
+        state: ForegroundToolState::Assembled {
+            arguments: String::new(),
+        },
+    }
+}
+
 fn inherited_terminal(
     provenance: crate::durable::reading::TurnReadingProvenance,
     cursor: RuntimeClientTranscriptCursor,
-) -> super::response::TurnProcessView {
-    super::response::TurnProcessView {
+) -> Result<super::response::TurnProcessView, String> {
+    if provenance.id.attempt_id.as_str().len() > 512 {
+        return Err("inherited turn requires its native owner field source".into());
+    }
+    Ok(super::response::TurnProcessView {
         conversation_id: provenance.id.conversation_id,
-        attempt_id: provenance.id.attempt_id,
+        attempt_id: Some(provenance.id.attempt_id),
+        attempt_id_source: None,
         event_id: None,
         control_cursor: cursor,
         final_message_id: None,
+        final_message_locator: None,
+        final_message_id_deferred: false,
+        final_message_id_source: None,
         message_count: 0,
         tool_call_count: 0,
         outcome: provenance.outcome.into(),
         failure: None,
         started_at: provenance.started_at,
         ended_at: provenance.ended_at,
-    }
+    })
 }
 
 /// Converts one live requested interaction audit envelope into its client
@@ -622,7 +811,7 @@ pub struct RuntimeClientContextView {
     pub compaction_error: Option<String>,
     /// Latest native measured request or committed compacted-context estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub occupancy: Option<crate::context::occupancy::ContextOccupancy>,
+    pub occupancy: Option<super::occupancy::RuntimeClientContextOccupancy>,
     /// Whether the runtime currently owns a context-compaction operation.
     /// This is live operation state, not inferred from token usage.
     pub compaction_in_progress: bool,
@@ -669,7 +858,6 @@ pub struct RuntimeClientCompactionView {
     /// The pre-compaction input measurement and its provenance.
     pub tokens_before: TokenMeasurement,
     /// The deterministic estimate of the rebuilt request context.
-    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub estimated_tokens_after: u64,
 }
 
@@ -681,8 +869,10 @@ pub struct RuntimeClientCompactionView {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientAttempt {
-    /// The attempt identity.
-    pub attempt_id: AttemptId,
+    /// Exact inline display identity, when bounded.
+    pub attempt_id: Option<AttemptId>,
+    /// Original native owner evidence when the inline alias is deferred.
+    pub attempt_id_source: Option<super::response::AttemptIdentitySource>,
     /// The externally meaningful attempt phase.
     pub phase: RuntimeClientAttemptPhase,
     /// The number of completed turns.
@@ -708,11 +898,26 @@ pub struct RuntimeClientAttempt {
     pub execution_settings: Option<super::settings::AdmittedSettings>,
 }
 
+/// Finite metadata for one original model name at its native request owner.
+/// The original model JSON remains readable from the enclosing domain/item/path[].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientModelName {
+    pub request_id: Option<crate::runtime::identity::RequestId>,
+    pub request_id_source: Option<JournalFieldRef>,
+    pub source_sequence: Option<u64>,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub encoded_bytes: u64,
+    pub value: Option<String>,
+}
+
 /// The externally meaningful phase of one attempt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientAttemptPhase {
+    /// A historical start has no recorded terminal or current live owner.
+    Incomplete,
     /// The coordinator admitted the attempt; the loop has not started yet.
     Admitted,
     /// The attempt is executing.
@@ -726,10 +931,9 @@ pub enum RuntimeClientAttemptPhase {
 
 /// The accumulated in-flight output of one streaming Assistant message.
 ///
-/// This is the repair state of streaming: a snapshot taken mid-stream
-/// carries every accumulated delta through its cursor, so a client
-/// repairing after `resync` reconstructs the exact message it would have
-/// observed incrementally.
+/// A checkpoint carries bounded previews and exact publication frontiers.
+/// Clients recover deferred bytes from those native references, independently
+/// of advancing their Applied Cursor through complete display transitions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -772,14 +976,55 @@ pub enum InFlightBlock {
         /// The canonical block index.
         block_index: ContentBlockIndex,
         /// The tool-call identity.
-        call_id: ToolCallId,
+        call_id: Option<ToolCallId>,
+        metadata_ref: Option<super::content::ContentRef>,
         /// The canonical tool identity.
-        tool_id: ToolId,
+        tool_id: Option<ToolId>,
         /// The model-facing tool name.
         name: String,
         /// The accumulated JSON argument fragments.
         arguments: String,
     },
+}
+
+/// Finite proposal metadata; exact provider identifiers and arguments can be deferred.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientToolCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<ToolCallId>,
+    pub tool_id: Option<ToolId>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<serde_json::Value>,
+    pub metadata_ref: Option<super::content::ContentRef>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientToolOccurrence {
+    pub locator: super::content::CanonicalContentLocator,
+    pub block_index: ContentBlockIndex,
+}
+pub(crate) fn inline_tool_id(id: &ToolId) -> Option<ToolId> {
+    (id.as_str().len() <= 256).then(|| id.clone())
+}
+pub(crate) fn inline_message_id(identity: &MessageId) -> Option<MessageId> {
+    (identity.as_str().len() <= 256).then(|| identity.clone())
+}
+
+pub(crate) fn inline_call_id(id: &ToolCallId) -> Option<ToolCallId> {
+    (id.as_str().len() <= 256).then(|| id.clone())
+}
+
+/// An exact immutable native Journal field authorized by the checkpoint read cut.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JournalFieldRef {
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub sequence: u64,
+    pub path: Vec<String>,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub encoded_bytes: u64,
 }
 
 /// The foreground tool execution read model of one logical tool call.
@@ -792,14 +1037,27 @@ pub enum InFlightBlock {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct ForegroundToolExecution {
-    /// Exact Assistant occurrence; provider call IDs can repeat across history.
-    pub message_id: MessageId,
+    pub occurrence: RuntimeClientToolOccurrence,
+    /// Exact inline Assistant identity when bounded; `occurrence` remains authoritative.
+    pub message_id: Option<MessageId>,
     /// Canonical Assistant content block (also used by live publication frames).
     pub block_index: ContentBlockIndex,
     /// The logical tool-call identity.
-    pub call_id: ToolCallId,
+    pub call_id: Option<ToolCallId>,
+    pub metadata_ref: Option<super::content::ContentRef>,
+    pub assembly_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_source: Option<JournalFieldRef>,
+    /// Canonical-only settlement metadata, including before-Start outcomes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_metadata_ref: Option<super::content::ContentRef>,
+    /// A committed canonical result is independent of execution-terminal Journal publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed_result: Option<ToolExecutionResult>,
+    /// The committed C result body is available through its exact metadata/payload sources.
+    pub committed_result_deferred: bool,
     /// The canonical tool identity.
-    pub tool_id: ToolId,
+    pub tool_id: Option<ToolId>,
     /// The model-facing tool name at call time.
     pub name: String,
     /// The externally meaningful execution state.
@@ -861,6 +1119,9 @@ pub struct InboundItemView {
     pub revision: u64,
     /// The mailbox-assigned inbound sequence.
     pub sequence: InboundSequence,
+    /// The bounded native header defers part of its authoritative message.
+    #[serde(default)]
+    pub deferred: bool,
     /// The canonical inbound message.
     pub message: UserMessageBlock,
 }
@@ -876,6 +1137,43 @@ pub struct InboundDrainView {
     pub count: usize,
 }
 
+/// Positive native audit settlement when its retained content is deferred.
+/// This is Publication Plane authority, not canonical C or execution settlement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientPublicationSettlement {
+    pub stream_id: Option<crate::runtime::identity::PublicationStreamId>,
+    pub message_id: Option<MessageId>,
+    pub attempt_id: Option<AttemptId>,
+    pub turn_id: Option<TurnId>,
+    pub request_id: Option<crate::runtime::identity::RequestId>,
+    pub kind: crate::publication::PublicationAuditKind,
+    pub settled_at: chrono::DateTime<chrono::Utc>,
+    pub block_count: u64,
+}
+/// Exact source placement and native cut of one positive publication settlement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientPublicationSettlementRecord {
+    pub settlement: RuntimeClientPublicationSettlement,
+    pub transcript_cursor: RuntimeClientTranscriptCursor,
+    pub read_cut: crate::durable::observation::ObservationReadCut,
+}
+impl From<crate::durable::inbox::PublicationAuditSummary> for RuntimeClientPublicationSettlement {
+    fn from(summary: crate::durable::inbox::PublicationAuditSummary) -> Self {
+        Self {
+            stream_id: summary.stream_id,
+            message_id: summary.message_id,
+            attempt_id: summary.attempt_id,
+            turn_id: summary.turn_id,
+            request_id: summary.request_id,
+            kind: summary.kind,
+            settled_at: summary.settled_at,
+            block_count: summary.block_count,
+        }
+    }
+}
+
 /// The external background execution read model.
 ///
 /// Projected from the authoritative [`ConversationBackgroundRegistry`]
@@ -887,12 +1185,14 @@ pub struct InboundDrainView {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientJob {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred_fields: Vec<Vec<String>>,
     /// Native Bash presentation, derived from the canonical invocation.
     pub bash: Option<crate::tools::types::BashPresentation>,
     /// The detached runtime execution identity.
     pub job_id: ToolExecutionId,
     /// The canonical tool identity.
-    pub tool_id: ToolId,
+    pub tool_id: Option<ToolId>,
     /// The model-facing tool name.
     pub tool_name: String,
     /// The authoritative lifecycle state.
@@ -916,6 +1216,8 @@ pub struct RuntimeClientJob {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientAgent {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred_fields: Vec<Vec<String>>,
     pub title: String,
     pub parent_agent_id: crate::runtime::identity::AgentId,
     /// The most recently admitted finite activation identity.
@@ -1013,7 +1315,10 @@ pub struct AgentStatusView {
     /// The canonical Agent Status User message described by this view. It is
     /// the stable identity of the composition: observing the same
     /// `status_message_id` twice describes one composition, never two.
-    pub status_message_id: MessageId,
+    pub status_message_id: Option<MessageId>,
+    pub source_locator: Option<super::content::CanonicalContentLocator>,
+    pub request_id: Option<crate::runtime::identity::RequestId>,
+    pub rendered_ref: Option<super::content::ContentRef>,
     /// The delivery opportunities that made this generation eligible, each
     /// carrying its own placement fact.
     ///
@@ -1055,7 +1360,7 @@ pub enum RuntimeClientStatusSection {
     /// The runtime-owned background-execution section.
     BackgroundExecutions {
         /// The active background executions in allocation order.
-        executions: Vec<RuntimeClientJob>,
+        executions: Vec<RuntimeClientStatusBackgroundExecution>,
         /// Active executions omitted by the module-local bound.
         omitted_count: usize,
     },
@@ -1078,6 +1383,18 @@ pub enum RuntimeClientStatusSection {
         /// Number of active tasks omitted from the bounded view.
         omitted_count: usize,
     },
+}
+
+/// Exactly the bounded Background presentation accepted by the Status owner.
+/// Job invocation bodies and terminal results remain in the native Job read domain.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientStatusBackgroundExecution {
+    pub job_id: ToolExecutionId,
+    pub tool_name: String,
+    pub state: BackgroundLifecycle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<ToolProgress>,
 }
 
 /// One bounded Todo task in the Agent Status client view.
@@ -1120,7 +1437,10 @@ pub struct AgentStatusOpportunityView {
 #[derive(schemars::JsonSchema)]
 pub struct FreshInboundOpportunityView {
     /// The inbound message that made status generation eligible.
-    pub target_message_id: MessageId,
+    pub target_message_id: Option<MessageId>,
+    pub target_locator: Option<super::content::CanonicalContentLocator>,
+    pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
+    pub target_metadata_ref: Option<super::content::ContentRef>,
 }
 
 /// The external view of one `PostToolBatch` status opportunity.
@@ -1272,7 +1592,8 @@ pub struct RuntimeClientTool {
 #[derive(schemars::JsonSchema)]
 pub struct RuntimeClientResourcesView {
     /// Facts copied from the same immutable generation as this revision.
-    pub inspection: Box<crate::runtime::capability_inspection::CapabilityInspection>,
+    /// Deferred inspection facts are loaded through finite native field pages.
+    pub inspection: Option<Box<crate::runtime::capability_inspection::CapabilityInspection>>,
     /// The monotonic process-local resource generation.
     #[serde(default)]
     pub revision: RuntimeResourceRevision,
@@ -1333,7 +1654,7 @@ pub struct ConversationWindow {
     pub cut: crate::durable::reading::ConversationReadCut,
     pub page: RuntimeClientTranscriptPage,
     pub newer_cursor: Option<RuntimeClientTranscriptCursor>,
-    pub target: Option<crate::durable::reading::ConversationTurnId>,
+    pub target: Option<crate::runtime_client::turn::ObservedTurnIdentity>,
     pub target_cursor: Option<RuntimeClientTranscriptCursor>,
 }
 
@@ -1347,4 +1668,16 @@ pub struct RuntimeClientManualCompaction {
     pub released: bool,
     /// Exact pre-commit failure diagnostic, if released unsuccessfully.
     pub error: Option<String>,
+}
+
+/// Derived availability of the existing native Session model authority.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientModelStatus {
+    pub available: bool,
+    pub body_deferred: bool,
+    /// Existing native Session binding revision; absent for an unbound read source.
+    pub binding_revision: Option<u64>,
 }

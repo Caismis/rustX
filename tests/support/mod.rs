@@ -21,6 +21,7 @@ pub(crate) mod context;
 pub(crate) mod domain_controls;
 pub(crate) mod fake;
 pub(crate) mod model;
+pub(crate) mod native_journal;
 pub(crate) mod runtime_client_conformance;
 pub(crate) mod runtime_client_fixture;
 pub(crate) mod todo;

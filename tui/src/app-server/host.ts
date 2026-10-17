@@ -1,3 +1,6 @@
+import { readSourceRepairFields, type SourceRepairRead } from '../../../protocol/app-server/source-observation.ts';
+import { materializeSettings } from '../../../protocol/app-server/settings-observation.ts';
+import { readEditor } from '../../../protocol/app-server/editor.ts';
 import { archiveDownloadUrl } from "../../../protocol/app-server/download.ts";
 import { saveSessionArchive } from "./archive.ts";
 /**
@@ -39,10 +42,8 @@ import {
   type SessionDeleteResult,
   type SessionId,
   type SurfaceRevision,
-  type MessageId,
   type UserInputBlock,
   type Notification,
-  type SourceSettings,
   type SourceTarget,
 } from "../protocol/app-server.ts";
 import { olderSequence, retainSource, sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
@@ -317,11 +318,16 @@ export class AppServerHost {
    * then forgot — changes nothing; it is still returned to the caller as the
    * snapshot it is.
    */
-  async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceSettings> {
+  async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceRepairRead> {
     const read = target.kind === "workspace" ? { key: sourceKey(target), forgotten: "0" } : undefined;
     if (read !== undefined) this.#reads.add(read);
     try {
-      const { projection } = await this.client.call("configuration/sourcesRead", { target }, "source_settings");
+      const client = this.client;
+      const authorityId = this.authorityId;
+      const current = () => this.client === client && this.authorityId === authorityId && !client.closed;
+      const result = await client.call("configuration/sourcesRead", { target }, "source_settings");
+      const projection = await readSourceRepairFields(result.projection, async (reference, offset) =>
+        (await client.call("configuration/sourceValueRead", { target, reference, offset, max_bytes: 65_536 }, "source_value_chunk")).chunk, current);
       const sequence = projection.repair_sequence;
       // The User is never forgotten, so nothing it held can be newer.
       this.#observeSourceRepair({ target: { kind: "user" }, receipt: projection.user_repair ?? undefined, sequence }, "0");
@@ -430,13 +436,14 @@ export class AppServerHost {
   async attach(
     sessionId: SessionId,
     nodeId?: SessionNodeId,
+    previous?: AppServerSession,
   ): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
       if (nodeId === undefined || nodeId === existing.nodeId) return existing;
       throw new Error("use branch switching to open a different Session node");
     }
-    const session = await AppServerSession.attach(this.client, sessionId, nodeId, this.#unknownModelSelections);
+    const session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
     this.#sessions.set(sessionId, session);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
@@ -524,7 +531,7 @@ export class AppServerHost {
   }
 
   async createSession(settings: SessionPersistentState): Promise<SessionTransition> {
-    return transitionOf(
+    return transitionOf(this.client,
       await this.client.call(
         "session/create",
         { settings },
@@ -567,10 +574,10 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: MessageId,
+    boundary?: import("../../../protocol/app-server/v50.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
-    return transitionOf(
+    return transitionOf(this.client,
       await this.client.call(
         "session/fork",
         {
@@ -590,9 +597,9 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: MessageId,
+    boundary: import("../../../protocol/app-server/v50.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
-    return transitionOf(
+    return transitionOf(this.client,
       await this.client.call(
         "session/branch",
         {
@@ -654,7 +661,8 @@ export class AppServerHost {
       { session_id: sessionId },
       "settings",
     );
-    return { revision: read.revision, settings: read.settings };
+    const settings = await materializeSettings(read.projection, async(reference,offset)=>(await this.client.call('session/settingsValueRead',{session_id:sessionId,reference,offset,max_bytes:65_536},'settings_value_chunk')).chunk, ()=>true);
+    return { revision: read.projection.revision, settings };
   }
 
   // -------------------------------------------------------------------------
@@ -694,14 +702,16 @@ export class AppServerHost {
   }
 }
 
-function transitionOf(result: {
+async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor_content?: UserInputBlock[] | null;
+  editor?: import('../../../protocol/app-server/v50.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
-}): SessionTransition {
+}): Promise<SessionTransition> {
   return {
     session: result.session,
-    editorContent: result.editor_content ?? undefined,
+    editorContent: result.editor ? await readEditor(result.editor,
+      async (block_index, offset) => (await client.call('session/editorRead', { locator: result.editor!, block_index, offset, max_bytes: 65_536 }, 'editor_page')).page,
+      () => true) : undefined,
     durabilityDiagnostic: result.durability_diagnostic ?? undefined,
   };
 }

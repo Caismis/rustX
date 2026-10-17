@@ -216,7 +216,20 @@ There is no `ConversationRecord`, full transcript table, request-message
 copy, generic repository, or second durable history. Canonical message bodies
 are stored once in the Ledger. A historical request reconstructs its exact frozen input and immutable dependencies. Checkpoint items select context independently of canonical append bookkeeping.
 
-The current SQLite development schema is 60, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Older schemas are refused without migration.
+In memory, the canonical Surface shares immutable Ledger body allocations in an
+ordered persistent selection. Its status-generation and ordinary-message-count
+indexes advance with canonical append, or rebuild from the exact durable
+selection during bootstrap. A contributor captures that root and its revision;
+it does not hydrate all prior bodies on each turn. This canonical selection is
+separate from compiled Original/Derived model input. The compiled immutable input
+root passes through context preparation, exact observation-anchor comparison,
+measurement and request assembly. Explicit provider encoders may enumerate the
+actual request; observation and preparation do not flatten it merely to pass it
+to another owner. The default estimator caches exact model-visible JSON byte
+lengths and rounds the complete aggregate once. Arbitrary estimators retain their
+complete-input contract; additivity is never assumed.
+
+The current SQLite development schema is 69, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Older schemas are refused without migration.
 Version 51 (Issue #462) binds every Agent and Workflow to the shared Session
 workspace: ownership facts carry one absolute workspace path, and Agent
 worktree disposal, Workflow workspace ownership, Candidate invocation and
@@ -4786,7 +4799,7 @@ Message Ledger, Request Snapshots, transcript ordering spine, and Event
 Journal. The lease is an OS-lifetime routing marker, not a registry or
 conversation fact; the child removes it normally, and its lock disappears on
 abnormal death. The wire protocol remains the normal `initialize`,
-`snapshot_get`, `transcript_page_get`, and subscription shapes. There is no
+`checkpoint_get`, `transcript_page_get`, and subscription shapes. There is no
 transcript identifier, inspection identifier, child-specific payload, or
 protocol compatibility mode.
 
@@ -4824,7 +4837,7 @@ The durable host has no `ConversationRuntime`, mailbox, subagent registry,
 provider adapter, or lifecycle handle. Its attachment linearizes at the
 durable bootstrap reads used to construct the projection. Durable Event
 Journal facts are folded into that read model without allocating a live
-Runtime Client cursor or publishing an event. `snapshot_get` and a fresh
+Runtime Client cursor or publishing an event. `checkpoint_get` and a fresh
 attachment rebuild from the durable authorities, so a skipped projection or
 reconnect repairs from authoritative state rather than client-owned history.
 The durable fallback does not replace or reconstruct #181's disposable live
@@ -5044,7 +5057,7 @@ transcript or execution-history authority.
                               └─► ContextRuntime ──► ModelBackedSummarizer
 
   RuntimeClientHost ──► Arc<ClientInner>
-  ClientInner ──► Arc<ConversationRuntime> (control + bootstrap reads)
+  ClientInner ──► Option<ConversationRuntime> (live control + bootstrap reads)
              ──► projection state
              ──► primary Arc<PendingObservations>
 
@@ -5075,9 +5088,12 @@ transcript or execution-history authority.
   `RuntimeInner` is therefore destroyed when its last semantic owner is
   released, not at process exit. `RuntimeInner::drop` closes the wake gate
   (the admission worker's terminal condition) and the observation fan-out;
-  `ClientInner::drop` closes only the primary queue (the projection worker's
-  terminal condition); all closes are idempotent. Teardown takes no lock,
-  joins nothing, and publishes nothing. A running attempt task is a
+  `ClientInner::drop` closes its presentation reader and primary queue; these
+  signal closure but do not join physical work. Explicit composition shutdown
+  settles the semantic runtime, closes reads, and joins the Projection worker
+  plus any outstanding Store read before ownership release. Join handles stay
+  in their supervised slots across cancellation of a shutdown waiter. Synchronous
+  Drop never claims this proof and publishes no semantic outcome. A running attempt task is a
   deliberate *bounded* strong owner — an admitted attempt must reach
   settlement, and the task releases the runtime when it does. Attachment
   detach remains unrelated to runtime or host lifetime.
@@ -5140,10 +5156,11 @@ transcript or execution-history authority.
   attempt task and holds no lock when it observes. Every client lock
   acquisition drains the pending queue first, so queued observations fold
   in the coordinator's commit order.
-- **Snapshot/cursor invariant.** `snapshot_get` returns `{ snapshot,
-  cursor }` where the snapshot describes all Runtime Client state through
-  cursor C, and a subscription after C observes every subsequently
-  published event or fails explicitly with `resync_required`.   This holds
+- **Checkpoint/cursor invariant.** `checkpoint_get` returns a bounded checkpoint
+  at cursor C with one native read cut, finite display heads, collection
+  frontiers and deferred content evidence. A subscription after C observes
+  every subsequently published display transition or fails explicitly with
+  `resync_required`. Loading deferred bytes does not advance Applied.   This holds
   by construction (one boundary), not by luck. At bootstrap the same
   invariant holds at cursor 0: the seed is installed as snapshot state,
   never replayed through `apply`, so no pre-existing runtime fact
@@ -5190,7 +5207,7 @@ transcript or execution-history authority.
   with no unbounded queue hidden underneath it.
 - **Explicit projection failure.** Cursor allocation uses a checked add:
   overflow sets an exhausted flag rather than wrapping, publication
-  stops, and every read (`snapshot_get`, `capability_get`, `initialize`,
+  stops, and every read (`checkpoint_get`, `capability_get`, `initialize`,
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
@@ -5206,12 +5223,19 @@ transcript or execution-history authority.
   capability state.
 - **Current-attempt coordination.** The conversation runtime owns the
   current-attempt slot and the exact `AgentCancellation` the attempt task
-  runs against; `cancel_current_attempt` requests cancellation through the
-  coordinator, which verifies under its own lock that the named attempt is
-  still the current one, so a settlement/admission race can never cancel a
-  newer attempt. The acceptance response is never terminal settlement (the
+  runs against. The Host asks `cancel_active_attempt` to select and cancel the
+  native current Attempt under one coordinator guard, including existing Goal
+  pause handling. It does not select a target from the published projection or
+  wait for observation preparation. Native identity-targeted cancellation still
+  rejects a superseded identity; no signal transfers to a successor. The acceptance response is never
+  terminal settlement (the
   Agent Loop owns settlement, observed asynchronously). Neither the
   coordinator nor the host owns a second attempt state machine.
+- **Manual compaction receipts.** The native maintenance operation returns its
+  exact generation, checkpoint, activation and before/after token measurements.
+  Runtime Client maps that outcome directly, without reading the published
+  context. A delayed receipt still describes its own operation after a valid
+  successor commits; observation unavailability never authorizes replay.
 - **ConversationState: one owner at a time.** Ownership transfers by move; it
   is never cloned or shared as a second mutable authority:
 
@@ -5336,7 +5360,7 @@ transcript or execution-history authority.
   and `event(cursor + typed payload)` with no request ids on
   notifications. Every Runtime Client method is client-initiated
   (`initialize`, `submit_inbound`, `cancel_current_attempt`,
-  `snapshot_get`, `subscribe_events`, `capability_get`,
+  `checkpoint_get`, `subscribe_events`, `capability_get`,
   `background_status`, `background_cancel`, `detach`, `shutdown`).
   Typed errors distinguish `unsupported_protocol_version`,
   `attachment_in_use`, `not_attached`, `invalid_request`,
@@ -6668,7 +6692,7 @@ facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-conversations-v49).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-observation-v50).
 
 ## Image Tool and Bash presentation (#412)
 

@@ -1,3 +1,7 @@
+import {applicationReceipt} from './support/fixtures.ts';
+import {readCut} from './support/fixtures.ts';
+import { registrationId } from "./support/app-server-peer.ts";
+import { checkpoint } from "./support/fixtures.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CURSOR_MARKER, TUI, visibleWidth } from "@earendil-works/pi-tui";
@@ -49,10 +53,10 @@ test("native queue order survives reconnect reconstruction and is independent of
   const h = await harness(snapshot({ inbound }));
   const before = new PendingInputView(terminal(), h.session, () => {}, () => {}).render(80).join("\n");
   const repair = h.session.resync();
-  const request = await nextRequest(h, "session/snapshot", 0);
-  h.transport.respond(request.id, { type: "snapshot", snapshot: snapshot({ inbound, transcript: { entries: [] } }), cursor: "42" });
+  const request = await nextRequest(h, "session/checkpoint", 0);
+  h.transport.respond(request.id, {type:'checkpoint', checkpoint:checkpoint(snapshot({ inbound, transcript: { entries: [] } }),"42")});
   const subscribe = await nextRequest(h, "session/subscribe", 0);
-  h.transport.respond(subscribe.id, { type: "subscribed", after_cursor: "42" });
+  h.transport.respond(subscribe.id, { type: "subscribed", target:h.target,registration_id:"00000000-0000-4000-8000-000000000099", after_cursor: "42" });
   await repair;
   const after = new PendingInputView(terminal(), h.session, () => {}, () => {}).render(80).join("\n");
   assert.equal(before, after); assert.match(after, /first[\s\S]*second/);
@@ -68,8 +72,8 @@ test("pending edit/remove use exact observed CAS once, including stale results",
       h.session.updateState(state => ({ ...state, inbound: { pending: [{ ...item, revision: "9007199254740996" }] } }));
       const work = view.mutate(method === "inbound/edit" ? "edited" : undefined);
       const request = await nextRequest(h, method, 0);
-      assert.deepEqual((request.params as MethodParams<typeof method>).expected, { sequence: item.sequence, revision: item.revision, message_id: item.message.id });
-      h.transport.respond(request.id, { type: "inbound_mutation", outcome: { status } });
+      assert.deepEqual((request.params as MethodParams<typeof method>).expected, { sequence: item.sequence, revision: item.revision });
+      h.transport.respond(request.id, { type: "inbound_mutation", outcome: status==='applied'?{status,read_cut:readCut()}:{status} });
       await work; await view.mutate("replay");
       assert.equal(h.transport.transportCount(method), 1);
       assert.match(view.render(120).join("\n"), status === "applied" ? /Applied/ : new RegExp(status));
@@ -89,7 +93,7 @@ test("Welcome consumes native origins, complete tools, extensions and admitted d
   ];
   const controls = ["subagent", "list_agents", "send_message", "wait_agent", "interrupt_agent"]
     .map((name) => ({ id: `tool-${name}`, name, origin: "builtin" as const }));
-  state.resources.inspection.main = { identity: { kind: "main" }, tools: [], agent_controls: controls, tool_selection: [], skills: [], agents: ["researcher"], workflows: ["audit"], plugins: [], diagnostics: [] };
+  state.resources.inspection!.main = { identity: { kind: "main" }, tools: [], agent_controls: controls, tool_selection: [], skills: [], agents: ["researcher"], workflows: ["audit"], plugins: [], diagnostics: [] };
   const banner = plain(renderResourceBanner(state));
   for (const fact of ["Extensions", "Agents", "researcher", "Agent controls · automatic", "send_message, wait_agent", "Skills", "Tools", "Builtin", "builtin_tool", "MCP · exa", "web_search", "Managed Python · data-tools", "dataframe", "Workflows", "audit"]) assert.ok(banner.includes(fact), fact);
   state.transcript = [];
@@ -169,9 +173,9 @@ test("all representative terminal sizes retain bounded Composer and actionable p
 
 test("exact historical completed_response drives tails and whole-conversation statistics survive paging", () => {
   const message = assistantMessage("answer", "historical response");
-  const response = { closing_message_id: "answer", origin: { conversation_id: "origin", attempt_id: "old", closing_message_id: "answer" }, completed_at: "2026-01-01T00:00:00Z", surface_revision: "4", usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 }, timing: { total_duration_ms: 18000 } };
-  const statistics = { turns: "1", steps: "1", completed_responses: "50", model_requests: "100", requests_with_usage: "99", reported_usage: { input_tokens: 10000, output_tokens: 2000, total_tokens: 12000 } };
-  const native: RuntimeClientSnapshot = snapshot({ transcript: { entries: [{ cursor: "4", item: { type: "message", message }, completed_response: response }], statistics }, attempt: attemptView({ last_usage: { input_tokens: 999, output_tokens: 999, total_tokens: 1998 } }) });
+  const response = { closing_locator:{type:"by_message_id" as const,message_id:"answer"},deferred_fields:[],closing_message_id: "answer", origin: {attempt_id_source:null, conversation_id: "origin", attempt_id: "old", closing_message_id: "answer" }, completed_at: "2026-01-01T00:00:00Z", surface_revision: "4", usage: { input_tokens: "100", output_tokens: "20", total_tokens: "120" }, timing: { total_duration_ms: 18000 } };
+  const statistics = { turns: "1", steps: "1", completed_responses: "50", model_requests: "100", requests_with_usage: "99", reported_usage: { input_tokens: "10000", output_tokens: "2000", total_tokens: "12000" } };
+  const native: RuntimeClientSnapshot = snapshot({ transcript: { entries: [{ cursor: "4", item: { type: "message", message }, completed_response: response }], statistics }, attempt: attemptView({ last_usage: { input_tokens: "999", output_tokens: "999", total_tokens: "1998" } }) });
   const state = replaceFromSnapshot(native, "10");
   assert.match(transcriptString(state), /120 tok · 18.0s/); assert.doesNotMatch(transcriptString(state), /1,998 tok/);
   const paged = mergeTranscriptPage(state, { entries: [{ cursor: "1", item: { type: "message", message: userMessage("old", "older") } }], statistics: { ...statistics, model_requests: "1" } });
@@ -187,18 +191,20 @@ test("T12/T16 native application notifications reject reorder and adoption sends
   // owners are a separate native fact.
   const application = { scope: h.session.sessionId, sources: [{ kind: "user" as const }, { kind: "workspace" as const, directory: "/workspace/A" }], version: "9007199254740993", desired: candidate.identity,
     units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const, impact: "prefix_changed" as const } }, candidate };
-  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application } });
-  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: { ...application, version: "9", candidate: null } } });
+  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application:applicationReceipt(application) } });
+  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: (applicationReceipt(({ ...application, version: "9", candidate: null }))) } });
   assert.deepEqual(h.session.application, application);
   const adopting = h.session.adoptConfiguration(candidate);
   const request = await nextRequest(h, "session/adoptConfiguration", 0);
   assert.deepEqual(request.params, { session_id: h.session.sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding });
-  h.transport.respond(request.id, { type: "configuration_application", application: { ...application, version: "9007199254740994", candidate: null } });
+  h.transport.respond(request.id, {type:'configuration_receipt',scope:({ ...application, version: "9007199254740994", candidate: null })?.scope??'configuration',version:({ ...application, version: "9007199254740994", candidate: null })?.version??'0'});
+  const adoptionRead = await nextRequest(h,"session/configuration");
+  h.transport.respond(adoptionRead.id,{type:"session_configuration",projection:applicationReceipt(application)});
   await adopting;
   assert.deepEqual(h.session.application?.candidate, candidate, "acknowledgement alone cannot clear pending state");
   const reading = h.session.readConfiguration();
   const read = await nextRequest(h, "session/configuration", 0);
-  h.transport.respond(read.id, { type: "session_configuration", application: { ...application, version: "9007199254740994", candidate: null } });
+  h.transport.respond(read.id, { type: "session_configuration", projection:(applicationReceipt(({ ...application, version: "9007199254740994", candidate: null }))) });
   await reading;
   assert.equal(h.session.application?.candidate, null);
   assert.equal(h.transport.transportCount("session/adoptConfiguration"), 1);
@@ -207,11 +213,11 @@ test("T12/T16 native application notifications reject reorder and adoption sends
 
 test("settlement reads native response statistics instead of summing usage events", async () => {
   const h = await harness(snapshot({ attempt: attemptView() }));
-  h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor: "1", event: { type: "attempt_settled", attempt_id: "a1", outcome: { type: "completed", finish_reason: { type: "stop" } } } } });
+  h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: {registration_id:registrationId(h.target), target: h.target, cursor: "1", event: { type: "attempt_settled", attempt_id: "a1", outcome: { type: "completed", finish_reason: { type: "stop" } } } } });
   const statistics = { turns: "1", steps: "1", completed_responses: "2", model_requests: "5", requests_with_usage: "4" };
-  h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { target: h.target, cursor: "2", event: { type: "read_domains_updated", transcript: { statistics }, occupancy: null, todos: null } } });
-  assert.equal(h.transport.transportCount("session/snapshot"), 0);
-  assert.equal(h.transport.transportCount("session/subscribe"), 0);
+  h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: {registration_id:registrationId(h.target), target: h.target, cursor: "2", event: { type: "read_domains_updated", trace: {records: []}, transcript: { statistics }, occupancy: null, todos: null } } });
+  assert.equal(h.transport.transportCount("session/checkpoint"), 1);
+  assert.equal(h.transport.transportCount("session/subscribe"), 1);
   assert.deepEqual(h.session.state.statistics, statistics); h.client.close();
 });
 
@@ -260,12 +266,32 @@ test("queued edit submits exact pre-submit whitespace and trailing newlines with
     const completion = new Promise<void>(resolve => { applied = resolve; });
     view.handleInput("\r"); // save without changing a byte
     const request = await nextRequest(h, "inbound/edit", 0);
-    assert.deepEqual(request.params, { target: h.target, expected: { sequence: item.sequence, message_id: item.message.id, revision: item.revision }, text });
+    assert.deepEqual(request.params, { target: h.target, expected: { sequence: item.sequence, revision: item.revision }, text });
     h.transport.respond(request.id, { type: "inbound_mutation", outcome: { status: "conflict" } });
     await completion;
     view.handleInput("\r");
     assert.equal(h.transport.transportCount("inbound/edit"), 1);
-    assert.equal(h.transport.transportCount("session/snapshot"), 0);
+    assert.equal(h.transport.transportCount("session/checkpoint"), 1);
     h.client.close();
   }
+});
+
+
+test('T11 T15 a deferred queued Human input cannot be overwritten from its partial preview and remains removable', async () => {
+  const item={...pending('9','2','partial'),deferred:true};
+  const h=await harness(snapshot({inbound:{pending:[item]}}));
+  const view=new PendingInputView(terminal(),h.session,()=>{},()=>{});
+  view.handleInput('\r');
+  assert.match(view.render(140).join('\n'),/Original input is deferred/);
+  assert.match(view.render(140).join('\n'),/observation inbound.pending/);
+  await view.mutate('partial');
+  assert.equal(h.transport.transportCount('inbound/edit'),0);
+  const removing=view.mutate();
+  const request=await nextRequest(h,'inbound/remove');
+  assert.deepEqual(request.params,{target:h.target,expected:{sequence:'9',revision:'2'}});
+  h.transport.respond(request.id,{type:'inbound_mutation',outcome:{status:'applied',read_cut:readCut()}});
+  await removing;
+  assert.equal(h.transport.transportCount('inbound/remove'),1);
+  assert.equal(h.session.state.inbound.pending?.[0]?.message.id,item.message.id);
+  h.client.close();
 });

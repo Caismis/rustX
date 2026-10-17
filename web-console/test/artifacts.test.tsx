@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import type { UploadedFile } from '../../protocol/app-server/v49';
+import type { UploadedFile } from '../../protocol/app-server/v50';
 import { Server, capabilities, TOKEN } from './fixture';
 let server: Server;
 let sequence = 0;
@@ -244,9 +244,9 @@ it('explicit prepare refusal is read as no-commit failure and never transmits a 
 });
 it('retired occurrence abort refuses a queued Artifact read before native dispatch', async () => {
   await server.attached('A'); server.held.add('session/list');
-  const occupying = Array.from({ length: 8 }, () => server.client.request({ method: 'session/list', params: { offset: 0, limit: 32 } }, 'sessions'));
-  const held = server.requests.filter(item => item.request.method === 'session/list').slice(-8).map(item => item.request);
-  expect(held).toHaveLength(8);
+  const occupying = Array.from({ length: 6 }, () => server.client.request({ method: 'session/list', params: { offset: 0, limit: 32 } }, 'sessions'));
+  const held = server.requests.filter(item => item.request.method === 'session/list').slice(-6).map(item => item.request);
+  expect(held).toHaveLength(6);
   const resources = new ArtifactResources(server.client, 'A'), abort = new AbortController();
   const read = resources.readBytes('hidden-before-dispatch', abort.signal), rejected = expect(read).rejects.toThrow();
   expect(server.requests.filter(item => item.request.method === 'artifact/read')).toHaveLength(0);

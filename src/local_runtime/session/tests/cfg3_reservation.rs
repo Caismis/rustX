@@ -554,6 +554,7 @@ fn spawn_create_child(root: &Path, mode: &str) -> (std::process::Child, SessionI
             "--exact",
             "local_runtime::session::tests::reservation_tests::reservation_create_process_gate",
             "--nocapture",
+            "--format=terse",
         ])
         .env("RUSTX_387_CREATE_ROOT", root)
         .env("RUSTX_387_CREATE_MODE", mode)

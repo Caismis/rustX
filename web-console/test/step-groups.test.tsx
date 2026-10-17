@@ -1,18 +1,18 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v49';
+import type { AssistantContentBlock, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v50';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { stepGroups } from '../src/bindings/step-groups';
 import { localeController } from '../src/locale/controller';
 import { snapshot } from './fixture';
 afterEach(() => { cleanup(); act(() => localeController.setLocale('en')); });
 
-const owner = (outcome: TurnProcessView['outcome'] = 'completed'): TurnProcessView => ({ conversation_id: 'c', attempt_id: 'a', final_message_id: 'final', outcome, control_cursor: '1', message_count: 4, tool_call_count: 3 });
+const owner = (outcome: TurnProcessView['outcome'] = 'completed'): TurnProcessView => ({attempt_id_source:null, conversation_id: 'c', attempt_id: 'a', final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: 'final', outcome, control_cursor: '1', message_count: 4, tool_call_count: 3 });
 const call = (id: string, name: string): AssistantContentBlock => ({ type: 'tool_call', id, tool_id: `tool-${name}`, name, arguments: {} });
 const assistant = (id: string, process: TurnProcessView, content: AssistantContentBlock[]): RuntimeClientTranscriptEntry =>
   ({ cursor: id, turn_process: process, item: { type: 'message', message: { role: 'assistant', id, content } } });
 const result = (id: string, process: TurnProcessView): RuntimeClientTranscriptEntry =>
-  ({ cursor: id, turn_process: process, item: { type: 'message', message: { role: 'tool', id, occurrence: { assistant_message_id: 'opening', block_index: 2 }, tool_call_id: 'read-1', tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: 1, content: [] } } } });
+  ({ cursor: id, turn_process: process, item: { type: 'message', message: { role: 'tool', id, occurrence: { assistant_message_id: 'opening', block_index: 2 }, tool_call_id: 'read-1', tool_id: 'tool-read', result: { status: { type: 'success' }, duration_ms: "1", content: [] } } } });
 // Interaction audits carry their Attempt, not process membership.
 const audit = (): RuntimeClientTranscriptEntry => ({ cursor: 'audit', item: { type: 'interaction_requested', event_id: 'approval-event', timestamp: '2026-10-06T00:00:00Z', attempt_id: 'a', turn_id: 't', interaction_id: 'approval',
   subject: { type: 'approval', invocation_id: { caller: 'agent', call_id: 'bash-1' }, tool_id: 'tool-bash', tool_name: 'bash', arguments_digest: 'digest', reason: 'Developer approval required' } } });

@@ -250,6 +250,8 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
 
 fn envelope(event_id: &str, turn: &str, event: RuntimeEvent) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(event_id),
         sequence: 0,
@@ -572,7 +574,7 @@ async fn seed_composed_store(paths: &mut LaunchFixture, messages: &[MessageBlock
     let runtime = LocalConversationRuntime::compose(&paths.resolve(), &dependencies())
         .await
         .unwrap();
-    runtime.runtime().shutdown().await.unwrap();
+    runtime.shutdown().await.unwrap();
     let database = runtime
         .tool_runtime()
         .tool_output()
@@ -620,12 +622,47 @@ fn selected_dependencies(paths: &LaunchFixture) -> LocalRuntimeDependencies {
 }
 
 fn initialized_snapshot(
-    result: RuntimeClientResult,
+    result: &RuntimeClientResult,
+    host: &rustx::runtime_client::RuntimeClientHost,
 ) -> rustx::runtime_client::RuntimeClientSnapshot {
-    let RuntimeClientResult::Initialized { snapshot, .. } = result else {
+    let RuntimeClientResult::Initialized { .. } = result else {
         panic!("expected initialized result, got {result:?}");
     };
-    snapshot
+    host.checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("explicit native read cut")
+        .0
+}
+
+async fn await_native_activation(attachment: &rustx::runtime_client::RuntimeAttachment) {
+    use rustx::local_runtime::configuration::application::AdoptionEligibility;
+    use rustx::runtime_client::{EventDelivery, RuntimeClientCursor, RuntimeClientEvent};
+    let subscription = attachment
+        .subscribe_events(RuntimeClientCursor::new(0))
+        .expect("subscribe to original activation");
+    tokio::time::timeout(std::time::Duration::from_mins(2), async {
+        loop {
+            let EventDelivery::Event(event) = subscription.next().await else {
+                panic!("startup observer retains the original activation event");
+            };
+            if event.event.facts().iter().any(|fact| match fact {
+                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
+                    *eligibility == AdoptionEligibility::Eligible
+                }
+                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                    assert_eq!(checkpoint.cursor, event.cursor);
+                    checkpoint.snapshot.configuration_adoption_eligibility
+                        == AdoptionEligibility::Eligible
+                }
+                _ => false,
+            }) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("native activation becomes eligible");
+    drop(subscription);
 }
 
 /// Requirement 5: detaching and reattaching the Runtime Client does not
@@ -644,13 +681,13 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first attach");
-    let first_snapshot = initialized_snapshot(first_result);
+    let first_snapshot = initialized_snapshot(&first_result, runtime.host());
     runtime.host().detach(first.attachment_id());
     let (_second, second_result) = runtime
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("reattach");
-    let second_snapshot = initialized_snapshot(second_result);
+    let second_snapshot = initialized_snapshot(&second_result, runtime.host());
     assert_eq!(first_snapshot.transcript, second_snapshot.transcript);
     assert_eq!(
         page_message_ids(
@@ -661,6 +698,10 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
         ),
         vec!["seed-user".to_owned()]
     );
+    runtime
+        .shutdown()
+        .await
+        .expect("drain interactive composition");
 }
 
 /// Requirement 6: a headless runtime can commit/read history with zero
@@ -690,7 +731,6 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
             .expect("headless page");
         assert_eq!(page_message_ids(&page), vec![accepted.message_id.as_str()]);
         headless
-            .runtime()
             .shutdown()
             .await
             .expect("release the native owner before reopening");
@@ -705,12 +745,16 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("later attach");
     assert_eq!(
-        client_page_message_ids(&initialized_snapshot(result).transcript),
+        client_page_message_ids(&initialized_snapshot(&result, interactive.host()).transcript),
         vec![format!(
             "{}-inbound-1",
             interactive.runtime().conversation_id()
         )]
     );
+    interactive
+        .shutdown()
+        .await
+        .expect("drain reopened composition");
 }
 
 /// Requirement 7: Agent Status remains durable model context but is absent
@@ -921,7 +965,7 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after audit recovery");
-    let snapshot = initialized_snapshot(result);
+    let snapshot = initialized_snapshot(&result, runtime.host());
     assert!(snapshot.pending_interactions.is_empty());
     assert!(snapshot.inbound.pending.is_empty());
     let page = runtime
@@ -1087,7 +1131,15 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
-    let live_before = runtime.host().snapshot().expect("snapshot").1;
+    // Join the producer's startup event before the two pure reads. Paging
+    // must not be credited with a later activation publication.
+    await_native_activation(&attachment).await;
+    let live_before = runtime
+        .host()
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot")
+        .1;
     let newest_page = runtime
         .host()
         .transcript_page(None, 2)
@@ -1102,9 +1154,15 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
         .transcript_page(Some(oldest_cursor), 2)
         .expect("older transcript page");
     assert_eq!(client_page_message_ids(&older), vec!["cursor-1"]);
-    let live_after = runtime.host().snapshot().expect("snapshot").1;
+    let live_after = runtime
+        .host()
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot")
+        .1;
     assert_eq!(live_before, live_after);
     attachment.detach();
+    runtime.shutdown().await.expect("drain paging composition");
 }
 
 /// The ordering spine uses an explicit `(kind, id)` identity. The same
@@ -1174,7 +1232,7 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
                 .transcript_cursor
                 .expect("publication collision message cursor")
                 .get(),
-            publication_cursor.get(),
+            publication_cursor.transcript_cursor.get(),
         ]
     );
     assert_eq!(
@@ -1230,6 +1288,10 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
             .await
             .expect("first composition");
     let first_page = first.host().transcript_page(None, 64).expect("first page");
+    first
+        .shutdown()
+        .await
+        .expect("join first composition before cold reopen");
     drop(first);
 
     std::fs::write(
@@ -1253,6 +1315,7 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
         .find(|entry| entry.name == "reopened")
         .expect("reopened Skill is discovered");
     assert_eq!(reopened_skill.description, "second");
+    second.shutdown().await.expect("drain reopened composition");
 }
 
 // ---------------------------------------------------------------------------

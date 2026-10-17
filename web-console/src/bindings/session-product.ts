@@ -3,7 +3,7 @@ import type { ClientView, SessionView } from '../client/app-server';
 
 export type SessionRecovery = 'connect' | 'connection-settings' | 'open' | 'refresh';
 export interface SessionProductState {
-  status: 'idle' | 'working' | 'queued' | 'stopping' | 'connecting' | 'reconnect' | 'uncertain' | 'failure' | 'waiting';
+  status: 'idle' | 'working' | 'queued' | 'stopping' | 'connecting' | 'reconnect' | 'unavailable' | 'uncertain' | 'failure' | 'waiting';
   label?: string;
   detail?: string;
   severity: 'quiet' | 'warning' | 'error';
@@ -27,7 +27,7 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
     : state.connection !== 'connected' ? { action: 'connect', label: tx('common:app.reconnect') }
     : !view || view.attachment === 'attaching' || view.attachment === 'resynchronizing' ? undefined
     : view.attachmentIntent !== 'wanted' || !view.target ? { action: 'open', label: tx('common:session-product.open-session') }
-    : view.attachment !== 'attached' ? { action: 'refresh', label: tx('common:session-product.retry-connection') } : undefined;
+    : view.attachment !== 'attached' ? { action: 'refresh', label: tx('common:session-product.refresh-observation') } : undefined;
   const uncertain = state.uncertain.some(item => sessionId !== undefined && item.sessionId === sessionId)
     || view?.cancellation?.status === 'uncertain' || view?.modelMutation?.status === 'uncertain'
     || view?.snapshot?.jobs?.some(tool => tool.state === 'outcome_unknown')
@@ -39,16 +39,18 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
     detail: tx('common:copy.storage-reported-a-failure-resolve-the-storage-problem-before-continuing-inspect-the-recor') };
   if (state.connection === 'incompatible') return { status: 'failure', label: tx('common:session-product.connection-version-mismatch'), severity: 'error', recovery,
     detail: tx('common:copy.use-matching-web-and-server-versions-review-connection-settings-before-connecting-again') };
+  if (recovery?.action === 'refresh') return { status: 'unavailable', label: tx('common:session-product.observation-unavailable'), severity: 'warning', recovery,
+    detail: tx('common:session-product.observation-unavailable-detail') };
   if (recovery) return { status: 'reconnect', label: tx('common:session-product.connection-interrupted'), severity: 'warning', recovery,
     detail: recovery.action === 'open' ? tx('common:copy.open-this-session-to-continue-your-previous-requests-will-not-be-sent-again') : tx('common:copy.reconnect-to-see-current-work-your-previous-requests-will-not-be-sent-again') };
   if (connecting || view?.attachment === 'attaching' || view?.attachment === 'resynchronizing') return { status: 'connecting', severity: 'quiet' };
   if (!view?.snapshot) return { status: 'idle', severity: 'quiet' };
   const snapshot = view.snapshot;
   if (snapshot.shutting_down) return { status: 'stopping', label: tx('common:session-product.session-is-closing'), severity: 'warning' };
-  if (view.cancellation) return { status: 'stopping', label: tx('common:session-product.stopping'), severity: 'quiet' };
+  if (view.cancellation?.attemptId !== undefined && view.cancellation.attemptId === view.snapshot?.attempt?.attempt_id) return { status: 'stopping', label: tx('common:session-product.stopping'), severity: 'quiet' };
   if (view.modelMutation) return { status: 'waiting', severity: 'quiet' };
   if (snapshot.pending_interactions?.length) return { status: 'waiting', label: tx('common:session-product.waiting-for-your-response'), severity: 'quiet' };
-  if (snapshot.attempt && snapshot.attempt.phase.type !== 'settled') return { status: 'working', severity: 'quiet' };
+  if (snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type)) return { status: 'working', severity: 'quiet' };
   if (snapshot.inbound.pending?.length || view.submissions?.length) return { status: 'queued', label: tx('common:session-product.queued'), severity: 'quiet' };
   return { status: 'idle', severity: 'quiet' };
 }

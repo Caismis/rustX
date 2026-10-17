@@ -1,299 +1,100 @@
-//! Request-relative presentation facts resolved by native authority.
-//!
-//! Two relationships a Trajectory reader needs are not facts about one
-//! record in isolation: whether a request's System Prompt changed, and which
-//! canonical Context a request introduced. Both are resolved here, from
-//! durable authority, before anything reaches a client.
-//!
-//! The rule this module exists to enforce: **a presentation relationship is
-//! resolved natively, never discovered downstream**. Nothing below reads the
-//! current Session configuration, the current System Prompt assembly, the
-//! current Surface, message text, message position, or the set of records a
-//! client happens to have loaded.
-//!
-//! ```text
-//! System Prompt   nearest preceding actual request, by durable start order
-//! Context         RequestSnapshot.request_context_ids + keyed Ledger reads
-//! ```
-//!
-//! Both are *immutable* historical facts, so both belong to the summary
-//! projection alone. A lifecycle refresh carries neither and never calls
-//! into this module; the counters under `#[cfg(test)]` below exist so a
-//! regression can prove that as an implementation property rather than
-//! infer it from timing.
-
+//! Optional historical relationships over native frozen summary headers.
 use super::TraceProjection;
-use super::bounds::{
-    TRACE_SUMMARY_CONTEXT, TRACE_SUMMARY_CONTEXT_ARTIFACTS, TRACE_SUMMARY_CONTEXT_BYTES,
-    TracePreview, encoded_len, identity_fits,
-};
-use super::content::{message_preview, user_artifacts};
 use super::types::{
-    TraceContextKind, TraceContextPresentation, TraceContextSource, TraceSystemPromptPresentation,
-    TraceSystemPromptState,
+    TraceRequestPredecessor, TraceSystemPromptPresentation, TraceSystemPromptState,
+    TraceToolCatalogState,
 };
 use crate::durable::ConversationStoreError;
-use crate::durable::presentation::{FactQuery, FactScope};
-use crate::events::types::RuntimeEvent as E;
-use crate::message::types::{ContextKind, InboundKind, MessageBlock, UserSource};
-use crate::model::snapshot::RequestSnapshot;
+use crate::durable::observation::{
+    RequestReadSummary, TraceRequestContextPage, TraceRequestPredecessorHeader,
+};
 
 impl TraceProjection<'_> {
-    /// One indexed predecessor seek shared by BOTH immutable comparisons.
-    /// `RequestNotFound` is absence; every other durable error propagates.
     pub(super) fn previous_request(
         &self,
-        anchor_sequence: u64,
+        start: u64,
     ) -> Result<PreviousRequest, ConversationStoreError> {
         #[cfg(test)]
         probe::record(&probe::SYSTEM_PREDECESSOR);
-        let Some(previous) = self
-            .store
-            .read_presentation_events(&FactQuery {
-                scope: FactScope::All,
-                kinds: vec!["model_request_started"],
-                before: Some(anchor_sequence),
-                after: 0,
-                ascending: false,
-                through: self.through,
-                limit: 1,
-            })?
-            .pop()
-        else {
-            return Ok(PreviousRequest::None);
-        };
-        let E::ModelRequestStarted { request_id, .. } = previous.event else {
-            return Err(ConversationStoreError::InvalidReference(
-                "non-request predecessor".into(),
-            ));
-        };
-        match self.store.load_request_snapshot(&request_id) {
-            Ok(snapshot) => Ok(PreviousRequest::Frozen(Box::new(snapshot))),
-            Err(ConversationStoreError::RequestNotFound(_)) => {
-                Ok(PreviousRequest::Unavailable(request_id))
-            }
-            Err(error) => Err(error),
-        }
+        self.store
+            .observation_request_predecessor_at(start, self.through)
+            .map(PreviousRequest)
     }
-
-    /// The Attempt that answers an adoption committed while idle: the first
-    /// Attempt started after it at this cut, or `None` before it starts.
-    /// The conversation turn outline reads a turn's prompt by the same rule.
-    pub(super) fn answering_attempt(
-        &self,
-        adoption_sequence: u64,
-    ) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
-        let next = self
-            .store
-            .read_presentation_events(&FactQuery {
-                scope: FactScope::All,
-                kinds: vec!["attempt_started"],
-                before: None,
-                after: adoption_sequence,
-                ascending: true,
-                through: self.through,
-                limit: 1,
-            })?
-            .pop();
-        next.map(|start| match start.event {
-            E::AttemptStarted { attempt_id } => Ok(attempt_id),
-            _ => Err(ConversationStoreError::InvalidReference(
-                "non-attempt answering start".into(),
-            )),
-        })
-        .transpose()
-    }
-
-    /// The canonical Context this exact request introduced, in frozen order.
-    ///
-    /// `RequestSnapshot.request_context_ids` is the identity and ordering
-    /// authority: it records the exact request-scoped canonical context
-    /// committed atomically with this request's start. A later retry or
-    /// recovery request reuses admitted context rather than admitting
-    /// duplicates, so its own snapshot lists none and it introduces none —
-    /// no Trace-local "already displayed" state is needed or kept.
-    ///
-    /// # Errors
-    ///
-    /// Propagates keyed Ledger read failures, and rejects a conversation
-    /// whose snapshot claims an identity that the Ledger does not hold as an
-    /// admitted Context fact. Such a message is never silently dropped or
-    /// downgraded into an ordinary User message.
     pub(super) fn context_presentation(
         &self,
-        frozen: &RequestSnapshot,
-    ) -> Result<(Vec<TraceContextPresentation>, bool), ConversationStoreError> {
-        let ids = &frozen.request_context_ids;
-        if ids.is_empty() {
-            return Ok((Vec::new(), false));
-        }
-        let mut truncated = ids.len() > TRACE_SUMMARY_CONTEXT;
-        let kept = &ids[..ids.len().min(TRACE_SUMMARY_CONTEXT)];
-        let mut additions: Vec<TraceContextPresentation> = Vec::new();
+        start: u64,
+    ) -> Result<TraceRequestContextPage, ConversationStoreError> {
+        let mut page = self.store.observation_request_context_at(
+            self.cut()?,
+            start,
+            0,
+            super::bounds::TRACE_SUMMARY_CONTEXT,
+        )?;
         #[cfg(test)]
-        probe::record(&probe::CONTEXT_LEDGER_JOIN);
-        for (id, message) in kept.iter().zip(self.store.load_messages(kept)?) {
-            let MessageBlock::User(user) = &message else {
-                return Err(context_invariant(frozen, id));
-            };
-            let InboundKind::Context(kind) = &user.kind else {
-                return Err(context_invariant(frozen, id));
-            };
-            let Some((source, context_kind)) = context_semantics(&user.source, kind) else {
-                return Err(context_invariant(frozen, id));
-            };
-            if !identity_fits(id.as_str()) {
-                // An identity is omitted whole rather than shortened into
-                // one that refers to nothing.
-                truncated = true;
-                continue;
-            }
-            let (attachments, attachments_truncated) =
-                user_artifacts(&user.content, TRACE_SUMMARY_CONTEXT_ARTIFACTS);
-            let contribution = frozen
-                .contributions
-                .iter()
-                .find(|record| record.message_id == *id)
-                .ok_or_else(|| context_invariant(frozen, id))?;
-            contribution.validate_message(&message)?;
-            additions.push(TraceContextPresentation {
-                message_id: id.clone(),
-                producer: contribution.producer.clone(),
-                context_kind,
-                source,
-                preview: message_preview(&message),
-                attachments,
-                truncated: attachments_truncated,
-            });
+        if !page.items.is_empty() {
+            probe::record(&probe::CONTEXT_LEDGER_JOIN);
         }
-        // Encoded bytes, not counts: JSON escaping can multiply a bounded
-        // preview several times over. The retained prefix stays in frozen
-        // order, so the same conversation always yields the same prefix.
-        while additions.len() > 1 && encoded_len(&additions) > TRACE_SUMMARY_CONTEXT_BYTES {
-            additions.pop();
-            truncated = true;
+        while super::bounds::encoded_len(&page.items) > super::bounds::TRACE_SUMMARY_CONTEXT_BYTES {
+            page.items.pop();
+            page.next_offset = Some(page.items.len() as u64);
         }
-        if encoded_len(&additions) > TRACE_SUMMARY_CONTEXT_BYTES
-            && let Some(first) = additions.first_mut()
-        {
-            // One adversarial fact cannot erase its own identity: the entry
-            // releases its content and keeps the identity it names.
-            first.preview = None;
-            first.attachments.clear();
-            first.truncated = true;
-            truncated = true;
-        }
-        Ok((additions, truncated))
+        Ok(page)
     }
 }
-
-/// Canonical provenance and family form one native Context Assembly relationship.
-/// Keep exact extension identity; an impossible pair is a durable invariant
-/// violation, never a new presentation source or a coerced family.
-fn context_semantics(
-    source: &UserSource,
-    kind: &ContextKind,
-) -> Option<(TraceContextSource, TraceContextKind)> {
-    match (source, kind) {
-        (UserSource::Runtime, ContextKind::NativeEnvironment) => Some((
-            TraceContextSource::Runtime,
-            TraceContextKind::NativeEnvironment,
-        )),
-        (UserSource::Runtime, ContextKind::GoalStatus(_)) => {
-            Some((TraceContextSource::Runtime, TraceContextKind::GoalStatus))
-        }
-        (UserSource::Runtime, ContextKind::RuntimeToolObservation) => Some((
-            TraceContextSource::Runtime,
-            TraceContextKind::RuntimeToolObservation,
-        )),
-        (UserSource::Runtime, ContextKind::AgentStatus(_)) => {
-            Some((TraceContextSource::Runtime, TraceContextKind::AgentStatus))
-        }
-        (UserSource::Extension { contributor }, ContextKind::ExtensionEnvironment) => Some((
-            TraceContextSource::CertifiedExtension {
-                contributor: contributor.clone(),
-            },
-            TraceContextKind::ExtensionEnvironment,
-        )),
-        _ => None,
-    }
+pub(super) fn record_tool_proposal() {
+    #[cfg(test)]
+    probe::record(&probe::TOOL_PROPOSAL);
 }
-
-/// The invariant violation of a snapshot identity the Ledger does not hold
-/// as an admitted Context fact.
-fn context_invariant(
-    frozen: &RequestSnapshot,
-    id: &crate::runtime::identity::MessageId,
-) -> ConversationStoreError {
-    ConversationStoreError::InvalidReference(format!(
-        "request {} froze {id} as request-scoped context, but the canonical Ledger message is not an admitted Context fact",
-        frozen.request_id
-    ))
-}
-
-/// The full frozen snapshot is loaded once, never separately per relationship.
-pub(super) enum PreviousRequest {
-    None,
-    Unavailable(crate::runtime::identity::RequestId),
-    Frozen(Box<RequestSnapshot>),
-}
-
+pub(super) struct PreviousRequest(Option<TraceRequestPredecessorHeader>);
 impl PreviousRequest {
-    pub(super) fn identity(&self) -> super::types::TraceRequestPredecessor {
-        use super::types::TraceRequestPredecessor as P;
-        match self {
-            Self::None => P::NotApplicable,
-            Self::Unavailable(id) => P::Unavailable {
-                request_id: identity_fits(id.as_str()).then(|| id.clone()),
+    pub(super) fn identity(&self) -> TraceRequestPredecessor {
+        match &self.0 {
+            None => TraceRequestPredecessor::NotApplicable,
+            Some(previous) if previous.summary.is_some() => TraceRequestPredecessor::Available {
+                request_id: previous.request_id.clone(),
+                request_id_source: previous.source.clone(),
             },
-            Self::Frozen(snapshot) if identity_fits(snapshot.request_id.as_str()) => P::Available {
-                request_id: snapshot.request_id.clone(),
+            Some(previous) => TraceRequestPredecessor::Unavailable {
+                request_id: previous.request_id.clone(),
+                request_id_source: previous.source.clone(),
             },
-            Self::Frozen(_) => P::Unavailable { request_id: None },
         }
     }
-
-    pub(super) fn prompt(&self) -> Option<super::bounds::TraceText> {
-        match self {
-            Self::Frozen(snapshot) => Some(super::bounds::TraceText::detail(
-                &snapshot.effective_system_prompt,
-            )),
-            _ => None,
-        }
-    }
-
     pub(super) fn presentation(
         &self,
-        current: &RequestSnapshot,
-    ) -> (
-        TraceSystemPromptPresentation,
-        super::types::TraceToolCatalogState,
-    ) {
-        use super::types::TraceToolCatalogState as T;
-        use TraceSystemPromptState as S;
+        current: &RequestReadSummary,
+    ) -> (TraceSystemPromptPresentation, TraceToolCatalogState) {
         #[cfg(test)]
         probe::record(&probe::TOOL_RELATIONSHIP);
-        let (state, tools) = match self {
-            Self::None => (S::Initial, T::Initial),
-            Self::Unavailable(_) => (S::PreviousUnavailable, T::PreviousUnavailable),
-            Self::Frozen(previous) => (
-                if previous.effective_system_prompt == current.effective_system_prompt {
-                    S::Unchanged
-                } else {
-                    S::Changed
-                },
-                if previous.tool_definitions == current.tool_definitions {
-                    T::Unchanged
-                } else {
-                    T::Changed
-                },
+        let (state, tools) = match &self.0 {
+            None => (
+                TraceSystemPromptState::Initial,
+                TraceToolCatalogState::Initial,
             ),
+            Some(previous) => match &previous.summary {
+                None => (
+                    TraceSystemPromptState::PreviousUnavailable,
+                    TraceToolCatalogState::PreviousUnavailable,
+                ),
+                Some(previous) => (
+                    if previous.prompt_digest == current.prompt_digest {
+                        TraceSystemPromptState::Unchanged
+                    } else {
+                        TraceSystemPromptState::Changed
+                    },
+                    if previous.tools_digest == current.tools_digest {
+                        TraceToolCatalogState::Unchanged
+                    } else {
+                        TraceToolCatalogState::Changed
+                    },
+                ),
+            },
         };
         (
             TraceSystemPromptPresentation {
                 state,
-                preview: (state != S::Unchanged)
-                    .then(|| TracePreview::of(&current.effective_system_prompt)),
+                preview: (state != TraceSystemPromptState::Unchanged)
+                    .then(|| current.prompt_preview.clone()),
             },
             tools,
         )

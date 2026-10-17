@@ -50,7 +50,7 @@ async fn plan(
 ) -> Result<usize, rustx::context::ContextError> {
     crate::context::planning::summary_prefix(
         engine,
-        input,
+        &input.to_vec().into(),
         "",
         &[],
         budgets,
@@ -62,13 +62,13 @@ async fn plan(
 #[test]
 fn short_history_requires_no_compaction() {
     let e = engine(1000, 0, 0);
-    let p = e.build_projection_input(SurfaceRevision::new(1), input(1), &[], None, "");
+    let p = e.build_projection_input(SurfaceRevision::new(1), input(1).into(), &[], None, "");
     assert!(!e.should_compact(&p, 0).unwrap());
 }
 #[test]
 fn threshold_equality_compacts() {
     let e = engine(200, 0, 0);
-    let p = e.build_projection_input(SurfaceRevision::new(2), input(2), &[], None, "");
+    let p = e.build_projection_input(SurfaceRevision::new(2), input(2).into(), &[], None, "");
     assert!(e.should_compact(&p, 0).unwrap());
     assert!(!e.fits_under_soft_limit(&p, 0).unwrap());
 }
@@ -81,8 +81,8 @@ fn soft_limit_respects_output_budget_and_reserve() {
 #[test]
 fn same_context_produces_same_estimate_and_order() {
     let e = engine(1000, 0, 0);
-    let a = e.build_projection_input(SurfaceRevision::new(3), input(3), &[], None, "fixed");
-    let b = e.build_projection_input(SurfaceRevision::new(3), input(3), &[], None, "fixed");
+    let a = e.build_projection_input(SurfaceRevision::new(3), input(3).into(), &[], None, "fixed");
+    let b = e.build_projection_input(SurfaceRevision::new(3), input(3).into(), &[], None, "fixed");
     assert_eq!(a, b);
     assert_eq!(
         a.messages
@@ -239,19 +239,15 @@ async fn candidate_selection_is_deterministic() {
 #[test]
 fn observed_usage_is_reused_only_for_exact_or_unchanged_prefix_input() {
     let e = engine(1000, 0, 0);
-    let first = e.build_projection_input(SurfaceRevision::new(2), input(2), &[], None, "fixed");
+    let first =
+        e.build_projection_input(SurfaceRevision::new(2), input(2).into(), &[], None, "fixed");
     let observed = ProviderObservedInput {
-        fingerprint: first.fingerprint(),
         input_tokens: 17,
-        anchor: Some(ObservedAnchor::of_model_input(
-            &first.messages,
-            "fixed",
-            &[],
-        )),
+        anchor: ObservedAnchor::of_selected(first.surface_revision, &first.messages, "fixed", &[]),
     };
     let exact = e.build_projection_input(
         SurfaceRevision::new(2),
-        input(2),
+        input(2).into(),
         &[],
         Some(&observed),
         "fixed",
@@ -259,7 +255,7 @@ fn observed_usage_is_reused_only_for_exact_or_unchanged_prefix_input() {
     assert_eq!(exact.estimated_input.input_tokens, 17);
     let extended = e.build_projection_input(
         SurfaceRevision::new(3),
-        input(3),
+        input(3).into(),
         &[],
         Some(&observed),
         "fixed",
@@ -267,7 +263,7 @@ fn observed_usage_is_reused_only_for_exact_or_unchanged_prefix_input() {
     assert_eq!(extended.estimated_input.input_tokens, 117);
     let changed = e.build_projection_input(
         SurfaceRevision::new(3),
-        input(3),
+        input(3).into(),
         &[],
         Some(&observed),
         "different",
@@ -277,7 +273,8 @@ fn observed_usage_is_reused_only_for_exact_or_unchanged_prefix_input() {
 #[test]
 fn estimate_does_not_create_provider_usage() {
     let e = engine(1000, 0, 0);
-    let projection = e.build_projection_input(SurfaceRevision::new(2), input(2), &[], None, "");
+    let projection =
+        e.build_projection_input(SurfaceRevision::new(2), input(2).into(), &[], None, "");
     assert_eq!(
         projection.estimated_input.source,
         rustx::runtime::types::TokenMeasurementSource::Estimated
@@ -407,7 +404,7 @@ async fn non_additive_planning_checks_complete_requests_and_retention_without_in
     };
     let n = crate::context::planning::summary_prefix(
         &e,
-        &history,
+        &history.clone().into(),
         "primary",
         &[],
         CompactionBudgets::new(10, 20, 30),
@@ -419,13 +416,19 @@ async fn non_additive_planning_checks_complete_requests_and_retention_without_in
     assert_eq!(n, 3);
     let full =
         rustx::model::input::assemble_model_input(&history[n..], &staged, None, None).unwrap();
-    assert!(e.estimate_model_input(&full, "primary", &[]) + 20 <= e.soft_input_limit(10).unwrap());
-    assert!(e.estimate_model_input(&history[n..], "", &[]) >= e.config().keep_recent_tokens);
+    assert!(
+        e.estimate_model_input(&full.into(), "primary", &[]) + 20
+            <= e.soft_input_limit(10).unwrap()
+    );
+    assert!(
+        e.estimate_model_input(&history[n..].to_vec().into(), "", &[])
+            >= e.config().keep_recent_tokens
+    );
     let summary = rustx::context::SummaryRequest {
         retired: history[..n].to_vec(),
     }
     .model_input();
-    assert!(e.estimate_model_input(&summary.messages, "", &[]) <= 30);
+    assert!(e.estimate_model_input(&summary.messages.into(), "", &[]) <= 30);
 }
 
 #[tokio::test]
@@ -540,13 +543,13 @@ async fn complete_tool_batch_and_core_owned_boundaries_constrain_every_probe() {
         if with_media {
             e.set_image_projection(artifacts, true);
             e.prepare_media(
-                &history,
-                &history,
+                &history.clone().into(),
+                &history.clone().into(),
                 &rustx::runtime::CancellationSignal::new(),
             )
             .await
             .unwrap();
-            assert!(e.supports_monotone_compaction(&history));
+            assert!(e.supports_monotone_compaction(&history.clone().into()));
         }
         let constraints = CompactionConstraints {
             must_cover_through: Some(&cover),
@@ -913,8 +916,8 @@ async fn production_media_search_bounds_reads_renders_queries_and_copied_bytes()
         e.set_upload_resolver(Arc::new(Owner));
         crate::model::media::take_work();
         e.prepare_media(
-            &history,
-            &history,
+            &history.clone().into(),
+            &history.clone().into(),
             &rustx::runtime::CancellationSignal::new(),
         )
         .await

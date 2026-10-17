@@ -134,16 +134,16 @@ describe("runtime-owned outcomes", () => {
 
   it("shows the runtime's duration and exit code, and never invents them", () => {
     assert.match(
-      card({ lifecycle: settled({ duration_ms: 2_800, exit_code: 0 }) }),
+      card({ lifecycle: settled({ duration_ms: "2800", exit_code: 0 }) }),
       /2\.8s.*exit 0/,
     );
-    assert.ok(!/exit/.test(card({ lifecycle: settled({ duration_ms: 12 }) })));
+    assert.ok(!/exit/.test(card({ lifecycle: settled({ duration_ms: "12" }) })));
   });
 
   it("reports runtime truncation separately from the visual collapse", () => {
     const rendered = card({
       lifecycle: settled({
-        truncation: { truncated: true, original_bytes: 9_001 },
+        truncation: { truncated: true, original_bytes: "9001" },
       }),
     });
     assert.match(rendered, /runtime-truncated result \(from 9001 bytes\)/);
@@ -153,7 +153,7 @@ describe("runtime-owned outcomes", () => {
       card(
         {
           lifecycle: settled({
-            truncation: { truncated: true, original_bytes: 9_001 },
+            truncation: { truncated: true, original_bytes: "9001" },
           }),
         },
         expanded,
@@ -423,7 +423,7 @@ describe("progressive disclosure bounds call details too", () => {
       lifecycle: settled({
         status: { type: "denied", reason: "human denied" },
         content: [{ type: "text", text: Array.from({ length: 50 }, (_, i) => `o${i}`).join("\n") }],
-        truncation: { truncated: true, original_bytes: 9_001 },
+        truncation: { truncated: true, original_bytes: "9001" },
       }),
     });
     assert.match(collapsed, /bulk/);
@@ -514,7 +514,7 @@ describe("specialized native renderers", () => {
           },
         ],
         exit_code: 0,
-        duration_ms: 2_800,
+        duration_ms: "2800",
       }),
     });
     assert.match(
@@ -912,8 +912,8 @@ describe("duration formatting", () => {
   });
 
   it("reports the runtime's measurement on the card, unaltered", () => {
-    assert.match(card({ lifecycle: settled({ duration_ms: 119_999 }) }), /2m00s/);
-    assert.match(card({ lifecycle: settled({ duration_ms: 12 }) }), /12ms/);
+    assert.match(card({ lifecycle: settled({ duration_ms: "119999" }) }), /2m00s/);
+    assert.match(card({ lifecycle: settled({ duration_ms: "12" }) }), /12ms/);
   });
 });
 
@@ -999,4 +999,25 @@ it("Job and Agent controls display distinct identities without inventing lifecyc
   assert.equal(wait?.title, "Wait for Job");
   assert.equal(wait?.subject, "job-42");
   assert.equal(hasSpecializedRenderer("tool-execution"), false);
+});
+
+
+it('T08 T19 tiny opaque Tool integers retain the original raw JSON display', () => {
+  const text = card({argumentsText:'{"native_counter":18446744073709551615}'});
+  assert.match(text, /18446744073709551615/);
+  assert.ok(!text.includes('18446744073709552000'));
+});
+
+
+it('deferred canonical metadata never promotes J delivery fields into C content', () => {
+  const result = toolResult({deliveries:[{scope:{conversation_id:'original',device:'1',inode:'2'},
+    path:'report.md',name:'original report.md',mime_type:'text/markdown'}]});
+  const native = tool({toolId:'tool-present',name:'present',lifecycle:{type:'settled',result},
+    resultCommitted:true,committedResultDeferred:true});
+  const deferred = plainText(renderToolCard(native, expanded));
+  assert.match(deferred, /Canonical result content deferred/);
+  assert.doesNotMatch(deferred, /Delivered 1 file/);
+  const loaded = plainText(renderToolCard({...native,committedResult:result,committedResultDeferred:false}, expanded));
+  assert.match(loaded, /Delivered 1 file/);
+  assert.match(loaded, /original report.md/);
 });

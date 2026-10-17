@@ -233,11 +233,11 @@ describe("committed delivery records", () => {
       entry("4", toolMessage("m-forged", "c-forged", "tool-write", forged)),
       { cursor: "5", item: { type: "message" as const, message: assistantBlocks("m-call", [toolCallBlock("c-new", "tool-present", "present", ARGS)]) } },
       entry("6", toolMessage("m-new", "c-new", "tool-present", toolResult({ deliveries: [REPORT, DATA] }))),
-    ], "older"));
-    assert.deepEqual(records.records.map((record) => [record.messageId, record.index, record.count, record.file.name]), [
-      ["m-new", 0, 2, REPORT.name],
-      ["m-new", 1, 2, DATA.name],
-      ["m-old", 0, 1, DATA.name],
+    ], "older"), "conv_view");
+    assert.deepEqual(records.records.map((record) => [record.locator, record.index, record.count, record.file!.name]), [
+      [{type:"by_message_id",message_id:"m-new"}, 0, 2, REPORT.name],
+      [{type:"by_message_id",message_id:"m-new"}, 1, 2, DATA.name],
+      [{type:"by_message_id",message_id:"m-old"}, 0, 1, DATA.name],
     ]);
     assert.equal(records.next, "older");
     assert.equal(deliveryType(REPORT), "MD");
@@ -1532,7 +1532,7 @@ describe("client-local Open", () => {
 describe("/files selector", () => {
   const records = pageDeliveries(page([
     entry("1", toolMessage("m1", "c1", "tool-present", toolResult({ deliveries: [REPORT, DATA] }))),
-  ], "older"));
+  ], "older"), "conv_view");
 
   it("refuses unavailable actions explicitly and starts none", () => {
     const selector = new DeliverySelector(records, { save: "no delivery access", open: "files are not on this machine" });
@@ -1551,7 +1551,7 @@ describe("/files selector", () => {
     const selector = new DeliverySelector(records, {});
     const started: Array<[number, string, string, string | undefined]> = [];
     const aborted: number[] = [];
-    selector.onAction = (operation, action, record, destination) => started.push([operation, action, record.file.name, destination]);
+    selector.onAction = (operation, action, record, destination) => started.push([operation, action, record.file!.name, destination]);
     selector.onAbort = (operation) => aborted.push(operation);
     selector.handleInput("o");
     assert.deepEqual(started, [[1, "open", REPORT.name, undefined]]);
@@ -1573,13 +1573,13 @@ describe("/files selector", () => {
     for (const name of HOSTILE_NAMES) {
       const hostile = file(name, `${name} description`);
       const selector = new DeliverySelector(
-        pageDeliveries(page([entry("1", toolMessage("m1", "c1", "tool-present", toolResult({ deliveries: [hostile] })))])),
+        pageDeliveries(page([entry("1", toolMessage("m1", "c1", "tool-present", toolResult({ deliveries: [hostile] })))]), "conv_view"),
         {},
       );
       selector.focused = true;
       const started: Array<string | undefined> = [];
       selector.onAction = (_operation, _action, record, destination) => {
-        assert.equal(record.file.name, name, "the authoritative name is never altered");
+        assert.equal(record.file!.name, name, "the authoritative name is never altered");
         started.push(destination);
       };
       assert.deepEqual(foreignControls(selector.render(120)), [], `list: ${JSON.stringify(name)}`);
@@ -1605,7 +1605,7 @@ describe("/files selector", () => {
     try {
       for (const name of ["报告 final.md", "data set.csv", "naïve résumé — v2.txt"]) {
         const selector = new DeliverySelector(
-          pageDeliveries(page([entry("1", toolMessage("m1", "c1", "tool-present", toolResult({ deliveries: [file(name)] })))])),
+          pageDeliveries(page([entry("1", toolMessage("m1", "c1", "tool-present", toolResult({ deliveries: [file(name)] })))]), "conv_view"),
           {},
         );
         let destination: string | undefined;
@@ -1635,4 +1635,25 @@ describe("/files selector", () => {
     selector.appendPage({ records: records.records });
     assert.doesNotMatch(selector.render(120).join("\n"), /Load older history/);
   });
+});
+
+it("deferred metadata is selected explicitly and one loaded delivery page replaces its predecessor", () => {
+  const locator = {type:"by_ledger_position" as const,position:2};
+  const record = {conversationId:"conv_view",locator,index:8,count:"9"};
+  const selector = new DeliverySelector({records:[record]},{});
+  const started:unknown[]=[];
+  selector.onAction=(...args)=>started.push(args);
+  selector.handleInput("s");
+  assert.equal((started[0] as unknown[])[1],"metadata");
+  assert.match(selector.render(120).join("\n"),/metadata deferred/);
+  selector.installMetadata(1,record,REPORT);
+  selector.handleInput("o"); // action mode ignores list shortcuts
+  selector.handleInput("\r");
+  assert.equal((started[1] as unknown[])[1],"open");
+  assert.deepEqual((started[1] as {file:unknown}[])[2]!.file,REPORT);
+  selector.settle(2,"info","opened");
+  selector.appendPage({records:[{...record,index:7,file:DATA}]});
+  const shown=selector.render(140).join("\n");
+  assert.match(shown,/L2#8\/9/);assert.doesNotMatch(shown,/L2#9\/9|report\.md/);
+  selector.installMetadata(1,record,REPORT);assert.doesNotMatch(selector.render(140).join("\n"),/L2#9\/9/);
 });

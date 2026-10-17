@@ -1,3 +1,4 @@
+import { boundedSettings } from "./support/fixtures.ts";
 /**
  * Issue #464: native automatic configuration repair as the terminal presents
  * it — Session-independent routing, one notice per receipt identity, and the
@@ -65,14 +66,14 @@ function presented(status: SourceRepairStatus): string {
 }
 
 function projection(target: SourceTarget, user?: ConfigRepairReceipt, workspace?: ConfigRepairReceipt, sequence = "1") {
-  return {
+  return boundedSettings({
     target, provenance: {}, process_policy_impacts: {}, absent_resource_revision: "absent", resource_revisions: {},
     user: { path: "/user", revision: "u" }, user_resource_root: "/ur", runtime_root: "/r", user_mcp: { path: "/um", revision: "um" }, agents: [],
     ...(target.kind === "workspace" ? { workspace: { path: "/w", revision: "w" }, workspace_resource_root: "/wr", workspace_mcp: { path: "/wm", revision: "wm" } } : {}),
     user_repair: user ?? null,
     workspace_repair: workspace ?? null,
     repair_sequence: sequence,
-  };
+  });
 }
 
 it("words repaired, combined, unresolved and uncertain receipts without values", () => {
@@ -268,7 +269,7 @@ it("refuses a connection that negotiates no authority", async () => {
     type: "initialized", authority_id: "",
     protocol_version: APP_SERVER_PROTOCOL_VERSION, capabilities: SERVER_CAPABILITIES,
   });
-  await assert.rejects(connecting, /did not negotiate an authority identity/);
+  await assert.rejects(connecting, /supplied no process authority identity/);
 });
 
 it("source notices never reach an attached Session's conversation", async () => {
@@ -971,7 +972,7 @@ async function answerRead(harnessed: Awaited<ReturnType<typeof harness>>): Promi
 /** Inspection only: the connection carried reads and nothing else. */
 function assertReadOnly(harnessed: Awaited<ReturnType<typeof harness>>) {
   const methods = new Set(harnessed.transport.log.requests.map(request => request.method));
-  for (const method of methods) assert.ok(["initialize", "session/attach", "session/summary", "configuration/sourcesRead"].includes(method), method);
+  for (const method of methods) assert.ok(["initialize", "session/attach", "session/checkpoint", "session/subscribe", "session/summary", "session/configuration", "session/settings", "configuration/sourcesRead", "configuration/sourceValueRead"].includes(method), method);
 }
 
 function body(outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>): string {

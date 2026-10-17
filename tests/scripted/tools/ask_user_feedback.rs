@@ -162,10 +162,12 @@ struct QuestionnaireObserver {
 impl InteractionObserver for QuestionnaireObserver {
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &std::sync::Arc<rustx::runtime::interaction::PendingInteractionSource>,
         _audit: &RuntimeEventEnvelope,
         _transcript_cursor: rustx::durable::TranscriptCursor,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
+        let request = source.request();
         self.published
             .send_modify(|requests| requests.push(request.clone()));
     }
@@ -175,6 +177,7 @@ impl InteractionObserver for QuestionnaireObserver {
         interaction_id: &InteractionId,
         outcome: &InteractionOutcome,
         _audit: Option<&(RuntimeEventEnvelope, rustx::durable::TranscriptCursor)>,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
         self.settled
             .lock()

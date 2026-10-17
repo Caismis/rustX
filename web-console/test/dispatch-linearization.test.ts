@@ -35,7 +35,7 @@ it.each(['capacity', 'validation'] as const)('%s revocation is unsent and frees 
   const gate = new Promise<boolean>(resolve => { resume = () => resolve(true); });
   const ready = new Promise<void>(resolve => { entered = resolve; });
   s.held.add('session/read');
-  const blockers = barrier === 'capacity' ? Array.from({ length: 8 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session')) : [];
+  const blockers = barrier === 'capacity' ? Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session')) : [];
   const work = s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', undefined,
     barrier === 'validation' ? { current: () => true, validate: () => { entered(); return gate; } } : undefined);
   const outcome = work.catch(error => error); if (barrier === 'validation') await ready;
@@ -44,7 +44,7 @@ it.each(['capacity', 'validation'] as const)('%s revocation is unsent and frees 
   resume(); await Promise.all(blockers); await release;
   expect(await outcome).toBeInstanceOf(RequestNotDispatched); expect(count(s, 'turn/start')).toBe(0); expect(s.client.getSnapshot().uncertain).toEqual([]);
   s.held.delete('session/read'); await s.client.attach('A'); await s.client.refresh('A');
-  expect(s.claims()).toHaveLength(1); expect(count(s, 'session/snapshot')).toBe(1);
+  expect(s.claims()).toHaveLength(1); expect(count(s, 'session/checkpoint')).toBe(3);
 });
 it.each(['throw', 'close'] as const)('synchronous send %s is one attempted uncertain outcome, not native acceptance', async failure => {
   const s = await setup(), send = s.socket.send.bind(s.socket); let attempts = 0, acknowledgements = 0;

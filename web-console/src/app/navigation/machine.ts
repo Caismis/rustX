@@ -1,6 +1,6 @@
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient, OperationAdmission } from '../../client/app-server';
-import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v49';
+import type { ConversationWindow, CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v50';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
 import type { CommandRequest } from '../commands/CommandPanel';
@@ -11,7 +11,7 @@ import { installTranscriptWindow } from '../../client/transcript';
 class RetiredPreparation extends Error {}
 export type ConversationRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string } | { kind: 'session-draft'; sessionId: string };
 export interface HistoryRoute {
-  kind: 'history'; sessionId: string; nodeId: string; messageId: string;
+  kind: 'history'; sessionId: string; nodeId: string; messageId?: string;
   conversationId: string; window: ConversationWindow; returnTo: ConversationRoute;
 }
 export type ShellRoute = ConversationRoute | HistoryRoute;
@@ -94,15 +94,20 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
     const { node } = await client.request({ method: 'session/node', params: { session_id: origin.source_session, node_id: origin.source_node } }, 'node', undefined, allowed);
     if (!current() || !allowed.current()) throw new RetiredPreparation();
     if (node.id !== origin.source_node) throw new Error('Different source Node returned.');
-    const { conversation_id, window } = await client.request({ method: 'session/history', params: { session_id: origin.source_session, node_id: origin.source_node, at: { type: 'message', id: origin.source_message }, limit: 64 } }, 'session_history', undefined, allowed);
+    const ref=origin.source_message_ref;
+    const {conversation_id,window}=origin.source_message!=null
+      ? await client.request({method:'session/history',params:{session_id:origin.source_session,node_id:origin.source_node,at:{type:'message',id:origin.source_message},limit:32}},'session_history',undefined,allowed)
+      : ref ? await client.request({method:'session/nodeOriginHistory',params:{session_id:ref.session_id,node_id:ref.node_id,limit:32}},'session_history',undefined,allowed)
+      : (()=>{throw new Error('The native source Message locator is unavailable.');})();
     installTranscriptWindow(window);
     if (window.page.entries?.some(entry => BigInt(entry.cursor) > BigInt(window.cut.transcript))) throw new Error('History entries exceed the native read cut.');
     const exact = window.page.entries?.find(entry => entry.cursor === window.target_cursor);
-    if (conversation_id !== node.conversation_id || window.cut.conversation_id !== conversation_id || exact?.item.type !== 'message' || exact.item.message.id !== origin.source_message) throw new Error('History read did not resolve the exact source Message.');
+    if (conversation_id !== node.conversation_id || window.cut.conversation_id !== conversation_id || (origin.source_message!=null?(exact?.item.type !== 'message'||exact.item.message.id!==origin.source_message):window.target_cursor==null)) throw new Error('History read did not resolve the exact source Message.');
     const returnTo = pending.route.kind === 'history' ? pending.route.returnTo : pending.route;
-    return { pending, route: { kind: 'history', sessionId: origin.source_session, nodeId: node.id, messageId: origin.source_message, conversationId: conversation_id, window, returnTo } };
+    return { pending, route: { kind: 'history', sessionId: origin.source_session, nodeId: node.id, messageId: origin.source_message??undefined, conversationId: conversation_id, window, returnTo } };
   }
   let sessionId = destination.sessionId, content: UserInputBlock[] | undefined;
+  let readyObservation: Observation | undefined;
   if (destination.kind === 'session' || destination.kind === 'restore-session') {
     if (destination.kind === 'restore-session' && client.firstSubmissions.session(sessionId) && !['admitted', 'discarded'].includes(client.firstSubmissions.session(sessionId)!.phase)) {
       if (client.firstSubmissions.session(sessionId)!.phase === 'attaching') await client.waitForAttachment(sessionId, current);
@@ -110,7 +115,13 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
     } else if (!client.isAttachmentControlCurrent(sessionId, client.getSnapshot().views[sessionId]?.attachmentObservation)) {
       // Native attachment evidence admits publication; supplementary metadata
       // settlement continues in Session Lifecycle after this disposable read.
-      await new Promise<void>((resolve, reject) => { void client.attach(sessionId, undefined, current, () => resolve()).then(resolve, reject); });
+      await new Promise<void>((resolve, reject) => {
+        void client.attach(sessionId, undefined, current, () => {
+          const proof = client.getSnapshot().views[sessionId]?.attachmentObservation;
+          if (client.isAttachmentControlCurrent(sessionId, proof)) readyObservation = proof;
+          resolve();
+        }).then(resolve, reject);
+      });
     }
   } else {
     const scope = new CommandSession(client, sessionId, current);
@@ -123,7 +134,10 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
       sessionId = result.session.id; content = result.content;
     }
   }
-  const observation = client.getSnapshot().views[sessionId]?.attachmentObservation;
+  const observation = readyObservation ?? client.getSnapshot().views[sessionId]?.attachmentObservation;
+  // Ready was proved by the native checkpoint/subscription handoff. A later
+  // same-claim resync disables controls but does not undo that navigation proof.
+  if ((destination.kind === 'session' || destination.kind === 'restore-session') && !readyObservation && !client.isAttachmentControlCurrent(sessionId, observation)) throw new RetiredPreparation();
   return { pending, route: { kind: 'session', sessionId }, observation, content };
 }
 
@@ -143,7 +157,7 @@ export const shellNavigationMachine = setup({
       const output = (event as unknown as { output: Prepared }).output;
       return output.pending === context.pending && authorityCurrent(context.client, output.pending)
         && (!context.readAdmission || context.readAdmission.current())
-        && (output.route.kind !== 'session' || context.client.isAttachmentControlCurrent(output.route.sessionId, output.observation));
+        && (output.route.kind !== 'session' || context.client.isAttachmentObservationCurrent(output.route.sessionId, output.observation));
     },
     createdOwner: ({ context, event }) => event.type === 'CREATION.KNOWN' && context.pending === event.pending && context.pending.destination.kind === 'creation',
     readOwner: ({ context, event }) => event.type === 'HISTORY.ADMITTED' && event.pending === context.pending,

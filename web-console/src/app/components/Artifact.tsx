@@ -1,6 +1,6 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v49';
+import type { CanonicalContentLocator, ToolExecutionResult } from '../../../../protocol/app-server/v50';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
@@ -37,10 +37,13 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
 }
 
 /** Only successful committed canonical Tool messages contribute cards. */
-export function ToolDeliveries({ messageId, result }: { messageId: string; result: ToolExecutionResult }) {
-  const tx = useTranslation(), preview = useContext(PreviewContext);
-  const deliveries = presentedDeliveries(messageId, result);
-  const intent = (delivery: PresentedDelivery) => ({ source: { kind: 'session_file' as const, messageId: delivery.messageId, index: delivery.index, file: delivery.file },
+export function ToolDeliveries({ locator, conversationId, result }: { locator: CanonicalContentLocator; conversationId:string; result: ToolExecutionResult }) {
+  return <DeliveryCards conversationId={conversationId} deliveries={presentedDeliveries(locator,result)}/>;
+}
+
+export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:string;deliveries:PresentedDelivery[];owned?:()=>boolean}) {
+  const tx=useTranslation(),preview=useContext(PreviewContext);
+  const intent = (delivery: PresentedDelivery) => ({ source: { kind: 'session_file' as const, conversationId,owned,locator: delivery.locator, index: delivery.index, file: delivery.file },
     name: delivery.file.name, image: delivery.file.mime_type.startsWith('image/'), mimeType: delivery.file.mime_type });
   return <PresentedFiles files={deliveries.map(delivery => ({ key: delivery.key, name: delivery.file.name, path: delivery.file.path, description: delivery.file.description }))}
     card={view => { const delivery = deliveries.find(item => item.key === view.key)!;

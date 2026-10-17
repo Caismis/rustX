@@ -116,8 +116,8 @@ impl core::fmt::Display for ContentBlockIndex {
 ///
 /// A `UserMessageBlock` does not necessarily mean a human spoke: it is the
 /// canonical home for anything inbound, including messages from other agents
-/// (with [`UserSource::Agent`] provenance) and runtime compaction summaries
-/// (with [`InboundKind::CompactionSummary`] kind). It
+/// (with [`UserSource::Agent`] provenance). Compaction summaries instead belong
+/// to immutable model-context checkpoints. An inbound block
 /// must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
 /// reserved for output and actions of the current agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -137,9 +137,8 @@ pub struct UserMessageBlock {
     /// An ordinary asynchronously delivered inbound message
     /// ([`InboundKind::Message`]) carries the persisted instant of its
     /// delivery; the producer supplies the original timestamp explicitly and
-    /// no wall-clock time is fabricated. Derived M4 compaction summaries
-    /// ([`InboundKind::CompactionSummary`]) never carry one. Older or
-    /// derived messages without a timestamp remain representable: the field
+    /// no wall-clock time is fabricated. Messages without a producer timestamp
+    /// remain representable: the field
     /// defaults to `None` on deserialization and is omitted from the
     /// canonical encoding while absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -442,7 +441,7 @@ impl AgentStatusModuleId {
 /// reminder), while `fingerprint` identifies the bounded relevant state that
 /// was actually presented. They are deliberately separate so a changed Todo
 /// state does not become a different reminder kind.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContributionEmission {
     /// Stable key for the reminder meaning.

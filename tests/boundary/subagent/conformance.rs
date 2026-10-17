@@ -42,6 +42,12 @@
 
 use super::super::{common, support};
 
+fn inspection_tempdir() -> std::io::Result<tempfile::TempDir> {
+    // macOS TMPDIR can consume sockaddr_un's entire pathname budget before
+    // the real product/Conversation/inspection suffix is appended.
+    tempfile::Builder::new().prefix("rx-").tempdir_in("/tmp")
+}
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,13 +73,16 @@ use support::fake::{FakeModel, FakeStep, FakeTool, fake_model};
 
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::inbound::ConversationInboundMailbox;
-use crate::runtime::observation::PendingObservations;
 use crate::runtime::subagent::process::StagedChild;
 use crate::runtime::subagent::{
     ResolvedSubagentSpec, SubagentAccepted, SubagentActivity, SubagentExecutionProfile,
     SubagentName, SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
     SubagentSpawnPlan, SubagentStartOutcome, SubagentStartSpec, SubagentState,
 };
+
+mod interaction_read;
+mod observation;
+mod tool_inspection;
 
 /// The outer liveness guard of one in-process interaction. No assertion
 /// depends on it; it only contains a broken fixture.
@@ -161,13 +170,11 @@ fn answer_script(answer: &str) -> Vec<FakeStep> {
 // ---------------------------------------------------------------------------
 
 /// A real child `ConversationRuntime` over the scripted model with the
-/// ordinary live Runtime Client host and a separate bounded parent-observation
-/// subscriber installed before activation — exactly the state the production
-/// child driver reaches before it would send `Ready`.
+/// ordinary live Runtime Client host. Child Control consumes native execution
+/// settlement and activity owners independently of display Source reads.
 struct ChildFixture {
     runtime: ConversationRuntime,
     host: rustx::runtime_client::RuntimeClientHost,
-    observations: Arc<PendingObservations>,
     model: Arc<FakeModel>,
     store: Arc<dyn ConversationStore>,
     /// The child's manually advanced monotonic clock: retry backoff only
@@ -205,6 +212,47 @@ async fn child_fixture_at(
     tools: ToolRegistry,
     initial_messages: Vec<MessageBlock>,
     artifacts_dir: std::path::PathBuf,
+) -> ChildFixture {
+    child_fixture_scoped_at(
+        dir,
+        conversation_id,
+        scripts,
+        tools,
+        initial_messages,
+        artifacts_dir,
+        None,
+    )
+    .await
+}
+
+async fn child_fixture_with_activation(
+    dir: &tempfile::TempDir,
+    conversation_id: &ConversationId,
+    scripts: Vec<Vec<FakeStep>>,
+    tools: ToolRegistry,
+    initial_messages: Vec<MessageBlock>,
+    activation: SubagentId,
+) -> ChildFixture {
+    child_fixture_scoped_at(
+        dir,
+        conversation_id,
+        scripts,
+        tools,
+        initial_messages,
+        dir.path().join("child-artifacts"),
+        Some(activation),
+    )
+    .await
+}
+
+async fn child_fixture_scoped_at(
+    dir: &tempfile::TempDir,
+    conversation_id: &ConversationId,
+    scripts: Vec<Vec<FakeStep>>,
+    tools: ToolRegistry,
+    initial_messages: Vec<MessageBlock>,
+    artifacts_dir: std::path::PathBuf,
+    activation: Option<SubagentId>,
 ) -> ChildFixture {
     let workspace = dir.path().join("child-workspace");
     std::fs::create_dir_all(&workspace).expect("child workspace");
@@ -284,22 +332,22 @@ async fn child_fixture_at(
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     )
     .expect("child runtime composition");
-    let host = rustx::runtime_client::RuntimeClientHost::new(
-        rustx::runtime_client::RuntimeClientHostConfig {
-            runtime: runtime.clone(),
-            replay_limit: None,
-        },
-    )
+    let config = rustx::runtime_client::RuntimeClientHostConfig {
+        runtime: runtime.clone(),
+        replay_limit: None,
+    };
+    let host = match activation {
+        Some(activation) => {
+            rustx::runtime_client::RuntimeClientHost::new_for_activation(config, activation)
+        }
+        None => rustx::runtime_client::RuntimeClientHost::new(config),
+    }
     .expect("live child Runtime Client host");
-    let observations = runtime
-        .subscribe_observations()
-        .expect("bounded parent observation subscriber before activation");
     runtime.activate();
     let store = tool_runtime.durable_store();
     ChildFixture {
         runtime,
         host,
-        observations,
         model,
         store,
         clock,
@@ -475,7 +523,7 @@ async fn parent_runtime_plane(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
 ) -> ParentRuntimePlane {
-    compose_parent_runtime_plane(dir, conversation, parent_scripts, false, false)
+    compose_parent_runtime_plane(dir, conversation, parent_scripts, false, false, None)
         .await
         .0
 }
@@ -490,8 +538,26 @@ async fn parent_runtime_host_plane(
     parent_scripts: Vec<Vec<FakeStep>>,
 ) -> (ParentRuntimePlane, rustx::runtime_client::RuntimeClientHost) {
     let (plane, host) =
-        compose_parent_runtime_plane(dir, conversation, parent_scripts, true, false).await;
+        compose_parent_runtime_plane(dir, conversation, parent_scripts, true, false, None).await;
     (plane, host.expect("the host plane composes the host"))
+}
+
+async fn parent_runtime_host_plane_for_activation(
+    dir: &tempfile::TempDir,
+    conversation: &str,
+    parent_scripts: Vec<Vec<FakeStep>>,
+    activation: SubagentId,
+) -> (ParentRuntimePlane, rustx::runtime_client::RuntimeClientHost) {
+    let (plane, host) = compose_parent_runtime_plane(
+        dir,
+        conversation,
+        parent_scripts,
+        true,
+        false,
+        Some(activation),
+    )
+    .await;
+    (plane, host.expect("scoped host before activation"))
 }
 
 #[allow(clippy::too_many_lines)] // fixture composition; mirrors child_fixture
@@ -501,6 +567,7 @@ async fn compose_parent_runtime_plane(
     parent_scripts: Vec<Vec<FakeStep>>,
     with_host: bool,
     with_goal: bool,
+    activation: Option<SubagentId>,
 ) -> (
     ParentRuntimePlane,
     Option<rustx::runtime_client::RuntimeClientHost>,
@@ -567,7 +634,7 @@ async fn compose_parent_runtime_plane(
     .with_identity_generator(identities.clone());
     let model = fake_model(parent_scripts);
     let adapter: Arc<dyn rustx::model::ModelAdapter> = model.clone();
-    let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+    let runtime_config = RuntimeConversationConfig {
         explicit_model: true,
         agent_id: AgentId::new("agent-parent-138"),
         model: support::model::scripted_session_model(adapter),
@@ -599,18 +666,33 @@ async fn compose_parent_runtime_plane(
         initial_messages: Vec::new(),
         subagents: Some(registry.clone()),
         workflow_output: None,
-    })
+    };
+    // The scoped intermediate Child is intentionally parked while its nested
+    // source is inspected. A real elapsed model-idle timeout would retire the
+    // authenticated route during that read; the test owns advancement instead.
+    let runtime = if activation.is_some() {
+        ConversationRuntime::with_test_monotonic_clock(
+            runtime_config,
+            Arc::new(ManualMonotonicClock::new()),
+        )
+    } else {
+        ConversationRuntime::new(runtime_config)
+    }
     .expect("parent runtime composition");
     // The Runtime Client host binds before activation: its bridge handshake
     // installs the registry observer and seeds the projection at one global
     // cut over the inert runtime.
     let host = with_host.then(|| {
-        rustx::runtime_client::RuntimeClientHost::new(
-            rustx::runtime_client::RuntimeClientHostConfig {
-                runtime: runtime.clone(),
-                replay_limit: None,
-            },
-        )
+        let config = rustx::runtime_client::RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        };
+        match activation {
+            Some(activation) => {
+                rustx::runtime_client::RuntimeClientHost::new_for_activation(config, activation)
+            }
+            None => rustx::runtime_client::RuntimeClientHost::new(config),
+        }
         .expect("runtime client host composition")
     });
     runtime.activate();
@@ -730,7 +812,7 @@ async fn launch_wired_child_full(
         .prepare(
             &SubagentStartSpec {
                 authority: crate::runtime::subagent::DurableAgentAuthority {
-                    title: "Explore task".to_owned(),
+                    title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: resolved_child_spec("conformance"),
                     approval_mode: rustx::runtime::ApprovalMode::Policy,
@@ -760,7 +842,6 @@ async fn launch_wired_child_full(
     };
     let parent_agent_id = plane.parent_agent_id.clone();
     let child_runtime = child.runtime.clone();
-    let child_observations = Arc::clone(&child.observations);
     let (stop_serve, stop_receiver) = tokio::sync::oneshot::channel();
     let serve = tokio::spawn(async move {
         let mut dispatcher = rustx::local_runtime::dispatcher::ChildControlDispatcher::start(
@@ -777,7 +858,6 @@ async fn launch_wired_child_full(
                 &handle,
                 parent_agent_id,
                 child_runtime,
-                child_observations,
                 None,
             ) => result,
             _ = stop_receiver => Ok(()),
@@ -840,6 +920,23 @@ async fn live_inspection_call(
     serde_json::from_str(&line).expect("live inspection response JSON")
 }
 
+/// Initialization is an identity/capability receipt. Observation begins only
+/// after this explicit read-only bounded native checkpoint request succeeds.
+fn attachment_checkpoint(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+) -> rustx::runtime_client::checkpoint::RuntimeClientCheckpoint {
+    let response =
+        attachment.handle_request(rustx::runtime_client::RuntimeClientRequest::CheckpointGet {
+            id: rustx::runtime_client::RequestId::new(9_000_001),
+        });
+    let Some(rustx::runtime_client::RuntimeClientResult::Checkpoint { checkpoint }) =
+        response.result
+    else {
+        panic!("bounded attachment checkpoint: {response:?}")
+    };
+    *checkpoint
+}
+
 async fn live_inspection_snapshot(
     lines: &mut LiveInspectionLines,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
@@ -848,17 +945,17 @@ async fn live_inspection_snapshot(
     let response = live_inspection_call(
         lines,
         writer,
-        rustx::runtime_client::RuntimeClientRequest::SnapshotGet {
+        rustx::runtime_client::RuntimeClientRequest::CheckpointGet {
             id: rustx::runtime_client::RequestId::new(id),
         },
     )
     .await;
-    let Some(rustx::runtime_client::RuntimeClientResult::Snapshot { snapshot, .. }) =
+    let Some(rustx::runtime_client::RuntimeClientResult::Checkpoint { checkpoint }) =
         response.result
     else {
         panic!("live inspection returned an unexpected snapshot result: {response:?}");
     };
-    snapshot
+    checkpoint.snapshot
 }
 
 /// Reads the whole durable event journal of one store.
@@ -935,6 +1032,7 @@ async fn await_snapshot(
 /// routed interaction. Other lifecycle/activity events are deliberately
 /// consumed first; UI order never selects the owner.
 async fn await_root_interaction(
+    attachment: &crate::runtime_client::RuntimeAttachment,
     subscription: &rustx::runtime_client::EventSubscription,
     predicate: impl Fn(&rustx::runtime::RoutedInteraction) -> bool,
     description: &str,
@@ -943,13 +1041,24 @@ async fn await_root_interaction(
         loop {
             match subscription.next().await {
                 rustx::runtime_client::EventDelivery::Event(event) => {
-                    if let rustx::runtime_client::RuntimeClientEvent::InteractionPending {
-                        interaction,
-                    } = event.event
-                        && predicate(&interaction)
-                    {
-                        return interaction;
+                    for fact in event.event.facts() {
+                        if let rustx::runtime_client::RuntimeClientEvent::InteractionPending {
+                            interaction,
+                        } = fact
+                        {
+                            let routed = rustx::runtime::RoutedInteraction {
+                                interaction: interaction.interaction.clone(),
+                                source: interaction.source.clone(),
+                                request: interaction_read::body(attachment, interaction).await,
+                            };
+                            if predicate(&routed) {
+                                return routed;
+                            }
+                        }
                     }
+                }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
                 }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("{description}: root subscription requires an unexpected resync")
@@ -979,13 +1088,24 @@ async fn await_root_interaction_removed(
         loop {
             match subscription.next().await {
                 rustx::runtime_client::EventDelivery::Event(event) => {
-                    if let rustx::runtime_client::RuntimeClientEvent::InteractionRemoved {
-                        interaction,
-                    } = event.event
-                        && &interaction == target
-                    {
-                        return;
+                    for fact in event.event.facts() {
+                        if let rustx::runtime_client::RuntimeClientEvent::PendingHeadChanged {
+                            owner,
+                            cut,
+                            head,
+                        } = fact
+                            && owner == "pending_children"
+                            && cut.total == head.len() as u64
+                            && head
+                                .iter()
+                                .all(|interaction| &interaction.interaction != target)
+                        {
+                            return;
+                        }
                     }
+                }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
                 }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("{description}: root subscription requires an unexpected resync")
@@ -1155,7 +1275,7 @@ async fn park_child_in_retry_backoff(
 /// integration binary.
 #[tokio::test]
 async fn the_child_spec_carries_the_frozen_timeout_policy() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plan = test_spawn_plan(&dir.path().join("runtime"));
     let subagent_id =
         rustx::runtime::identity::SubagentId::new("conv_95489284-1901-7da7-8093-8754fbb0517e");
@@ -1222,7 +1342,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
 /// projection goes straight from Running to Succeeded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_transient_retries_settle_one_parent_success() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_8922ca62-7b5e-701f-ba4e-201ed534db9e");
     let child = child_fixture(
         &dir,
@@ -1308,7 +1428,7 @@ async fn child_transient_retries_settle_one_parent_success() {
 /// only the final answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_attempt_publication_stays_child_local() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_d621af25-1566-7bbb-91e3-ab2733eda977");
     let child = child_fixture(
         &dir,
@@ -1402,7 +1522,7 @@ async fn failed_attempt_publication_stays_child_local() {
 /// its own unresolved-output carryover pointer as durable local residue.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_8ba92ecd-5003-7efa-a870-61822bc44c39");
     let failing_script = || {
         vec![
@@ -1541,7 +1661,7 @@ async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() 
 /// carryover pointer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_carryover_never_enters_parent_conversation_or_requests() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
         "conv_37a1028a-6a51-70ac-b030-34bfd2f0b06c",
@@ -1662,7 +1782,7 @@ async fn child_carryover_never_enters_parent_conversation_or_requests() {
 /// publishes exactly one `Cancelled` terminal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_cancellation_during_retry_backoff_cancels_the_child() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_1be6c606-ae2d-7802-bc3d-3b9342b12ca3");
     let child = child_fixture(
         &dir,
@@ -1750,7 +1870,7 @@ async fn parent_cancellation_during_retry_backoff_cancels_the_child() {
 /// ("the runtime is shutting down"), never rewritten to a user request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
         "conv_091b2630-19f7-79a9-a87e-b02de2aace1a",
@@ -1848,7 +1968,7 @@ async fn parent_runtime_drain_during_child_retry_backoff_reaches_quiescence() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_4e3cd5bc-80e4-750c-8369-e65ca9ce7564");
     let child = child_fixture(
         &dir,
@@ -1943,7 +2063,7 @@ async fn child_process_loss_during_backoff_is_terminal_and_never_relaunched() {
 /// settled snapshot is returned unchanged and no second publication exists.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancellation_after_terminalization_cannot_rewrite_the_result() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_a08991e8-0c1d-70a5-9ecd-5459da30726e");
     let child = child_fixture(
         &dir,
@@ -2007,7 +2127,7 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
         (true, "requested by the user"),
         (false, "the runtime is shutting down"),
     ] {
-        let dir = tempfile::tempdir().expect("temp root");
+        let dir = inspection_tempdir().expect("temp root");
         let plane = standalone_parent_plane(&dir, "conv_987b5a05-95b6-754e-980e-50721bd7ca4e");
         let child = child_fixture(
             &dir,
@@ -2107,7 +2227,7 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
 /// scheduled ordinal, folded from the child's durable retry schedule.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_is_activity_never_lifecycle() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_de69a5cb-e55e-7819-a41e-aa728d5f6b9b");
     let child = child_fixture(
         &dir,
@@ -2262,7 +2382,7 @@ fn ask_user_arguments(question: &str) -> serde_json::Value {
 /// answer, or `ToolResult`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_questionnaire_routes_through_root_without_parent_mediation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_c27650cf-7376-753e-95af-c493e2de043f",
@@ -2273,14 +2393,16 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
     let cursor = match initialized {
-        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {
+            attachment_checkpoint(&attachment).cursor
+        }
         other => panic!("root attach result: {other:?}"),
     };
     let subscription = attachment
         .subscribe_events(cursor)
         .expect("root event subscription");
     let question = "Which deployment target should the child use?";
-    let child = child_fixture(
+    let child = child_fixture_with_activation(
         &dir,
         &ConversationId::new("conv_e6395e9e-2b15-7991-809f-bc3eaa72d0bf"),
         vec![
@@ -2294,6 +2416,7 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
         ],
         child_ask_user_tools(),
         Vec::new(),
+        SubagentId::for_conversation(parent.plane.store.conversation_id(), 1),
     )
     .await;
     assert!(
@@ -2315,8 +2438,10 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
         "the attached root client enables the child provider"
     );
     let wired = launch_wired_child(&parent.plane, &child, "choose a deployment target").await;
+    let _inspection = interaction_read::bind(&parent.plane, &child, &wired);
 
     let routed = await_root_interaction(
+        &attachment,
         &subscription,
         |interaction| {
             matches!(
@@ -2333,7 +2458,7 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
             subagent_id,
             child_conversation_id,
             ..
-        } if *subagent_id == wired.accepted.subagent_id
+        } if subagent_id.as_str() == wired.accepted.subagent_id.as_str()
             && *child_conversation_id == ConversationId::new("conv_e6395e9e-2b15-7991-809f-bc3eaa72d0bf")
     ));
     assert_eq!(routed.interaction, routed.request.interaction_ref());
@@ -2437,7 +2562,10 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
             .is_none(),
         "the parent does not receive a child questionnaire result"
     );
-    let (root_snapshot, _) = host.snapshot().expect("root projection");
+    let (root_snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("root projection");
     assert!(root_snapshot.pending_interactions.is_empty());
 
     attachment.detach();
@@ -2450,7 +2578,7 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
 /// is resumed only after the child's durable Approved settlement.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_f827f1de-a705-78d1-8367-8747d8a1c98b",
@@ -2461,7 +2589,9 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
     let cursor = match initialized {
-        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {
+            attachment_checkpoint(&attachment).cursor
+        }
         other => panic!("root attach result: {other:?}"),
     };
     let subscription = attachment
@@ -2470,7 +2600,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
     let (tools, mut calls, _started) = child_approval_tools();
     let invocation_arguments = serde_json::json!({"target": "staging"});
     let child_conversation = ConversationId::new("conv_8cb27edc-7469-7f11-80e8-cfd61970a05b");
-    let child = child_fixture(
+    let child = child_fixture_with_activation(
         &dir,
         &child_conversation,
         vec![
@@ -2484,11 +2614,14 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
         ],
         tools,
         Vec::new(),
+        SubagentId::for_conversation(parent.plane.store.conversation_id(), 1),
     )
     .await;
     let wired = launch_wired_child(&parent.plane, &child, "run the approved child tool").await;
+    let _inspection = interaction_read::bind(&parent.plane, &child, &wired);
 
     let routed = await_root_interaction(
+        &attachment,
         &subscription,
         |interaction| {
             matches!(
@@ -2525,7 +2658,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
             subagent_id,
             child_conversation_id,
             ..
-        } if *subagent_id == wired.accepted.subagent_id
+        } if subagent_id.as_str() == wired.accepted.subagent_id.as_str()
             && *child_conversation_id == child_conversation
     ));
 
@@ -2578,7 +2711,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
                 call_id: ToolCallId::new("call-approval-allow")
             },
             tool_id: rustx::runtime::identity::ToolId::new("tool-approved"),
-            tool_name: "approved_tool".to_owned(),
+            tool_name: "approved_tool".into(),
             mode: rustx::tools::types::ToolInvocationMode::Foreground,
             arguments: invocation_arguments,
         }
@@ -2642,7 +2775,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
 /// policy-denied `ToolResult`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_7fef1d27-1af8-7c12-ad03-a38f8e57c071",
@@ -2653,7 +2786,9 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
     let cursor = match initialized {
-        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {
+            attachment_checkpoint(&attachment).cursor
+        }
         other => panic!("root attach result: {other:?}"),
     };
     let subscription = attachment
@@ -2661,7 +2796,7 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
         .expect("root event subscription");
     let (tools, calls, started) = child_approval_tools();
     let child_conversation = ConversationId::new("conv_0a5b2055-9982-791e-881a-f4c2e2986d6e");
-    let child = child_fixture(
+    let child = child_fixture_with_activation(
         &dir,
         &child_conversation,
         vec![
@@ -2675,10 +2810,13 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
         ],
         tools,
         Vec::new(),
+        SubagentId::for_conversation(parent.plane.store.conversation_id(), 1),
     )
     .await;
     let wired = launch_wired_child(&parent.plane, &child, "deny the child tool").await;
+    let _inspection = interaction_read::bind(&parent.plane, &child, &wired);
     let routed = await_root_interaction(
+        &attachment,
         &subscription,
         |interaction| {
             matches!(
@@ -2754,7 +2892,7 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
 /// from the live child registry and can answer the same full routed address.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn routed_interaction_survives_root_detach_and_reconnect() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_ff54ad2c-f7b7-73ef-b0d3-70d74674b085",
@@ -2765,14 +2903,16 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("first root Runtime Client attaches");
     let cursor = match initialized {
-        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {
+            attachment_checkpoint(&first).cursor
+        }
         other => panic!("first attach result: {other:?}"),
     };
     let subscription = first
         .subscribe_events(cursor)
         .expect("first root event subscription");
     let child_conversation = ConversationId::new("conv_d2131d77-33c4-7cbe-840c-36beb1bcf1b9");
-    let child = child_fixture(
+    let child = child_fixture_with_activation(
         &dir,
         &child_conversation,
         vec![
@@ -2786,10 +2926,13 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
         ],
         child_ask_user_tools(),
         Vec::new(),
+        SubagentId::for_conversation(parent.plane.store.conversation_id(), 1),
     )
     .await;
     let wired = launch_wired_child(&parent.plane, &child, "reconnect the human surface").await;
+    let _inspection = interaction_read::bind(&parent.plane, &child, &wired);
     let routed = await_root_interaction(
+        &first,
         &subscription,
         |interaction| {
             matches!(
@@ -2810,7 +2953,8 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
         parent
             .plane
             .registry
-            .pending_interaction_projection()
+            .pending_interaction_head()
+            .head
             .iter()
             .any(|pending| pending.interaction == routed.interaction),
         "detach leaves the originating child coordinator's live request pending"
@@ -2825,10 +2969,14 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
     let (second, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("reattach root Runtime Client");
-    let rustx::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
-    else {
-        panic!("reattach did not initialize");
-    };
+    assert!(
+        matches!(
+            initialized,
+            rustx::runtime_client::RuntimeClientResult::Initialized { .. }
+        ),
+        "reattach did not initialize"
+    );
+    let snapshot = attachment_checkpoint(&second).snapshot;
     assert!(
         snapshot
             .pending_interactions
@@ -2888,7 +3036,7 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
 /// order and each child must observe only its own response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_7d27cece-5131-7eb2-b2b5-547ef0cbca24",
@@ -2899,7 +3047,9 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
     let cursor = match initialized {
-        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {
+            attachment_checkpoint(&attachment).cursor
+        }
         other => panic!("root attach result: {other:?}"),
     };
     let subscription = attachment
@@ -2907,7 +3057,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .expect("root event subscription");
 
     let child_one_conversation = ConversationId::new("conv_b8eb123a-65ed-7bcc-8b0f-803645aaddd6");
-    let child_one = child_fixture(
+    let child_one = child_fixture_with_activation(
         &dir,
         &child_one_conversation,
         vec![
@@ -2921,11 +3071,12 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         ],
         child_ask_user_tools(),
         Vec::new(),
+        SubagentId::for_conversation(parent.plane.store.conversation_id(), 1),
     )
     .await;
     let child_two_conversation = ConversationId::new("conv_1e203843-ca70-7ee7-8612-924f55a9fa53");
     let (child_two_tools, _child_two_calls, _child_two_started) = child_approval_tools();
-    let child_two = child_fixture_at(
+    let child_two = child_fixture_scoped_at(
         &dir,
         &child_two_conversation,
         vec![
@@ -2940,28 +3091,40 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         child_two_tools,
         Vec::new(),
         dir.path().join("child-artifacts-mixed-two"),
+        Some(SubagentId::for_conversation(
+            parent.plane.store.conversation_id(),
+            2,
+        )),
     )
     .await;
     let first = launch_wired_child(&parent.plane, &child_one, "mixed questionnaire").await;
     let second = launch_wired_child(&parent.plane, &child_two, "mixed approval").await;
+    let _first_inspection = interaction_read::bind(&parent.plane, &child_one, &first);
+    let _second_inspection = interaction_read::bind(&parent.plane, &child_two, &second);
 
     let routed_interactions = tokio::time::timeout(LIVENESS, async {
         let mut interactions = Vec::new();
         while interactions.len() < 2 {
             match subscription.next().await {
                 rustx::runtime_client::EventDelivery::Event(event) => {
+                    for fact in event.event.facts() {
                     if let rustx::runtime_client::RuntimeClientEvent::InteractionPending {
                         interaction,
-                    } = event.event
+                    } = fact
                         && matches!(
                             &interaction.source,
                             rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
-                                if *subagent_id == first.accepted.subagent_id
-                                    || *subagent_id == second.accepted.subagent_id
+                                if subagent_id.as_str() == first.accepted.subagent_id.as_str()
+                                    || subagent_id.as_str() == second.accepted.subagent_id.as_str()
                         )
                     {
-                        interactions.push(interaction);
+                        assert!(interactions.iter().all(|known: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
+                        interactions.push(interaction.clone());
                     }
+                    }
+                }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
                 }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("mixed interactions require an unexpected resync")
@@ -2984,8 +3147,8 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .iter()
         .find(|interaction| {
             matches!(
-                interaction.request.kind,
-                rustx::runtime::InteractionKind::Questionnaire { .. }
+                interaction.kind,
+                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
             )
         })
         .cloned()
@@ -2994,18 +3157,20 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .iter()
         .find(|interaction| {
             matches!(
-                interaction.request.kind,
-                rustx::runtime::InteractionKind::Approval { .. }
+                interaction.kind,
+                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Approval
             )
         })
         .cloned()
         .expect("one approval");
     assert!(matches!(
-        questionnaire.request.kind,
+        interaction_read::body(&attachment, &questionnaire)
+            .await
+            .kind,
         rustx::runtime::InteractionKind::Questionnaire { .. }
     ));
     assert!(matches!(
-        approval.request.kind,
+        interaction_read::body(&attachment, &approval).await.kind,
         rustx::runtime::InteractionKind::Approval { .. }
     ));
     assert_ne!(questionnaire.interaction, approval.interaction);
@@ -3128,7 +3293,10 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
             && !parent_requests.contains("staging"),
         "the parent may receive an ordinary child terminal answer, but never child HITL facts"
     );
-    let (snapshot, _) = host.snapshot().expect("root snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("root snapshot");
     assert!(snapshot.pending_interactions.is_empty());
 
     attachment.detach();
@@ -3152,7 +3320,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_death_removes_only_its_routed_interactions() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_54228aad-8ab2-7cbb-b603-2bd2ef743b95",
@@ -3163,7 +3331,9 @@ async fn child_death_removes_only_its_routed_interactions() {
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("root Runtime Client attaches");
     let cursor = match initialized {
-        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {
+            attachment_checkpoint(&attachment).cursor
+        }
         other => panic!("root attach result: {other:?}"),
     };
     let subscription = attachment
@@ -3214,18 +3384,24 @@ async fn child_death_removes_only_its_routed_interactions() {
         while interactions.len() < 2 {
             match subscription.next().await {
                 rustx::runtime_client::EventDelivery::Event(event) => {
+                    for fact in event.event.facts() {
                     if let rustx::runtime_client::RuntimeClientEvent::InteractionPending {
                         interaction,
-                    } = event.event
+                    } = fact
                         && matches!(
                             &interaction.source,
                             rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
-                                if *subagent_id == first_wired.accepted.subagent_id
-                                    || *subagent_id == second_wired.accepted.subagent_id
+                                if subagent_id.as_str() == first_wired.accepted.subagent_id.as_str()
+                                    || subagent_id.as_str() == second_wired.accepted.subagent_id.as_str()
                         )
                     {
-                        interactions.push(interaction);
+                        assert!(interactions.iter().all(|known: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
+                        interactions.push(interaction.clone());
                     }
+                    }
+                }
+                rustx::runtime_client::EventDelivery::Unavailable { message } => {
+                    panic!("observation source unavailable: {message}")
                 }
                 rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                     panic!("child-death interactions require an unexpected resync")
@@ -3249,7 +3425,7 @@ async fn child_death_removes_only_its_routed_interactions() {
             matches!(
                 &interaction.source,
                 rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
-                    if *subagent_id == first_wired.accepted.subagent_id
+                    if subagent_id.as_str() == first_wired.accepted.subagent_id.as_str()
             )
         })
         .cloned()
@@ -3260,7 +3436,7 @@ async fn child_death_removes_only_its_routed_interactions() {
             matches!(
                 &interaction.source,
                 rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
-                    if *subagent_id == second_wired.accepted.subagent_id
+                    if subagent_id.as_str() == second_wired.accepted.subagent_id.as_str()
             )
         })
         .cloned()
@@ -3294,7 +3470,10 @@ async fn child_death_removes_only_its_routed_interactions() {
         .await
         .expect("dead child settles");
     assert_eq!(dead_snapshot.state, SubagentState::Interrupted);
-    let (root_snapshot, _) = host.snapshot().expect("root snapshot after child death");
+    let (root_snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("root snapshot after child death");
     assert!(
         root_snapshot
             .pending_interactions
@@ -3380,7 +3559,7 @@ async fn child_death_removes_only_its_routed_interactions() {
 /// closed. Runtime binding, not the presence of a client, grants availability.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_questionnaire_fails_closed_without_root_provider() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = standalone_parent_plane(&dir, "conv_0a422f7d-96cd-75e6-85eb-3c293deeb822");
     let child = child_fixture(
         &dir,
@@ -3413,7 +3592,7 @@ async fn child_questionnaire_fails_closed_without_root_provider() {
         "unavailable publication fails closed without creating an actionable prompt"
     );
     assert!(
-        parent.registry.pending_interaction_projection().is_empty(),
+        parent.registry.pending_interaction_head().head.is_empty(),
         "no root projection exists without a capable provider"
     );
     child.runtime.shutdown().await.expect("child drains");
@@ -3423,7 +3602,7 @@ async fn child_questionnaire_fails_closed_without_root_provider() {
 /// observes the authoritative prompt and cancellation reaches the child owner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn root_detach_preserves_headless_child_publication_and_routed_cancellation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_a1557c10-e45c-744b-ad71-85d8ae26e91b",
@@ -3484,10 +3663,14 @@ async fn root_detach_preserves_headless_child_publication_and_routed_cancellatio
     let (reconnected, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("reconnect");
-    let rustx::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
-    else {
-        panic!("snapshot");
-    };
+    assert!(
+        matches!(
+            initialized,
+            rustx::runtime_client::RuntimeClientResult::Initialized { .. }
+        ),
+        "snapshot"
+    );
+    let snapshot = attachment_checkpoint(&reconnected).snapshot;
     assert_eq!(snapshot.pending_interactions.len(), 1);
     let interaction = snapshot.pending_interactions[0].interaction.clone();
     reconnected
@@ -3515,7 +3698,8 @@ async fn root_detach_preserves_headless_child_publication_and_routed_cancellatio
         parent
             .plane
             .registry
-            .pending_interaction_projection()
+            .pending_interaction_head()
+            .head
             .is_empty()
     );
     reconnected.detach();
@@ -3543,7 +3727,7 @@ fn event_kinds(events: &[RuntimeEvent]) -> Vec<String> {
 /// keeps the counters as the final record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn model_activity_projects_while_lifecycle_stays_running() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_41e0c081-549d-7ed8-952b-db2deb356df5");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -3639,7 +3823,7 @@ async fn model_activity_projects_while_lifecycle_stays_running() {
 /// progress can survive into a settled or later projection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tool_activity_projects_identity_scoped_progress_and_counts_executions() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_f5578161-daa5-7b53-98c1-d26358e4e432");
     let mut tools = ToolRegistry::new();
     // The first tool parks without reporting progress; the second parks
@@ -3705,17 +3889,32 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
     let probing = await_snapshot(
         &plane,
         &wired.accepted.subagent_id,
-        |snapshot| matches!(snapshot.observation.activity, SubagentActivity::Tool { .. }),
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::ToolGroup {
+                    active: 1,
+                    representative: Some(
+                        crate::runtime::subagent::activity::SubagentToolRepresentative { .. }
+                    )
+                }
+            )
+        },
         "the parked tool execution projects Tool activity",
     )
     .await;
     assert_eq!(probing.state, SubagentState::Running);
     assert_eq!(
         probing.observation.activity,
-        SubagentActivity::Tool {
-            tool_call_id: ToolCallId::new("call-probe"),
-            tool_id: rustx::runtime::identity::ToolId::new("tool-probe"),
-            progress: None,
+        SubagentActivity::ToolGroup {
+            active: 1,
+            representative: Some(
+                crate::runtime::subagent::activity::SubagentToolRepresentative {
+                    tool_call_id: ToolCallId::new("call-probe"),
+                    tool_id: rustx::runtime::identity::ToolId::new("tool-probe"),
+                    progress: None,
+                }
+            )
         },
         "no progress has been reported for the parked execution"
     );
@@ -3734,7 +3933,7 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
         |snapshot| {
             matches!(
                 snapshot.observation.activity,
-                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                SubagentActivity::ToolGroup { active: 1, representative: Some(crate::runtime::subagent::activity::SubagentToolRepresentative { ref tool_call_id, progress: Some(ref progress), .. }) }
                     if *tool_call_id == ToolCallId::new("call-scan")
                         && progress.message.as_deref() == Some("progress 2")
             )
@@ -3745,14 +3944,19 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
     assert_eq!(scanning.state, SubagentState::Running);
     assert_eq!(
         scanning.observation.activity,
-        SubagentActivity::Tool {
-            tool_call_id: ToolCallId::new("call-scan"),
-            tool_id: rustx::runtime::identity::ToolId::new("tool-scan"),
-            progress: Some(rustx::tools::types::ToolProgress {
-                message: Some("progress 2".to_owned()),
-                completed: None,
-                total: None,
-            }),
+        SubagentActivity::ToolGroup {
+            active: 1,
+            representative: Some(
+                crate::runtime::subagent::activity::SubagentToolRepresentative {
+                    tool_call_id: ToolCallId::new("call-scan"),
+                    tool_id: rustx::runtime::identity::ToolId::new("tool-scan"),
+                    progress: Some(rustx::tools::types::ToolProgress {
+                        message: Some("progress 2".to_owned()),
+                        completed: None,
+                        total: None,
+                    }),
+                }
+            )
         },
         "live foreground progress projects in-flight, coalesced to the latest report"
     );
@@ -3843,7 +4047,7 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
 /// never skip past it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_88187cdd-43f7-7645-ab39-921033fd729c");
     let mut tools = ToolRegistry::new();
     // call-a parks without reporting progress; call-b parks, reports one
@@ -3931,7 +4135,17 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
     let both_active = await_snapshot(
         &plane,
         &wired.accepted.subagent_id,
-        |snapshot| matches!(snapshot.observation.activity, SubagentActivity::Tool { .. }),
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::ToolGroup {
+                    active: 2,
+                    representative: Some(
+                        crate::runtime::subagent::activity::SubagentToolRepresentative { .. }
+                    )
+                }
+            )
+        },
         "two concurrently parked calls project one bounded Tool representative",
     )
     .await;
@@ -3950,7 +4164,7 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
         |snapshot| {
             matches!(
                 snapshot.observation.activity,
-                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                SubagentActivity::ToolGroup { active: 2, representative: Some(crate::runtime::subagent::activity::SubagentToolRepresentative { ref tool_call_id, progress: Some(ref progress), .. }) }
                     if *tool_call_id == ToolCallId::new("call-b")
                         && progress.message.as_deref() == Some("b phase 2")
             )
@@ -3963,6 +4177,18 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
         "a physically finished but uncommitted sibling is never counted and never neutralizes the projection"
     );
 
+    assert_eq!(
+        journal(&child.store)
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionCompleted { .. }
+                    | RuntimeEvent::ToolExecutionFailed { .. }
+            ))
+            .count(),
+        0,
+        "neither original Tool terminal is committed before the group settles"
+    );
     // The final call settles: the group batch commits, no Tool activity can
     // outlive it, and each execution counted exactly once. (The cut between
     // the batch commit and the next request start may legitimately coalesce
@@ -3979,7 +4205,12 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
     assert!(
         !matches!(
             settled_tools.observation.activity,
-            SubagentActivity::Tool { .. }
+            SubagentActivity::ToolGroup {
+                active: 1,
+                representative: Some(
+                    crate::runtime::subagent::activity::SubagentToolRepresentative { .. }
+                )
+            }
         ),
         "no active call remains: {:?}",
         settled_tools.observation.activity
@@ -4019,7 +4250,7 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
 /// the retry ordinal it was scheduled under.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_transient_retry_projects_retrying_model_then_the_retried_request() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_a1951b70-2756-73a9-a86b-ff5a157b1fba");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -4188,7 +4419,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
     }
 
     async fn run(conversation: &str, topology: Topology) -> ExecutionRecord {
-        let dir = tempfile::tempdir().expect("temp root");
+        let dir = inspection_tempdir().expect("temp root");
         let (plane, parent_runtime, host) = match topology {
             Topology::Standalone | Topology::ObservationBroken => {
                 (standalone_parent_plane(&dir, conversation), None, None)
@@ -4319,7 +4550,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
                 |snapshot| {
                     matches!(
                         snapshot.observation.activity,
-                        SubagentActivity::Tool { ref tool_call_id, progress: Some(_), .. }
+                        SubagentActivity::ToolGroup { active: 1, representative: Some(crate::runtime::subagent::activity::SubagentToolRepresentative { ref tool_call_id, progress: Some(_), .. }) }
                             if *tool_call_id == ToolCallId::new("call-scan")
                     )
                 },
@@ -4420,7 +4651,10 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         if let Some(host) = &host {
             tokio::time::timeout(LIVENESS, async {
                 loop {
-                    let (snapshot, _) = host.snapshot().expect("projection snapshot");
+                    let (snapshot, _) = host
+                        .checkpoint()
+                        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                        .expect("projection snapshot");
                     if snapshot.agents.iter().any(|view| {
                         view.activation_id == subagent_id && view.observation == settled.observation
                     }) {
@@ -4537,7 +4771,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
 /// registry's latest revision without having observed the intermediates.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_a302f249-af50-7289-942e-c166d04125a4",
@@ -4630,7 +4864,7 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         |snapshot| {
             matches!(
                 snapshot.observation.activity,
-                SubagentActivity::Tool { progress: Some(ref progress), .. }
+                SubagentActivity::ToolGroup { active: 1, representative: Some(crate::runtime::subagent::activity::SubagentToolRepresentative { progress: Some(ref progress), .. }) }
                     if progress.message.as_deref() == Some("progress 199")
             )
         },
@@ -4665,7 +4899,10 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
                 .snapshot(&subagent_id)
                 .expect("child record")
                 .observation;
-            let (snapshot, _) = host.snapshot().expect("projection snapshot");
+            let (snapshot, _) = host
+                .checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                .expect("projection snapshot");
             let view = snapshot
                 .agents
                 .iter()
@@ -4679,7 +4916,10 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     })
     .await
     .expect("the projection converges to the registry's latest revision");
-    let (snapshot, _) = host.snapshot().expect("projection snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("projection snapshot");
     let view = snapshot
         .agents
         .iter()
@@ -4731,6 +4971,36 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         .expect("parent runtime drains");
 }
 
+async fn await_child_publication_fact<T>(
+    subscription: &rustx::runtime_client::EventSubscription,
+    conversation: &ConversationId,
+    activation: &SubagentId,
+    description: &str,
+    predicate: impl Fn(&rustx::runtime_client::RuntimeClientEvent) -> Option<T>,
+) -> T {
+    tokio::time::timeout(LIVENESS, async {
+        loop {
+            let rustx::runtime_client::EventDelivery::Event(record) = subscription.next().await
+            else {
+                panic!("{description}: Child publication stopped or requires repair");
+            };
+            let rustx::runtime_client::RuntimeClientEvent::ProjectionTransition {
+                metadata, ..
+            } = &record.event
+            else {
+                panic!("complete native Child transition");
+            };
+            assert_eq!(&metadata.read_cut.conversation_id, conversation);
+            assert_eq!(metadata.read_cut.activation_id.as_ref(), Some(activation));
+            if let Some(value) = record.event.facts().iter().find_map(&predicate) {
+                return value;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{description}: Child publication did not arrive"))
+}
+
 /// Invariant (live foreground tool progress): a phased tool execution
 /// proves the full live-progress contract across the wire. While the tool
 /// is parked mid-execution the parent projects the newest reported phase
@@ -4741,7 +5011,7 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
 /// fact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_fd5f1ca7-c1e6-7664-9d06-c5d40791b868");
     let catalog = rustx::local_runtime::session::SessionCatalog::create(
         &plane.runtime_root,
@@ -4774,7 +5044,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         .parent()
         .unwrap()
         .to_path_buf();
-    let child = child_fixture_at(
+    let child = child_fixture_scoped_at(
         &dir,
         &child_conversation_id,
         vec![
@@ -4794,6 +5064,10 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         tools,
         Vec::new(),
         child_artifacts,
+        Some(SubagentId::for_conversation(
+            plane.store.conversation_id(),
+            1,
+        )),
     )
     .await;
     let wired = launch_wired_child(&plane, &child, "inspect").await;
@@ -4815,10 +5089,15 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         &subagent_id,
         |snapshot| {
             snapshot.observation.activity
-                == SubagentActivity::Tool {
-                    tool_call_id: ToolCallId::new("call-phased"),
-                    tool_id: rustx::runtime::identity::ToolId::new("tool-phased"),
-                    progress: None,
+                == SubagentActivity::ToolGroup {
+                    active: 1,
+                    representative: Some(
+                        crate::runtime::subagent::activity::SubagentToolRepresentative {
+                            tool_call_id: ToolCallId::new("call-phased"),
+                            tool_id: rustx::runtime::identity::ToolId::new("tool-phased"),
+                            progress: None,
+                        },
+                    ),
                 }
         },
         "the parked execution projects its Tool identity without progress",
@@ -4826,6 +5105,37 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     .await;
     assert_eq!(initial.state, SubagentState::Running);
     assert_eq!(initial.observation.counters.tool_executions, 0);
+
+    // Parent activity and the Child's published projection have different
+    // owners. Observe the Child's own complete records before testing its pure
+    // checkpoint read; subscription polling does not drain or publish work.
+    let (progress_observer, _) = child
+        .host
+        .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("read-only Child publication observer");
+    let progress_events = progress_observer
+        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
+        .expect("Child native publication subscription");
+    let (progress_attempt, progress_occurrence) = await_child_publication_fact(
+        &progress_events,
+        &child_conversation_id,
+        &subagent_id,
+        "the Child publishes its actual Started occurrence",
+        |fact| match fact {
+            rustx::runtime_client::RuntimeClientEvent::ToolExecutionStarted {
+                attempt_id,
+                occurrence: Some(occurrence),
+                tool_call_id: Some(call),
+                ..
+            } if call.as_str() == "call-phased" => Some((attempt_id.clone(), occurrence.clone())),
+            _ => None,
+        },
+    )
+    .await;
+    assert!(matches!(
+        progress_occurrence.locator,
+        rustx::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. }
+    ));
 
     // Gate A: the tool reports "phase 1" and parks again — provably
     // mid-execution (started, never released to completion).
@@ -4836,7 +5146,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         |snapshot| {
             matches!(
                 snapshot.observation.activity,
-                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                SubagentActivity::ToolGroup { active: 1, representative: Some(crate::runtime::subagent::activity::SubagentToolRepresentative { ref tool_call_id, progress: Some(ref progress), .. }) }
                     if *tool_call_id == ToolCallId::new("call-phased")
                         && progress.message.as_deref() == Some("phase 1")
             )
@@ -4845,6 +5155,29 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     )
     .await;
     assert_eq!(phase_one.state, SubagentState::Running);
+    await_child_publication_fact(
+        &progress_events,
+        &child_conversation_id,
+        &subagent_id,
+        "the Child publishes phase 1 at its exact occurrence",
+        |fact| match fact {
+            rustx::runtime_client::RuntimeClientEvent::ToolExecutionProgress {
+                attempt_id,
+                occurrence: Some(occurrence),
+                progress,
+                execution_id: None,
+                ..
+            } if *attempt_id == progress_attempt
+                && *occurrence == progress_occurrence
+                && progress.message.as_deref() == Some("phase 1") =>
+            {
+                Some(())
+            }
+            _ => None,
+        },
+    )
+    .await;
+    child.host.detach(progress_observer.attachment_id());
     let mid_execution = journal(&child.store);
     assert_eq!(
         count_events(&mid_execution, |event| matches!(
@@ -4875,10 +5208,11 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         &plane.runtime_root,
         &child_conversation_id,
     );
-    let live_server =
+    let mut live_server =
         rustx::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
             socket_path.clone(),
             child.host.clone(),
+            subagent_id.clone(),
         )
         .expect("child live inspection endpoint");
     let model_requests = child.model.requests().len();
@@ -4945,7 +5279,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     ));
     assert!(
         attempt.foreground.iter().any(|execution| {
-            execution.call_id == ToolCallId::new("call-phased")
+            execution.call_id == Some(ToolCallId::new("call-phased"))
                 && matches!(
                     &execution.state,
                     rustx::runtime_client::ForegroundToolState::Running {
@@ -4954,7 +5288,9 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
                     } if progress.message.as_deref() == Some("phase 1")
                 )
         }),
-        "the running inspector reads non-durable foreground progress from the child's live projection"
+        "the running inspector reads non-durable foreground progress from the child's live projection: slots={:?}, source={}",
+        attempt.foreground,
+        child.host.inner.projection_source_debug(),
     );
 
     // An abrupt observer disconnect (no detach) cancels nothing, and a
@@ -5013,7 +5349,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         |snapshot| {
             matches!(
                 snapshot.observation.activity,
-                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                SubagentActivity::ToolGroup { active: 1, representative: Some(crate::runtime::subagent::activity::SubagentToolRepresentative { ref tool_call_id, progress: Some(ref progress), .. }) }
                     if *tool_call_id == ToolCallId::new("call-phased")
                         && progress.message.as_deref() == Some("phase 2")
             )
@@ -5040,7 +5376,12 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     assert!(
         !matches!(
             completing.observation.activity,
-            SubagentActivity::Tool { .. }
+            SubagentActivity::ToolGroup {
+                active: 1,
+                representative: Some(
+                    crate::runtime::subagent::activity::SubagentToolRepresentative { .. }
+                )
+            }
         ),
         "no progress outlives the completion: {:?}",
         completing.observation.activity
@@ -5065,7 +5406,8 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     // EOF, the exact routing socket is removed, and nothing can attach.
     tokio::time::timeout(LIVENESS, live_server.shutdown())
         .await
-        .expect("live inspection shutdown settles held connections");
+        .expect("live inspection shutdown settles held connections")
+        .expect("the listener joins successfully");
     assert!(
         tokio::time::timeout(LIVENESS, held_lines.next_line())
             .await
@@ -5138,7 +5480,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
 /// to the conversation. The cumulative counter keeps the retry count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fresh_request_after_a_retry_projects_retry_zero() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_9e749cd5-a623-7c43-aa5e-5806aaa85b40");
     let mut tools = ToolRegistry::new();
     FakeTool::new(
@@ -5239,7 +5581,7 @@ async fn a_fresh_request_after_a_retry_projects_retry_zero() {
 /// the ownership fact and the one terminal publication, and nothing else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn activity_frames_commit_no_parent_journal_facts() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_d933f2dd-c757-73db-978b-5a0eb50843e8");
     let mut tools = ToolRegistry::new();
     // The tool parks so the mid-run Tool activity is applied before the
@@ -5291,7 +5633,7 @@ async fn activity_frames_commit_no_parent_journal_facts() {
         |snapshot| {
             matches!(
                 snapshot.observation.activity,
-                SubagentActivity::Tool { ref tool_call_id, .. }
+                SubagentActivity::ToolGroup { active: 1, representative: Some(crate::runtime::subagent::activity::SubagentToolRepresentative { ref tool_call_id, .. }) }
                     if *tool_call_id == ToolCallId::new("call-scan")
             )
         },
@@ -5348,7 +5690,7 @@ async fn activity_frames_commit_no_parent_journal_facts() {
 /// Agent-authored terminal inbound.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn child_activity_never_enters_the_parent_model_context() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let parent = parent_runtime_plane(
         &dir,
         "conv_789c0434-30c8-7ad9-bd0b-8ca0693eac95",
@@ -5471,6 +5813,8 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
             &self,
             _agent: Option<&rustx::runtime::subagent::AgentSnapshot>,
             snapshot: &SubagentSnapshot,
+            _cut: crate::runtime::identity::ObservationCollectionCut,
+            _ordinal: Option<u64>,
         ) {
             self.0
                 .lock()
@@ -5479,7 +5823,7 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
         }
     }
 
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_36a1b005-528a-75f5-ae6b-5beb5ceb7829");
     let recorded = Arc::new(RecordingObserver::default());
     plane
@@ -5548,14 +5892,14 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
 }
 
 /// Invariant: a Runtime Client that attaches after activity already flowed
-/// repairs from the snapshot alone — the initialized snapshot and an
-/// explicit `snapshot_get` both serve the latest observation (revision,
-/// activity, counters), the redacted execution profile, and the start time,
+/// repairs from an independent bounded checkpoint after its identity receipt.
+/// The checkpoint serves the latest observation (revision, activity, counters),
+/// the redacted execution profile, and the start time,
 /// without the client having consumed any intermediate `SubagentUpdated`
 /// event.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn snapshot_repair_serves_the_latest_subagent_observation() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let (parent, host) = parent_runtime_host_plane(
         &dir,
         "conv_112418f3-578e-706b-b917-7950d19a8036",
@@ -5596,7 +5940,10 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
     // itself so the attach below provably seeds from the folded state.
     tokio::time::timeout(LIVENESS, async {
         loop {
-            let (snapshot, _) = host.snapshot().expect("projection snapshot");
+            let (snapshot, _) = host
+                .checkpoint()
+                .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                .expect("projection snapshot");
             if snapshot
                 .agents
                 .iter()
@@ -5610,15 +5957,19 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
     .await
     .expect("the host projection folds the activity observation");
 
-    // A fresh client attaches now. Its initialized snapshot is the repair
-    // path: it consumed no SubagentUpdated event at all.
+    // A fresh client attaches now and reads its independent checkpoint:
+    // it consumed no SubagentUpdated event at all.
     let (attachment, initialized) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
-    let rustx::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
-    else {
-        panic!("attach initializes: {initialized:?}");
-    };
+    assert!(
+        matches!(
+            initialized,
+            rustx::runtime_client::RuntimeClientResult::Initialized { .. }
+        ),
+        "attach initializes: {initialized:?}"
+    );
+    let snapshot = attachment_checkpoint(&attachment).snapshot;
     let view = snapshot
         .agents
         .iter()
@@ -5643,18 +5994,19 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
         rustx::runtime::subagent::SubagentState::Running
     );
 
-    // An explicit snapshot_get agrees — the same repair primitive.
+    // An explicit bounded checkpoint agrees — the same repair primitive.
     let response =
-        attachment.handle_request(rustx::runtime_client::RuntimeClientRequest::SnapshotGet {
+        attachment.handle_request(rustx::runtime_client::RuntimeClientRequest::CheckpointGet {
             id: rustx::runtime_client::RequestId::new(1),
         });
-    let Some(rustx::runtime_client::RuntimeClientResult::Snapshot { snapshot, .. }) =
+    let Some(rustx::runtime_client::RuntimeClientResult::Checkpoint { checkpoint }) =
         response.result
     else {
-        panic!("snapshot_get succeeds: {response:?}");
+        panic!("checkpoint succeeds: {response:?}");
     };
     assert_eq!(
-        snapshot
+        checkpoint
+            .snapshot
             .agents
             .iter()
             .find(|view| view.activation_id == wired.accepted.subagent_id)
@@ -5690,7 +6042,7 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
 /// credentials or endpoints of the frozen provider binding.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_snapshot_projects_only_the_frozen_execution_profile() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_4781943a-d0c2-79ab-a6e5-d4790aed5fdb");
     let child = child_fixture(
         &dir,
@@ -5708,7 +6060,7 @@ async fn the_snapshot_projects_only_the_frozen_execution_profile() {
         .expect("child record");
     let expected = SubagentExecutionProfile::from_frozen(&resolved_child_spec("conformance").model);
     assert_eq!(
-        snapshot.profile.as_ref(),
+        snapshot.profile.as_deref(),
         Some(&expected),
         "the profile is derived from the frozen child specification"
     );
@@ -5730,7 +6082,7 @@ async fn the_snapshot_projects_only_the_frozen_execution_profile() {
             .expect("Agent owner"),
         &snapshot,
     );
-    assert_eq!(view.execution_profile, snapshot.profile);
+    assert_eq!(view.execution_profile, snapshot.profile.as_deref().cloned());
     let wire = serde_json::to_value(&view).expect("view json");
     assert_eq!(wire["execution_profile"]["model"], "local/model");
     assert!(
@@ -5835,7 +6187,7 @@ fn request_carries_user_text(request: &rustx::model::ModelRequest, wanted: &str)
 /// one registry record, one spawn, one terminal publication.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_70bbecdd-3617-7fdf-b79d-bb3881570201");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -5949,7 +6301,7 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
 /// domain. No scheduler ordering is involved on either side.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
-    let dir = tempfile::tempdir().expect("temp root");
+    let dir = inspection_tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv_804e7c5c-0eb9-761c-87f8-2f107fa4d3cd");
     let (release, released) = support::fake::model_release();
     let child = child_fixture(
@@ -6011,7 +6363,7 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
 /// request or explicit admission call is needed after releasing owned work.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn goal350_subagent_terminal_publication_wakes_next_continuation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = inspection_tempdir().unwrap();
     let (parent, _) = compose_parent_runtime_plane(
         &dir,
         "conv_45000000-0000-7000-8000-000000000005",
@@ -6021,6 +6373,7 @@ async fn goal350_subagent_terminal_publication_wakes_next_continuation() {
         ],
         false,
         true,
+        None,
     )
     .await;
     let (finish, wait) = support::fake::model_release();

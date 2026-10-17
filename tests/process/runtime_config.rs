@@ -123,6 +123,56 @@ fn model(reference: &str) -> SessionModelConfig {
     SessionModelConfig::of(ModelRef::parse(reference).expect("model reference"))
 }
 
+fn capability_tools(
+    endpoint: &rustx::runtime_client::endpoint::RuntimeClientEndpoint,
+    header: &rustx::runtime_client::checkpoint::CheckpointPage,
+    field: &str,
+) -> Vec<rustx::runtime_client::snapshot::RuntimeClientTool> {
+    let domain = format!("capabilities.{field}");
+    let frontier = header
+        .collections
+        .iter()
+        .find(|row| row.domain == domain)
+        .expect("advertised exact capability collection");
+    let mut offset = 0;
+    let mut tools = Vec::new();
+    loop {
+        let response = endpoint.handle_request(RuntimeClientRequest::CheckpointPageGet {
+            id: RequestId::new(50),
+            cut: header.read_cut.clone(),
+            domain: domain.clone(),
+            offset,
+            limit: 32,
+        });
+        let Some(RuntimeClientResult::CheckpointPage { page }) = response.result else {
+            panic!("exact capability page error: {:?}", response.error);
+        };
+        assert_eq!(page.read_cut, header.read_cut);
+        assert_eq!(page.cursor, header.cursor);
+        assert_eq!(page.domain, domain);
+        assert_eq!(page.total, frontier.total);
+        assert!(page.items.len() <= 32);
+        let previous = offset;
+        for item in page.items {
+            assert_eq!(item.offset, offset);
+            assert!(!item.deferred, "small fixture tool is fully readable");
+            tools.push(
+                rustx::runtime_client::checkpoint::decode_domain_value(
+                    item.value.expect("original finite Tool value"),
+                )
+                .expect("exact typed native Tool"),
+            );
+            offset += 1;
+        }
+        assert_eq!(page.next_offset, (offset < page.total).then_some(offset));
+        if page.next_offset.is_none() {
+            assert_eq!(u64::try_from(tools.len()).unwrap(), frontier.total);
+            return tools;
+        }
+        assert!(offset > previous, "native capability continuation advances");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
@@ -154,7 +204,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         product.runtime().model_view().configured.model.to_string(),
         "local/model-a"
     );
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
     drop(product);
     // The Session-local model selection is durable Session state, written by
     // its native owner exactly as App Server `session/setModel` does for a
@@ -270,10 +320,23 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         id: RequestId::new(3),
         protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
-    let initialized_snapshot = match resumed_initialized.result {
-        Some(RuntimeClientResult::Initialized { snapshot, .. }) => snapshot,
+    let initialized_checkpoint = match resumed_initialized.result {
+        Some(RuntimeClientResult::Initialized { .. }) => {
+            resumed.host().checkpoint().expect("bounded checkpoint")
+        }
         other => panic!("initialize returned an unexpected result: {other:?}"),
     };
+    assert_eq!(
+        initialized_checkpoint
+            .read_cut
+            .source_cut
+            .as_ref()
+            .expect("native checkpoint source cut")
+            .ledger_through,
+        0,
+        "cold resource discovery creates no canonical conversation message"
+    );
+    let initialized_snapshot = initialized_checkpoint.snapshot;
     assert!(
         initialized_snapshot.messages.iter().all(|message| {
             let json = serde_json::to_string(message).expect("message JSON");
@@ -284,28 +347,34 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let capability_view = resumed_endpoint.handle_request(RuntimeClientRequest::CapabilityGet {
         id: RequestId::new(5),
     });
-    let capabilities = match capability_view.result {
-        Some(RuntimeClientResult::Capability { capabilities }) => capabilities,
-        other => panic!("capability_get returned an unexpected result: {other:?}"),
+    let Some(RuntimeClientResult::DomainPage {
+        page: capability_page,
+    }) = capability_view.result
+    else {
+        panic!("bounded capability error: {:?}", capability_view.error);
     };
+    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+        crate::common::native_domain_single(RuntimeClientResult::DomainPage {
+            page: capability_page.clone(),
+        });
+    assert_eq!(
+        capabilities.revision,
+        initialized_snapshot.capabilities.revision
+    );
+    let tools = capability_tools(&resumed_endpoint, &capability_page, "tools");
+    let available_tools = capability_tools(&resumed_endpoint, &capability_page, "available_tools");
     // The client view agrees with the runtime: the active set is exactly the
     // extension-provided Tool, and the ordinary available catalog does not
     // contain it (Issue #259).
     assert_eq!(
-        capabilities
-            .tools
+        tools
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
         vec!["todo"]
     );
-    assert!(!capabilities.available_tools.is_empty());
-    assert!(
-        !capabilities
-            .available_tools
-            .iter()
-            .any(|tool| tool.name == "todo")
-    );
+    assert!(!available_tools.is_empty());
+    assert!(!available_tools.iter().any(|tool| tool.name == "todo"));
     // Accept durable user work before creating an independent Session.
     let submitted = resumed_endpoint
         .handle_request_async(RuntimeClientRequest::SubmitInbound {
@@ -325,7 +394,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "unexpected SubmitInbound response: {submitted:?}"
     );
     drop(snapshot);
-    resumed.runtime().shutdown().await.unwrap();
+    resumed.shutdown().await.unwrap();
     drop(resumed_endpoint);
     drop(resumed);
     let fresh = (startup)
@@ -336,6 +405,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         fresh.runtime().model_view().configured.model.to_string(),
         "local/model-c"
     );
+    fresh.shutdown().await.expect("drain fresh composition");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -490,7 +560,8 @@ fn projected_extensions(
 ) -> Option<EffectivePlugins> {
     runtime
         .host()
-        .snapshot()
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("the host projects its snapshot")
         .0
         .effective_plugins
@@ -587,7 +658,11 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     .await
     .expect("interactive composition");
 
-    let (snapshot, _) = live.host().snapshot().expect("snapshot");
+    let (snapshot, _) = live
+        .host()
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot.effective_plugins,
         Some(composed(true, Some(chrono_tz::Asia::Shanghai), false)),
@@ -639,7 +714,9 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
         "the attached runtime keeps projecting the composition it runs, not the \
          one a next launch would compose"
     );
-    live.runtime().shutdown().await.expect("shutdown");
+    live.shutdown()
+        .await
+        .expect("join the original composition");
     drop(live);
 
     // Regression 2: a launch that composes no Agent Status projects absence
@@ -663,5 +740,5 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
         composed(false, None, false),
         "an absent extension is a different fact from a fully disabled one"
     );
-    empty.runtime().shutdown().await.expect("shutdown");
+    empty.shutdown().await.expect("join the empty composition");
 }

@@ -32,6 +32,7 @@ pub(super) struct LiveTarget<'a> {
     attempt_id: Option<&'a AttemptId>,
     /// The provisional Assistant identity this request itself froze.
     assistant_message_id: Option<&'a MessageId>,
+    tool_occurrence: Option<&'a crate::runtime_client::snapshot::RuntimeClientToolOccurrence>,
     tool_call: Option<(&'a ToolCallId, &'a ToolId)>,
 }
 
@@ -39,18 +40,22 @@ impl TraceRecord {
     fn live_target(&mut self) -> LiveTarget<'_> {
         LiveTarget {
             kind: self.kind,
-            request_id: self.request.as_ref().map(|request| &request.request_id),
+            request_id: self
+                .request
+                .as_ref()
+                .and_then(|request| request.request_id.as_ref()),
             state: &mut self.state,
             native_id: self.native_id.as_deref(),
             attempt_id: self.location.attempt_id.as_ref(),
             assistant_message_id: self
                 .request
                 .as_ref()
-                .map(|request| &request.assistant_message_id),
+                .and_then(|request| request.assistant_message_id.as_ref()),
+            tool_occurrence: self.tool.as_ref().and_then(|tool| tool.occurrence.as_ref()),
             tool_call: self
                 .tool
                 .as_ref()
-                .map(|tool| (&tool.call_id, &tool.tool_id)),
+                .and_then(|tool| Some((tool.call_id.as_ref()?, tool.tool_id.as_ref()?))),
         }
     }
 }
@@ -62,23 +67,25 @@ impl AnchorFacts {
             request_id: self
                 .request
                 .as_ref()
-                .map(|request| &request.frozen.request_id),
+                .and_then(|request| request.request_id.as_ref()),
             state: &mut self.state,
             native_id: self.native_id.as_deref(),
             attempt_id: self.location.attempt_id.as_ref(),
             assistant_message_id: self
                 .request
                 .as_ref()
-                .map(|request| &request.frozen.provisional_message_id),
+                .and_then(|request| request.assistant_message_id.as_ref()),
+            tool_occurrence: self.tool.as_ref().and_then(|tool| tool.occurrence.as_ref()),
             tool_call: self
                 .tool
                 .as_ref()
-                .map(|tool| (&tool.call_id, &tool.tool_id)),
+                .and_then(|tool| Some((tool.call_id.as_ref()?, tool.tool_id.as_ref()?))),
         }
     }
 }
 
 /// Applies current lifecycle evidence to the snapshot's own Trace window.
+#[cfg(test)]
 pub(crate) fn repair_live(snapshot: &mut crate::runtime_client::snapshot::RuntimeClientSnapshot) {
     let mut page = std::mem::take(&mut snapshot.trace);
     repair_records(&mut page.records, snapshot);
@@ -152,8 +159,8 @@ fn repair<'a>(
                 .pending_interactions
                 .iter()
                 .any(|current| {
-                    current.request.conversation_id == snapshot.conversation_id
-                        && record.native_id == Some(current.request.id.as_str())
+                    current.conversation_id == snapshot.conversation_id
+                        && record.native_id == Some(current.request_id.as_str())
                 })
                 .then_some(TraceState::Waiting),
             _ => None,
@@ -166,7 +173,9 @@ fn repair<'a>(
             continue;
         };
         if !matches!(attempt.phase, RuntimeClientAttemptPhase::Running)
-            || record.attempt_id != Some(&attempt.attempt_id)
+            || record
+                .attempt_id
+                .is_none_or(|id| attempt.attempt_id.as_ref() != Some(id))
         {
             continue;
         }
@@ -183,16 +192,21 @@ fn repair<'a>(
                     *record.state = TraceState::Running;
                 }
             }
-            TraceKind::Tool => {
-                if let Some((call_id, tool_id)) = record.tool_call
-                    && attempt.foreground.iter().any(|current| {
-                        current.call_id == *call_id
-                            && current.tool_id == *tool_id
-                            && matches!(current.state, ForegroundToolState::Running { .. })
-                    })
-                {
-                    *record.state = TraceState::Running;
-                }
+            TraceKind::Tool
+                if attempt.foreground.iter().any(|current| {
+                    let same = record.tool_occurrence.map_or_else(
+                        || {
+                            record.tool_call.is_some_and(|(call_id, tool_id)| {
+                                current.call_id.as_ref() == Some(call_id)
+                                    && current.tool_id.as_ref() == Some(tool_id)
+                            })
+                        },
+                        |occurrence| &current.occurrence == occurrence,
+                    );
+                    same && matches!(current.state, ForegroundToolState::Running { .. })
+                }) =>
+            {
+                *record.state = TraceState::Running;
             }
             _ => {}
         }
@@ -240,12 +254,15 @@ fn repair_agent<'a>(
             }
             (
                 TraceKind::Tool,
-                SubagentActivity::Tool {
-                    tool_call_id,
-                    tool_id,
+                SubagentActivity::ToolGroup {
+                    representative: Some(representative),
                     ..
                 },
-            ) if record.tool_call == Some((tool_call_id, tool_id)) => Some(TraceState::Running),
+            ) if record.tool_call
+                == Some((&representative.tool_call_id, &representative.tool_id)) =>
+            {
+                Some(TraceState::Running)
+            }
             (TraceKind::Compaction, SubagentActivity::Compacting) => Some(TraceState::Running),
             _ => None,
         };

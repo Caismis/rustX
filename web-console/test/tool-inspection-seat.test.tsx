@@ -1,7 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { useToolTraceNavigation } from '../src/app/agent/tool-inspection';
-const locator = { occurrence: { assistant_message_id: 'assistant', block_index: 0 }, call_id: 'call', tool_id: 'tool-bash' };
+const locator = { occurrence: { locator: { type: 'by_message_id' as const, message_id: 'assistant' }, block_index: 0 }, call_id: 'call', tool_id: 'tool-bash' };
 it('a late location cannot change the tab of another Session or a hidden resident child', async () => {
   let complete!: (located: boolean) => void;
   const locate = vi.fn(() => new Promise<boolean>(resolve => complete = resolve)), open = vi.fn();

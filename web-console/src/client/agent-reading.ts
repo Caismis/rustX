@@ -1,10 +1,10 @@
-import type { AttachmentTarget, ConversationTurn, ConversationTurnPage, ConversationWindowAt, RuntimeClientSnapshot } from '../../../protocol/app-server/v49';
+import type { AttachmentTarget, ObservedTurn, ObservedTurnPage, ConversationWindowAt, RuntimeClientSnapshot } from '../../../protocol/app-server/v50';
 import type { AppServerClient } from './app-server';
-import { extendTranscriptWindow, HISTORY_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, sameReadCut, turnKey, type TranscriptCache } from './transcript';
+import { extendTranscriptWindow, HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, installTranscriptWindow, refreshTranscript, replaceTranscript, sameReadCut, turnKey, turnPageCount, type TranscriptCache, type TurnSelection } from './transcript';
 
 export interface AgentReadingState {
   history?: TranscriptCache;
-  outline?: ConversationTurnPage;
+  outline?: ObservedTurnPage;
   outlineLoading?: boolean;
   outlineError?: string;
   pending?: string;
@@ -22,7 +22,7 @@ export class AgentReading {
   private live?: RuntimeClientSnapshot;
   private liveRevision?: string;
   private outlineOffset?: number;
-  private outlineWork?: Promise<ConversationTurnPage | undefined>;
+  private outlineWork?: Promise<ObservedTurnPage | undefined>;
   private refreshPending = false;
   constructor(private client: AppServerClient, private target: AttachmentTarget, private agentId: string, private conversationId: string, private owned: () => boolean) {}
   getSnapshot = () => this.state;
@@ -33,6 +33,12 @@ export class AgentReading {
     this.state = { ...this.state, ...patch }; this.listeners.forEach(listener => listener());
   }
   dispose() { this.closed = true; this.intent++; this.outlineIntent++; this.listeners.clear(); }
+  /** Hiding retires outstanding read generations while retaining the loaded cut. */
+  suspend() {
+    this.intent++; this.outlineIntent++; this.refreshPending = !!this.outlineWork;
+    this.state = {...this.state,pending:undefined,outlineLoading:false,history:this.state.history && {...this.state.history,loading:false}};
+    this.listeners.forEach(listener=>listener());
+  }
   invalidate = () => { this.intent++; this.publish({ pending: undefined, history: this.state.history && { ...this.state.history, loading: false } }); };
   observe(snapshot: RuntimeClientSnapshot) {
     if (!this.current() || snapshot.conversation_id !== this.conversationId) return;
@@ -40,29 +46,33 @@ export class AgentReading {
     this.publish({ history: refreshTranscript(this.state.history, snapshot.transcript) });
     // Streaming text does not demand a new outline per delta. Native attempt
     // transitions and the committed transcript frontier refresh its previews.
-    const revision = JSON.stringify([snapshot.attempt?.attempt_id, snapshot.attempt?.phase.type,
+    const revision = JSON.stringify([snapshot.attempt?.attempt_id, snapshot.attempt?.attempt_id_source, snapshot.attempt?.phase.type,
       snapshot.transcript.entries?.at(-1)?.cursor]);
-    if (revision !== this.liveRevision) {
+    if (revision !== this.liveRevision || this.refreshPending && !this.outlineWork || !this.state.outline && !this.state.outlineError) {
       this.liveRevision = revision;
       if (this.outlineWork) this.refreshPending = true; else void this.refreshTurns();
     }
   }
-  refreshTurns = (): Promise<ConversationTurnPage | undefined> => {
+  refreshTurns = (): Promise<ObservedTurnPage | undefined> => {
     if (this.outlineWork) return this.outlineWork;
     return this.readTurns(this.outlineOffset);
   };
-  private readTurns(offset?: number): Promise<ConversationTurnPage | undefined> {
+  private readTurns(offset?: number): Promise<ObservedTurnPage | undefined> {
+    this.refreshPending = false;
     const intent = ++this.outlineIntent;
     const current = () => this.current() && intent === this.outlineIntent;
     this.publish({ outlineLoading: true, outlineError: undefined });
     const work = (async () => {
+      let page: ObservedTurnPage | undefined;
       try {
-        const result = await this.client.request({ method: 'agent/turns', params: { target: this.target, agent_id: this.agentId, offset: offset ?? null, limit: HISTORY_PAGE_SIZE } }, 'conversation_turns', undefined, current);
+        const result = await this.client.request({ method: 'agent/turns', params: { target: this.target, agent_id: this.agentId, offset: offset ?? null, limit: TURN_PAGE_SIZE } }, 'conversation_turns', undefined, current);
         if (!current()) return;
-        if (result.page.cut.conversation_id !== this.conversationId || result.page.turns.length > HISTORY_PAGE_SIZE) throw new Error('Invalid native child outline.');
+        if (result.page.cut.conversation_id !== this.conversationId || result.page.turns.length > TURN_PAGE_SIZE) throw new Error('Invalid native child outline.');
+        page=result.page;
+        turnPageCount(result.page);
         this.outlineOffset = offset;
         this.publish({ outline: result.page }); return result.page;
-      } catch (error) { if (current()) this.publish({ outlineError: String(error) }); }
+      } catch (error) { if (current()) this.publish({ ...(page?{outline:page}:{}), outlineError: String(error) }); }
       finally { if (current()) this.publish({ outlineLoading: false }); }
     })();
     this.outlineWork = work;
@@ -73,31 +83,33 @@ export class AgentReading {
     });
     return work;
   }
-  async navigate(selection: ConversationTurn | number, gestureCurrent: () => boolean = () => true) {
+  async navigate(selection: TurnSelection, gestureCurrent: () => boolean = () => true) {
     this.invalidate();
     const intent = this.intent;
     const current = () => this.current() && intent === this.intent && gestureCurrent();
     if (!current()) return false;
-    this.publish({ pending: typeof selection === 'number' ? `ordinal:${selection}` : turnKey(selection.id), navigationError: undefined });
+    this.publish({ pending: typeof selection === 'number' ? `ordinal:${selection}` : turnKey(selection.turn.id), navigationError: undefined });
     try {
-      let turn: ConversationTurn | undefined, cut = this.state.outline?.cut;
+      let turn: ObservedTurn | undefined, cut: ObservedTurnPage['cut'] | undefined;
       if (typeof selection === 'number') {
-        const offset = Math.floor((selection - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE;
+        if (!Number.isSafeInteger(selection) || selection < 1) throw new Error('Invalid native child Turn ordinal.');
+        const offset = Math.floor((selection - 1) / TURN_PAGE_SIZE) * TURN_PAGE_SIZE;
         const page = await this.readTurns(offset);
         if (!current()) return false;
         turn = page?.turns.find(turn => turn.ordinal === selection); cut = page?.cut;
         // Follow newest again only if the selected native page was the last.
-        if (page && page.offset + page.turns.length >= page.total) this.outlineOffset = undefined;
-      } else turn = selection;
-      if (!turn || !cut || turn.id.conversation_id !== this.conversationId || turn.cursor == null) throw new Error('Reload the native child outline before navigating.');
+        if (page && BigInt(page.offset + page.turns.length) >= BigInt(page.total)) this.outlineOffset = undefined;
+      } else { turn = selection.turn; cut = selection.cut; }
+      if (!turn || turn.cursor == null || turn.ordinal > 0 && (!cut || cut.conversation_id !== this.conversationId)) throw new Error('Reload the native child outline before navigating.');
       const cursor = turn.cursor, key = turnKey(turn.id);
       const anchored = this.state.history?.page.entries?.some(entry => entry.cursor === cursor &&
         (entry.turn_process && turnKey(entry.turn_process) === key || entry.item.type === 'attempt_terminal' && turnKey(entry.item.turn) === key));
       if (!anchored) {
-        const result = await this.client.request({ method: 'agent/transcript', params: { target: this.target, agent_id: this.agentId, at: { type: 'turn', id: turn.id, cut }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
+        if (!cut || !Number.isSafeInteger(turn.ordinal) || turn.ordinal < 1) throw new Error('The live child Turn has no loaded native anchor.');
+        const result = await this.client.request({ method: 'agent/transcript', params: { target: this.target, agent_id: this.agentId, at: { type: 'turn_ordinal', ordinal: turn.ordinal, cut }, limit: HISTORY_PAGE_SIZE } }, 'transcript_window', undefined, current);
         if (!current()) return false;
         const window = result.window;
-        if (!sameReadCut(window.cut, cut) || window.target_cursor !== cursor || !window.target || turnKey(window.target) !== key || !window.page.entries?.some(entry => entry.cursor === cursor)) throw new Error('Invalid native child Turn window.');
+        if (window.cut.conversation_id !== this.conversationId || !sameReadCut(window.cut, cut) || window.target_cursor !== cursor || !window.target || turnKey(window.target) !== key || !window.page.entries?.some(entry => entry.cursor === cursor)) throw new Error('Invalid native child Turn window.');
         this.publish({ history: installTranscriptWindow(window, this.state.history) });
       }
       if (!current()) return false;

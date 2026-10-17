@@ -40,6 +40,7 @@ fn checkpoint(
         SemanticTransformation,
     };
     let history = store.projected_history().unwrap();
+    assert!(retired <= history.messages.len());
     let mut items = vec![CheckpointItem {
         message: CheckpointMessage::Derived(Box::new(DerivedModelMessage {
             message: ProjectedMessage::User {
@@ -50,8 +51,10 @@ fn checkpoint(
                 kind: rustx::model::projected::ProjectedUserKind::Message,
                 timestamp: None,
             },
-            sources: history.messages[..retired]
+            sources: history
+                .messages
                 .iter()
+                .take(retired)
                 .filter_map(|m| m.as_canonical())
                 .map(|m| CanonicalMessageRef::of(store.conversation_id(), m))
                 .collect(),
@@ -59,8 +62,10 @@ fn checkpoint(
                 .projection_head()
                 .unwrap()
                 .filter(|_| {
-                    history.messages[..retired]
+                    history
+                        .messages
                         .iter()
+                        .take(retired)
                         .any(|m| matches!(m, rustx::model::ModelInputMessage::Derived(_)))
                 })
                 .map(|p| CheckpointSourceRef {
@@ -116,7 +121,7 @@ fn freeze_request(
         .freeze_input(
             store.conversation_id(),
             &rustx::model::ModelRequest {
-                messages: history.messages,
+                messages: history.messages.clone(),
                 images: rustx::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
                 tools: snapshot.tool_definitions.clone(),

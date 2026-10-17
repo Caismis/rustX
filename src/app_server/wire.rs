@@ -434,6 +434,31 @@ macro_rules! envelope {
                     }
                 }
                 static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+                // Bound native encoding before the numeric codec builds a Value.
+                // The final wire encoding is checked independently by the writer.
+                struct Budget(usize);
+                impl std::io::Write for Budget {
+                    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                        self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::FileTooLarge,
+                                "native record exceeds limit",
+                            )
+                        })?;
+                        Ok(bytes.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        Ok(())
+                    }
+                }
+                serde_json::to_writer(Budget(super::transport::MAX_MESSAGE_BYTES), &Native(self))
+                    .map_err(|error| {
+                    if error.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
+                        serde::ser::Error::custom("native record exceeds limit")
+                    } else {
+                        serde::ser::Error::custom(error)
+                    }
+                })?;
                 let schema = SCHEMA.get_or_init(|| {
                     serde_json::to_value(schemars::schema_for!($ty)).expect("Rust schema")
                 });
@@ -465,8 +490,15 @@ envelope!(super::product_host::FileRead);
 
 /// The complete public JSON Schema, with the same numeric rules as the codec.
 pub(super) fn protocol_schema() -> Value {
+    // DomainPage.value carries bounded display DTOs without an unbounded RPC
+    // result variant. Export their Rust-owned shapes for generated consumers.
+    let mut generator = schemars::SchemaGenerator::default();
+    let _ = generator.subschema_for::<crate::runtime_client::trace::TraceDetail>();
+    let _ = generator.subschema_for::<crate::runtime_client::trace::TraceInspectionHead>();
+    let _ = generator.subschema_for::<crate::runtime_client::RuntimeClientModelName>();
+    let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
     schema(
-        serde_json::to_value(schemars::schema_for!(super::protocol::ProtocolMessage))
+        serde_json::to_value(generator.into_root_schema_for::<super::protocol::ProtocolMessage>())
             .expect("Rust schema"),
     )
 }
@@ -480,10 +512,17 @@ mod tests {
         let mut value = serde_json::json!({
             "target": {"session_id": "ses_00000000-0000-7000-8000-000000000001", "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
                 "runtime_incarnation": "1", "attachment_id": "a"},
-            "source": {"kind": "session_file", "message_id": "m", "delivery_index": 0}, "roots": ["/workspace"]
+            "source": {"kind": "session_file", "locator": {"type":"by_message_id","message_id":"m"}, "delivery_index": 0}, "roots": ["/workspace"]
         });
         let read: FileRead = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&read).unwrap(), value);
+        let mut obsolete = value.clone();
+        obsolete["source"]
+            .as_object_mut()
+            .unwrap()
+            .remove("locator");
+        obsolete["source"]["message_id"] = Value::from("m");
+        assert!(serde_json::from_value::<FileRead>(obsolete).is_err());
         value["target"]["runtime_incarnation"] = Value::from(1);
         assert!(serde_json::from_value::<FileRead>(value).is_err());
     }
@@ -579,7 +618,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v49.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v50.ts"),
         )
         .unwrap();
         for domain in [

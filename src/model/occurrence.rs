@@ -39,12 +39,115 @@ pub struct HistoricalToolAssociation {
     pub wire_id: ProviderWireCorrelationId,
 }
 
+/// Frozen actual-request relationships. The native producer's validation proof
+/// shares the exact Store-issued selection origin; mutation revokes that proof.
+/// Serialization remains the established flat association array.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FrozenToolAssociations {
+    values: std::sync::Arc<Vec<ActualRequestToolAssociation>>,
+    #[serde(skip)]
+    validation: Option<std::sync::Arc<AssociationValidation>>,
+}
+#[derive(Debug)]
+struct AssociationValidation {
+    origin: std::sync::Arc<crate::model::selected_input::SelectionOrigin>,
+    request: RequestId,
+    policy: [u8; 32],
+}
+impl PartialEq for FrozenToolAssociations {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+    }
+}
+impl Eq for FrozenToolAssociations {}
+impl From<Vec<ActualRequestToolAssociation>> for FrozenToolAssociations {
+    fn from(values: Vec<ActualRequestToolAssociation>) -> Self {
+        Self {
+            values: std::sync::Arc::new(values),
+            validation: None,
+        }
+    }
+}
+impl std::ops::Deref for FrozenToolAssociations {
+    type Target = Vec<ActualRequestToolAssociation>;
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+impl std::ops::DerefMut for FrozenToolAssociations {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.validation = None;
+        std::sync::Arc::make_mut(&mut self.values)
+    }
+}
+impl<'a> IntoIterator for &'a FrozenToolAssociations {
+    type Item = &'a ActualRequestToolAssociation;
+    type IntoIter = std::slice::Iter<'a, ActualRequestToolAssociation>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+impl<'a> IntoIterator for &'a mut FrozenToolAssociations {
+    type Item = &'a mut ActualRequestToolAssociation;
+    type IntoIter = std::slice::IterMut<'a, ActualRequestToolAssociation>;
+    fn into_iter(self) -> Self::IntoIter {
+        (**self).iter_mut()
+    }
+}
+fn association_policy(
+    protocol: crate::model::ModelProtocol,
+    continuation: Option<&crate::runtime::continuation::ProviderContinuationState>,
+    source: Option<&crate::runtime::continuation::AcceptedOutputContinuationSource>,
+) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    serde_json::to_writer(
+        {
+            struct PolicyWriter<'a>(&'a mut Sha256);
+            impl std::io::Write for PolicyWriter<'_> {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    self.0.update(bytes);
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            PolicyWriter(&mut digest)
+        },
+        &(protocol, continuation, source),
+    )
+    .expect("native wire policy serializes");
+    digest.finalize().into()
+}
+impl FrozenToolAssociations {
+    pub(crate) fn certifies(
+        &self,
+        origin: &std::sync::Arc<crate::model::selected_input::SelectionOrigin>,
+        snapshot: &crate::model::RequestSnapshot,
+    ) -> bool {
+        self.validation.as_ref().is_some_and(|validation| {
+            std::sync::Arc::ptr_eq(&validation.origin, origin)
+                && validation.request == snapshot.request_id
+                && validation.policy
+                    == association_policy(
+                        snapshot.invocation.protocol,
+                        snapshot.continuation.as_ref(),
+                        snapshot.continuation_source.as_ref(),
+                    )
+        })
+    }
+}
+
 pub(crate) fn freeze_associations(
     history: &crate::durable::projection::HistoricalModelInput,
     request_id: &RequestId,
     request: &crate::model::ModelRequest,
     inserted_at: Option<usize>,
-) -> Result<Vec<ActualRequestToolAssociation>, String> {
+) -> Result<FrozenToolAssociations, String> {
+    #[cfg(test)]
+    let _reads = super::selected_input::PreparationReads::new();
     let position = |index: u32| -> Result<u32, String> {
         if inserted_at.is_some_and(|at| index as usize >= at) {
             index
@@ -75,9 +178,32 @@ pub(crate) fn freeze_associations(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    install_wire_labels(request, &mut associations)?;
-    validate_associations(request_id, request, &associations)?;
-    Ok(associations)
+    if associations.is_empty() && !request.messages.has_tool_relationships() {
+        request.continuation_boundary()?;
+    } else {
+        install_wire_labels(request, &mut associations)?;
+        if !request
+            .messages
+            .follows_native_history(&history.input_manifest)
+        {
+            validate_associations(request_id, request, &associations)?;
+        }
+    }
+    let validation = history.input_manifest.origin.as_ref().map(|origin| {
+        std::sync::Arc::new(AssociationValidation {
+            origin: origin.clone(),
+            request: request_id.clone(),
+            policy: association_policy(
+                request.protocol(),
+                request.continuation.as_ref(),
+                request.continuation_source.as_ref(),
+            ),
+        })
+    });
+    Ok(FrozenToolAssociations {
+        values: std::sync::Arc::new(associations),
+        validation,
+    })
 }
 
 #[allow(clippy::too_many_lines)] // One complete request coordinate and Tool-batch validation fold.
@@ -86,6 +212,10 @@ pub(crate) fn validate_associations(
     request: &crate::model::ModelRequest,
     associations: &[ActualRequestToolAssociation],
 ) -> Result<(), String> {
+    if associations.is_empty() && !request.messages.has_tool_relationships() {
+        request.continuation_boundary()?;
+        return Ok(());
+    }
     let messages = &request.messages;
     let labels = crate::model::adapter::correlation::request_labels(request)?;
     let mut calls = std::collections::BTreeSet::new();

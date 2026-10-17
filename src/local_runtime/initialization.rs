@@ -312,6 +312,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
+        super::super::launch_tests::git(&workspace, &["init", "--quiet"]);
         let host = HostEnvironment::from_paths(workspace, root.path().join("home")).unwrap();
         let documents = documents(&declarations()).unwrap();
         assert_eq!(initialize(&host, &documents).written.len(), 2);
@@ -338,7 +339,7 @@ mod tests {
                 .exists()
         );
         assert!(!launch.workspace.join("rustx.toml").exists());
-        product.runtime().shutdown().await.unwrap();
+        product.shutdown().await.unwrap();
     }
 
     #[test]
@@ -440,6 +441,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
+        super::super::launch_tests::git(&workspace, &["init", "--quiet"]);
         let host =
             HostEnvironment::from_paths(workspace.clone(), root.path().join("home")).unwrap();
         let documents = documents(&declarations()).unwrap();

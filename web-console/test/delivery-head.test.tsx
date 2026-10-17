@@ -1,0 +1,56 @@
+import {act,cleanup,fireEvent,render} from '@testing-library/react';
+import {afterEach,expect,it,vi} from 'vitest';
+import {DeliveryHead} from '../src/app/agent/DeliveryHead';
+import {JournalSourceProvider} from '../src/app/agent/JournalValue';
+import {PreviewContext} from '../src/app/components/ArtifactPreview';
+import {checkpoint,Server,snapshot} from './fixture';
+import type {CheckpointPage,RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v50';
+import {deliveryPage,readDeliveryMetadata} from '../../protocol/app-server/delivery-observation';
+let server:Server;
+afterEach(()=>{cleanup();server?.client.disconnect();});
+const file:SessionFileReference={scope:{conversation_id:'original-inherited-owner',device:'1',inode:'2'},path:'out/report.md',name:'report.md',mime_type:'text/markdown',description:'native selected metadata'};
+const locator={type:'by_ledger_position' as const,position:2};
+const item=(index:number):RuntimeClientDeliveryItem=>({index,locator,file:null,metadata_deferred:true,encoded_bytes:String(new TextEncoder().encode(JSON.stringify(file)).length),metadata_domain:`messages.ledger:2.deliveries.${index}.metadata`});
+const head:RuntimeClientDeliveryHead={domain:'messages.ledger:2.deliveries',total:'9',items:Array.from({length:8},(_,index)=>({...item(index),file,metadata_deferred:false})) as RuntimeClientDeliveryHead['items'],next_offset:8};
+it('successful C ninth-item discovery reads only selected original metadata and preserves protected locator ownership',async()=>{
+ server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn();
+ const selected=item(8),original=new TextEncoder().encode(JSON.stringify(file));
+ server.handlers.set('conversation/checkpointPage',request=>{
+  if(request.method!=='conversation/checkpointPage')throw new Error('method');
+  expect(request.params).toEqual({target,agent_id:null,cut,domain:head.domain,offset:8,limit:8});
+  return {type:'checkpoint_page',page:{cursor:'0',read_cut:cut,domain:head.domain,total:'9',items:[{offset:'8',identity:'delivery 8',value:selected,content:[],deferred:false}],next_offset:null,collections:[]}};
+ });
+ server.handlers.set('conversation/checkpointValueRead',request=>{
+  if(request.method!=='conversation/checkpointValueRead')throw new Error('method');
+  expect(request.params).toMatchObject({target,agent_id:null,cut,domain:selected.metadata_domain,item_offset:0,path:[],max_bytes:65536});
+  const offset=request.params.offset,end=Math.min(original.length,offset+17);
+  return {type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:selected.metadata_domain,item_offset:0,path:[],offset,bytes_base64:btoa(String.fromCharCode(...original.slice(offset,end))),readable_end:original.length,next_offset:end===original.length?null:end}};
+ });
+ const source={client:server.client,target,cut:()=>cut,owned:()=>true};
+ const ui=render(<JournalSourceProvider source={source}><PreviewContext.Provider value={{openPreview,download}}><DeliveryHead head={head}/></PreviewContext.Provider></JournalSourceProvider>);
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Read next page'})));
+ expect(ui.queryByRole('button',{name:'Read next page'})).toBeNull();
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Preview 9/9'})));
+ expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({conversationId:target.conversation_id,locator,index:8,file}),name:file.name}));
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Download 9/9'})));
+ expect(download).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({locator,index:8,file})}));
+ expect(server.requests.some(row=>['conversation/contentRead','session/modelGet'].includes(row.request.method))).toBe(false);
+ expect(server.client.getSnapshot().views.A.cursor).toBe('0');
+});
+it('a metadata response after exact owner retirement cannot dispatch Preview or Download',async()=>{
+ server=new Server();await server.attached('A');const cut=checkpoint(snapshot()).read_cut,target=server.target('A'),openPreview=vi.fn(),download=vi.fn(),selected=item(0);let owned=true;
+ server.held.add('conversation/checkpointValueRead');
+ const ui=render(<JournalSourceProvider source={{client:server.client,target,cut:()=>cut,owned:()=>owned}}><PreviewContext.Provider value={{openPreview,download}}><DeliveryHead head={{...head,items:[selected],next_offset:null}}/></PreviewContext.Provider></JournalSourceProvider>);
+ await act(async()=>fireEvent.click(ui.getByRole('button',{name:'Preview 1/9'})));
+ const request=await server.waitFor('conversation/checkpointValueRead',1);owned=false;
+ await act(async()=>server.socket.success(request,{type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:selected.metadata_domain,item_offset:0,path:[],offset:0,bytes_base64:btoa(JSON.stringify(file)),readable_end:Number(selected.encoded_bytes),next_offset:null}}));
+ expect(openPreview).not.toHaveBeenCalled();expect(download).not.toHaveBeenCalled();
+});
+it('selected ranges reject oversized scalar evidence before reads and collection pages preserve exact u64 totals',async()=>{
+ const cut=checkpoint(snapshot()).read_cut,read=vi.fn();
+ await expect(readDeliveryMetadata({...item(0),encoded_bytes:'9'.repeat(1_000_000)},cut,read,()=>true)).rejects.toThrow('unavailable');expect(read).not.toHaveBeenCalled();
+ const page:CheckpointPage={cursor:'0',read_cut:cut,domain:head.domain,total:'18446744073709551615',items:[{offset:'8',identity:'original',value:item(8),content:[],deferred:true}],next_offset:'9',collections:[]};
+ const next=deliveryPage({...head,total:page.total},page,cut,8);
+ expect(next.total).toBe('18446744073709551615');expect(next.next_offset).toBe(9);
+ expect(()=>deliveryPage(head,{...page,read_cut:{...cut,conversation_id:'foreign'}},cut,8)).toThrow('exactly');
+});

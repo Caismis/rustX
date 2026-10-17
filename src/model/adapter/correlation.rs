@@ -6,6 +6,10 @@ use serde_json::Value;
 /// call label (required by stored continuation). Provider signatures and opaque
 /// replay values are untouched; only explicit wire correlation fields change.
 pub(crate) fn encode(value: &mut Value, protocol: ModelProtocol) -> Result<(), &'static str> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::WireCorrelation,
+    );
     let mut raw = Vec::new();
     let mut pending_ids = std::collections::BTreeSet::new();
     let mut invalid = None;
@@ -54,6 +58,10 @@ pub(crate) fn request_labels(
     use crate::message::types::AssistantContentBlock;
     use crate::model::projected::ModelMessageView;
     use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::RequestCorrelation,
+    );
     let boundary = request.continuation_boundary()?;
     let stored = request.protocol() == ModelProtocol::OpenAiResponses
         && matches!(
@@ -68,9 +76,19 @@ pub(crate) fn request_labels(
         0
     };
     let mut calls = Vec::new();
-    for (message, item) in request.messages.iter().enumerate().skip(start) {
+    for message in request
+        .messages
+        .tool_indices()
+        .into_iter()
+        .filter(|index| *index >= start)
+    {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::item(message);
+        let item = &request.messages[message];
         if let ModelMessageView::Assistant(content) = item.view() {
             for (block, item) in content.iter().enumerate() {
+                #[cfg(feature = "issue-387-profile")]
+                crate::model::adapter::profile::block();
                 if let AssistantContentBlock::ToolCall(call) = item {
                     calls.push((
                         (
@@ -95,9 +113,13 @@ pub(crate) fn request_labels(
         .collect();
     if stored {
         let at = boundary.ok_or("stored continuation lacks accepted output")?;
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::item(at);
         if let ModelMessageView::Assistant(content) = request.messages[at].view() {
             let mut native_ids = std::collections::BTreeSet::new();
             for (block, item) in content.iter().enumerate() {
+                #[cfg(feature = "issue-387-profile")]
+                crate::model::adapter::profile::block();
                 if let AssistantContentBlock::ToolCall(call) = item {
                     if call.id.as_str().is_empty() || !native_ids.insert(call.id.as_str()) {
                         return Err("ambiguous stored native wire correlation ID".into());
@@ -118,10 +140,17 @@ pub(crate) fn request_labels(
 }
 
 fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool, &mut Value)) {
+    #[cfg(feature = "issue-387-profile")]
+    let mut field = |call, id: &mut Value| {
+        crate::model::adapter::profile::wire_field();
+        field(call, id);
+    };
     match protocol {
         ModelProtocol::OpenAiChatCompletions => {
             if let Some(messages) = value["messages"].as_array_mut() {
                 for message in messages {
+                    #[cfg(feature = "issue-387-profile")]
+                    crate::model::adapter::profile::wire_item();
                     if let Some(calls) = message["tool_calls"].as_array_mut() {
                         for call in calls {
                             field(true, &mut call["id"]);
@@ -136,6 +165,8 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
         ModelProtocol::AnthropicMessages => {
             if let Some(messages) = value["messages"].as_array_mut() {
                 for message in messages {
+                    #[cfg(feature = "issue-387-profile")]
+                    crate::model::adapter::profile::wire_item();
                     if let Some(blocks) = message["content"].as_array_mut() {
                         for block in blocks {
                             match block["type"].as_str() {
@@ -151,6 +182,8 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
         ModelProtocol::OpenAiResponses => {
             if let Some(items) = value["input"].as_array_mut() {
                 for item in items {
+                    #[cfg(feature = "issue-387-profile")]
+                    crate::model::adapter::profile::wire_item();
                     match item["type"].as_str() {
                         Some("function_call") => field(true, &mut item["call_id"]),
                         Some("function_call_output") => field(false, &mut item["call_id"]),

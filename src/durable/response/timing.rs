@@ -147,6 +147,10 @@ impl ActivityFold {
         let span = u64::try_from(at.signed_duration_since(started).num_milliseconds()).unwrap_or(0);
         self.tool_ms = Some(self.tool_ms.unwrap_or(0).saturating_add(span));
     }
+    /// Adds one exact duration already resolved from native lifecycle timestamps.
+    pub(crate) fn tool_span_ms(&mut self, span: u64) {
+        self.tool_ms = Some(self.tool_ms.unwrap_or(0).saturating_add(span));
+    }
     /// Writes this fold's additive work into one inherited turn's evidence.
     pub(crate) fn record(&self, execution: &mut TurnExecution) {
         execution.model_ms = self.model_ms;

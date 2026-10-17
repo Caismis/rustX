@@ -674,20 +674,21 @@ async fn context_estimates_the_same_rendering_as_provider_input() {
         .unwrap()
         .apply(&mut rendered)
         .unwrap();
+    let selected = canonical.clone().into();
     engine
         .prepare_media(
-            &canonical,
-            &canonical,
+            &selected,
+            &selected,
             &crate::runtime::CancellationSignal::new(),
         )
         .await
         .unwrap();
     assert_eq!(
-        engine.estimate_model_input(&canonical, "system", &[]),
+        engine.estimate_model_input(&selected, "system", &[]),
         estimator.estimate_input(&rendered, "system", &[])
     );
     assert!(
-        engine.estimate_model_input(&canonical, "system", &[])
+        engine.estimate_model_input(&selected, "system", &[])
             > estimator.estimate_input(&canonical, "system", &[])
     );
 }

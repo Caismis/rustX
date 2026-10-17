@@ -52,7 +52,18 @@ struct ArtifactManifest {
 struct ArtifactCut {
     manifest: ArtifactManifest,
     file: crate::tools::artifacts::ArtifactReadHandle,
+    #[cfg(test)]
+    read_hook: Option<ArtifactReadHook>,
 }
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArtifactReadStage {
+    Read,
+    Verified,
+}
+#[cfg(test)]
+type ArtifactReadHook = Box<dyn FnMut(ArtifactReadStage, u64) + Send>;
 
 /// One finite domain. All members share the instant when the final included
 /// database prefix and settled artifact lengths have been captured, before
@@ -213,6 +224,8 @@ impl SessionArchiveCut {
                         bytes,
                     },
                     file,
+                    #[cfg(test)]
+                    read_hook: None,
                 });
             }
         }
@@ -247,6 +260,16 @@ impl SessionArchiveCut {
     #[cfg(test)]
     pub(crate) fn write_test(self, writer: impl Write) -> io::Result<()> {
         self.write_zip(writer, &CancellationToken::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_artifact_read_hook(
+        mut self,
+        hook: impl FnMut(ArtifactReadStage, u64) + Send + 'static,
+    ) -> Self {
+        assert_eq!(self.artifacts.len(), 1);
+        self.artifacts[0].read_hook = Some(Box::new(hook));
+        self
     }
 
     fn write_zip(mut self, writer: impl Write, cancel: &CancellationToken) -> io::Result<()> {
@@ -308,18 +331,44 @@ impl SessionArchiveCut {
             check_cancel(cancel)?;
             zip.start_file(&artifact.manifest.entry, options)
                 .map_err(error)?;
-            let mut remaining = artifact.manifest.bytes;
-            while remaining > 0 {
-                check_cancel(cancel)?;
-                let size = usize::try_from(remaining.min(CHUNK_BYTES as u64)).map_err(error)?;
-                artifact.file.read_exact(&mut buffer[..size])?;
-                zip.write_all(&buffer[..size])?;
-                remaining -= size as u64;
-            }
+            artifact.write_verified(&mut zip, &mut buffer, cancel)?;
         }
         check_cancel(cancel)?;
         zip.finish().map_err(error)?;
         Ok(())
+    }
+}
+
+impl ArtifactCut {
+    fn write_verified(
+        &mut self,
+        writer: &mut impl Write,
+        buffer: &mut [u8],
+        cancel: &CancellationToken,
+    ) -> io::Result<()> {
+        let mut verification = self.file.verification();
+        let mut offset = 0;
+        while offset < self.manifest.bytes {
+            check_cancel(cancel)?;
+            let size = usize::try_from((self.manifest.bytes - offset).min(CHUNK_BYTES as u64))
+                .map_err(error)?;
+            self.file.read_exact(&mut buffer[..size])?;
+            #[cfg(test)]
+            if let Some(hook) = &mut self.read_hook {
+                hook(ArtifactReadStage::Read, offset);
+            }
+            self.file
+                .verify_chunk(&mut verification, offset, &buffer[..size])?;
+            #[cfg(test)]
+            if let Some(hook) = &mut self.read_hook {
+                hook(ArtifactReadStage::Verified, offset);
+            }
+            // Emit the authenticated buffer itself; never reread the file after verification.
+            writer.write_all(&buffer[..size])?;
+            offset += size as u64;
+        }
+        check_cancel(cancel)?;
+        self.file.finish_verification(verification)
     }
 }
 

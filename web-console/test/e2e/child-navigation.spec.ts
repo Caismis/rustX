@@ -52,7 +52,12 @@ for (const width of [1440, 390]) test(`child native turn directory locates dista
   await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
   await expect(page.getByText('Reading a history window. Latest activity continues below; intervening history is not loaded.', { exact: true })).toHaveCount(0);
   const calls = await page.evaluate(() => (window as any).startupFixture.requests());
-  expect(calls.filter((request: any) => request.method === 'agent/transcript').map((request: any) => request.params.at.id.attempt_id)).toContain('child-turn-1');
+  const located = calls.filter((request: any) => request.method === 'agent/transcript' && request.params.at.type === 'turn_ordinal');
+  expect(located.map((request: any) => request.params.at.ordinal)).toEqual([1, 130]);
+  for (const request of located) {
+    expect(request.params.agent_id).toBe('child-1');
+    expect(request.params.at.cut).toEqual({ conversation_id: 'child-conversation-1', journal: '1000', transcript: '1000', mutation_revision: '0', ledger_through: '0', surface_revision: '0', transcript_total: '0', pending_through: '0', pending_total: '0' });
+  }
   expect(calls.filter((request: any) => request.method === 'agent/turns').some((request: any) => request.params.offset === 0)).toBe(true);
   if (width === 1440) {
     await page.getByRole('button', { name: parentTitle, exact: true }).click();

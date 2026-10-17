@@ -8,7 +8,7 @@ import { useSubagents } from './subagent-context';
 import css from '../../presentation/agent/Tool.module.css';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v49';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v50';
 import { ToolCard, ToolInspectionButton } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 
@@ -26,7 +26,7 @@ const names: Record<string, { domain: 'job' | 'agent'; title: TranslationKey }> 
 
 /** Historical Tool results are evidence, never the current Job/Agent roster. */
 export function domainActivity(tool: ForegroundToolExecution) {
-  return names[tool.tool_id];
+  return tool.tool_id==null?undefined:names[tool.tool_id];
 }
 export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
   const inspect = useToolInspection(tool);

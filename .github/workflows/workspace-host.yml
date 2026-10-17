@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/workspace-host.yml'
+      - '.github/actions/libclang/**'
       - 'web-console/host/**'
       - 'src/runtime/interactive_supervisor.rs'
       - 'src/runtime/supervised_unit.rs'
@@ -33,6 +34,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace-host

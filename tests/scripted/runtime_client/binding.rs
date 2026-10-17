@@ -263,7 +263,9 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
     let host =
         RuntimeClientHost::new(fresh_host_config).expect("a fresh runtime identity is bindable");
     fresh_runtime.activate();
-    host.snapshot().expect("the fresh host is operational");
+    host.checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("the fresh host is operational");
     assert!(fresh.runtime.is_runtime_client_bound());
 }
 
@@ -317,7 +319,9 @@ async fn reconnect_replaces_the_attachment_not_the_host() {
         first_id, second_id,
         "reconnect receives a fresh attachment identity"
     );
-    host.snapshot().expect("the host served both attachments");
+    host.checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("the host served both attachments");
 }
 
 /// The `ConversationToolRuntime` is the one conversation authority at the
@@ -372,7 +376,10 @@ async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot.conversation_id(),
         &authority,
@@ -407,7 +414,10 @@ async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
         let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
             panic!("subscription stays open, got {delivery:?}");
         };
-        if let RuntimeClientEvent::AttemptSettled { attempt_id, .. } = event.event {
+        if let Some(attempt_id) = event.event.facts().iter().find_map(|fact| match fact {
+            RuntimeClientEvent::AttemptSettled { attempt_id, .. } => Some(attempt_id.clone()),
+            _ => None,
+        }) {
             break attempt_id;
         }
     };
@@ -421,7 +431,10 @@ async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
         1,
         "the attempt actually ran against the model"
     );
-    let (settled, _) = host.snapshot().expect("snapshot");
+    let (settled, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     let attempt = settled.attempt.expect("the attempt is projected");
-    assert_eq!(attempt.attempt_id, settled_attempt);
+    assert_eq!(attempt.attempt_id.as_ref(), Some(&settled_attempt));
 }

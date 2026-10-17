@@ -1,3 +1,5 @@
+import { sourceReceipt } from './fixture';
+import { boundedSettings } from "./fixture";
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -73,8 +75,8 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
 });
 
 it.each(['target', 'connection'] as const)('C10 late response after %s replacement cannot overwrite new authority', async invalidation => {
- let release!: (result: import('../../protocol/app-server/v49').MethodResult) => void;
- const pending = new Promise<import('../../protocol/app-server/v49').MethodResult>(resolve => { release = resolve; });
+ let release!: (result: import('../../protocol/app-server/v50').MethodResult) => void;
+ const pending = new Promise<import('../../protocol/app-server/v50').MethodResult>(resolve => { release = resolve; });
  let reads = 0;
  const s = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++reads === 1) return pending; });
  const host = cfg3Host(s); const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
@@ -84,7 +86,7 @@ it.each(['target', 'connection'] as const)('C10 late response after %s replaceme
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget(invalidation === 'target' ? 'B' : 'A', invalidation === 'target' ? 'B' : 'A')} host={host}/>);
  await openSettingsPage('Advanced');
  await screen.findByText(/Revision: fresh/);
- await act(async () => { release({ type: 'source_settings', projection: stale }); await pending; });
+ await act(async () => { release({ type: 'source_settings', projection:boundedSettings(stale) }); await pending; });
  expect(screen.queryByText(/Revision: stale/)).toBeNull(); expect(screen.getByText(/Revision: fresh/)).toBeTruthy();
 });
 
@@ -347,7 +349,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v49').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v50').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
@@ -359,7 +361,7 @@ it('an older authoritative read cannot replace a newer read', async () => {
   subject.source.workspace!.revision = 'newest';
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
   await screen.findByText(/Revision: newest/);
-  release({ type: 'source_settings', projection: stale });
+  release({ type: 'source_settings', projection:boundedSettings(stale) });
   await waitFor(() => expect(screen.getByText(/Revision: newest/)).toBeTruthy());
 });
 
@@ -445,7 +447,7 @@ it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v49').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v50').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -476,8 +478,8 @@ it.each([
 
 it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit'] as const)('T12/T16 source projection %s preserves subsequent drafts', async order => {
   // The acknowledgement is held explicitly; nothing here depends on timing.
-  let acknowledge!: (outcome: { acknowledgement: import('../../protocol/app-server/v49').SourceSettings }) => void;
-  const held = new Promise<{ acknowledgement: import('../../protocol/app-server/v49').SourceSettings }>(resolve => { acknowledge = resolve; });
+  let acknowledge!: (outcome: { acknowledgement: {revision:string} }) => void;
+  const held = new Promise<{ acknowledgement: {revision:string} }>(resolve => { acknowledge = resolve; });
   const source = cfg3Source();
   const form = (authored: { command: string }, revision: string) => <UnitForm<{ command: string }>
     title="MCP acknowledgement" authored={authored} blank={{ command: '' }} revision={revision}
@@ -489,7 +491,7 @@ it.each(['before acknowledgement', 'after acknowledgement', 'after the next edit
   fireEvent.click(screen.getByRole('button', { name: 'Save MCP acknowledgement' }));
   // Hold source publication and the acknowledgement independently.
   if (order === 'before acknowledgement') rerender(form({ command: 'native-redacted' }, 'r2'));
-  await act(async () => { acknowledge({ acknowledgement: sameRevision(source, 'r2') }); await held; });
+  await act(async () => { acknowledge({ acknowledgement: sourceReceipt(sameRevision(source, 'r2')) }); await held; });
   if (order === 'after acknowledgement') rerender(form({ command: 'native-redacted' }, 'r2'));
   if (order !== 'after the next edit') expect((screen.getByLabelText('Acknowledged command') as HTMLInputElement).value).toBe('native-redacted');
   fireEvent.change(screen.getByLabelText('Acknowledged command'), { target: { value: 'preserved-draft' } });
@@ -511,7 +513,7 @@ it('T17 a post-commit read that observes the exact pre-save revision asks for re
     title="MCP rollback" authored={{ command: 'original' }} blank={{ command: '' }} revision="r1"
     mutation={value => ({ kind: 'mcp', id: 'fixture', authored: value ? { definition: { type: 'stdio', command: value.command } } : null })}>
     {(value, change) => <TextField label="Rollback command" value={value.command} change={command => change({ command })} />}
-  </UnitForm>, { source, write: async () => ({ acknowledgement: committed }) });
+  </UnitForm>, { source, write: async () => ({ acknowledgement: sourceReceipt(committed) }) });
   fireEvent.change(screen.getByLabelText('Rollback command'), { target: { value: 'saved' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save MCP rollback' }));
   // The commit is definitive; the source no longer carries it.
@@ -522,8 +524,8 @@ it('T17 a post-commit read that observes the exact pre-save revision asks for re
 });
 
 it('retires a confirmed Provider save, including its literal credential, after the editor unmounts', async () => {
-  let release!: (result: import('../../protocol/app-server/v49').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v49').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v50').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v50').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
@@ -542,7 +544,7 @@ it('retires a confirmed Provider save, including its literal credential, after t
   // Native commit and its authoritative reread both succeed after unmount.
   subject.source.workspace!.revision = 'saved-2';
   subject.source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
-  release({ type: 'source_settings', projection: structuredClone(subject.source) });
+  release({type:'sources_written',revision:'saved-2',configuration_revision:'1'});
   await openSettingsPage('Advanced');
   await screen.findByText(/Revision: saved-2/);
   // Returning to Models restores the exact detail this page was left on —
@@ -557,8 +559,8 @@ it('retires a confirmed Provider save, including its literal credential, after t
 });
 
 it('a late acknowledgement advances the CAS base without erasing a newer draft submitted after it', async () => {
-  let release!: (result: import('../../protocol/app-server/v49').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v49').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v50').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v50').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
@@ -569,7 +571,7 @@ it('a late acknowledgement advances the CAS base without erasing a newer draft s
   // A newer editing intent exists before the first mutation is acknowledged.
   fireEvent.click(screen.getByLabelText('write'));
   subject.source.workspace!.revision = 'saved-2';
-  release({ type: 'source_settings', projection: structuredClone(subject.source) });
+  release({type:'sources_written',revision:'saved-2',configuration_revision:'1'});
   const nativeTools = () => within(screen.getByRole('form', { name: 'Native Tools' }));
   await waitFor(() => expect(nativeTools().getByText(/Draft base revision:/).textContent).toContain('saved-2'));
   // The newer draft survives the old acknowledgement; only the submitted

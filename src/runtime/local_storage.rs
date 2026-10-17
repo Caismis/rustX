@@ -828,6 +828,7 @@ mod tests {
                 "--exact",
                 "runtime::local_storage::tests::lifecycle_process_gate",
                 "--nocapture",
+                "--format=terse",
             ])
             .env("RUSTX_260_LOCK_ROOT", root)
             .env("RUSTX_260_LOCK_MODE", mode)
@@ -925,6 +926,7 @@ mod tests {
                 "--exact",
                 "runtime::local_storage::tests::reservation_process_gate",
                 "--nocapture",
+                "--format=terse",
             ])
             .env("RUSTX_387_RESERVE_ROOT", directory.path())
             .env("RUSTX_387_RESERVE_ID", consumed.as_str())

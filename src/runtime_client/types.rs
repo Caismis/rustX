@@ -53,13 +53,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientEvent;
-use super::snapshot::{
-    CapabilityView, RuntimeClientContextView, RuntimeClientSnapshot, RuntimeClientTranscriptCursor,
-    RuntimeClientTranscriptPage,
-};
+use super::snapshot::{RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage};
 use crate::message::types::UserContentBlock;
-use crate::model::catalog::ModelCatalogView;
-use crate::model::session::{SessionModelConfig, SessionModelView};
+use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionRef, InteractionResponse};
@@ -274,7 +270,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// are rejected before an attachment or application operation is admitted.
 /// Version 69 separates typed projection history and exact frozen request occurrences from canonical execution.
 /// Version 70 represents absent wire fields for native-covered Tool associations.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 70;
+/// Version 71 adds bounded observation and exact source-unavailability handling.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 71;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -437,10 +434,17 @@ pub enum RuntimeClientRequest {
         /// The finite typed response.
         response: InteractionResponse,
     },
-    /// Read the authoritative snapshot and its cursor.
-    SnapshotGet {
+    /// Read one bounded authoritative checkpoint at its native cut and cursor.
+    CheckpointGet {
         /// Attachment-scoped request id.
         id: RequestId,
+    },
+    /// Read finite Trace records and exact own lifecycle interests.
+    TracePageGet {
+        id: RequestId,
+        before: Option<super::trace::TraceCursor>,
+        limit: usize,
+        records: Vec<super::trace::TraceCursor>,
     },
     /// Read one bounded durable transcript page. `before_cursor` is the
     /// exclusive boundary for older history; omitting it returns the newest
@@ -468,6 +472,49 @@ pub enum RuntimeClientRequest {
         /// The last cursor the client already observed.
         after_cursor: RuntimeClientCursor,
     },
+    ObserveEvents {
+        id: RequestId,
+        after_cursor: RuntimeClientCursor,
+    },
+    ContentRead {
+        id: RequestId,
+        content_ref: super::content::ContentRef,
+        offset: u64,
+        max_bytes: u32,
+    },
+    CheckpointPageGet {
+        id: RequestId,
+        cut: super::checkpoint::CheckpointReadCut,
+        domain: String,
+        offset: u64,
+        limit: usize,
+    },
+    CheckpointValueRead {
+        id: RequestId,
+        cut: super::checkpoint::CheckpointReadCut,
+        domain: String,
+        item_offset: u64,
+        path: Vec<String>,
+        offset: u64,
+        max_bytes: u32,
+    },
+    /// Read an immutable pending interaction at its originating runtime.
+    InteractionPageGet {
+        id: RequestId,
+        interaction: InteractionRef,
+        path: Vec<String>,
+        offset: u64,
+        limit: usize,
+    },
+    /// Read exact bounded structural bytes from the originating coordinator.
+    InteractionValueRead {
+        id: RequestId,
+        interaction: InteractionRef,
+        path: Vec<String>,
+        offset: u64,
+        max_bytes: u32,
+    },
+
     /// Inspect the active capability projection.
     CapabilityGet {
         /// Attachment-scoped request id.
@@ -525,10 +572,10 @@ pub enum RuntimeClientRequest {
     AgentList {
         id: RequestId,
     },
-    AgentConversation {
+    AgentObserve {
         id: RequestId,
         agent_id: AgentId,
-        after: Option<super::agent_conversation::AgentConversationCursor>,
+        after: Option<super::agent_observation::AgentObservationCursor>,
     },
     AgentStatistics {
         id: RequestId,
@@ -559,6 +606,10 @@ pub enum RuntimeClientRequest {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
         record_id: String,
+    },
+    TraceLocateTool {
+        id: RequestId,
+        locator: super::trace::TraceToolLocator,
     },
     AgentTraceLocateTool {
         id: RequestId,
@@ -604,8 +655,15 @@ impl RuntimeClientRequest {
             | Self::CancelCurrentAttempt { id, .. }
             | Self::CompactContext { id, .. }
             | Self::InteractionRespond { id, .. }
-            | Self::SnapshotGet { id, .. }
+            | Self::CheckpointGet { id, .. }
+            | Self::ObserveEvents { id, .. }
+            | Self::ContentRead { id, .. }
+            | Self::CheckpointPageGet { id, .. }
+            | Self::CheckpointValueRead { id, .. }
+            | Self::InteractionPageGet { id, .. }
+            | Self::InteractionValueRead { id, .. }
             | Self::TranscriptPageGet { id, .. }
+            | Self::TracePageGet { id, .. }
             | Self::SubscribeEvents { id, .. }
             | Self::CapabilityGet { id, .. }
             | Self::ModelCatalogGet { id, .. }
@@ -617,13 +675,14 @@ impl RuntimeClientRequest {
             | Self::JobCancel { id, .. }
             | Self::AgentStatus { id, .. }
             | Self::AgentList { id, .. }
-            | Self::AgentConversation { id, .. }
+            | Self::AgentObserve { id, .. }
             | Self::AgentStatistics { id, .. }
             | Self::AgentSendMessage { id, .. }
             | Self::AgentWait { id, .. }
             | Self::AgentInterrupt { id, .. }
             | Self::AgentTrace { id, .. }
             | Self::AgentTraceDetail { id, .. }
+            | Self::TraceLocateTool { id, .. }
             | Self::AgentTraceLocateTool { id, .. }
             | Self::AgentTranscript { id, .. }
             | Self::AgentTurns { id, .. }
@@ -642,8 +701,15 @@ impl RuntimeClientRequest {
             Self::Goal { .. } => "goal",
             Self::CompactContext { .. } => "compact_context",
             Self::InteractionRespond { .. } => "interaction_respond",
-            Self::SnapshotGet { .. } => "snapshot_get",
+            Self::CheckpointGet { .. } => "checkpoint_get",
+            Self::ObserveEvents { .. } => "observe_events",
+            Self::ContentRead { .. } => "content_read",
+            Self::CheckpointPageGet { .. } => "checkpoint_page_get",
+            Self::CheckpointValueRead { .. } => "checkpoint_value_read",
+            Self::InteractionPageGet { .. } => "interaction_page_get",
+            Self::InteractionValueRead { .. } => "interaction_value_read",
             Self::TranscriptPageGet { .. } => "transcript_page_get",
+            Self::TracePageGet { .. } => "trace_page_get",
             Self::SubscribeEvents { .. } => "subscribe_events",
             Self::CapabilityGet { .. } => "capability_get",
             Self::ModelCatalogGet { .. } => "model_catalog_get",
@@ -655,13 +721,14 @@ impl RuntimeClientRequest {
             Self::JobCancel { .. } => "job_cancel",
             Self::AgentStatus { .. } => "agent_status",
             Self::AgentList { .. } => "agent_list",
-            Self::AgentConversation { .. } => "agent_conversation",
+            Self::AgentObserve { .. } => "agent_observe",
             Self::AgentStatistics { .. } => "agent_statistics",
             Self::AgentSendMessage { .. } => "agent_send_message",
             Self::AgentWait { .. } => "agent_wait",
             Self::AgentInterrupt { .. } => "agent_interrupt",
             Self::AgentTrace { .. } => "agent_trace",
             Self::AgentTraceDetail { .. } => "agent_trace_detail",
+            Self::TraceLocateTool { .. } => "trace_locate_tool",
             Self::AgentTraceLocateTool { .. } => "agent_trace_locate_tool",
             Self::AgentTranscript { .. } => "agent_transcript",
             Self::AgentTurns { .. } => "agent_turns",
@@ -670,13 +737,35 @@ impl RuntimeClientRequest {
         }
     }
 
+    /// The Child inspection socket exposes only bounded observation reads.
+    pub(crate) fn is_inspection_read(&self) -> bool {
+        matches!(
+            self,
+            Self::CheckpointGet { .. }
+                | Self::TracePageGet { .. }
+                | Self::CheckpointPageGet { .. }
+                | Self::CheckpointValueRead { .. }
+                | Self::TraceLocateTool { .. }
+                | Self::InteractionPageGet { .. }
+                | Self::InteractionValueRead { .. }
+                | Self::ContentRead { .. }
+                | Self::ObserveEvents { .. }
+                | Self::SubscribeEvents { .. }
+                | Self::Detach { .. }
+        )
+    }
+
     /// Whether this request must run through the async semantic endpoint.
     #[must_use]
     pub fn requires_async(&self) -> bool {
         matches!(
             self,
-            Self::AgentStatistics { .. }
-                | Self::AgentConversation { .. }
+            Self::TraceLocateTool { .. }
+                | Self::InteractionPageGet { .. }
+                | Self::InteractionValueRead { .. }
+                | Self::AgentStatistics { .. }
+                | Self::ObserveEvents { .. }
+                | Self::AgentObserve { .. }
                 | Self::AgentTrace { .. }
                 | Self::AgentTraceDetail { .. }
                 | Self::AgentTraceLocateTool { .. }
@@ -737,11 +826,11 @@ pub struct RuntimeClientResponse {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientResult {
     /// Authoritative durable Goal state after an operation.
-    Goal {
-        view: crate::goal::GoalView,
+    GoalMutation {
+        reference: Option<crate::goal::GoalRef>,
     },
     /// `initialize` succeeded: the attachment is admitted and the initial
-    /// authoritative snapshot (linearized with its cursor) is returned.
+    /// bounded read-only identity/capability receipt is returned.
     Initialized {
         /// The fresh attachment identity.
         attachment_id: AttachmentId,
@@ -749,10 +838,10 @@ pub enum RuntimeClientResult {
         conversation_id: ConversationId,
         /// The agent executed by attempts of this runtime.
         agent_id: AgentId,
-        /// The authoritative snapshot at the returned cursor.
-        snapshot: RuntimeClientSnapshot,
-        /// The cursor the snapshot is linearized at.
-        cursor: RuntimeClientCursor,
+        activation_id: Option<crate::runtime::identity::SubagentId>,
+        protocol_version: u16,
+        read_only: bool,
+        capabilities: Vec<String>,
     },
     /// `submit_inbound` succeeded: the message was accepted/admitted.
     InboundAccepted {
@@ -767,10 +856,11 @@ pub enum RuntimeClientResult {
         /// The attempt cancellation was requested for.
         attempt_id: AttemptId,
     },
-    /// `compact_context` succeeded after the durable summary/Surface commit.
+    /// This invocation committed its native context checkpoint.
     ContextCompacted {
-        /// The authoritative context projection after the commit.
-        context: RuntimeClientContextView,
+        /// Always present on success: the exact receipt for this invocation,
+        /// independently of the latest published context.
+        compaction: Option<super::snapshot::RuntimeClientCompactionView>,
     },
 
     /// `interaction_respond` succeeded: the coordinator accepted the one
@@ -779,12 +869,9 @@ pub enum RuntimeClientResult {
         /// The full routed interaction identity.
         interaction: InteractionRef,
     },
-    /// `snapshot_get` succeeded.
-    Snapshot {
-        /// The authoritative snapshot at the returned cursor.
-        snapshot: RuntimeClientSnapshot,
-        /// The cursor the snapshot is linearized at.
-        cursor: RuntimeClientCursor,
+    /// One bounded native read cut.
+    Checkpoint {
+        checkpoint: Box<super::checkpoint::RuntimeClientCheckpoint>,
     },
     /// `transcript_page_get` succeeded.
     ProjectionPage {
@@ -797,23 +884,52 @@ pub enum RuntimeClientResult {
     TracePage {
         page: super::trace::TracePage,
     },
-    /// Heavy inspection detail for one exact Trace record identity, or
-    /// `None` when that identity names no record at the read cut.
-    TraceDetail {
-        detail: Option<Box<super::trace::TraceDetail>>,
-    },
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
     },
     TranscriptWindow {
-        window: super::snapshot::ConversationWindow,
+        window: Box<super::snapshot::ConversationWindow>,
     },
     ConversationTurns {
-        page: crate::durable::reading::ConversationTurnPage,
+        page: crate::runtime_client::turn::ObservedTurnPage,
     },
     TranscriptPage {
         /// The bounded durable transcript page.
         page: RuntimeClientTranscriptPage,
+    },
+    ContentChunk {
+        chunk: super::content::ContentChunk,
+    },
+    CheckpointPage {
+        page: super::checkpoint::CheckpointPage,
+    },
+    DomainPage {
+        page: super::checkpoint::CheckpointPage,
+    },
+    CheckpointValueChunk {
+        chunk: super::checkpoint::CheckpointValueChunk,
+    },
+    /// Source-owned finite descriptors; key previews never grant read authority.
+    InteractionFields {
+        interaction: InteractionRef,
+        path: Vec<String>,
+        total: u64,
+        fields: Vec<InteractionFieldItem>,
+        next_offset: Option<u64>,
+    },
+    InteractionValueChunk {
+        interaction: InteractionRef,
+        path: Vec<String>,
+        offset: u64,
+        bytes_base64: String,
+        readable_end: u64,
+        next_offset: Option<u64>,
+    },
+
+    EventBatch {
+        after_cursor: RuntimeClientCursor,
+        cursor: RuntimeClientCursor,
+        events: Vec<RuntimeClientProtocolEvent>,
     },
     /// `subscribe_events` succeeded.
     Subscribed {
@@ -821,55 +937,35 @@ pub enum RuntimeClientResult {
         after_cursor: RuntimeClientCursor,
     },
     /// `capability_get` succeeded: the active capability projection.
-    Capability {
-        /// The deterministic active capability projection.
-        capabilities: CapabilityView,
-    },
+
     /// `model_catalog_get` succeeded: the safe selectable-model view.
-    ModelCatalog {
-        /// The bounded public catalog view.
-        catalog: ModelCatalogView,
-    },
+
     /// `model_get` succeeded: the authoritative session model state.
-    Model {
-        /// The redacted session model view.
-        model: Box<SessionModelView>,
-    },
-    /// `model_set` succeeded for a standalone conversation.
+
+    /// Standalone model selection committed; durable Sessions use their native Session owner.
     ///
-    /// The result carries its current model selection after the update. It never
-    /// implies that a running attempt changed model. Durable Session selection
-    /// acknowledgements belong to the native Session owner.
-    ModelSet {
-        /// The redacted session model view after the update.
-        model: Box<SessionModelView>,
+    /// This finite receipt confirms commitment. Read the current model through
+    /// its bounded domain; an admitted attempt retains its frozen model.
+    ModelSet,
+    JobCancellationAccepted {
+        job_id: crate::runtime::identity::ToolExecutionId,
     },
-    Job {
-        job: RuntimeClientJob,
+    AgentInterruptionAccepted {
+        agent_id: crate::runtime::identity::AgentId,
+        activation_id: Option<crate::runtime::identity::SubagentId>,
     },
-    Jobs {
-        jobs: Vec<RuntimeClientJob>,
-        returned: usize,
-        matched: usize,
-        limit: usize,
-        truncated: bool,
+    JobOutcome {
+        job_id: ToolExecutionId,
+        state: crate::tools::background::BackgroundLifecycle,
     },
-    Agent {
-        agent: RuntimeClientAgent,
-    },
-    AgentConversation {
-        conversation: super::agent_conversation::AgentConversation,
+
+    AgentObserve {
+        observation: super::agent_observation::AgentObservation,
     },
     AgentStatistics {
         metrics: super::agent_statistics::AgentStatistics,
     },
-    Agents {
-        agents: Vec<RuntimeClientAgent>,
-        returned: usize,
-        matched: usize,
-        limit: usize,
-        truncated: bool,
-    },
+
     AgentMessage {
         accepted: crate::runtime::subagent::AgentMessageAccepted,
     },
@@ -877,12 +973,29 @@ pub enum RuntimeClientResult {
         agent_id: crate::runtime::identity::AgentId,
         activation_id: Option<crate::runtime::identity::SubagentId>,
         outcome: Option<crate::runtime::subagent::SubagentState>,
-        agent: RuntimeClientAgent,
     },
     /// `detach` succeeded.
     Detached,
     /// `shutdown` succeeded: the conversation runtime reached quiescence.
     ShutdownCompleted,
+}
+
+/// One bounded member descriptor from the immutable pending source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InteractionFieldItem {
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub offset: u64,
+    pub key: Option<String>,
+    pub key_complete: bool,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub key_bytes: Option<u64>,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub encoded_bytes: u64,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub children: u64,
+    pub value: Option<serde_json::Value>,
+    pub deferred: bool,
 }
 
 /// The typed protocol-visible errors of the Runtime Client protocol.
@@ -956,7 +1069,9 @@ pub enum RuntimeClientError {
     },
     /// The captured Job owner exhausted terminal publication and cannot make
     /// further lifecycle progress. Its candidate is not a durable terminal.
-    JobPublicationAbandoned { job_id: ToolExecutionId },
+    JobPublicationAbandoned {
+        job_id: ToolExecutionId,
+    },
     /// The input frame was provably not written; no input was delivered.
     AgentNotDelivered {
         agent_id: crate::runtime::identity::AgentId,
@@ -993,6 +1108,14 @@ pub enum RuntimeClientError {
         /// The oldest cursor the runtime can still serve.
         earliest_serviceable: RuntimeClientCursor,
     },
+    ObservationUnavailable {
+        message: String,
+    },
+    ObservationCapacityExceeded,
+    ContentSourceUnavailable,
+    /// The requested byte range lies outside the authorized source frontier.
+    InvalidRange,
+    ReadCutExpired,
     /// The runtime is shutting down and no longer admits inbound work.
     RuntimeShutdown,
     /// The operation is impossible in the current authoritative runtime
@@ -1022,12 +1145,72 @@ pub enum RuntimeClientError {
     },
 }
 
+impl RuntimeClientError {
+    pub(crate) fn content_read_error(error: crate::durable::ConversationStoreError) -> Self {
+        let result = match error {
+            crate::durable::ConversationStoreError::InvalidContentRange => Self::InvalidRange,
+            _ => Self::ContentSourceUnavailable,
+        };
+        drop(error);
+        result
+    }
+    pub(crate) fn observation_collection_error(
+        error: crate::runtime::identity::ObservationCollectionReadError,
+    ) -> Self {
+        use crate::runtime::identity::ObservationCollectionReadError;
+        match error {
+            ObservationCollectionReadError::CutExpired => Self::ReadCutExpired,
+            ObservationCollectionReadError::InvalidRequest(message) => Self::InvalidRequest {
+                message: message.into(),
+            },
+            ObservationCollectionReadError::Unavailable(message) => Self::ObservationUnavailable {
+                message: message.into(),
+            },
+        }
+    }
+    pub(crate) fn observation_read_error(
+        error: crate::runtime::read_layout::ObservationReadError,
+    ) -> Self {
+        match error {
+            crate::runtime::read_layout::ObservationReadError::InvalidRequest(message) => {
+                Self::InvalidRequest {
+                    message: message.into(),
+                }
+            }
+            crate::runtime::read_layout::ObservationReadError::Unavailable(message) => {
+                Self::ObservationUnavailable {
+                    message: message.into(),
+                }
+            }
+        }
+    }
+    /// Observation failures preserve the store's cut/source distinction. A
+    /// storage fault cannot request replay repair of an otherwise valid cut.
+    pub(crate) fn observation_store_error(error: crate::durable::ConversationStoreError) -> Self {
+        use crate::durable::ConversationStoreError;
+        let failure = match &error {
+            ConversationStoreError::ObservationCutExpired => Self::ReadCutExpired,
+            ConversationStoreError::ObservationCapacityExceeded => {
+                Self::ObservationCapacityExceeded
+            }
+            ConversationStoreError::InvalidContentRange => Self::InvalidRange,
+            ConversationStoreError::InvalidReference(_)
+            | ConversationStoreError::RequestNotFound(_) => Self::ContentSourceUnavailable,
+            _ => Self::ObservationUnavailable {
+                message: "native durable observation source is unavailable".into(),
+            },
+        };
+        drop(error);
+        failure
+    }
+}
+
 /// One Runtime Client event pushed on the observation stream.
 ///
 /// The envelope carries the cursor the event was published at, so a client
 /// resuming after a cursor always knows the exact stream position of every
 /// observation. Notifications structurally carry no request id.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientProtocolEvent {
     /// The cursor this event was published at.
@@ -1053,6 +1236,76 @@ mod tests {
     use crate::message::types::UserContentBlock;
     use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolExecutionId};
     use crate::runtime::interaction::{ApprovalDecision, InteractionRef, InteractionResponse};
+
+    #[test]
+    fn t14_t18_native_observation_errors_keep_cut_source_and_range_distinct() {
+        use crate::durable::ConversationStoreError;
+        use crate::runtime::read_layout::ObservationReadError;
+        assert_eq!(
+            RuntimeClientError::observation_store_error(
+                ConversationStoreError::ObservationCutExpired
+            ),
+            RuntimeClientError::ReadCutExpired,
+        );
+        assert_eq!(
+            RuntimeClientError::observation_store_error(ConversationStoreError::InvalidReference(
+                "missing retained source".into()
+            )),
+            RuntimeClientError::ContentSourceUnavailable,
+        );
+        let failure = RuntimeClientError::observation_store_error(ConversationStoreError::Storage(
+            "large diagnostic".repeat(100_000),
+        ));
+        assert!(matches!(
+            failure,
+            RuntimeClientError::ObservationUnavailable { .. }
+        ));
+        assert!(serde_json::to_vec(&failure).unwrap().len() < 128);
+        assert!(matches!(
+            RuntimeClientError::observation_store_error(
+                ConversationStoreError::InvalidContentRange
+            ),
+            RuntimeClientError::InvalidRange,
+        ));
+        assert_eq!(
+            RuntimeClientError::observation_read_error(ObservationReadError::InvalidRequest(
+                "range exceeds frontier"
+            )),
+            RuntimeClientError::InvalidRequest {
+                message: "range exceeds frontier".into()
+            },
+        );
+        assert_eq!(
+            RuntimeClientError::observation_read_error(ObservationReadError::Unavailable(
+                "layout read failed"
+            )),
+            RuntimeClientError::ObservationUnavailable {
+                message: "layout read failed".into()
+            },
+        );
+    }
+    #[test]
+    fn t14_t18_native_collection_failures_do_not_request_resync() {
+        use crate::runtime::identity::ObservationCollectionReadError;
+        assert_eq!(
+            RuntimeClientError::observation_collection_error(
+                ObservationCollectionReadError::CutExpired
+            ),
+            RuntimeClientError::ReadCutExpired
+        );
+        assert!(matches!(
+            RuntimeClientError::observation_collection_error(
+                ObservationCollectionReadError::Unavailable("source unavailable")
+            ),
+            RuntimeClientError::ObservationUnavailable { .. }
+        ));
+        assert!(matches!(
+            RuntimeClientError::observation_collection_error(
+                ObservationCollectionReadError::InvalidRequest("invalid range")
+            ),
+            RuntimeClientError::InvalidRequest { .. }
+        ));
+    }
     use crate::runtime_client::event::RuntimeClientEvent;
 
     /// Session catalog control is App Server's (#428). Complete v54 Session
@@ -1108,7 +1361,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 70);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 71);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1127,6 +1380,7 @@ mod tests {
     #[test]
     fn interrupted_subagent_projection_serializes_as_the_current_wire_state() {
         let subagent = RuntimeClientAgent {
+            deferred_fields: Vec::new(),
             title: "Explore task".to_owned(),
             activation_id: crate::runtime::identity::SubagentId::new("subagent-1"),
             current_activation: None,
@@ -1239,7 +1493,7 @@ mod tests {
             serde_json::from_str::<RuntimeClientRequest>(interaction_publish).is_err(),
             "Runtime Client exposes response control only; publication is runtime-owned"
         );
-        let unknown_field = r#"{"method": "snapshot_get", "id": 1, "extra": true}"#;
+        let unknown_field = r#"{"method": "checkpoint_get", "id": 1, "extra": true}"#;
         assert!(serde_json::from_str::<RuntimeClientRequest>(unknown_field).is_err());
     }
 

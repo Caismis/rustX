@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use tokio_util::sync::CancellationToken;
 
+mod integrity_tests;
+
 async fn decode(cut: SessionArchiveCut) -> BTreeMap<String, Vec<u8>> {
     let mut stream = cut.stream();
     let mut bytes = Vec::new();
@@ -275,7 +277,7 @@ async fn archive_streams_deduplicated_large_artifact_and_rejects_missing_bytes()
         crate::session_archive::SessionArchivePrepareError::ArtifactUnavailable,
         "an unsealed artifact is not historical bytes"
     );
-    drop(writer);
+    writer.finish().unwrap();
     let cut =
         SessionArchiveProducer::prepare(directory.path(), &session, &CancellationToken::new())
             .unwrap();
@@ -432,7 +434,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
             &crate::model::ModelRequest {
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: prior.invocation.clone(),
-                messages: crate::model::input::canonical_input(&history),
+                messages: crate::model::input::canonical_input(&history).into(),
                 tools: prior.tool_definitions.clone(),
                 effective_system_prompt: prior.effective_system_prompt.clone(),
                 continuation: None,
@@ -458,7 +460,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             prior.request_id,
             &conversation,
-            &crate::model::input::canonical_input(&history),
+            &crate::model::input::canonical_input(&history).into(),
             &output,
         )
         .unwrap();
@@ -475,7 +477,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
                 continuation_source: Some(source),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
-                messages: input,
+                messages: input.into(),
                 tools: snapshot.tool_definitions.clone(),
                 effective_system_prompt: snapshot.effective_system_prompt.clone(),
                 continuation: snapshot.continuation.clone(),
@@ -794,6 +796,8 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
             };
             store
                 .append_event(RuntimeEventEnvelope {
+                    tool_occurrence: None,
+                    observation: None,
                     schema_version: EVENT_SCHEMA_VERSION,
                     event_id: EventId::new(format!("{family}-{kind}")),
                     sequence: 0,
@@ -890,6 +894,8 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
         result.managed_output = Some(Box::new(continuation));
         store
             .append_event(RuntimeEventEnvelope {
+                tool_occurrence: None,
+                observation: None,
                 schema_version: EVENT_SCHEMA_VERSION,
                 event_id: EventId::new(format!("managed-output-{index}")),
                 sequence: 0,
@@ -1023,6 +1029,8 @@ async fn inherited_turn_archive(member: bool) {
         .with_timezone(&Utc);
     let ended_at = started_at + chrono::Duration::seconds(7);
     let event = |kind, timestamp| RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: 1,
         event_id: EventId::new(format!(
             "archive-turn-{}",

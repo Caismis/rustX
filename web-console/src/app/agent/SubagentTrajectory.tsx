@@ -1,5 +1,5 @@
 import { useEffect, useState, useImperativeHandle, type Ref, useSyncExternalStore } from 'react';
-import type { RuntimeClientAgent, TraceToolLocator } from '../../../../protocol/app-server/v49';
+import type { RuntimeClientAgent, TraceToolLocator } from '../../../../protocol/app-server/v50';
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentTraceReader } from '../../client/agent-trace';
@@ -15,10 +15,10 @@ export function SubagentTrajectory({ agent, client, sessionId, visible, ref }: {
   const reader = domain?.proof === proof ? domain?.reader : undefined;
   useEffect(() => {
     if (!proof) return;
-    const reader = new AgentTraceReader(client, sessionId, proof, agent.agent_id);
+    const reader = new AgentTraceReader(client, sessionId, proof, agent);
     setDomain({ proof, reader });
     return () => reader.retire();
-  }, [client, sessionId, proof, agent.agent_id]);
+  }, [client, sessionId, proof, agent.agent_id,agent.child_conversation_id,agent.activation_id,agent.state]);
   useImperativeHandle(ref, () => ({ locate: locator => reader?.locate(locator) ?? Promise.resolve(false) }), [reader]);
   const cache = useSyncExternalStore(reader?.subscribe ?? noSubscription, () => reader?.snapshot());
 

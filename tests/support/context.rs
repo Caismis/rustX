@@ -252,12 +252,14 @@ pub(crate) fn checkpoint_fixture(
     let history = store.projected_history().expect("fixture historical input");
     assert!(retired > 0 && retired <= history.messages.len());
     let parent = store.projection_head().unwrap();
-    let originals: Vec<_> = history.messages[..retired]
+    let originals: Vec<_> = history
+        .messages
         .iter()
+        .take(retired)
         .filter_map(|m| m.as_canonical().cloned())
         .collect();
     let physical = crate::context::compaction_metadata::retired_span_metadata(&originals);
-    let uses_parent=history.messages[..retired].iter().any(|m|matches!(m,ModelInputMessage::Derived(d) if d.transformations.contains(&SemanticTransformation::Summary)));
+    let uses_parent=history.messages.iter().take(retired).any(|m|matches!(m,ModelInputMessage::Derived(d) if d.transformations.contains(&SemanticTransformation::Summary)));
     let metadata = rustx::message::types::CompactionSummaryMetadata::accumulate(
         parent
             .as_ref()

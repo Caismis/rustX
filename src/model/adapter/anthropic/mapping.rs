@@ -337,6 +337,9 @@ pub(crate) fn translate_request(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
 ) -> Result<serde_json::Value, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
     construct_request(request, tools, true)
 }
 
@@ -380,7 +383,14 @@ fn construct_request(
         tools: (!tools.is_empty()).then_some(tools),
         stream: true,
     };
-    let mut value = serde_json::to_value(&wire).map_err(|error| ModelError {
+    let mut value = {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile = crate::model::adapter::profile::phase(
+            crate::model::adapter::profile::Phase::TypedToValue,
+        );
+        serde_json::to_value(&wire)
+    }
+    .map_err(|error| ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: format!("failed to serialize the Anthropic request: {error}"),
         retry_disposition: crate::model::error::ModelRetryDisposition::Never,
@@ -393,6 +403,9 @@ fn construct_request(
     })?;
     crate::model::adapter::correlation::encode(&mut value, ModelProtocol::AnthropicMessages)
         .map_err(invalid_request)?;
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
     finalize_provider_request(
         value,
         request.request_params(),
@@ -418,6 +431,10 @@ fn translate_messages(
     tools: &ValidatedTools,
     require_history: bool,
 ) -> Result<(Vec<WireTextBlock>, Vec<WireRequestMessage>), ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::TranslateMessages,
+    );
     let system: Vec<WireTextBlock> = if request.effective_system_prompt.is_empty() {
         Vec::new()
     } else {
@@ -435,28 +452,12 @@ fn translate_messages(
     };
 
     for (position, block) in request.messages.iter().enumerate() {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::item(position);
         match block.view() {
             ModelMessageView::User(user) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
-                let mut content = Vec::new();
-                for user_content in user {
-                    match user_content {
-                        UserContentBlock::Text(text) => {
-                            content.push(serde_json::json!({
-                                "type": "text",
-                                "text": text.text,
-                            }));
-                        }
-                        UserContentBlock::Image(image) => {
-                            content.push(image_block(image, &request.images)?);
-                        }
-                        UserContentBlock::UploadedFile(_) | UserContentBlock::File(_) => {
-                            return Err(unsupported(
-                                "Anthropic cannot represent canonical image/file references                                  without artifact resolution",
-                            ));
-                        }
-                    }
-                }
+                let content = translate_user_content(user, &request.images)?;
                 messages.push(WireRequestMessage {
                     role: "user",
                     content,
@@ -516,6 +517,34 @@ fn translate_messages(
         });
     }
     Ok((system, messages))
+}
+
+fn translate_user_content(
+    user: &[UserContentBlock],
+    images: &crate::model::images::ResolvedImages,
+) -> Result<Vec<serde_json::Value>, ModelError> {
+    let mut content = Vec::new();
+    for user_content in user {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::block();
+        match user_content {
+            UserContentBlock::Text(text) => {
+                content.push(serde_json::json!({
+                    "type": "text",
+                    "text": text.text,
+                }));
+            }
+            UserContentBlock::Image(image) => {
+                content.push(image_block(image, images)?);
+            }
+            UserContentBlock::UploadedFile(_) | UserContentBlock::File(_) => {
+                return Err(unsupported(
+                    "Anthropic cannot represent canonical image/file references                                  without artifact resolution",
+                ));
+            }
+        }
+    }
+    Ok(content)
 }
 
 /// Translates one canonical Assistant message into Anthropic assistant

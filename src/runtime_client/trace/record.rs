@@ -1,162 +1,39 @@
-//! Bounded summary-record projection: one anchor, one pageable row.
-//!
-//! A summary row is the *immutable historical presentation* of one record.
-//! It starts from the facts the anchor owns by itself ([`super::anchor`])
-//! and adds the two things only a reader of history needs:
-//!
-//! ```text
-//! bounded preview / detail summary   content this row stands for
-//! immutable relationships           System Prompt state, Context, Tool name
-//! ```
-//!
-//! Those additions are historical joins. They are performed here, when a
-//! page is built, and nowhere else: a lifecycle refresh projects
-//! [`super::TraceLifecycle`], which carries none of them, so it must not pay
-//! for them or fail because of them.
-//!
-//! A record never borrows a fact from a neighbouring anchor: a Tool's
-//! outcome comes from that Tool's own terminal, a request's usage from that
-//! request's own terminal fact, and a step's end from that step's own
-//! completion.
-
+//! Bounded summary joins over finite own facts, canonical headers and request summaries.
+use super::TraceProjection;
 use super::anchor::AnchorFacts;
 use super::bounds::{TRACE_RECORD_BYTES, TracePreview, encoded_len, identity_fits};
-use super::content::message_preview;
+#[cfg(test)]
+use super::types::TraceState;
 use super::types::{
-    TraceGeneration, TraceGenerationTimeline, TraceRecord, TraceRequestSummary, TraceState,
+    TraceFieldKind, TraceFieldSource, TraceGeneration, TraceGenerationTimeline, TraceRecord,
+    TraceRequestSummary,
 };
-use super::{ADOPTED_MESSAGE_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
-use crate::durable::presentation::FactScope;
-use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
+use crate::durable::observation::{TraceFactData as D, TraceFactHeader};
+#[cfg(test)]
+use crate::events::types::RuntimeEvent as E;
 use crate::model::generation_evidence::GenerationEvidence;
 use crate::model::types::ModelUsage;
+#[cfg(test)]
 use crate::tools::types::ToolExecutionStatus;
 
 impl TraceProjection<'_> {
-    /// Projects one anchor into its bounded summary record.
-    ///
-    /// # Errors
-    ///
-    /// Propagates the failed durable read of any authority this row joins.
-    #[allow(clippy::too_many_lines)] // One exhaustive native execution record projection.
     pub(super) fn record(
         &self,
-        anchor: &RuntimeEventEnvelope,
+        anchor: &TraceFactHeader,
     ) -> Result<TraceRecord, ConversationStoreError> {
-        let AnchorFacts {
-            id,
-            position,
-            location,
-            mut kind,
-            state,
-            timing,
-            mut preview,
-            calls,
-            native_id,
-            mut agent_id,
-            activation_id,
-            activation_origin,
-            originating_tool_call_id,
-            message_id,
-            attachments,
-            mut tool,
-            request,
-            has_detail,
-            mut truncated,
-        } = self.anchor_facts(anchor)?;
-        // Everything below is presentation-only: the previews that need a
-        // Ledger read of their own, the recorded Tool name, and the two
-        // request-relative relationships. None of it reaches a lifecycle
-        // update, and a lifecycle refresh performs none of these reads.
-        //
-        // The request anchor is the one that froze a snapshot, so the
-        // resolved facts drive this rather than a second match on the event.
-        // The immutable snapshot is also this request's identity authority.
-        let summary = match request {
-            Some(request) => {
-                let frozen = &request.frozen;
-                // Both relationships below are resolved here, from native
-                // authority, so no client has to compare request details or
-                // diff messages to discover them.
-                let previous = self.previous_request(anchor.sequence)?;
-                let (system_prompt, tool_catalog) = previous.presentation(frozen);
-                let (context_additions, context_truncated) = self.context_presentation(frozen)?;
-                Some(TraceRequestSummary {
-                    previous_failure_kind: self.previous_request_failure(frozen)?,
-                    assistant_message_id: frozen.provisional_message_id.clone(),
-                    request_id: frozen.request_id.clone(),
-                    retry_number: frozen.identity.retry_number,
-                    model: frozen.invocation.model.clone(),
-                    failure_kind: request.failure_kind,
-                    usage: request.usage,
-                    generation: request.generation,
-                    system_prompt,
-                    predecessor: previous.identity(),
-                    tool_catalog,
-                    context_additions,
-                    context_truncated,
-                })
+        let mut facts = self.anchor_facts(anchor)?;
+        let summary = if let Some(request) = &facts.request {
+            let summary = self.request_summary(request, &facts.fields)?;
+            if let Some((_, preview)) = &summary {
+                facts.preview = Some(preview.clone());
             }
-            None => None,
+            summary.map(|(summary, _)| summary)
+        } else {
+            None
         };
-        match &anchor.event {
-            E::InboundTurnAdopted { message_ids } => {
-                let messages = self
-                    .store
-                    .load_messages(&message_ids[..message_ids.len().min(ADOPTED_MESSAGE_LIMIT)])?;
-                // Input role is model-facing; the native authorship decides the ledger role.
-                kind = adopted_kind(self.store, message_ids)?;
-                let (sender, overflow) = adopted_sender(&messages, message_ids.len());
-                agent_id = sender;
-                truncated |= overflow;
-                if preview.is_none() {
-                    preview = messages.iter().find_map(message_preview);
-                }
-            }
-            E::CompactionStarted { .. } => {
-                if let Some(id) = native_id.as_ref() {
-                    let checkpoint = self
-                        .store
-                        .projection_checkpoint(&crate::runtime::identity::CheckpointId::new(id))?;
-                    preview =
-                        checkpoint
-                            .candidate
-                            .items
-                            .iter()
-                            .find_map(|item| match &item.message {
-                                crate::context::checkpoint::CheckpointMessage::Derived(message) => {
-                                    match &message.message {
-                                        crate::model::projected::ProjectedMessage::User {
-                                            content,
-                                            ..
-                                        } => content.iter().find_map(|block| match block {
-                                            crate::message::types::UserContentBlock::Text(text) => {
-                                                Some(TracePreview::of(&text.text))
-                                            }
-                                            _ => None,
-                                        }),
-                                        _ => None,
-                                    }
-                                }
-                                crate::context::checkpoint::CheckpointMessage::Original(_) => None,
-                            });
-                }
-            }
-            E::ToolExecutionStarted {
-                tool_call_id,
-                tool_id,
-            } => {
-                if let Some(tool) = tool.as_mut()
-                    && let Some((_, call)) = self.step_tool_call(anchor, tool_call_id, tool_id)?
-                {
-                    tool.arguments = Some(TracePreview::of_json(&call.arguments));
-                    tool.name = Some(call.name);
-                }
-            }
-            _ => {}
-        }
-        Ok(TraceRecord {
+        self.enrich_record(anchor, &mut facts)?;
+        let AnchorFacts {
             id,
             position,
             location,
@@ -164,8 +41,6 @@ impl TraceProjection<'_> {
             state,
             timing,
             preview,
-            request: summary,
-            tool,
             calls,
             native_id,
             agent_id,
@@ -174,35 +49,161 @@ impl TraceProjection<'_> {
             originating_tool_call_id,
             message_id,
             attachments,
+            tool,
             has_detail,
             truncated,
+            fields,
+            collections,
+            ..
+        } = facts;
+        Ok(TraceRecord {
+            id,
+            position,
+            location,
+            kind,
+            state,
+            timing,
+            preview,
+            calls,
+            native_id,
+            agent_id,
+            activation_id,
+            activation_origin,
+            originating_tool_call_id,
+            message_id,
+            attachments,
+            tool,
+            has_detail,
+            truncated,
+            fields,
+            collections,
+            request: summary,
         })
     }
-
-    /// The exact preceding actual request's failure class, when recorded.
-    ///
-    /// The previous request is named by the native ordinal, not by scanning
-    /// timestamps: retry evidence is the frozen `retry_number`, and nothing
-    /// else is treated as proof that one request followed another.
-    fn previous_request_failure(
+    fn enrich_record(
         &self,
-        frozen: &crate::model::snapshot::RequestSnapshot,
-    ) -> Result<Option<crate::model::error::ModelErrorKind>, ConversationStoreError> {
-        if frozen.identity.retry_number == 0 {
-            return Ok(None);
+        anchor: &TraceFactHeader,
+        facts: &mut AnchorFacts,
+    ) -> Result<(), ConversationStoreError> {
+        match &anchor.fact {
+            D::Adoption {
+                first_ledger_positions,
+                ..
+            } => {
+                for position in first_ledger_positions {
+                    let canonical = self
+                        .store
+                        .observation_trace_canonical_summary(self.cut()?, *position)?;
+                    if facts.preview.is_none() {
+                        facts.preview = canonical.preview;
+                    }
+                    if facts.message_id.is_none() {
+                        facts.message_id = canonical.identity;
+                    }
+                    for artifact in canonical.attachments {
+                        if facts
+                            .attachments
+                            .iter()
+                            .any(|known| known.artifact_id == artifact.artifact_id)
+                        {
+                            continue;
+                        }
+                        if facts.attachments.len() < 32 {
+                            facts.attachments.push(artifact);
+                        } else {
+                            facts.truncated = true;
+                        }
+                    }
+                    facts.fields.extend(canonical.fields);
+                    facts.collections.extend(canonical.collections);
+                    facts.truncated |= canonical.truncated;
+                }
+            }
+            D::ToolStart {
+                occurrence: Some(occurrence),
+                ..
+            } => {
+                super::summary::record_tool_proposal();
+                let proposal = self
+                    .store
+                    .observation_trace_tool_proposal(self.cut()?, occurrence)?;
+                if let Some(tool) = &mut facts.tool {
+                    tool.name = proposal.name;
+                    tool.arguments = proposal.arguments;
+                    tool.fields.extend(proposal.fields);
+                }
+            }
+            _ => {}
         }
-        let mut identity = frozen.identity.clone();
-        identity.retry_number -= 1;
-        Ok(self
-            .ending(
-                FactScope::Request(identity.request_id().to_string()),
-                &["model_request_failed"],
-            )?
-            .and_then(|event| match event.event {
-                E::ModelRequestFailed { error, .. } => Some(error.kind),
-                _ => None,
-            }))
+        Ok(())
     }
+    fn request_summary(
+        &self,
+        request: &super::anchor::AnchorRequest,
+        fields: &[TraceFieldSource],
+    ) -> Result<Option<(TraceRequestSummary, TracePreview)>, ConversationStoreError> {
+        let Some(summary) = self
+            .store
+            .observation_request_summary_at(request.start_sequence, self.through)?
+        else {
+            return Ok(None);
+        };
+        if request
+            .retry_number
+            .is_some_and(|number| number != summary.retry_number)
+        {
+            return Err(ConversationStoreError::Storage(
+                "request summary ordinal differs from native core".into(),
+            ));
+        }
+        let preview = summary.model_preview.clone();
+        let previous = self.previous_request(request.start_sequence)?;
+        let (system_prompt, tool_catalog) = previous.presentation(&summary);
+        let context = self.context_presentation(request.start_sequence)?;
+        Ok(Some((
+            TraceRequestSummary {
+                accepted_message_locator: self
+                    .store
+                    .observation_request_accepted_at(self.cut()?, request.start_sequence)?,
+                request_id: summary.request_id,
+                request_id_source: field(fields, TraceFieldKind::RequestId),
+                assistant_message_id: summary.assistant_message_id,
+                assistant_message_id_source: field(fields, TraceFieldKind::ProvisionalMessageId),
+                model: summary.model,
+                model_source: field(fields, TraceFieldKind::Model),
+                retry_number: summary.retry_number,
+                previous_failure_kind: self
+                    .store
+                    .observation_request_retry_failure_at(request.start_sequence, self.through)?,
+                failure_kind: request.failure_kind.clone(),
+                usage: request.usage.clone(),
+                generation: request.generation,
+                system_prompt,
+                predecessor: previous.identity(),
+                tool_catalog,
+                context_truncated: context.next_offset.is_some()
+                    || context
+                        .items
+                        .iter()
+                        .any(|item| item.truncated || item.message_id.is_none()),
+                context_additions: context.items,
+                context_total: context.total,
+                context_domain: context.domain,
+                context_next_offset: context.next_offset,
+            },
+            preview,
+        )))
+    }
+}
+pub(super) fn field(fields: &[TraceFieldSource], kind: TraceFieldKind) -> Option<TraceFieldSource> {
+    fields
+        .iter()
+        .find(|source| match source {
+            TraceFieldSource::Value { field, .. } | TraceFieldSource::Content { field, .. } => {
+                *field == kind
+            }
+        })
+        .cloned()
 }
 
 /// Derives display metrics from settled evidence and this request's usage.
@@ -242,6 +243,7 @@ fn generation_timeline(evidence: GenerationEvidence) -> Option<TraceGenerationTi
 }
 
 /// The typed state proven by one terminal fact.
+#[cfg(test)]
 pub(super) fn terminal(event: &E) -> TraceState {
     match event {
         E::AttemptCompleted { .. }
@@ -297,6 +299,7 @@ pub(super) fn terminal(event: &E) -> TraceState {
     }
 }
 
+#[cfg(test)]
 pub(super) fn tool_state(state: &ToolExecutionStatus) -> TraceState {
     match state {
         ToolExecutionStatus::Success => TraceState::Completed,
@@ -365,32 +368,36 @@ pub(super) fn bound_record(record: &mut TraceRecord) {
         record.originating_tool_call_id = None;
         record.truncated = true;
     }
-    if record.request.as_ref().is_some_and(|request| {
-        !identity_fits(request.request_id.as_str())
-            || !identity_fits(request.assistant_message_id.as_str())
-    }) {
-        record.request = None;
-        record.truncated = true;
-    }
-    if record.tool.as_ref().is_some_and(|tool| {
-        !identity_fits(tool.call_id.as_str()) || !identity_fits(tool.tool_id.as_str())
-    }) {
-        record.tool = None;
-        record.truncated = true;
-    }
     let identities = record.attachments.len() + record.calls.len();
     record
         .attachments
         .retain(|reference| identity_fits(reference.artifact_id.as_str()));
     record.calls.retain(|call| {
-        identity_fits(call.call_id.as_str()) && identity_fits(call.tool_id.as_str())
+        call.call_id
+            .as_ref()
+            .is_none_or(|id| identity_fits(id.as_str()))
+            && call
+                .tool_id
+                .as_ref()
+                .is_none_or(|id| identity_fits(id.as_str()))
     });
     record.truncated |= identities != record.attachments.len() + record.calls.len();
-    if encoded_len(record) > TRACE_RECORD_BYTES {
-        record.preview = None;
-        record.calls.clear();
-        record.truncated = true;
+    if encoded_len(record) <= TRACE_RECORD_BYTES {
+        return;
     }
+    record.preview = None;
+    while let Some(call) = record.calls.pop() {
+        let domain = format!("messages.{}.tools", call.occurrence.locator.key());
+        if let Some(frontier) = record
+            .collections
+            .iter_mut()
+            .find(|frontier| frontier.domain == domain)
+        {
+            frontier.loaded = record.calls.len() as u64;
+            frontier.next_offset = Some(u64::from(call.occurrence.block_index.get()));
+        }
+    }
+    record.truncated = true;
     // Context presentation is the largest optional block a request row can
     // carry. Releasing it keeps the request's own identity, classification
     // and outcome visible rather than losing the whole summary for it.
@@ -399,48 +406,7 @@ pub(super) fn bound_record(record: &mut TraceRecord) {
     {
         request.context_additions.clear();
         request.context_truncated = true;
+        request.context_next_offset = (request.context_total > 0).then_some(0);
         request.system_prompt.preview = None;
-    }
-    // JSON escaping can expand even bounded identity and model strings
-    // several times over, so the bound is re-checked after each release.
-    if encoded_len(record) > TRACE_RECORD_BYTES {
-        record.request = None;
-        record.tool = None;
-        record.attachments.clear();
-    }
-}
-
-/// Authorship applies to the complete batch, independent of bounded previews.
-fn adopted_kind(
-    store: &dyn crate::durable::ConversationStore,
-    ids: &[crate::runtime::identity::MessageId],
-) -> Result<super::types::TraceKind, ConversationStoreError> {
-    Ok(if store.messages_are_human_inputs(ids)? {
-        super::types::TraceKind::User
-    } else {
-        super::types::TraceKind::Context
-    })
-}
-
-/// A sender is evidence only when the complete adopted batch agrees.
-fn adopted_sender(
-    messages: &[crate::message::types::MessageBlock],
-    expected: usize,
-) -> (Option<crate::runtime::identity::AgentId>, bool) {
-    use crate::message::types::{MessageBlock, UserSource};
-    if messages.len() == expected
-        && let Some(MessageBlock::User(first)) = messages.first()
-        && let UserSource::Agent { agent_id } = &first.source
-        && messages.iter().all(
-            |message| matches!(message, MessageBlock::User(user) if user.source == first.source),
-        )
-    {
-        if identity_fits(agent_id.as_str()) {
-            (Some(agent_id.clone()), false)
-        } else {
-            (None, true)
-        }
-    } else {
-        (None, false)
     }
 }

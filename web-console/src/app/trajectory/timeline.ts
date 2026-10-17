@@ -9,7 +9,7 @@ import type { Translate } from '../../locale/translation';
  * relationship. Missing bridge evidence leaves a request as a marker, with separate numeric metrics.
  */
 import { trajectoryItems, isInspectable, type TrajectoryProjection } from './layout';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v49';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v50';
 
 /** Horizontal projection of the overview's domain: equal-width operations, or
  * recorded durations with idle time compressed, the two Harness exposes. */
@@ -45,7 +45,8 @@ export interface TrajectorySpan extends TrajectoryTimeRange {
 
 /** One Turn boundary in the active domain. */
 export interface TrajectoryBoundary {
-  nativeAttemptId: string;
+  ownerKey:string;
+  nativeAttemptId?: string;
   at: number;
 }
 
@@ -65,7 +66,7 @@ export function timelineProjectionRevision(model: TrajectoryTimelineModel | null
     model.start, model.end,
     model.spans.map(span => [span.id, span.lane, span.start, span.end,
       span.dispatchAt, span.firstOutputAt, span.lastOutputAt, span.providerTerminalAt]),
-    model.boundaries.map(boundary => [boundary.nativeAttemptId, boundary.at]),
+    model.boundaries.map(boundary => [boundary.ownerKey, boundary.at]),
   ]]);
 }
 
@@ -156,7 +157,7 @@ export function trajectoryTimeline(tx: Translate,
         const start = starts.get(record.id);
         return start === undefined ? [] : [start];
       });
-      return positions.length ? [{ nativeAttemptId: section.nativeAttemptId, at: Math.min(...positions) }] : [];
+      return positions.length ? [{ ownerKey:section.ownerKey,nativeAttemptId: section.nativeAttemptId, at: Math.min(...positions) }] : [];
     });
   };
   if (mode === 'sequence') {

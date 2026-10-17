@@ -108,7 +108,8 @@ fn live_request_with_storage(
                 kind: InboundKind::Message,
                 timestamp: None,
             }),
-        )],
+        )]
+        .into(),
         tools: Vec::new(),
         effective_system_prompt: String::new(),
         continuation: None,
@@ -274,7 +275,8 @@ async fn live_openai_chat_tool_call() {
                 kind: InboundKind::Message,
                 timestamp: None,
             }),
-        )],
+        )]
+        .into(),
         tools: vec![ModelToolDefinition {
             id: ToolId::new("tool-weather"),
             name: "get_weather".to_owned(),

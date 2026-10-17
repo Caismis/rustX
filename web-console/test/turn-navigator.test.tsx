@@ -1,14 +1,15 @@
+import type { TurnSelection } from '../src/client/transcript';
 import { act, cleanup, fireEvent, render, within, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { turnRail, turnRailRange } from '../src/app/agent/turn-rail-items';
 import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { Server } from './fixture';
 import { installTurnNavigatorObserver } from './turn-navigator-fixture';
-import type { ConversationTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v49';
+import type { ObservedTurn, RuntimeClientSnapshot } from '../../protocol/app-server/v50';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.unstubAllGlobals(); });
 const turnsRequests = () => server.requests.filter(row => row.request.method === 'session/turns');
-const native = (n: number, prompt = `Prompt ${n}`): ConversationTurn => ({ id: { conversation_id: 'conversation-A', attempt_id: `native-${n}` }, ordinal: n, cursor: String(n), prompt, response: `Response ${n}` });
+const native = (n: number, prompt = `Prompt ${n}`): ObservedTurn => ({ id: { conversation_id: 'conversation-A', attempt_id: `native-${n}` }, ordinal: n, cursor: String(n), prompt, response: `Response ${n}` });
 const scroller = (ui: ReturnType<typeof render>) => ui.getByRole('navigation', { name: 'Turn navigation' }).firstElementChild as HTMLElement;
 /** Scroll the rail itself, as a reader's wheel does; the virtual range follows. */
 async function scrollRail(ui: ReturnType<typeof render>, top: number) {
@@ -18,12 +19,12 @@ async function scrollRail(ui: ReturnType<typeof render>, top: number) {
 
 function navigationIntent() {
   server.handlers.set('session/transcript', request => {
-    if (request.method !== 'session/transcript' || request.params.at.type !== 'turn') throw Error('expected direct Turn window');
+    if (request.method !== 'session/transcript' || request.params.at.type !== 'turn_ordinal') throw Error('expected direct Turn window');
     const at = request.params.at;
-    const turn = server.client.getSnapshot().views.A.turnOutline!.page!.turns.find(turn => turn.id.attempt_id === at.id.attempt_id)!;
-    return {type:'transcript_window',window:{cut:at.cut,target:at.id,target_cursor:turn.cursor,page:{entries:[{cursor:turn.cursor!,item:{type:'message',message:{role:'assistant',id:'read',content:[{type:'text',text:'window'}]}},turn_process:{...at.id,control_cursor:turn.cursor!,message_count:1,tool_call_count:0,outcome:'completed'}}]}}};
+    const turn = server.client.getSnapshot().views.A.turnOutline!.page!.turns.find(turn => turn.ordinal === at.ordinal)!;
+    return {type:'transcript_window',window:{cut:at.cut,target:turn.id,target_cursor:turn.cursor,page:{entries:[{cursor:turn.cursor!,item:{type:'message',message:{role:'assistant',id:'read',content:[{type:'text',text:'window'}]}},turn_process:{ final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,...turn.id,control_cursor:turn.cursor!,message_count:1,tool_call_count:0,outcome:'completed'}}]}}};
   });
-  return vi.fn((selection: ConversationTurn | number) => { if (typeof selection === 'number') void server.client.navigateTurn('A', selection); });
+  return vi.fn((selection: TurnSelection) => { if (typeof selection === 'number') void server.client.navigateTurn('A', selection); });
 }
 
 async function thousandTurns(total = 1000) {
@@ -33,7 +34,7 @@ async function thousandTurns(total = 1000) {
   server.handlers.set('session/turns', request => {
     if (request.method !== 'session/turns') throw new Error('outline method');
     const offset = request.params.offset ?? Math.floor((total - 1) / 64) * 64;
-    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' }, offset, total,
+    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, offset, total:String(total),
       turns: Array.from({ length: Math.min(64, total - offset) }, (_, i) => native(offset + i + 1, offset + i + 1 === 999 ? '' : undefined)) } };
   });
   const navigate = navigationIntent();
@@ -58,7 +59,7 @@ it('hover loads inherited previews without navigating, then clicks the destinati
   server.handlers.set('session/turns', request => {
     if (request.method !== 'session/turns') throw new Error('outline method');
     const offset = request.params.offset ?? 960;
-    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' }, offset, total: 1000,
+    return { type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, offset, total: "1000",
       turns: Array.from({ length: 64 }, (_, i) => ({ ...native(offset + i + 1), id: { conversation_id: 'fork-source', attempt_id: `source-${offset+i+1}` } })) } };
   });
   fireEvent.pointerMove(ui.getByRole('button', { name: 'Load and jump to turn 960' }));
@@ -84,7 +85,7 @@ it('previews show the native prompt and final response, fall back to the turn nu
   expect(ui.queryByRole('tooltip')).toBeNull();
   expect(navigate).not.toHaveBeenCalled();
   fireEvent.click(mark);
-  expect(navigate).toHaveBeenCalledExactlyOnceWith(native(1000));
+  expect(navigate).toHaveBeenCalledExactlyOnceWith({turn:native(1000),cut:server.client.getSnapshot().views.A.turnOutline!.page!.cut});
 });
 
 it('an unloaded mark reads its native page before navigating; the newest page restores latest intent', async () => {
@@ -128,13 +129,13 @@ it('dragging previews the pointed turn and release navigates exactly once', asyn
   expect(navigate).not.toHaveBeenCalled();
   pointer('pointerup', y);
   fireEvent.click(rail);
-  expect(navigate).toHaveBeenCalledExactlyOnceWith(native(999, ''));
+  expect(navigate).toHaveBeenCalledExactlyOnceWith({turn:native(999, ''),cut:server.client.getSnapshot().views.A.turnOutline!.page!.cut});
 });
 
 it('fewer than two native turns render no rail', async () => {
   installTurnNavigatorObserver();
   server = new Server(); await server.attached('A');
-  server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1', mutation_revision: '0' }, offset: 0, total: 1, turns: [native(1)] } }));
+  server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: { cut: { conversation_id: 'conversation-A', journal: '1', transcript: '1', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, offset: 0, total: "1", turns: [native(1)] } }));
   const ui = await act(async () => render(<TurnNavigator client={server.client} sessionId="A" onNavigate={() => {}}/>));
   expect(ui.queryByRole('navigation')).toBeNull();
 });
@@ -143,9 +144,9 @@ it('current native identity precedes location; the first durable process locatio
  installTurnNavigatorObserver();
  server=new Server();await server.attached('A');
  const id={conversation_id:'conversation-A',attempt_id:'live'};
- const cut={conversation_id:'conversation-A',journal:'10',transcript:'0',mutation_revision:'0'};
+ const cut={conversation_id:'conversation-A',journal:'10',transcript:'0',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};
  let cursor:string|null=null;
- server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut:{...cut,transcript:cursor??'0'},offset:0,total:2,turns:[native(1),{id,ordinal:2,cursor,prompt:'Live prompt',response:''}]}}));
+ server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut:{...cut,transcript:cursor??'0'},offset:0,total:"2",turns:[native(1),{id,ordinal:2,cursor,prompt:'Live prompt',response:''}]}}));
  const s=server.snapshots.get('A')!;
  server.snapshots.set('A',{...s,attempt:{attempt_id:'live',phase:{type:'running'},turn:1}});await server.client.refresh('A');
  const navigate=vi.fn();let ui:ReturnType<typeof render>;
@@ -153,14 +154,14 @@ it('current native identity precedes location; the first durable process locatio
  const mark=()=>ui!.container.querySelector<HTMLButtonElement>('[data-turn-id=\'["conversation-A","live"]\']')!;
  expect(mark().getAttribute('aria-current')).toBe('true');expect(mark().getAttribute('aria-disabled')).toBe('true');
  fireEvent.click(mark());expect(navigate).not.toHaveBeenCalled();
- cursor='1';const owner={...id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'running' as const};
+ cursor='1';const owner={ final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,...id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'running' as const};
  await act(async()=>{server.durableUpdate('A',{...s,attempt:{attempt_id:'live',phase:{type:'running'},turn:1},transcript:{entries:[{cursor:'1',item:{type:'message',message:{role:'assistant',id:'first',content:[{type:'text',text:'first durable'}]}},turn_process:owner}]}});});
  expect(mark().hasAttribute('aria-disabled')).toBe(false);expect(mark().getAttribute('aria-current')).toBe('true');
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
  expect(turnsRequests()).toHaveLength(2);
  await act(async()=>{server.durableUpdate('A',{...server.snapshots.get('A')!,attempt:{attempt_id:'live',phase:{type:'running'},turn:1,in_flight:{message_id:'more',blocks:[{type:'text',block_index:0,text:'same attempt text delta'}]}}});});
  expect(turnsRequests()).toHaveLength(2);
- fireEvent.click(mark());expect(navigate).toHaveBeenCalledWith(expect.objectContaining({id,cursor:'1'}));
+ fireEvent.click(mark());expect(navigate).toHaveBeenCalledWith({turn:expect.objectContaining({id,cursor:'1'}),cut:server.client.getSnapshot().views.A.turnOutline!.page!.cut});
  ui!.rerender(<TurnNavigator client={server.client} sessionId="A" active={'turn:["conversation-A","history"]'} onNavigate={navigate}/>);
  expect(mark().hasAttribute('aria-current')).toBe(false);
  ui!.rerender(<TurnNavigator client={server.client} sessionId="A" active={'turn:["conversation-A","live"]'} onNavigate={navigate}/>);
@@ -172,13 +173,13 @@ it('a loaded rail mark outside the transcript window reads its native window whi
  server=new Server();await server.attached('A');
  const old={id:{conversation_id:'conversation-A',attempt_id:'old'},ordinal:1,cursor:'1',prompt:'first',response:'answer'};
  const live={id:{conversation_id:'conversation-A',attempt_id:'live'},ordinal:2,cursor:'600',prompt:'current',response:''};
- const cut={conversation_id:'conversation-A',journal:'600',transcript:'600',mutation_revision:'0'};
- const owner={...live.id,control_cursor:'600',message_count:1,tool_call_count:0,outcome:'running' as const};
+ const cut={conversation_id:'conversation-A',journal:'600',transcript:'600',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};
+ const owner={ final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,...live.id,control_cursor:'600',message_count:1,tool_call_count:0,outcome:'running' as const};
  const row=(cursor:string)=>({cursor,item:{type:'message' as const,message:{role:'assistant' as const,id:`m${cursor}`,content:[{type:'text' as const,text:`output ${cursor}`}]}},turn_process:owner});
  const s={...server.snapshots.get('A')!,attempt:{attempt_id:'live',phase:{type:'running' as const},turn:1},transcript:{entries:[row('600')],next_cursor:'600'}};
  server.snapshots.set('A',s);await server.client.refresh('A');
- server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:2,turns:[old,live]}}));
- let work:Promise<false | ConversationTurn>|undefined,ui:ReturnType<typeof render>;
+ server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:"2",turns:[old,live]}}));
+ let work:Promise<false | ObservedTurn>|undefined,ui:ReturnType<typeof render>;
  await act(async()=>{ui=render(<TurnNavigator client={server.client} sessionId="A" onNavigate={turn=>{work=server.client.navigateTurn('A',turn);}}/>);});
  const mark=ui!.getByRole('button',{name:'Jump to turn 1'});
  await act(async()=>{server.durableUpdate('A',{...s,transcript:{entries:[row('600'),row('601')]}});});
@@ -186,9 +187,9 @@ it('a loaded rail mark outside the transcript window reads its native window whi
  expect(turnsRequests()).toHaveLength(1);
  server.held.add('session/transcript');
  fireEvent.click(mark);const request=await server.waitFor('session/transcript',1);
- expect(request.params).toMatchObject({limit:64});expect(request.params).toHaveProperty('at',{type:'turn',id:old.id,cut});
+ expect(request.params).toMatchObject({limit:32});expect(request.params).toHaveProperty('at',{type:'turn_ordinal',ordinal:old.ordinal,cut});
  expect(mark.getAttribute('aria-busy')).toBe('true');
- await act(async()=>{server.socket.success(request,{type:'transcript_window',window: { cut, target:old.id, target_cursor:'1', page:{entries:[{...row('1'),turn_process:{...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]}}});expect(await work).toEqual(old);});
+ await act(async()=>{server.socket.success(request,{type:'transcript_window',window: { cut, target:old.id, target_cursor:'1', page:{entries:[{...row('1'),turn_process:{ final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,...old.id,control_cursor:'1',message_count:1,tool_call_count:0,outcome:'completed'}}]}}});expect(await work).toEqual(old);});
  expect(mark.hasAttribute('aria-busy')).toBe(false);
  expect(server.client.getSnapshot().views.A.history?.page.entries?.map(row=>row.cursor)).toEqual(['1']);
  // The historical window and current tail have separate read authority.
@@ -267,13 +268,13 @@ async function pagingRail(initial:number){
  server.handlers.set('session/turns',request=>{
   if(request.method!=='session/turns')throw new Error('outline method');
   const offset=request.params.offset??Math.floor((total-1)/64)*64;
-  return {type:'conversation_turns',page:{cut:{conversation_id:'conversation-A',journal:String(total),transcript:String(location??initial),mutation_revision:'0'},offset,total,
+  return {type:'conversation_turns',page:{cut:{conversation_id:'conversation-A',journal:String(total),transcript:String(location??initial),mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'},offset,total:String(total),
    turns:Array.from({length:Math.min(64,total-offset)},(_,i)=>{const n=offset+i+1;return {id:{conversation_id:'conversation-A',attempt_id:`a${n}`},ordinal:n,cursor:n>initial && n!==location?null:String(n),prompt:`turn ${n}`,response:''};})}};
  });
  navigationIntent();
- const navigate=vi.fn((selection:ConversationTurn|number)=>{void server.client.navigateTurn('A',selection);});
+ const navigate=vi.fn((selection:TurnSelection)=>{void server.client.navigateTurn('A',selection);});
  let ui:ReturnType<typeof render>;await act(async()=>{ui=render(<TurnNavigator client={server.client} sessionId="A" onNavigate={navigate}/>);});
- const update=async(n:number,settled=false,phaseChange=false)=>{const s=server.snapshots.get('A')!;const next:RuntimeClientSnapshot={...s,attempt:{attempt_id:`a${n}`,turn:1,phase:settled?{type:'settled',outcome:{type:'completed',finish_reason:{type:'stop'}}}:{type:'running'}},transcript:{entries:location?[{cursor:String(location),item:{type:'message',message:{role:'assistant',id:`m${location}`,content:[{type:'text',text:'native output'}]}},turn_process:{conversation_id:'conversation-A',attempt_id:`a${n}`,control_cursor:String(location),message_count:1,tool_call_count:0,outcome:settled?'completed' as const:'running' as const}}]:[]}};await act(async()=>{server.snapshots.set('A',next);if(phaseChange)await server.client.refresh('A');else server.durableUpdate('A',next);});};
+ const update=async(n:number,settled=false,phaseChange=false)=>{const s=server.snapshots.get('A')!;const next:RuntimeClientSnapshot={...s,attempt:{attempt_id:`a${n}`,turn:1,phase:settled?{type:'settled',outcome:{type:'completed',finish_reason:{type:'stop'}}}:{type:'running'}},transcript:{entries:location?[{cursor:String(location),item:{type:'message',message:{role:'assistant',id:`m${location}`,content:[{type:'text',text:'native output'}]}},turn_process:{attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,conversation_id:'conversation-A',attempt_id:`a${n}`,control_cursor:String(location),message_count:1,tool_call_count:0,outcome:settled?'completed' as const:'running' as const}}]:[]}};await act(async()=>{server.snapshots.set('A',next);if(phaseChange)await server.client.refresh('A');else server.durableUpdate('A',next);});};
  return {ui:ui!,navigate,mark:(n:number)=>ui!.container.querySelector<HTMLButtonElement>(`[data-turn-id='["conversation-A","a${n}"]']`),
   offsets:()=>server.requests.filter(row=>row.request.method==='session/turns').map(row=>row.request.method==='session/turns'?row.request.params.offset:undefined),
   start:async(n:number)=>{total=n;location=undefined;await update(n,false,true);},locate:async(n:number)=>{location=n;await update(n);},settle:async(n:number)=>{await update(n,true,true);}};
@@ -282,11 +283,11 @@ async function pagingRail(initial:number){
 it('observed unknown detached ownership suppresses the unrelated live fallback', async () => {
  installTurnNavigatorObserver();
  server=new Server();await server.attached('A');
- const id={conversation_id:'conversation-A',attempt_id:'live'},cut={conversation_id:'conversation-A',journal:'1',transcript:'1',mutation_revision:'0'};
+ const id={conversation_id:'conversation-A',attempt_id:'live'},cut={conversation_id:'conversation-A',journal:'1',transcript:'1',mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'};
  const s=server.snapshots.get('A')!;
  server.snapshots.set('A',{...s,attempt:{attempt_id:'live',phase:{type:'running'},turn:1}});await server.client.refresh('A');
  const turn={id,ordinal:2,cursor:'1',prompt:'',response:''};
- server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:2,turns:[native(1),turn]}}));
+ server.handlers.set('session/turns',()=>({type:'conversation_turns',page:{cut,offset:0,total:"2",turns:[native(1),turn]}}));
  const ui=await act(async()=>render(<TurnNavigator client={server.client} sessionId="A" active={null} onNavigate={()=>{}}/>));
  expect(ui.container.querySelectorAll('[aria-current]')).toHaveLength(0);
  ui.rerender(<TurnNavigator client={server.client} sessionId="A" onNavigate={()=>{}}/>);
@@ -295,7 +296,7 @@ it('observed unknown detached ownership suppresses the unrelated live fallback',
 
 it('a million native ordinals retain only one page and arithmetic accessors; allocation follows the visible range', () => {
  const total=1_000_000,offset=499_968;
- const page={cut:{conversation_id:'conversation-A',journal:'1',transcript:String(total),mutation_revision:'0'},offset,total,turns:Array.from({length:64},(_,i)=>native(offset+i+1))};
+ const page={cut:{conversation_id:'conversation-A',journal:'1',transcript:String(total),mutation_revision:'0',ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'},offset,total:String(total),turns:Array.from({length:64},(_,i)=>native(offset+i+1))};
  let accesses=0;page.turns=new Proxy(page.turns,{get(target,key,receiver){if(typeof key==='string' && /^\d+$/.test(key))accesses++;return Reflect.get(target,key,receiver);}});
  const model=turnRail(page);
  expect(Object.keys(model)).toEqual(['count','item','indexOfKey','indexOfTurn']);
@@ -337,7 +338,7 @@ it('overlapping unloaded clicks retain only the newest page demand and navigatio
  expect(server.requests.filter(row=>row.request.method==='session/transcript')).toHaveLength(0);
  await act(async()=>server.reply(next));
  const windows=server.requests.filter(row=>row.request.method==='session/transcript');expect(windows).toHaveLength(1);
- expect(windows[0].request.params).toMatchObject({at:{type:'turn',id:native(1).id}});
+ expect(windows[0].request.params).toMatchObject({at:{type:'turn_ordinal',ordinal:1}});
  expect(server.client.getSnapshot().views.A.history?.window?.target).toEqual(native(1).id);
 });
 

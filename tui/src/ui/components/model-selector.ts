@@ -83,16 +83,19 @@ export interface ModelSelectorOptions {
   sessionModel: SessionModelView;
   /** The active attempt, when one exists, for the frozen-model notice. */
   attempt?: AttemptPresentation;
+  deferredNotice?: string;
 }
 
 export class ModelSelector implements PopupContent, Focusable {
   onSelect?: (model: CatalogModelView) => void;
   onCancel?: () => void;
   onChange?: () => void;
+  onNextPage?: () => void;
 
   readonly #models: CatalogModelView[];
   readonly #sessionModel: SessionModelView;
   readonly #attempt: AttemptPresentation | undefined;
+  readonly #deferredNotice: string | undefined;
   readonly #searchInput: Input;
   #query = "";
   #selected = 0;
@@ -102,6 +105,7 @@ export class ModelSelector implements PopupContent, Focusable {
     this.#models = options.models;
     this.#sessionModel = options.sessionModel;
     this.#attempt = options.attempt;
+    this.#deferredNotice = options.deferredNotice;
     this.#searchInput = new Input();
     this.#searchInput.onEscape = () => this.onCancel?.();
     this.#searchInput.onSubmit = () => this.#selectCurrent();
@@ -151,7 +155,7 @@ export class ModelSelector implements PopupContent, Focusable {
 
   /** The popup's help line, contained by the frame below the body. */
   popupFooter(): string[] {
-    return ["↑↓ navigate · Enter select · Esc close"];
+    return [this.onNextPage ? "↑↓ navigate · PageDown next catalog page · Enter select · Esc close" : "↑↓ navigate · Enter select · Esc close"];
   }
 
   /**
@@ -169,6 +173,7 @@ export class ModelSelector implements PopupContent, Focusable {
 
   handleInput(data: string): void {
     const visible = this.visibleModels();
+    if (matchesKey(data,"pageDown") && this.onNextPage) {this.onNextPage();return;}
     if (matchesKey(data, "escape")) {
       this.onCancel?.();
       return;
@@ -206,7 +211,7 @@ export class ModelSelector implements PopupContent, Focusable {
     const searchWidth = Math.max(1, width - plainWidth("Search: "));
     const search = this.#searchInput.render(searchWidth)[0] ?? "";
     // The interactive header always renders first: it owns the input focus.
-    const header = [truncate(`${role.meta("Search:")} ${search}`, width), ""];
+    const header = [truncate(`${role.meta("Search:")} ${search}`, width), ...(this.#deferredNotice ? [truncate(role.meta(this.#deferredNotice), width)] : []), ""];
     const budget = Math.max(1, this.#bodyHeight);
 
     if (visible.length === 0) {
@@ -346,8 +351,8 @@ export class ModelSelector implements PopupContent, Focusable {
     if (attempt !== undefined) {
       const frozen = attempt.model ? `${attempt.model.primary.model} · profile ${describeProfile(attempt.model.primary)} · ${attempt.model.primary.maxOutputTokens} out` : "unavailable";
       lines.push(
-        attempt.phase.type === "settled"
-          ? role.meta(`attempt     ${frozen} · frozen at admission (settled)`)
+        !["admitted","running"].includes(attempt.phase.type)
+          ? role.meta(`attempt     ${frozen} · frozen at admission (${attempt.phase.type})`)
           : role.pending(
               `attempt     ${frozen} · frozen at admission; a change applies to the next attempt`,
             ),

@@ -4,6 +4,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openWorkspaceSettings, openSettingsPage, closeSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { transitionFacts } from '../../../protocol/app-server/projection';
 
 function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 
@@ -102,11 +103,14 @@ test('Harness New Conversation, permission, model, native process and Models con
     await expect(page.getByText(/^(Creating|Attaching)…$/)).toHaveCount(0);
     expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(1);
     expect(wire.requests.filter(r => r.method === 'turn/start')).toHaveLength(1);
-    const admitted = wire.notifications.filter(n => n.method === 'session/event' && n.params.event?.type === 'attempt_started');
+    const admitted = wire.notifications.filter(n => n.method === 'session/event' && transitionFacts(n.params.event).some(fact => fact.type === 'attempt_started'));
     expect(admitted).toHaveLength(1);
-    expect(admitted[0].params.event.execution_settings.approval_mode).toBe('full_access');
+    const started = transitionFacts(admitted[0].params.event).find(fact => fact.type === 'attempt_started');
+    if (started?.type !== 'attempt_started' || !started.execution_settings) throw new Error('Missing original admitted Attempt execution settings.');
+    expect(started.execution_settings.approval_mode).toBe('full_access');
     const methods = wire.requests.map(r => r.method);
-    expect(methods.indexOf('session/setModel')).toBeLessThan(methods.indexOf('turn/start'));
+    expect(wire.requests.find(request => request.method === 'session/create')!.params.settings.model).toMatchObject({ model: 'fixture/second-model' });
+    expect(methods.filter(method => method === 'session/setModel')).toHaveLength(0);
     const process = page.locator('[data-turn-process]');
     await expect(process).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByRole('note', { name: 'Agent Status' })).toHaveCount(0);

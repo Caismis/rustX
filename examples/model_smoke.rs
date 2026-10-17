@@ -182,7 +182,8 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
                 kind: InboundKind::Message,
                 timestamp: None,
             }),
-        )],
+        )]
+        .into(),
         tools: Vec::new(),
         effective_system_prompt: String::new(),
         continuation: None,
