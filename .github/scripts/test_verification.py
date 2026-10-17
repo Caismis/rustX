@@ -12,6 +12,16 @@ def passing(planned):
     return {**results, "notifications": "success"}
 
 
+class Globs(unittest.TestCase):
+    def test_double_star_spans_directories_and_single_star_one_segment(self):
+        self.assertTrue(v.matches("web-console/src/a/b/c.css", ["web-console/src/**.css"]))
+        self.assertTrue(v.matches("web-console/test/e2e/a.spec.ts-snapshots/x/y.png", ["web-console/test/e2e/*.spec.ts-snapshots/**"]))
+        self.assertFalse(v.matches("web-console/test/e2e/sub/a.spec.ts", ["web-console/test/e2e/*.spec.ts"]))
+        self.assertFalse(v.matches("web-console/src/locale/dictionaries/x/y.ts", ["web-console/src/locale/dictionaries/*.ts"]))
+        self.assertTrue(v.matches("README.md", ["*.md"]))
+        self.assertFalse(v.matches("examples/AGENTS.md", ["*.md"]))
+
+
 class Classification(unittest.TestCase):
     def test_runtime_ci_test_infrastructure_and_unknown_paths_are_high_risk(self):
         for path in [
@@ -31,6 +41,17 @@ class Classification(unittest.TestCase):
             "web-console/playwright.config.ts",
             "tui/src/protocol/decoder.ts",
             "dev/src/process.ts",
+            "web-console/src/workspaces/authority.ts",
+            "web-console/src/workspaces/session-admission.ts",
+            "web-console/src/connection/controller.ts",
+            "web-console/src/app/agent/AgentComposer.tsx",
+            "web-console/src/locale/controller.ts",
+            "web-console/test/fixture.ts",
+            "web-console/test/setup.ts",
+            "tui/src/commands/dispatcher.ts",
+            "tui/src/presentation/state.ts",
+            "tui/src/ui/app.ts",
+            "tui/test/support.ts",
             "Cargo.lock",
             "an/unknown/path.txt",
             "Makefile",
@@ -46,10 +67,11 @@ class Classification(unittest.TestCase):
             "web-console/CHAT.md",
             "web-console/src/presentation/agent/Message.tsx",
             "web-console/src/locale/dictionaries/agent.ts",
+            "web-console/src/app/agent/AgentComposer.module.css",
             "web-console/test/model-retry.test.tsx",
             "web-console/test/e2e/chat.spec.ts",
             "web-console/test/e2e/agent.spec.ts-snapshots/settled.png",
-            "tui/src/ui/screen.ts",
+            "tui/test/deliveries.test.ts",
         ]:
             with self.subTest(path=path):
                 self.assertEqual(v.risk_of(path), "low")
@@ -104,9 +126,10 @@ class Planning(unittest.TestCase):
         run = v.plan("pull_request", [], ["web-console/src/presentation/a.tsx"])["run"]
         self.assertEqual({job for job, selected in run.items() if selected},
                          {"desktop-macos", "browser-prepare", "web-client", "browser-shard", "browser-report"})
+        self.assertEqual(v.plan("pull_request", [], ["web-console/src/presentation/a.tsx"])["risk"], "low")
         run = v.plan("pull_request", [], ["src/lib.rs"])["run"]
         self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
-        self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"] or run["browser-shard"])
+        self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
         run = v.plan("pull_request", [], ["README.md"])["run"]
         self.assertFalse(any(run.values()))
 
@@ -127,6 +150,39 @@ class AffectedSteps(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         used = set(re.findall(r"fromJSON\(needs\.plan\.outputs\.steps\)\['([^']+)'\]", text))
         self.assertEqual(used, set(v.COMPONENTS))
+
+
+class BrowserSelection(unittest.TestCase):
+    def test_full_runs_the_complete_inventory_in_two_shards(self):
+        self.assertEqual(v.plan("push", [], [])["browser"],
+                         {"selection": "full", "shards": [1, 2], "specs": [], "screenshots": False})
+
+    def test_fast_is_one_shard_of_smoke_and_changed_specs(self):
+        browser = v.plan("pull_request", [], ["web-console/test/e2e/chat.spec.ts", "README.md"])["browser"]
+        self.assertEqual(browser, {"selection": "fast", "shards": [1], "specs": ["chat.spec.ts"], "screenshots": False})
+
+    def test_a_changed_screenshot_reference_selects_its_spec(self):
+        browser = v.plan("pull_request", [], ["web-console/test/e2e/agent.spec.ts-snapshots/a.png"])["browser"]
+        self.assertEqual(browser["specs"], ["agent.spec.ts"])
+
+    def test_a_low_risk_presentation_change_runs_the_browser_and_its_screenshot_specs(self):
+        planned = v.plan("pull_request", [], ["web-console/src/presentation/agent/Message.tsx"])
+        self.assertEqual(planned["risk"], "low")
+        self.assertTrue(planned["run"]["browser-shard"] and planned["run"]["browser-report"])
+        self.assertTrue(planned["browser"]["screenshots"])
+        self.assertEqual(planned["browser"]["shards"], [1, 2])
+
+    def test_a_high_risk_web_change_runs_smoke_and_changed_specs_on_one_shard(self):
+        browser = v.plan("pull_request", [], ["web-console/src/connection/controller.ts"])["browser"]
+        self.assertEqual(browser, {"selection": "fast", "shards": [1], "specs": [], "screenshots": False})
+
+    def test_an_unreadable_diff_runs_every_screenshot_spec(self):
+        self.assertTrue(v.plan("pull_request", [], [])["browser"]["screenshots"])
+
+    def test_a_rust_change_gets_browser_smoke_feedback(self):
+        planned = v.plan("pull_request", [], ["src/lib.rs"])
+        self.assertTrue(planned["run"]["browser-shard"])
+        self.assertEqual(planned["browser"]["selection"], "fast")
 
 
 class Gate(unittest.TestCase):
@@ -153,6 +209,14 @@ class Gate(unittest.TestCase):
         planned = v.plan("pull_request", [v.PROMOTION_LABEL], ["src/lib.rs"])
         self.assertEqual(v.gate(planned, passing(planned), "old", "new"),
                          ["this run verified old, but the pull request head is now new: superseded"])
+
+    def test_a_tested_merge_commit_must_join_the_event_base_and_head(self):
+        planned = v.plan("pull_request", [], ["web-console/src/presentation/a.tsx"])
+        good = {"merge": "m", "parents": ["base", "abc"], "base": "base"}
+        self.assertEqual(v.gate(planned, passing(planned), "abc", "abc", good), [])
+        stale = {"merge": "m", "parents": ["base", "older"], "base": "base"}
+        self.assertEqual(v.gate(planned, passing(planned), "abc", "abc", stale),
+                         ["the tested merge commit m joins ['base', 'older'], not base base and head abc"])
 
     def test_a_superseded_fast_run_is_not_current_verification(self):
         planned = v.plan("pull_request", [], ["web-console/src/presentation/a.tsx"])

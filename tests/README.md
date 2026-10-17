@@ -301,43 +301,62 @@ and affected steps run. Every gated job runs only when the plan's
 `run[<job id>]` is true, and the script's tests check that `ci.yml` gates
 each job exactly that way.
 
-**Risk.** A change is high risk when any path can alter runtime, Agent Loop,
-persistence, canonical history, process supervision, transport, protocol,
-cancellation or recovery semantics, shared test infrastructure, CI or
-test-selection rules, or build provenance: all Rust sources and tests,
-`protocol/`, `test-support/`, `dev/`, `.github/`, the Product Host, the Web
-client, bindings and carrier, the browser fixtures and configuration, the
-TUI's App Server client, and every manifest and lockfile. A path no rule
-names, or an unreadable diff, is high risk and affects every surface.
-Presentation (Web `src/` outside those owners, the TUI's UI), leaf tests
-and browser specs are low risk. Documentation is low risk and selects no
-suite; Markdown under `examples/` is not documentation (it defines Agents,
-Skills and Workflows).
+**Risk.** Low risk is an explicit allowlist (`LOW_RISK` in
+`verification.py`); every other path is high risk, unknown paths and an
+unreadable or possibly truncated diff included. Low risk is:
 
-**Merge.** `Merge verification` (the `verification` job) is the verdict to
-require. It always runs, and fails unless:
+- documentation (`*.md` at the top level, `docs/`, the Web and TUI READMEs
+  and guides, `tests/README.md`, `LICENSE`) — Markdown under `examples/` is
+  not documentation, it defines Agents, Skills and Workflows;
+- Web presentation: `web-console/src/presentation/**` (the provenance check
+  fails a file there that imports a client, protocol, binding, storage,
+  fetch or WebSocket authority), the translation dictionaries, stylesheets
+  and `public/`;
+- leaf tests: `web-console/test/*.test.ts(x)`, `tui/test/*.test.ts`, browser
+  specs and their screenshot references. A changed leaf test runs in FAST.
+
+Everything that owns behaviour is therefore high risk, including Web
+connection, authorization, workspace admission and client ownership
+(`web-console/src/connection/`, `src/workspaces/`, `src/client/`, …), the
+TUI's command dispatcher, presentation state and protocol, shared test
+fixtures and helpers, CI, manifests and all Rust.
+
+**Browser FAST and FULL.** Both run the same build-once inputs, pinned
+Chromium and one Playwright worker per runner; they differ only in the
+selection the plan passes to `browser-prepare`:
+
+- **FULL** — every test Playwright discovers, in two shards. The coverage
+  gate fails unless all of them ran exactly once.
+- **FAST** — one shard of the `@smoke` tests (startup and admission, the
+  development launcher with the real Web carrier, App Server and Host,
+  connection authentication, a native retry workflow, lost-acknowledgement
+  model selection, configuration recovery, Harness primitives and an Agent
+  screenshot reference), every test of a changed spec (or of a spec whose
+  screenshot references changed), and, for a low-risk presentation change,
+  every spec that holds screenshot references, then over two shards. The
+  coverage gate fails if FAST selects no smoke test or omits a changed
+  spec, and its summary says it is a subset, never full coverage.
+
+**Merge.** `Merge verification` (the `verification` job) is the verdict, and
+the repository ruleset "Merge verification on main" requires it from GitHub
+Actions on `main`, with branches up to date, so a pull request whose check
+is missing, pending, cancelled or failed cannot merge. The job always runs
+and fails unless:
 
 - every job the plan selected succeeded and nothing unselected ran;
 - a high-risk change was verified by FULL;
-- the head this run verified is still the pull request's head.
+- the tested merge commit's parents are exactly the event's base and head,
+  and that head is still the pull request's head.
 
-A high-risk pull request therefore shows a failing `Merge verification` on
-every FAST run, with the reason, until its final candidate is promoted with
-the `full-verification` label. FULL then runs on that exact head; any later
-push runs FULL again on the new head, and a result for an earlier head
-verifies nothing. The check enforces merges only once branch protection (or
-a ruleset) on `main` requires `Merge verification`; `main` currently has
-none, so a repository admin must add that rule — the workflow alone cannot
-prevent a merge. GitHub attaches checks to the pull request's head commit,
-which is tested merged with `main` as it was when the run started; requiring
-branches to be up to date before merging closes that gap.
+The run's summary names the pull request head, base and tested merge commit
+separately; the browser inventory records the merge commit it checked out.
 
-**Superseded runs.** A newer push or label on the same pull request cancels
-its unfinished run (`concurrency`, one group per pull request). Runs on
-`main`, scheduled and dispatched runs each form their own group and are
-never cancelled. FAST and FULL for one head are the same run, so they never
-cancel each other; a run's gate also fails if the pull request's head moved
-while it ran.
+**Promotion.** Add the `full-verification` label when a high-risk change is
+a stable candidate: the `labeled` event runs FULL on the current head, and
+every later push runs FULL while the label stays. To return to FAST for
+further development, remove the label (removal starts no run); add it again
+for the next candidate. Until a high-risk head has a successful FULL run, its
+`Merge verification` fails with the reason.
 
 **FAST Rust.** `rust-fast` compiles the library test harness and the
 `process` target once, runs every unit and deterministic contract module
@@ -360,7 +379,8 @@ deliberate scheduling tradeoff: before #479 every pull request push ran
 everything; now a high-risk change gets that complete verification once, on
 its promoted head, and its intermediate pushes get FAST feedback. A
 low-risk change merges on FAST, which selects the suites of its surfaces (a
-Web presentation change runs the Web client checks and both browser shards).
+Web presentation change runs the Web client checks and the browser FAST
+selection with every screenshot-reference spec).
 
 **Capacity tests.** A test whose value comes from its scale — a thousand
 turns, thousands of requests, 2,048 tool calls, 4,097 releases, a thousand
@@ -482,13 +502,19 @@ summarizes them and the lane check below verifies them against Cargo:
   after the script re-verifies the installed
   inputs (`RUSTX_BROWSER_PREPARED=1` selects that path instead of
   `cargo build`) and `provenance.ts --artifact` re-checks the installed
-  bundle. `browser-report` ("Full Web conformance", the one browser verdict)
-  merges both blob reports into one HTML report with every trace and
-  screenshot, and `browser-shards.ts verify` passes only when every
-  inventoried test ran exactly once in exactly one shard, against the
-  inventory's commit and prepared inputs, and passed or skipped itself; a
-  missing or empty shard, a duplicate, an unexecuted test or another
-  identity fails it, as does either shard's failure. Locally,
+  bundle. `browser-report` ("Browser acceptance coverage", the one browser
+  verdict) merges the shards' blob reports into one HTML report with every
+  trace and screenshot, and `browser-shards.ts verify` passes only when every
+  inventoried test of the selection ran exactly once in exactly one shard,
+  against the inventory's commit and prepared inputs, and passed or skipped
+  itself; a missing or empty shard, a duplicate, an unexecuted test, a FULL
+  inventory smaller than discovery, a FAST selection without a smoke test or
+  without a changed spec, or another identity fails it, as does any shard's
+  failure. The preparation build refuses build-affecting overrides
+  (`RUSTFLAGS`, `CARGO_PROFILE_*`, `CARGO_BUILD_*` except `JOBS`, compiler
+  and linker flags, `NODE_ENV`, `VITE_*`, …), so the identity's `build:
+  repository-defaults` plus the checksums of the Cargo, toolchain, pnpm and
+  Vite configuration are its whole build configuration. Locally,
   `pnpm test:e2e` stays self-contained: `pnpm build && bash
   scripts/browser-tests.sh`, which runs `cargo build` itself.
 

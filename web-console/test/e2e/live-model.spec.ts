@@ -143,7 +143,7 @@ max_output_tokens = { mode = "limit", tokens = 333 }
 // the narrow layout. Neither the width-specific placement nor the lost-ACK
 // recovery depends on the other.
 for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as const) {
-  test(`live same-model profile selection (${width}, acknowledgement ${acknowledgement})`, async ({ page }) => {
+  test(`live same-model profile selection (${width}, acknowledgement ${acknowledgement})`, { tag: acknowledgement === 'lost' ? ['@smoke'] : [] }, async ({ page }) => {
     // Reuse the shared two-request provider scenario. Its first stream is held
     // at an explicit gate until the profile mutation and recovery are proven.
     const fixture = await startDogfood('tui_multi_session');

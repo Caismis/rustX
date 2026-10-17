@@ -9,9 +9,10 @@ high-risk change was verified by FULL, and the verified pull request head is
 still the current one.
 """
 
-import fnmatch
 import json
 import os
+import re
+import subprocess
 import sys
 import urllib.request
 
@@ -19,68 +20,38 @@ import urllib.request
 # FULL. Adding it starts a run (the `labeled` event); removing it does not.
 PROMOTION_LABEL = "full-verification"
 
-# Paths whose change can alter runtime, persistence, transport, process,
-# protocol, build, provenance or verification semantics. Their pull requests
-# need FULL on the exact head before merge. First matching rule wins; a path
-# no rule names is unknown and therefore high risk.
-HIGH_RISK = (
-    ".github/**",
-    "src/**",
-    "tests/**",
-    "examples/**",
-    "benches/**",
-    "build.rs",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain.toml",
-    "schemas/**",
-    "protocol/**",
-    "test-support/**",
-    "dev/**",
-    "web-console/host/**",
-    "web-console/shared/**",
-    "web-console/src/client/**",
-    "web-console/src/bindings/**",
-    "web-console/src/carrier/**",
-    "web-console/scripts/**",
-    "web-console/test/e2e/*.ts",
-    "web-console/test/e2e/*.py",
-    "web-console/test/e2e/*.yaml",
-    "web-console/test/fixture*.ts",
-    "web-console/test/setup.ts",
-    "web-console/playwright.config.ts",
-    "web-console/vite.config.ts",
-    "web-console/vite.performance.config.ts",
-    "web-console/package.json",
-    "web-console/pnpm-lock.yaml",
-    "web-console/pnpm-workspace.yaml",
-    "tui/src/app-server/**",
-    "tui/src/protocol/**",
-    "tui/package.json",
-    "tui/pnpm-lock.yaml",
-    "tui/pnpm-workspace.yaml",
-)
+# Risk is an explicit allowlist. Only the paths below are low risk: changes
+# that cannot alter runtime, persistence, Source, recovery, authorization,
+# admission, transport, connection or client ownership, CI, test
+# infrastructure or build semantics. Everything else, including every path
+# no rule names, is high risk and needs FULL on the exact head before merge.
+#
 # Documentation that no build, test or runtime reads. Markdown elsewhere is
 # not assumed inert: examples/local-runtime holds Agent, Skill and Workflow
 # definitions written in Markdown.
 DOCUMENTATION = ("*.md", "docs/**", "web-console/*.md", "tui/*.md", "tests/README.md", "LICENSE")
-# Presentation and leaf tests: FAST, with the affected surface's suites
-# selected, is their merge evidence. Browser specs sit beside the shared e2e
-# helpers that HIGH_RISK names.
-LOW_RISK = (
+# Web presentation: what a screenshot reference can show changing.
+PRESENTATION = (
+    # The presentation layer. scripts/provenance.ts fails the Web check if a
+    # file here imports a client, protocol, binding, storage, fetch or
+    # WebSocket authority, so it can only render what it is given.
+    "web-console/src/presentation/**",
+    # Pure translations and stylesheets.
+    "web-console/src/locale/dictionaries/*.ts",
+    "web-console/src/**.css",
+    "web-console/public/**",
+)
+LOW_RISK = DOCUMENTATION + (
+    *PRESENTATION,
+    # Leaf tests. Each runs in FAST when changed: the Web and TUI unit suites
+    # run whole, and a changed browser spec or screenshot reference selects
+    # that spec (browser_selection below). Shared fixtures and helpers are
+    # test infrastructure and stay high risk.
+    "web-console/test/*.test.ts",
+    "web-console/test/*.test.tsx",
     "web-console/test/e2e/*.spec.ts",
     "web-console/test/e2e/*.spec.ts-snapshots/**",
-    "web-console/src/**",
-    "web-console/test/**",
-    "web-console/public/**",
-    "web-console/licenses/**",
-    "web-console/index.html",
-    "web-console/source-inventory.json",
-    "web-console/browser-session.ts",
-    "web-console/tsconfig.json",
-    "tui/src/**",
-    "tui/test/**",
-    "tui/tsconfig.json",
+    "tui/test/*.test.ts",
 )
 # Which suites a changed path affects. Documentation selects only the
 # always-on jobs; any other path in no surface affects every suite.
@@ -94,27 +65,21 @@ SURFACES = {
 }
 
 
+def glob(pattern):
+    """A path glob: `**` spans directories, `*` and `?` stay within one."""
+    parts = re.split(r"(\*\*|\*|\?)", pattern)
+    tokens = {"**": ".*", "*": "[^/]*", "?": "[^/]"}
+    return re.compile("".join(tokens.get(part, re.escape(part)) for part in parts) + r"\Z")
+
+
 def matches(path, patterns):
-    """Glob match where `**` spans directories and `*` stays within one."""
-    for pattern in patterns:
-        if "**" in pattern:
-            prefix, _, suffix = pattern.partition("**")
-            if path.startswith(prefix) and fnmatch.fnmatchcase(path[len(prefix):], "*" + suffix):
-                return True
-        elif fnmatch.fnmatchcase(path, pattern) and path.count("/") == pattern.count("/"):
-            return True
-    return False
+    return any(glob(pattern).match(path) for pattern in patterns)
 
 
 def risk_of(path):
-    """`high` or `low` for one path; unknown paths are high."""
-    if matches(path, DOCUMENTATION) or matches(path, ("web-console/test/e2e/*.spec.ts",)):
-        return "low"
-    if matches(path, HIGH_RISK):
-        return "high"
-    if matches(path, LOW_RISK):
-        return "low"
-    return "high"
+    """`low` only for an allowlisted path; anything else, unknown paths
+    included, is `high`."""
+    return "low" if matches(path, LOW_RISK) else "high"
 
 
 def surfaces_of(path):
@@ -152,8 +117,8 @@ def selected_jobs(profile, surfaces):
         "desktop-macos": full or bool(s & {"web", "tui"}),
         "browser-prepare": full or bool(s & {"web", "dev", "rust", "protocol"}),
         "web-client": full or bool(s & {"web", "dev", "rust", "protocol"}),
-        "browser-shard": full or "web" in s,
-        "browser-report": full or "web" in s,
+        "browser-shard": full or bool(s & {"web", "dev", "rust", "protocol"}),
+        "browser-report": full or bool(s & {"web", "dev", "rust", "protocol"}),
     }
 
 
@@ -178,6 +143,35 @@ ALWAYS = ("notifications",)
 FULL_JOBS = tuple(job for job, selected in selected_jobs("full", SURFACES).items() if selected)
 
 
+# Browser acceptance in two selections over one discovered inventory
+# (web-console/scripts/browser-shards.ts). FULL runs every discovered test in
+# two shards. FAST runs one shard: the tests tagged @smoke, every test of a
+# changed spec (or of a spec whose screenshot references changed), and, when
+# Web source changed, every spec that holds screenshot references, since a
+# presentation change can move pixels.
+BROWSER_SPEC = "web-console/test/e2e/"
+
+
+def browser_selection(profile, paths):
+    if profile == "full":
+        return {"selection": "full", "shards": [1, 2], "specs": [], "screenshots": False}
+    specs = set()
+    for path in paths:
+        if path.startswith(BROWSER_SPEC):
+            name = path[len(BROWSER_SPEC):].split("/")[0]
+            if name.endswith(".spec.ts-snapshots"):
+                name = name[: -len("-snapshots")]
+            if name.endswith(".spec.ts"):
+                specs.add(name)
+    # A low-risk presentation change merges on FAST, so FAST must also hold
+    # it to the screenshot references (and spreads them over both shards). A
+    # high-risk Web change needs FULL anyway; its FAST run is smoke feedback.
+    # An unreadable diff cannot name its specs: it runs every screenshot spec.
+    screenshots = not paths or any(matches(path, PRESENTATION) for path in paths)
+    return {"selection": "fast", "shards": [1, 2] if screenshots else [1], "specs": sorted(specs),
+            "screenshots": screenshots}
+
+
 def plan(event_name, labels, paths):
     """The profile and job selection for one run.
 
@@ -190,16 +184,18 @@ def plan(event_name, labels, paths):
         classified = classify(paths)
         profile = "full" if PROMOTION_LABEL in labels else "fast"
     return {**classified, "profile": profile, "run": selected_jobs(profile, classified["surfaces"]),
-            "steps": selected_steps(profile, paths)}
+            "steps": selected_steps(profile, paths), "browser": browser_selection(profile, paths)}
 
 
-def gate(planned, results, tested_head, current_head):
+def gate(planned, results, tested_head, current_head, tested=None):
     """Merge verdict: the reasons this run cannot verify its head (empty = pass).
 
     `results` maps a job id to its GitHub result (success, failure,
-    cancelled, skipped); `tested_head` is the pull request head this run
-    checked out and `current_head` the pull request's head now (both None
-    outside pull requests).
+    cancelled, skipped); `tested_head` is the pull request head this run's
+    event named and `current_head` the pull request's head now (both None
+    outside pull requests). `tested` describes the synthetic merge commit a
+    pull request run checked out: {"merge", "parents", "base"}; its parents
+    must be exactly the event's base and head.
     """
     errors = [f"{job}: required by every run but {results.get(job) or 'missing'}"
               for job in ALWAYS if results.get(job) != "success"]
@@ -214,6 +210,9 @@ def gate(planned, results, tested_head, current_head):
             "high-risk change verified only by FAST; FULL is required on the exact head "
             f"before merge (add the `{PROMOTION_LABEL}` label): " + "; ".join(planned["reasons"][:5])
         )
+    if tested is not None and tested["parents"] != [tested["base"], tested_head]:
+        errors.append(f"the tested merge commit {tested['merge']} joins {tested['parents']}, "
+                      f"not base {tested['base']} and head {tested_head}")
     if tested_head != current_head:
         errors.append(f"this run verified {tested_head}, but the pull request head is now {current_head}: superseded")
     return errors
@@ -270,6 +269,7 @@ def main(command):
         output("plan", json.dumps(planned, separators=(",", ":")))
         output("run", json.dumps(planned["run"], separators=(",", ":")))
         output("steps", json.dumps(planned["steps"], separators=(",", ":")))
+        output("browser", json.dumps(planned["browser"], separators=(",", ":")))
         summary(f"### {planned['profile'].upper()} verification, {planned['risk']} risk\n\n"
                 f"Surfaces: {', '.join(planned['surfaces']) or 'none'}\n\n"
                 + "\n".join(f"- {reason}" for reason in planned["reasons"][:20]))
@@ -277,16 +277,23 @@ def main(command):
     elif command == "gate":
         planned = json.loads(os.environ["PLAN"])
         results = {job: need["result"] for job, need in json.loads(os.environ["NEEDS"]).items()}
-        tested = pull["head"]["sha"] if pull else None
+        head = pull["head"]["sha"] if pull else None
         current = github(f"pulls/{pull['number']}")["head"]["sha"] if pull else None
-        errors = gate(planned, results, tested, current)
+        merge = None
+        if pull:
+            parents = subprocess.run(["git", "rev-list", "--parents", "-n", "1", "HEAD"], check=True,
+                                     capture_output=True, text=True).stdout.split()
+            merge = {"merge": parents[0], "parents": parents[1:], "base": pull["base"]["sha"]}
+        errors = gate(planned, results, head, current, merge)
+        identity = (f"PR head `{head}`, base `{merge['base']}`, tested merge `{merge['merge']}`"
+                    if merge else f"commit `{os.environ['GITHUB_SHA']}`")
         summary(f"### Merge verification: {'FAILED' if errors else 'passed'} ({planned['profile'].upper()}, {planned['risk']} risk)\n\n"
-                + "\n".join(f"- {error}" for error in errors))
+                + identity + "\n\n" + "\n".join(f"- {error}" for error in errors))
         for error in errors:
             print(f"::error::{error}")
         if errors:
             sys.exit(1)
-        print(f"{planned['profile'].upper()} verification holds for {tested or os.environ['GITHUB_SHA']}")
+        print(f"{planned['profile'].upper()} verification holds for {identity}")
     else:
         sys.exit("usage: verification.py plan|gate")
 

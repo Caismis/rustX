@@ -37,12 +37,27 @@ export interface Identity {
   arch: string;
   rust: string;
   cargo: { profile: 'dev'; command: string; features: 'default'; debuginfo: 'stripped' };
+  /** Built with no override of a build-affecting setting (BUILD_OVERRIDES). */
+  build: 'repository-defaults';
   node: { version: string; abi: string };
   pnpm: string;
   playwright: string;
   /** Checksums of the sources that define dependencies, features and profiles. */
   sources: Record<string, string>;
 }
+/**
+ * Settings that change what Cargo, rustc, the C toolchain or Vite produce.
+ * The preparation build refuses to run under any of them, so its identity's
+ * `build: 'repository-defaults'` means exactly the checked-in configuration.
+ * Parallelism (CARGO_BUILD_JOBS) and incremental caching (CARGO_INCREMENTAL,
+ * which rust-cache sets) change no artifact semantics and stay allowed.
+ */
+export const BUILD_OVERRIDES = /^(RUSTFLAGS|RUSTDOCFLAGS|RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|RUSTC_BOOTSTRAP|CARGO_ENCODED_RUSTFLAGS|CARGO_BUILD_(?!JOBS$).+|CARGO_PROFILE_.+|CARGO_TARGET_.+|CARGO_UNSTABLE_.+|CARGO_FEATURES|CC|CXX|AR|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|NODE_ENV|NODE_OPTIONS|VITE_.+)$/;
+/** The build-affecting overrides set in `environment`, by name. */
+export function buildOverrides(environment: NodeJS.ProcessEnv = process.env) {
+  return Object.keys(environment).filter(name => environment[name] !== undefined && BUILD_OVERRIDES.test(name)).sort();
+}
+
 /** Recorded for diagnosis, never compared: runners differ in incidental setup. */
 export interface Provenance { rustc: string; environment: Record<string, string> }
 export interface FileRecord { sha256: string; size: number; executable: boolean }
@@ -75,10 +90,13 @@ export function expectedIdentity(root = repository): Identity {
     arch: arch(),
     rust: pinnedRust(root),
     cargo: { profile: 'dev', command: `cargo ${CARGO_BUILD.join(' ')}`, features: 'default', debuginfo: 'stripped' },
+    build: 'repository-defaults',
     node: { version: process.version, abi: process.versions.modules },
     pnpm: run('pnpm', ['--version'], web),
     playwright: JSON.parse(readFileSync(join(web, 'node_modules/@playwright/test/package.json'), 'utf8')).version,
-    sources: Object.fromEntries(['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'web-console/package.json', 'web-console/pnpm-lock.yaml'].map(file => [file, sha256(join(root, file))])),
+    // Cargo configuration the repository may carry is part of the build.
+    sources: Object.fromEntries(['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'web-console/package.json', 'web-console/pnpm-lock.yaml', 'web-console/vite.config.ts']
+      .map(file => [file, existsSync(join(root, file)) ? sha256(join(root, file)) : 'absent'])),
   };
 }
 
@@ -133,6 +151,8 @@ export function fileErrors(manifest: Manifest, root: string): string[] {
  * then stage every input with its checksum.
  */
 export function pack(stage: string, root = repository) {
+  const overrides = buildOverrides();
+  if (overrides.length) throw new Error(`Browser inputs build only with repository defaults; unset ${overrides.join(', ')}`);
   execFileSync('cargo', CARGO_BUILD, { cwd: root, stdio: 'inherit' });
   // The one production build: Vite plus the artifact provenance check.
   execFileSync('pnpm', ['build'], { cwd: join(root, 'web-console'), stdio: 'inherit' });

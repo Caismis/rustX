@@ -17,7 +17,7 @@ async function expectSharedAnchor(reply: Locator, notice: Locator) {
 // locales' retry copy across every theme and width is pinned by
 // test/model-retry.test.tsx; the retry semantics do not vary by presentation.
 for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
-  test(`native timeout retry disclosure ${locale} ${theme}`, async ({ page }) => {
+  test(`native timeout retry disclosure ${locale} ${theme}`, { tag: locale === 'en' ? ['@smoke'] : [] }, async ({ page }) => {
     const fixture = await startDogfood('web_timeout_retry');
     let passed = false;
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

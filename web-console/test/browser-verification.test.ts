@@ -4,18 +4,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { JSONReport, JSONReportSuite, JSONReportTest } from '@playwright/test/reporter';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EXECUTABLES, INSTALLED_MANIFEST, check, fileErrors, identityErrors, install, record, type Identity, type Manifest } from '../scripts/browser-artifact.ts';
-import { assign, verify, weightsOf, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
+import { EXECUTABLES, INSTALLED_MANIFEST, buildOverrides, check, fileErrors, identityErrors, install, record, type Identity, type Manifest } from '../scripts/browser-artifact.ts';
+import { assign, inventoryOf, verify, weightsOf, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
 
 const identity: Identity = {
   commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.98.1',
-  cargo: { profile: 'dev', command: 'cargo build --bins --example document_artifact_fixture --locked', features: 'default', debuginfo: 'stripped' },
+  cargo: { profile: 'dev', command: 'cargo build --bins --example document_artifact_fixture --locked', features: 'default', debuginfo: 'stripped' }, build: 'repository-defaults',
   node: { version: 'v24.19.0', abi: '137' }, pnpm: '11.13.1', playwright: '1.63.0', sources: { 'Cargo.lock': 'c'.repeat(64) },
 };
 
 describe('sharded browser coverage', () => {
   const prepared = 'p'.repeat(64);
-  const inventory = (...ids: string[]): Inventory => ({ commit: identity.commit, prepared, tests: ids.map(id => ({ id: `${id}@`, title: `title ${id}`, file: 'spec.ts' })), shards: [['spec.ts'], []] });
+  const inventory = (...ids: string[]): Inventory => ({ commit: identity.commit, prepared, selection: 'full', discovered: ids.length, discoveredFiles: ['spec.ts'], specs: [], tests: ids.map(id => ({ id: `${id}@`, title: `title ${id}`, file: 'spec.ts' })), shards: [['spec.ts'], []] });
   type Ran = { id: string; status?: JSONReportTest['status']; result?: 'passed' | 'failed' | 'skipped'; expected?: JSONReportTest['expectedStatus']; skip?: boolean; repeats?: number };
   /** Playwright's JSON report of one shard that ran `ran`, each spec's id being `id`. */
   function report(...ran: Ran[]): Pick<JSONReport, 'suites'> {
@@ -62,8 +62,45 @@ describe('sharded browser coverage', () => {
     expect(verify(complete, [shard(1, report({ id: 'a' }, { id: 'b' }, skippedC), { total: 1 })], 1).errors).toEqual([]);
     expect(verify(complete, [shard(1, report({ id: 'a' }, { id: 'b' }, skippedC), { total: 3 })], 1).errors).toEqual(['shard 1/3: not one of 1 expected shards']);
   });
+  it('fails a FULL inventory that lost part of the discovered suite', () => {
+    expect(verify({ ...complete, discovered: 4 }, passing, 2).errors).toEqual(['FULL selects 3 of 4 discovered tests; FULL runs them all']);
+  });
+  it('fails a FAST selection without a smoke test or missing a changed spec', () => {
+    const fast = (tests: Inventory['tests'], specs: string[]): Inventory => ({ ...complete, selection: 'fast', discovered: 10, discoveredFiles: ['spec.ts', 'other.spec.ts'], specs, tests });
+    const one = [shard(1, report({ id: 'a' }), { total: 1 })];
+    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], ['spec.ts']), one, 1).errors).toEqual([]);
+    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts' }], []), one, 1).errors).toEqual(['FAST selects no smoke test']);
+    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], ['other.spec.ts']), one, 1).errors).toEqual(['changed spec other.spec.ts is not selected by FAST']);
+    // A deleted spec is no longer discovered and needs no coverage.
+    expect(verify(fast([{ id: 'a@', title: 'title a', file: 'spec.ts', smoke: true }], ['gone.spec.ts']), one, 1).errors).toEqual([]);
+  });
   it('fails an empty inventory instead of treating zero tests as coverage', () => {
     expect(verify(inventory(), [shard(1, report()), shard(2, report())], 2).errors).toEqual(expect.arrayContaining(['the inventory discovered no browser tests']));
+  });
+});
+
+describe('browser selections', () => {
+  const found = (file: string, title: string, tags: string[] = []) => ({ id: `${file}:${title}@`, title: `${file} › ${title}`, file, tags, test: {} as JSONReportTest });
+  const discovered = [found('smoke.spec.ts', 'boots', ['@smoke']), found('chat.spec.ts', 'sends'), found('chat.spec.ts', 'settles'), found('shell.spec.ts', 'frame'), found('other.spec.ts', 'x')];
+  const identityOf = { commit: identity.commit, prepared: 'p' };
+  it('FULL selects every discovered test and splits whole files over two shards', () => {
+    const full = inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], screenshots: false }, ['shell.spec.ts'], {});
+    expect(full.tests).toHaveLength(5);
+    expect(full.shards.flat().sort()).toEqual(['chat.spec.ts', 'other.spec.ts', 'shell.spec.ts', 'smoke.spec.ts']);
+  });
+  it('FAST selects smoke tests, every test of a changed spec, and screenshot specs only when Web source changed', () => {
+    const fast = (screenshots: boolean) => inventoryOf(identityOf, discovered, { selection: 'fast', shards: [1], specs: ['chat.spec.ts'], screenshots }, ['shell.spec.ts'], {});
+    // Wholly selected files are one --test-list line each.
+    expect(fast(false).shards).toEqual([['chat.spec.ts', 'smoke.spec.ts']]);
+    expect(fast(false).tests.map(test => test.title)).toEqual(['smoke.spec.ts › boots', 'chat.spec.ts › sends', 'chat.spec.ts › settles']);
+    expect(fast(false).tests.filter(test => test.smoke).map(test => test.title)).toEqual(['smoke.spec.ts › boots']);
+    expect(fast(true).shards[0]).toContain('shell.spec.ts');
+    expect(fast(true).tests.map(test => test.file)).not.toContain('other.spec.ts');
+  });
+  it('lists only the selected tests of a partly selected file', () => {
+    const mixed = [found('smoke.spec.ts', 'boots', ['@smoke']), found('smoke.spec.ts', 'other')];
+    const fast = inventoryOf(identityOf, mixed, { selection: 'fast', shards: [1], specs: [], screenshots: false }, [], {});
+    expect(fast.shards).toEqual([['smoke.spec.ts › boots']]);
   });
 });
 
@@ -131,6 +168,13 @@ describe('prepared browser inputs', () => {
     expect(identityErrors({ ...identity, cargo: { ...identity.cargo, features: 'all' as 'default' }, node: { ...identity.node, abi: '127' } }, identity)).toEqual(['identity.cargo.features: prepared "all", required "default"', 'identity.node.abi: prepared "127", required "137"']);
     const { stage } = staged();
     expect(() => install(stage, directory(), { ...identity, rust: '1.99.0' })).toThrow('identity.rust: prepared "1.98.1", required "1.99.0"');
+  });
+  it('refuses inputs built under another build configuration, and never builds under an override', () => {
+    expect(identityErrors({ ...identity, build: 'overridden' as 'repository-defaults' }, identity)).toEqual(['identity.build: prepared "overridden", required "repository-defaults"']);
+    expect(identityErrors({ ...identity, sources: { ...identity.sources, '.cargo/config.toml': 'absent' } }, identity)).toEqual(['identity.sources..cargo/config.toml: prepared "absent", required undefined']);
+    expect(buildOverrides({ RUSTFLAGS: '-C opt-level=3', CARGO_PROFILE_DEV_DEBUG: '0', CARGO_BUILD_JOBS: '1', CARGO_INCREMENTAL: '0', VITE_API: 'x', NODE_ENV: 'development', PATH: '/bin' }))
+      .toEqual(['CARGO_PROFILE_DEV_DEBUG', 'NODE_ENV', 'RUSTFLAGS', 'VITE_API']);
+    expect(buildOverrides({ CARGO_BUILD_JOBS: '1', CARGO_INCREMENTAL: '0', CARGO_TERM_COLOR: 'always' })).toEqual([]);
   });
   it('refuses a missing manifest, a missing or altered file, a lost executable mode and an extra bundle file', () => {
     expect(() => install(directory(), directory(), identity)).toThrow('No prepared browser manifest');

@@ -45,6 +45,7 @@ jobs:
       plan: ${{ steps.plan.outputs.plan }}
       run: ${{ steps.plan.outputs.run }}
       steps: ${{ steps.plan.outputs.steps }}
+      browser: ${{ steps.plan.outputs.browser }}
     steps:
       - uses: actions/checkout@v4
       - name: Classify the change and select the profile's jobs
@@ -908,14 +909,19 @@ jobs:
         working-directory: web-console
         run: node scripts/browser-artifact.ts pack "$RUNNER_TEMP/browser-prepared"
       # Playwright's own discovery of the checked-out suite, bound to these
-      # inputs: the coverage gate compares every shard's run against it. Whole
-      # spec files go to the two shards by their measured cost
-      # (test/e2e/shard-weights.json), each shard's Playwright --test-list.
+      # inputs, narrowed to the plan's selection: FULL is every discovered
+      # test in two shards; FAST is the @smoke tests, every test of a changed
+      # spec and, for a presentation change, the screenshot-reference specs.
+      # Files go to shards by measured cost (test/e2e/shard-weights.json), as
+      # each shard's Playwright --test-list. The coverage gate compares every
+      # shard's run against this inventory.
       - name: Discover the browser test inventory and assign the shards
         working-directory: web-console
+        env:
+          BROWSER_SELECTION: ${{ needs.plan.outputs.browser }}
         run: |
           mkdir "$RUNNER_TEMP/browser-inventory"
-          node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory" 2
+          node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory"
       - name: Package the prepared inputs
         run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
       - uses: actions/upload-artifact@v4
@@ -987,7 +993,7 @@ jobs:
   # bundle's provenance, and drives Chromium in the digest-pinned Playwright
   # container (fonts and rasterization included), exactly as `pnpm test:e2e`.
   browser-shard:
-    name: Browser acceptance (shard ${{ matrix.shard }}/2)
+    name: Browser acceptance (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [plan, browser-prepare]
     if: fromJSON(needs.plan.outputs.run)['browser-shard']
     runs-on: ubuntu-latest
@@ -997,7 +1003,7 @@ jobs:
       # Both shards always finish, so one failure never hides the other's.
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: ${{ fromJSON(needs.plan.outputs.browser).shards }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -1032,7 +1038,7 @@ jobs:
         working-directory: web-console
         run: |
           mkdir -p shard-report
-          node scripts/browser-shards.ts identity ${{ matrix.shard }}/2 shard-report/identity.json
+          node scripts/browser-shards.ts identity ${{ matrix.shard }}/${{ strategy.job-total }} shard-report/identity.json
       - name: Provenance of the installed production bundle
         working-directory: web-console
         run: node scripts/provenance.ts --artifact
@@ -1063,7 +1069,7 @@ jobs:
   # failed or cancelled shard still yields the merged report, and passes only
   # if both shards succeeded and every discovered test ran exactly once.
   browser-report:
-    name: Full Web conformance
+    name: Browser acceptance coverage
     needs: [plan, browser-prepare, browser-shard]
     if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['browser-report'] }}
     runs-on: ubuntu-latest
@@ -1105,7 +1111,7 @@ jobs:
             mkdir -p "$RUNNER_TEMP/runs/$(basename "$shard")"
             cp "$shard"/shard-report/*.json "$RUNNER_TEMP/runs/$(basename "$shard")/" 2>/dev/null || true
           done
-          node scripts/browser-shards.ts verify "$RUNNER_TEMP/inventory/browser-inventory.json" "$RUNNER_TEMP/runs" 2
+          node scripts/browser-shards.ts verify "$RUNNER_TEMP/inventory/browser-inventory.json" "$RUNNER_TEMP/runs"
       - name: Both shards succeeded
         run: test "${{ needs.browser-shard.result }}" = success
       - name: Merged browser report
@@ -1143,7 +1149,11 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      # Depth 2 keeps the tested merge commit's parents, which the gate
+      # matches against the event's base and head.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - name: Every selected job succeeded, at the right profile, for the current head
         env:
           GITHUB_TOKEN: ${{ github.token }}

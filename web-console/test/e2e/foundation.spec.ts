@@ -1,6 +1,6 @@
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 import { test, expect, type Locator, type Page } from '@playwright/test';
-test('Harness primitive keyboard, menu, modal, hover and disclosure contracts', async ({ page }) => {
+test('Harness primitive keyboard, menu, modal, hover and disclosure contracts', { tag: '@smoke' }, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
   await expect(page).toHaveTitle('Foundation contracts');

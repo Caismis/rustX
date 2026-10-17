@@ -23,17 +23,35 @@ const repository = resolve(web, '..');
 /** What one shard, or the inventory, ran or was taken against. */
 export interface RunIdentity { commit: string; prepared: string }
 export interface ShardIdentity extends RunIdentity { shard: number; total: number }
-export interface Inventory extends RunIdentity { tests: { id: string; title: string; file: string }[]; shards: string[][] }
+/**
+ * The tests a run must execute. `full` is every discovered test in two
+ * shards; `fast` is the smoke tests, every test of a changed spec and, when
+ * Web source changed, every spec holding screenshot references, in one shard.
+ */
+export interface Selection { selection: 'full' | 'fast'; shards: number[]; specs: string[]; screenshots: boolean }
+export interface Inventory extends RunIdentity {
+  selection: Selection['selection'];
+  /** Everything Playwright discovered, by test identity and spec file. */
+  discovered: number;
+  discoveredFiles: string[];
+  /** The changed specs FAST must cover. */
+  specs: string[];
+  /** The selected tests, each with whether it is a mandatory smoke test. */
+  tests: { id: string; title: string; file: string; smoke?: boolean }[];
+  /** Each shard's Playwright --test-list lines. */
+  shards: string[][];
+}
+export const SMOKE = '@smoke';
 /** One shard's evidence: its identity and Playwright's own report of its run. */
 export interface ShardRun { identity: ShardIdentity; report?: Pick<JSONReport, 'suites'> }
 
-export interface Case { id: string; title: string; file: string; test: JSONReportTest }
+export interface Case { id: string; title: string; file: string; tags: string[]; test: JSONReportTest }
 /** Every test of a report, keyed by Playwright's spec id and project. */
 export function cases(report: Pick<JSONReport, 'suites'>): Case[] {
   const found: Case[] = [];
   const visit = (suite: JSONReportSuite, path: string[]) => {
     const titles = suite.title ? [...path, suite.title] : path;
-    for (const spec of suite.specs) for (const test of spec.tests) found.push({ id: `${spec.id}@${test.projectName}`, title: [...titles, spec.title].join(' › '), file: spec.file, test });
+    for (const spec of suite.specs) for (const test of spec.tests) found.push({ id: `${spec.id}@${test.projectName}`, title: [...titles, spec.title].join(' › '), file: spec.file, tags: spec.tags.map(tag => tag.startsWith('@') ? tag : `@${tag}`), test });
     for (const child of suite.suites ?? []) visit(child, titles);
   };
   for (const suite of report.suites) visit(suite, []);
@@ -65,6 +83,15 @@ export function verify(inventory: Inventory, runs: ShardRun[], total: number): C
   const errors: string[] = [];
   if (!Number.isInteger(total) || total < 1) errors.push(`invalid shard total ${total}`);
   if (inventory.tests.length === 0) errors.push('the inventory discovered no browser tests');
+  if (inventory.selection === 'full' && inventory.tests.length !== inventory.discovered) {
+    errors.push(`FULL selects ${inventory.tests.length} of ${inventory.discovered} discovered tests; FULL runs them all`);
+  }
+  if (inventory.selection === 'fast') {
+    if (!inventory.tests.some(test => test.smoke)) errors.push('FAST selects no smoke test');
+    for (const spec of inventory.specs) {
+      if (inventory.discoveredFiles.includes(spec) && !inventory.tests.some(test => test.file === spec)) errors.push(`changed spec ${spec} is not selected by FAST`);
+    }
+  }
   for (let index = 1; index <= total; index++) {
     const reported = runs.filter(run => run.identity.shard === index);
     if (reported.length > 1) errors.push(`shard ${index}/${total}: reported more than once`);
@@ -164,12 +191,38 @@ export function weightsOf(reports: Pick<JSONReport, 'suites'>[]): Record<string,
   return Object.fromEntries([...totals].sort(([a], [b]) => a.localeCompare(b)).map(([file, { seconds, reports: count }]) => [file, Math.round(seconds / count * 10) / 10]));
 }
 
+/** The tests `selection` requires, from everything discovered. */
+export function select(discovered: Case[], selection: Selection, screenshotSpecs: string[]): Case[] {
+  if (selection.selection === 'full') return discovered;
+  return discovered.filter(found => found.tags.includes(SMOKE) || selection.specs.includes(found.file)
+    || (selection.screenshots && screenshotSpecs.includes(found.file)));
+}
+
+/** The inventory and each shard's --test-list lines for one selection. */
+export function inventoryOf(identity: RunIdentity, discovered: Case[], selection: Selection, screenshotSpecs: string[], weights: Record<string, number>): Inventory {
+  const selected = select(discovered, selection, screenshotSpecs);
+  const tests = selected.map(({ id, title, file, tags }) => ({ id, title, file, ...(tags.includes(SMOKE) ? { smoke: true } : {}) }));
+  // Files go to shards by weight, scaled to the share of their tests that is
+  // selected. A wholly selected file is one --test-list line; a partly
+  // selected one (FAST's smoke tests) lists each selected test.
+  const count = (list: { file: string }[], file: string) => list.filter(test => test.file === file).length;
+  const scaled = Object.fromEntries(Object.entries(weights).map(([file, seconds]) => [file, seconds * count(tests, file) / Math.max(1, count(discovered, file))]));
+  const shards = assign(tests, scaled, selection.shards.length).map(files => files.flatMap(file =>
+    count(tests, file) === count(discovered, file) ? [file] : tests.filter(test => test.file === file).map(test => test.title)));
+  return {
+    ...identity, selection: selection.selection, discovered: discovered.length,
+    discoveredFiles: [...new Set(discovered.map(found => found.file))].sort(), specs: selection.specs, tests, shards,
+  };
+}
+
 function markdown(coverage: Coverage, inventory: Inventory) {
   const minutes = (ms: number) => `${(ms / 60_000).toFixed(1)} min`;
   return [
-    `### Browser acceptance: ${coverage.errors.length ? 'FAILED' : 'complete'}`,
+    `### Browser acceptance (${inventory.selection.toUpperCase()}): ${coverage.errors.length ? 'FAILED' : 'passed'}`,
     '', `Commit \`${inventory.commit}\`, prepared inputs \`${inventory.prepared.slice(0, 16)}\`.`,
-    `${coverage.total} discovered; ${coverage.passed} passed; ${coverage.skipped.length} intentionally skipped.`,
+    inventory.selection === 'full'
+      ? `FULL: all ${coverage.total} discovered tests; ${coverage.passed} passed; ${coverage.skipped.length} intentionally skipped.`
+      : `FAST subset: ${coverage.total} of ${inventory.discovered} discovered tests (smoke, changed specs${inventory.specs.length ? `: ${inventory.specs.join(', ')}` : ''}, screenshot specs when Web source changed); ${coverage.passed} passed. Not full browser coverage.`,
     '', '| Shard | Tests | Passed | Skipped | Failed | Wall | Test time |', '| --- | --- | --- | --- | --- | --- | --- |',
     ...coverage.shards.map(shard => `| ${shard.index} | ${shard.tests} | ${shard.passed} | ${shard.skipped} | ${shard.failed} | ${minutes(shard.wallMs)} | ${minutes(shard.testMs)} |`),
     ...(coverage.skipped.length ? ['', 'Intentionally skipped:', ...coverage.skipped.map(title => `- ${title}`)] : []),
@@ -185,17 +238,19 @@ function playwrightList(): JSONReport {
 
 if (import.meta.main) {
   const [command, ...rest] = process.argv.slice(2);
-  if (command === 'inventory' && rest.length === 3) {
-    // The inventory and each shard's --test-list, for `total` shards.
-    const [manifest, directory, total] = [resolve(rest[0]), resolve(rest[1]), Number(rest[2])];
-    const tests = cases(playwrightList()).map(({ id, title, file }) => ({ id, title, file }));
-    if (tests.length === 0) throw new Error('Playwright discovered no browser tests');
-    const shards = assign(tests, JSON.parse(readFileSync(join(web, 'test/e2e/shard-weights.json'), 'utf8')) as Record<string, number>, total);
-    if (shards.some(files => files.length === 0)) throw new Error(`${tests.length} tests cannot fill ${total} shards`);
-    const inventory: Inventory = { ...currentIdentity(manifest), tests, shards };
+  if (command === 'inventory' && rest.length === 2) {
+    // The inventory and each shard's --test-list for the plan's selection.
+    const [manifest, directory] = [resolve(rest[0]), resolve(rest[1])];
+    const selection = JSON.parse(process.env.BROWSER_SELECTION ?? '{"selection":"full","shards":[1,2],"specs":[],"screenshots":false}') as Selection;
+    const discovered = cases(playwrightList());
+    if (discovered.length === 0) throw new Error('Playwright discovered no browser tests');
+    const screenshotSpecs = readdirSync(join(web, 'test/e2e')).filter(name => name.endsWith('.spec.ts-snapshots')).map(name => name.slice(0, -'-snapshots'.length));
+    const weights = JSON.parse(readFileSync(join(web, 'test/e2e/shard-weights.json'), 'utf8')) as Record<string, number>;
+    const inventory = inventoryOf(currentIdentity(manifest), discovered, selection, screenshotSpecs, weights);
+    if (inventory.shards.length !== selection.shards.length || inventory.shards.some(lines => lines.length === 0)) throw new Error(`${inventory.tests.length} tests cannot fill ${selection.shards.length} shards`);
     writeFileSync(join(directory, 'browser-inventory.json'), `${JSON.stringify(inventory, null, 2)}\n`);
-    shards.forEach((files, index) => writeFileSync(join(directory, `shard-${index + 1}.txt`), `${files.join('\n')}\n`));
-    console.log(`Inventory: ${tests.length} browser tests at ${inventory.commit}; ${shards.map((files, index) => `shard ${index + 1}: ${files.length} files`).join(', ')}`);
+    inventory.shards.forEach((lines, index) => writeFileSync(join(directory, `shard-${index + 1}.txt`), `${lines.join('\n')}\n`));
+    console.log(`Inventory (${selection.selection}): ${inventory.tests.length} of ${discovered.length} browser tests at ${inventory.commit}; ${inventory.shards.map((lines, index) => `shard ${index + 1}: ${lines.length} entries`).join(', ')}`);
   } else if (command === 'weights' && rest.length >= 1) {
     const weights = weightsOf(rest.map(file => JSON.parse(readFileSync(file, 'utf8')) as JSONReport));
     writeFileSync(join(web, 'test/e2e/shard-weights.json'), `${JSON.stringify(weights, null, 2)}\n`);
@@ -204,9 +259,10 @@ if (import.meta.main) {
     const [shard, total] = rest[0].split('/').map(Number);
     const identity: ShardIdentity = { ...currentIdentity(), shard, total };
     writeFileSync(rest[1], `${JSON.stringify(identity)}\n`);
-  } else if (command === 'verify' && rest.length === 3) {
-    // Each shard directory holds identity.json and Playwright's report.json.
-    const [inventoryFile, shardDirectory, total] = rest;
+  } else if (command === 'verify' && rest.length === 2) {
+    // Each shard directory holds identity.json and Playwright's report.json;
+    // the inventory names how many shards its selection assigned.
+    const [inventoryFile, shardDirectory] = rest;
     const inventory = JSON.parse(readFileSync(inventoryFile, 'utf8')) as Inventory;
     const runs: ShardRun[] = (existsSync(shardDirectory) ? readdirSync(shardDirectory, { withFileTypes: true }).filter(entry => entry.isDirectory()) : [])
       .filter(entry => existsSync(join(shardDirectory, entry.name, 'identity.json')))
@@ -215,12 +271,12 @@ if (import.meta.main) {
         const report = join(directory, 'report.json');
         return { identity: JSON.parse(readFileSync(join(directory, 'identity.json'), 'utf8')) as ShardIdentity, report: existsSync(report) ? JSON.parse(readFileSync(report, 'utf8')) as JSONReport : undefined };
       });
-    const coverage = verify(inventory, runs, Number(total));
+    const coverage = verify(inventory, runs, inventory.shards.length);
     const text = markdown(coverage, inventory);
     console.log(text);
     if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMARY, text, { flag: 'a' });
     if (coverage.errors.length) process.exit(1);
   } else {
-    throw new Error('usage: browser-shards.ts inventory <staged-manifest> <out-dir> <total> | weights <report.json>... | identity <i/n> <out> | verify <inventory> <shard-dir> <total>');
+    throw new Error('usage: browser-shards.ts inventory <staged-manifest> <out-dir> | weights <report.json>... | identity <i/n> <out> | verify <inventory> <shard-dir>');
   }
 }

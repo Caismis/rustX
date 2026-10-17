@@ -10,7 +10,7 @@ import { spawnOwned } from '../../../dev/src/process.ts';
 import { BROWSER_SESSION_HEADER, BROWSER_SESSION_STORAGE } from '../../browser-session';
 
 /** Normal local composition: no dogfood helper, provider process, or Host proxy. */
-test('development launcher serves the real Web carrier, native App Server and exact-root Host', async ({ page }) => {
+test('development launcher serves the real Web carrier, native App Server and exact-root Host', { tag: '@smoke' }, async ({ page }) => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-dev-browser-'));
   const root = fileURLToPath(new URL('../../../', import.meta.url));
   const workspace = join(directory, 'workspace with spaces'); mkdirSync(workspace);
