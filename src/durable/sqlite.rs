@@ -879,6 +879,16 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
+        // Native readers select bounded index ranges explicitly. Do not
+        // recompile their plans whenever a historical cut or identity changes:
+        // bundled SQLite's STAT4 parameter-sensitive planning otherwise does
+        // so even for reused statements. Schema changes still invalidate plans.
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .map_err(|error| storage(format!("configure stable SQLite plans: {error}")))?;
         let append_validation = append_validation::Owner::new(&connection)?;
         let rollback = Arc::clone(&append_validation);
         connection
