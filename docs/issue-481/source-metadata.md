@@ -48,18 +48,30 @@ overhead; reopen/close work belongs to separately retained lifecycle counters.
 | warm | 64 | 0.9928 | 0.6667 | 1.0000 |
 | warm | 512 | 1.0079 | 1.0000 | 1.0000 |
 | warm | 2048 | 1.0691 | 1.2000 | 1.0000 |
+| cold, verified rerun | 0 | 0.9755 | 0.4000 | 1.0000 |
+| cold, verified rerun | 64 | 0.9346 | 0.6000 | 1.0000 |
+| cold, verified rerun | 512 | 1.0734 | 0.8000 | 1.0000 |
+| cold, verified rerun | 2048 | 1.0266 | 1.2500 | 1.0000 |
 
 Each sample measures 32 appends. Coarse CPU ticks make ratios for these short
 windows noisy; the raw counters and per-operation observations remain available.
 The first cold attempt failed all 24 samples because the fixture used the read-only
 management opener. Those failures and empty summary output are retained. The
-corrected fixture uses the writable opener before each measured append. Both checkout builds were requested with that fixture, and all 24 samples passed
-their oracles. **Independent review found this cold A/B matrix invalid:** both
-executables were SHA-256 `ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c`.
-The shared Cargo target reused the metadata executable when returning to the older
-checkout. These are same-binary samples, not a production-revision comparison;
-their former cold ratio rows are withdrawn. A fresh-root-crate rebuild and rerun
-are pending. Original binaries, build logs and samples are retained. The original successful runtime/warm/Pi samples remain unchanged.
+corrected fixture uses the writable opener before each measured append. The first
+corrected-fixture matrix passed its oracles but was invalid: both executables
+were SHA-256 `ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c`.
+Shared Cargo target reuse returned the metadata executable for the older checkout.
+Those 24 same-binary samples remain retained and excluded from benefit claims.
+
+The replacement matrix above ran 08:36:41–08:37:07 UTC on 2026-10-18, after
+explicit root-crate cleanup and fresh library/conformance compilation for both
+checkouts. Its 24 samples all passed with distinct executable identities and
+identical complete fixture inputs. Metadata rebuilt byte-identically to the
+prior metadata executable. Cold controls remain mixed, including 7.3%/2.7%
+adverse wall ratios at 512/2,048 messages; writes are unchanged. This Source-only
+change establishes no general marginal-append benefit. The original failures,
+invalid comparison, replacement runs and build logs are all preserved.
+
 
 ## Same-provider Pi comparison
 
@@ -98,6 +110,8 @@ Binary SHA-256 identities:
 - metadata: `5f006c64b0f207486888a1e2759564069709fe3731d596aaeaba5fb0918ca740`; fixture `6a9c041588babca4c879facf5d002e8c1d4384dd1d506940da5c2fbf0255708a`.
 - structural-baseline-cold-fixed: `ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c`; fixture `0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16`.
 - metadata-cold-fixed: `ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c`; fixture `0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16`.
+- structural-baseline-verified: `4d27e7a1cfb17bbe94e6b67653c9fed9c9ab2c8cd581277b0fcdb05d855b8789`; same corrected fixture.
+- metadata-verified: `ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c`; same corrected fixture, confirmed by fresh compilation.
 
 The archived manifests retain commands, UTC boundaries, complete logical/allocated
 DB/WAL/temp footprints, startup/steady/close/reopen/cleanup counters, provider
@@ -135,3 +149,9 @@ in the cloud workspace.
 
 The shared-target identity audit and plain per-pair numeric inputs are in
 [evidence/pair-inputs](evidence/pair-inputs) and [the build audit](evidence/build-identity-audit.json).
+
+The [identity-repair archive](evidence/identity-repair.tar.xz) and its
+[manifest](evidence/identity-repair.tar.manifest.json) preserve clean build logs,
+full fixture hashes, replacement cold samples and the plain-input verification.
+[Plain cold pairs](evidence/pair-inputs/metadata-append-cold-verified.json) expose
+all measured inputs and executable identities without extracting the archive.

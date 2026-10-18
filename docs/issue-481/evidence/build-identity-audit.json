@@ -312,5 +312,60 @@
     "library_sha256": "2e6bf97c4d496702430816cb02e2248434b7c6883b58ec1c48021328f7d64591",
     "previous_metadata_sha256": "ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c",
     "matches_previous_metadata_binary": true
+  },
+  "clean_baseline_replacement": {
+    "head": "5457e1c34106b8d49de0edfb40b49ca8267d0383",
+    "production_tree": "1c4fef821b06766aaf9d28bd98ca0e5bbf2217c9",
+    "fixture_sha256": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+    "start_utc": "2026-10-18T08:27:07.921170+00:00",
+    "clean_command": [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "rustx"
+    ],
+    "clean_exit": 0,
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "exit": 0,
+    "end_utc": "2026-10-18T08:36:41.492123+00:00",
+    "root_artifacts": [
+      {
+        "name": "rustx",
+        "kind": [
+          "lib"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-structural-baseline/src/lib.rs"
+      },
+      {
+        "name": "rustx",
+        "kind": [
+          "bin"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-structural-baseline/src/main.rs"
+      },
+      {
+        "name": "conformance",
+        "kind": [
+          "test"
+        ],
+        "fresh": false,
+        "source_path": "/workspace/rustX-481-structural-baseline/tests/conformance/main.rs"
+      }
+    ],
+    "binary": "/workspace/issue-481-evidence/structural-baseline-verified-conformance",
+    "sha256": "4d27e7a1cfb17bbe94e6b67653c9fed9c9ab2c8cd581277b0fcdb05d855b8789",
+    "library_sha256": "e6d126b83f2889b535a0b2deb3a8367d590aa72e41d2ff3dcbac8284c87312fd"
   }
 }
