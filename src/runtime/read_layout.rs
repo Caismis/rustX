@@ -3,12 +3,13 @@
 mod byte_reader_tests;
 pub(crate) mod canonical;
 mod key_order;
+mod small;
 use rusqlite::OptionalExtension as _;
 use serde_json::Value;
 use std::sync::Arc;
 const ITEM_BYTES: usize = 16_384;
 /// At most 4 KiB of original JSON can contribute nodes/keys to this index.
-const MEMORY_INDEX_BYTES: u64 = 4096;
+const MEMORY_INDEX_BYTES: usize = 4096;
 const SAFE: u64 = 9_007_199_254_740_991;
 #[cfg(test)]
 thread_local! { pub(crate) static READ_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) }; }
@@ -104,7 +105,7 @@ struct Layout {
     file: Option<std::fs::File>,
     connection: std::sync::Mutex<Option<rusqlite::Connection>>,
     written: u64,
-    memory_index: bool,
+    small_index: Option<small::SmallIndex>,
     next_node: u64,
     deadline: Option<std::time::Instant>,
 }
@@ -119,6 +120,59 @@ impl std::ops::Deref for LayoutConnection<'_> {
         match self {
             Self::Borrowed(guard) => guard.as_ref().expect("native source owns index"),
             Self::Reading(connection) => connection,
+        }
+    }
+}
+
+enum IndexReader<'a> {
+    Small(&'a small::SmallIndex),
+    Sqlite(LayoutConnection<'a>),
+}
+impl IndexReader<'_> {
+    fn node(&self, id: u64) -> Result<Node, &'static str> {
+        match self {
+            Self::Small(index) => {
+                #[cfg(test)]
+                NODE_LOOKUPS.with(|count| count.set(count.get() + 1));
+                index.node(id)
+            }
+            Self::Sqlite(connection) => Layout::node_at(connection, id),
+        }
+    }
+    fn select(
+        &self,
+        parent: u64,
+        ordinal: Option<u64>,
+        key: &str,
+    ) -> Result<u64, ObservationReadError> {
+        match self {
+            Self::Small(index) => index.select(parent, ordinal, key),
+            Self::Sqlite(connection) => Layout::indexed_select(connection, parent, ordinal, key),
+        }
+    }
+    fn children(
+        &self,
+        parent: u64,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, u64)>, &'static str> {
+        match self {
+            Self::Small(index) => Ok(index.children(parent, offset, limit)),
+            Self::Sqlite(connection) => Layout::children_at(connection, parent, offset, limit),
+        }
+    }
+    fn visit(
+        &self,
+        first: u64,
+        last: u64,
+        include: impl FnMut(u64) -> bool,
+        visit: impl FnMut(NodeRecord) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        match self {
+            Self::Small(index) => index.visit(first, last, include, visit),
+            Self::Sqlite(connection) => {
+                Layout::visit_selected_records(connection, first, last, include, visit)
+            }
         }
     }
 }
@@ -157,6 +211,11 @@ impl Layout {
             .is_some_and(|deadline| std::time::Instant::now() >= deadline)
     }
     fn seal(&mut self) -> Result<(), &'static str> {
+        if let Some(index) = &mut self.small_index {
+            index.seal(self.next_node, self.written)?;
+            self.file = None;
+            return Ok(());
+        }
         self.connection
             .get_mut()
             .map_err(|_| "native source index poisoned")?
@@ -165,15 +224,22 @@ impl Layout {
             .execute_batch("CREATE UNIQUE INDEX nodes_ordinal ON nodes(parent,ordinal); CREATE INDEX nodes_key ON nodes(parent,key) WHERE key_complete=1; COMMIT")
             .map_err(|_| "native source index commit unavailable")?;
         self.file = None;
-        if !self.memory_index {
-            *self
-                .connection
-                .get_mut()
-                .map_err(|_| "native source index poisoned")? = None;
-        }
+        *self
+            .connection
+            .get_mut()
+            .map_err(|_| "native source index poisoned")? = None;
         Ok(())
     }
+    fn index_reader(&self) -> Result<IndexReader<'_>, &'static str> {
+        match &self.small_index {
+            Some(index) => Ok(IndexReader::Small(index)),
+            None => self.reader_connection().map(IndexReader::Sqlite),
+        }
+    }
     fn reader_connection(&self) -> Result<LayoutConnection<'_>, &'static str> {
+        if self.small_index.is_some() {
+            return Err("native small index has no SQLite connection");
+        }
         let guard = self
             .connection
             .lock()
@@ -213,35 +279,25 @@ impl Layout {
             file: Some(file),
             connection: std::sync::Mutex::new(None),
             written: 0,
-            memory_index: false,
+            small_index: None,
             next_node: 0,
             deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(5)),
         })
     }
     fn initialize_index(&mut self, memory: bool) -> Result<(), &'static str> {
-        let connection = if memory {
+        if memory {
             // Admission uses the completed original encoding, never an estimate
             // or a second serialization. JSON size bounds node and key storage.
-            if self.written > MEMORY_INDEX_BYTES {
+            if self.written > MEMORY_INDEX_BYTES as u64 {
                 return Err("native memory index exceeds byte bound");
             }
-            rusqlite::Connection::open_in_memory()
-        } else {
-            rusqlite::Connection::open(self.directory.path().join("index.sqlite"))
+            self.small_index = Some(small::SmallIndex::default());
+            return Ok(());
         }
-        .map_err(|_| "pending source index unavailable")?;
-        if memory {
-            // Cap SQLite index pages as well as the admitted source bytes.
-            // Sorting at most 4 KiB of JSON also has a bounded temporary set.
-            connection
-                .execute_batch(
-                    "PRAGMA page_size=4096; PRAGMA max_page_count=256; PRAGMA temp_store=MEMORY",
-                )
-                .map_err(|_| "native memory index bound unavailable")?;
-        }
+        let connection = rusqlite::Connection::open(self.directory.path().join("index.sqlite"))
+            .map_err(|_| "pending source index unavailable")?;
         // Derived observation only: this is not the durable execution journal.
         connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-1024; CREATE TABLE nodes(id INTEGER PRIMARY KEY,parent INTEGER,ordinal INTEGER NOT NULL,start INTEGER NOT NULL,end INTEGER NOT NULL,children INTEGER NOT NULL,recursive_nodes INTEGER NOT NULL,container INTEGER NOT NULL,object INTEGER NOT NULL,key TEXT,key_start INTEGER,key_end INTEGER,key_complete INTEGER NOT NULL); BEGIN;").map_err(|_|"pending source index unavailable")?;
-        self.memory_index = memory;
         *self
             .connection
             .get_mut()
@@ -249,8 +305,7 @@ impl Layout {
         Ok(())
     }
     fn node(&self, id: u64) -> Result<Node, &'static str> {
-        let connection = self.reader_connection()?;
-        Self::node_at(&connection, id)
+        self.index_reader()?.node(id)
     }
     fn node_at(connection: &rusqlite::Connection, id: u64) -> Result<Node, &'static str> {
         #[cfg(test)]
@@ -263,8 +318,7 @@ impl Layout {
         ordinal: Option<u64>,
         key: &str,
     ) -> Result<u64, ObservationReadError> {
-        let connection = self.reader_connection()?;
-        Self::indexed_select(&connection, parent, ordinal, key)
+        self.index_reader()?.select(parent, ordinal, key)
     }
     fn indexed_select(
         connection: &rusqlite::Connection,
@@ -299,8 +353,7 @@ impl Layout {
         offset: u64,
         limit: usize,
     ) -> Result<Vec<(u64, u64)>, &'static str> {
-        let connection = self.reader_connection()?;
-        Self::children_at(&connection, parent, offset, limit)
+        self.index_reader()?.children(parent, offset, limit)
     }
     fn children_at(
         connection: &rusqlite::Connection,
@@ -373,7 +426,7 @@ impl ObservationByteReader<'_> {
     }
 }
 struct FieldReader<'a> {
-    connection: LayoutConnection<'a>,
+    connection: IndexReader<'a>,
     bytes: std::fs::File,
 }
 pub(crate) type ObservationLayoutCache =
@@ -420,14 +473,18 @@ impl SeekableObservationSource {
                 .flush()
                 .map_err(|_| "native observation source flush unavailable")?;
         }
-        layout.initialize_index(layout.written <= MEMORY_INDEX_BYTES)?;
+        layout.initialize_index(layout.written <= MEMORY_INDEX_BYTES as u64)?;
         let reader = layout
             .file
             .as_ref()
             .ok_or("source sealed")?
             .try_clone()
             .map_err(|_| "native source reader unavailable")?;
-        let mut reader = std::io::BufReader::with_capacity(65536, reader);
+        let mut reader = std::io::BufReader::with_capacity(
+            usize::try_from(layout.written.clamp(1, 65_536))
+                .map_err(|_| "native parser buffer exceeds platform capacity")?,
+            reader,
+        );
         std::io::Seek::rewind(&mut reader).map_err(|_| "native source seek unavailable")?;
         LayoutParser {
             reader,
@@ -452,7 +509,9 @@ impl SeekableObservationSource {
             let (writes, opens) = work.get();
             work.set((writes, opens + 1));
         });
-        let mut buffer = vec![0; 65_536];
+        let capacity = usize::try_from(self.layout.written.min(65_536))
+            .map_err(|_| std::io::Error::other("native copy buffer exceeds platform capacity"))?;
+        let mut buffer = vec![0; capacity];
         let mut offset = 0;
         while offset < self.layout.written {
             let count = (self.layout.written - offset).min(65_536);
@@ -576,7 +635,7 @@ impl SeekableObservationSource {
         Ok(FieldReader {
             bytes: std::fs::File::open(self.layout.directory.path().join("bytes"))
                 .map_err(|_| "native byte source unavailable")?,
-            connection: self.layout.reader_connection()?,
+            connection: self.layout.index_reader()?,
         })
     }
     fn visit_selected_fields_in(
@@ -666,11 +725,11 @@ impl SeekableObservationSource {
             stack.push((id, path.len(), path_json, node.object));
             Ok(())
         };
-        Layout::visit_selected_records(connection, first, last, &mut include, &mut process)?;
+        connection.visit(first, last, &mut include, &mut process)?;
         Ok(())
     }
     fn preview_node(
-        connection: &rusqlite::Connection,
+        connection: &IndexReader<'_>,
         bytes: &std::fs::File,
         id: u64,
         node: &Node,
@@ -706,14 +765,14 @@ impl SeekableObservationSource {
                 Ok(Value::Null)
             };
         }
-        let children = Layout::children_at(connection, id, 0, 32)?;
+        let children = connection.children(id, 0, 32)?;
         if node.object {
             let mut values = serde_json::Map::new();
             for (child, _) in children {
                 if *budget == 0 {
                     break;
                 }
-                let child_node = Layout::node_at(connection, child)?;
+                let child_node = connection.node(child)?;
                 if child_node.key_complete && child_node.key.is_some() {
                     let value = Self::preview_node(connection, bytes, child, &child_node, budget)?;
                     values.insert(
@@ -729,7 +788,7 @@ impl SeekableObservationSource {
                 if *budget == 0 {
                     break;
                 }
-                let child_node = Layout::node_at(connection, child)?;
+                let child_node = connection.node(child)?;
                 values.push(Self::preview_node(
                     connection,
                     bytes,
@@ -763,67 +822,62 @@ impl SeekableObservationSource {
         });
         let bytes = std::fs::File::open(self.layout.directory.path().join("bytes"))
             .map_err(|_| "native byte source unavailable")?;
-        let connection = self.layout.reader_connection()?;
-        let mut rows = connection
-            .prepare("SELECT id,parent,ordinal FROM nodes ORDER BY id")
-            .map_err(|_| "native layout traversal unavailable")?;
-        let mut rows = rows
-            .query([])
-            .map_err(|_| "native layout traversal unavailable")?;
-        while let Some(row) = rows
-            .next()
-            .map_err(|_| "native layout traversal unavailable")?
-        {
-            let id: u64 = row
-                .get(0)
-                .map_err(|_| "native layout identity unavailable")?;
-            let parent: Option<u64> = row.get(1).map_err(|_| "native layout parent unavailable")?;
-            let ordinal: u64 = row
-                .get(2)
-                .map_err(|_| "native layout ordinal unavailable")?;
-            while stack.last().map(|(id, _, _)| *id) != parent {
-                stack.pop().ok_or("native layout parent ordering invalid")?;
-            }
-            let node = Layout::node_at(&connection, id)?;
-            let mut path = stack
-                .last()
-                .map_or_else(Vec::new, |(_, path, _)| path.clone());
-            if let Some(parent) = parent {
-                let object = Layout::node_at(&connection, parent)?.object;
-                path.push(if object {
-                    node.key
-                        .as_ref()
-                        .filter(|_| node.key_complete)
-                        .filter(|key| !key.starts_with('@') && key.as_str() != "$key")
-                        .cloned()
-                        .unwrap_or_else(|| format!("@{ordinal}"))
-                } else {
-                    ordinal.to_string()
-                });
-            }
-            let path_json =
-                serde_json::to_string(&path).map_err(|_| "native layout path unavailable")?;
-            if path_json.len() > 3600 {
-                return Err("native layout path exceeds bound");
-            }
-            let value = Self::preview_node_legacy(&connection, &bytes, id, &mut 32)?;
-            visit(
-                &path,
-                &path_json,
-                stack.last().map(|(_, _, path)| (path.as_str(), ordinal)),
-                node.start,
-                node.end,
-                node.children,
-                node.key_span,
-                &value,
-            )?;
-            stack.push((id, path, path_json));
-        }
-        Ok(())
+        let connection = self.layout.index_reader()?;
+        connection.visit(
+            0,
+            self.layout.next_node,
+            |_| true,
+            |record| {
+                let NodeRecord {
+                    id,
+                    parent,
+                    ordinal,
+                    ..
+                } = record;
+                while stack.last().map(|(id, _, _)| *id) != parent {
+                    stack.pop().ok_or("native layout parent ordering invalid")?;
+                }
+                let node = connection.node(id)?;
+                let mut path = stack
+                    .last()
+                    .map_or_else(Vec::new, |(_, path, _)| path.clone());
+                if let Some(parent) = parent {
+                    let object = connection.node(parent)?.object;
+                    path.push(if object {
+                        node.key
+                            .as_ref()
+                            .filter(|_| node.key_complete)
+                            .filter(|key| !key.starts_with('@') && key.as_str() != "$key")
+                            .cloned()
+                            .unwrap_or_else(|| format!("@{ordinal}"))
+                    } else {
+                        ordinal.to_string()
+                    });
+                }
+                let path_json =
+                    serde_json::to_string(&path).map_err(|_| "native layout path unavailable")?;
+                if path_json.len() > 3600 {
+                    return Err("native layout path exceeds bound");
+                }
+                let value = Self::preview_node_legacy(&connection, &bytes, id, &mut 32)?;
+                visit(
+                    &path,
+                    &path_json,
+                    stack.last().map(|(_, _, path)| (path.as_str(), ordinal)),
+                    node.start,
+                    node.end,
+                    node.children,
+                    node.key_span,
+                    &value,
+                )?;
+                stack.push((id, path, path_json));
+                Ok(())
+            },
+        )
     }
     #[cfg(test)]
     fn preview_node_legacy(
-        connection: &rusqlite::Connection,
+        connection: &IndexReader<'_>,
         bytes: &std::fs::File,
         id: u64,
         budget: &mut usize,
@@ -832,7 +886,7 @@ impl SeekableObservationSource {
             return Ok(Value::Null);
         }
         *budget -= 1;
-        let node = Layout::node_at(connection, id)?;
+        let node = connection.node(id)?;
         if node.recursive_nodes <= 32 && node.end - node.start <= 16_384 {
             *budget = budget.saturating_sub(
                 usize::try_from(node.recursive_nodes.saturating_sub(1))
@@ -859,14 +913,14 @@ impl SeekableObservationSource {
                 Ok(Value::Null)
             };
         }
-        let children = Layout::children_at(connection, id, 0, 32)?;
+        let children = connection.children(id, 0, 32)?;
         if node.object {
             let mut values = serde_json::Map::new();
             for (child, _) in children {
                 if *budget == 0 {
                     break;
                 }
-                let key = Layout::node_at(connection, child)?;
+                let key = connection.node(child)?;
                 if let Some(key) = key.key.filter(|_| key.key_complete) {
                     values.insert(
                         key,
@@ -1206,6 +1260,30 @@ impl LayoutParser<'_> {
         }
         let end = self.position;
         // IDs remain preorder; completed rows need no placeholder update.
+        if let Some(index) = &mut self.layout.small_index {
+            index.push(NodeRecord {
+                id,
+                parent,
+                ordinal,
+                node: Node {
+                    start,
+                    end,
+                    children,
+                    recursive_nodes: recursive,
+                    container,
+                    object,
+                    key: name,
+                    key_span: span,
+                    key_complete: complete,
+                },
+            })?;
+            #[cfg(test)]
+            NODE_WRITES.with(|work| {
+                let (inserts, updates) = work.get();
+                work.set((inserts + 1, updates));
+            });
+            return Ok((id, recursive));
+        }
         self.index_write(
             "INSERT INTO nodes VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             rusqlite::params![
@@ -1286,6 +1364,7 @@ mod path_tests;
 #[cfg(test)]
 mod source_copy_tests;
 
+#[derive(Debug, Clone)]
 struct NodeRecord {
     id: u64,
     parent: Option<u64>,
@@ -1330,12 +1409,64 @@ impl Layout {
 mod tests {
     use super::*;
     #[test]
+    fn small_index_matches_disk_fields_and_allows_reentrant_reads() {
+        use std::io::{Seek as _, Write as _};
+        let value = serde_json::json!({"@0":[1,2],"$key":true,"escaped/~":"水", "wide":(0..70).collect::<Vec<_>>()});
+        let small = SeekableObservationSource::new(&value).unwrap();
+        assert!(small.layout.small_index.is_some());
+        let original = original_layout_bytes(&small);
+        let mut layout = Layout::new().unwrap();
+        layout.write_all(&original).unwrap();
+        let mut reader =
+            std::io::BufReader::new(layout.file.as_ref().unwrap().try_clone().unwrap());
+        reader.rewind().unwrap();
+        LayoutParser {
+            reader,
+            position: 0,
+            layout: &mut layout,
+        }
+        .value(None, 0, None, 0)
+        .unwrap();
+        layout.seal().unwrap();
+        let disk = SeekableObservationSource { layout };
+        let collect = |source: &SeekableObservationSource| {
+            let mut fields = Vec::new();
+            source
+                .visit_fields(
+                    |path, encoded, parent, start, end, children, key, preview| {
+                        let bytes = source.read(path, 0, 4096).unwrap().bytes;
+                        assert_eq!(
+                            bytes,
+                            original
+                                [usize::try_from(start).unwrap()..usize::try_from(end).unwrap()]
+                        );
+                        fields.push((
+                            path.to_vec(),
+                            encoded.to_owned(),
+                            parent.map(|(path, n)| (path.to_owned(), n)),
+                            start,
+                            end,
+                            children,
+                            key,
+                            preview.clone(),
+                        ));
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            fields
+        };
+        assert_eq!(collect(&small), collect(&disk));
+        assert_eq!(original_layout_bytes(&disk), original);
+    }
+
+    #[test]
     fn small_index_admission_uses_exact_encoded_bytes_and_retains_navigation() {
         for (length, memory) in [(4094, true), (4095, false)] {
             let value = "x".repeat(length);
             let source = SeekableObservationSource::new(&value).unwrap();
             assert_eq!(source.layout.written, (length + 2) as u64);
-            assert_eq!(source.layout.memory_index, memory);
+            assert_eq!(source.layout.small_index.is_some(), memory);
             assert_eq!(
                 source.layout.directory.path().join("index.sqlite").exists(),
                 !memory
@@ -1354,22 +1485,17 @@ mod tests {
     fn small_index_dense_input_is_bounded_and_pagination_is_exact() {
         let values = vec![0; 2047]; // 4,095 bytes, 2,048 index nodes.
         let source = SeekableObservationSource::new(&values).unwrap();
-        assert!(source.layout.memory_index);
-        {
-            let connection = source.layout.reader_connection().unwrap();
-            let bytes: u64 = connection
-                .query_row(
-                    "SELECT page_count*page_size FROM pragma_page_count(),pragma_page_size()",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert!(bytes <= 1_048_576);
-            let limit: u64 = connection
-                .query_row("PRAGMA max_page_count", [], |row| row.get(0))
-                .unwrap();
-            assert_eq!(limit, 256);
-        }
+        assert!(source.layout.small_index.is_some());
+        let index = source.layout.small_index.as_ref().unwrap();
+        let retained = index.nodes.capacity() * std::mem::size_of::<NodeRecord>()
+            + index
+                .nodes
+                .iter()
+                .filter_map(|record| record.node.key.as_ref())
+                .map(String::capacity)
+                .sum::<usize>();
+        assert!(retained <= 1_048_576);
+        assert!(source.layout.connection.lock().unwrap().is_none());
         let mut offset = 0;
         loop {
             let page = source.page(&[], offset, 32).unwrap();
@@ -1402,7 +1528,7 @@ mod tests {
             raw: &raw,
         };
         let source = SeekableObservationSource::new(&fixture).unwrap();
-        assert!(source.layout.memory_index);
+        assert!(source.layout.small_index.is_some());
         let mut expected = Vec::new();
         crate::runtime_client::structural_json::to_writer(&mut expected, &fixture).unwrap();
         let mut copied = Vec::new();
@@ -1837,47 +1963,52 @@ mod tests {
 
     #[test]
     fn t08_t12_source_read_errors_distinguish_invalid_selection_from_layout_failure() {
-        let opaque = serde_json::json!({"wide": u64::MAX});
-        let native = NativeSource {
-            title: "original",
-            revision: u64::MAX,
-            opaque: &opaque,
-        };
-        let source = SeekableObservationSource::new(&native).unwrap();
-        for error in [
-            source.page(&["absent".into()], 0, 32).unwrap_err(),
-            source.read(&["title".into()], 100, 1).unwrap_err(),
-            source.read(&["@bad".into()], 0, 1).unwrap_err(),
-            source.page(&[], 0, 33).unwrap_err(),
-        ] {
+        for padding in [0, 4096] {
+            let opaque = serde_json::json!({"wide": u64::MAX,"padding":"x".repeat(padding)});
+            let native = NativeSource {
+                title: "original",
+                revision: u64::MAX,
+                opaque: &opaque,
+            };
+            let mut source = SeekableObservationSource::new(&native).unwrap();
+            for error in [
+                source.page(&["absent".into()], 0, 32).unwrap_err(),
+                source.read(&["title".into()], 100, 1).unwrap_err(),
+                source.read(&["@bad".into()], 0, 1).unwrap_err(),
+                source.page(&[], 0, 33).unwrap_err(),
+            ] {
+                assert!(
+                    matches!(error, ObservationReadError::InvalidRequest(_)),
+                    "{error:?}"
+                );
+            }
             assert!(
-                matches!(error, ObservationReadError::InvalidRequest(_)),
-                "{error:?}"
+                source
+                    .value(&["opaque".into(), "wide".into()])
+                    .unwrap()
+                    .is_none()
             );
+            let exact = source
+                .read(&["opaque".into(), "wide".into()], 0, 65_536)
+                .unwrap();
+            assert_eq!(exact.bytes, u64::MAX.to_string().as_bytes());
+            assert_eq!(
+                source.value(&["revision".into()]).unwrap(),
+                Some(Value::String(u64::MAX.to_string()))
+            );
+            if let Some(index) = &mut source.layout.small_index {
+                index.nodes.clear();
+            } else {
+                let connection =
+                    rusqlite::Connection::open(source.layout.directory.path().join("index.sqlite"))
+                        .unwrap();
+                connection.execute("DROP TABLE nodes", []).unwrap();
+            }
+            assert!(matches!(
+                source.read(&["title".into()], 0, 1).unwrap_err(),
+                ObservationReadError::Unavailable(_)
+            ));
         }
-        assert!(
-            source
-                .value(&["opaque".into(), "wide".into()])
-                .unwrap()
-                .is_none()
-        );
-        let exact = source
-            .read(&["opaque".into(), "wide".into()], 0, 65_536)
-            .unwrap();
-        assert_eq!(exact.bytes, u64::MAX.to_string().as_bytes());
-        assert_eq!(
-            source.value(&["revision".into()]).unwrap(),
-            Some(Value::String(u64::MAX.to_string()))
-        );
-        {
-            // Corrupt the actual selected backend, including bounded memory indexes.
-            let connection = source.layout.reader_connection().unwrap();
-            connection.execute("DROP TABLE nodes", []).unwrap();
-        }
-        assert!(matches!(
-            source.read(&["title".into()], 0, 1).unwrap_err(),
-            ObservationReadError::Unavailable(_)
-        ));
     }
 
     #[test]
