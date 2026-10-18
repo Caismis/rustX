@@ -613,16 +613,10 @@ fn a_turn_adopted_after_a_settled_attempt_continues() {
 #[test]
 fn a_turn_drained_into_a_live_attempt_continues() {
     let lab = Lab::new();
-    // Occurrence 1 is the admission adoption of the first message; occurrence
-    // 2 is the running attempt's safe-boundary drain of the second.
-    let mut process = lab.spawn_nth(
-        child::STREAMING_INBOUND,
-        Some("after:adopt_pending_batch"),
-        2,
-    );
+    let mut process = lab.spawn(child::STREAMING_INBOUND, Some("after:settle_model_turn"));
     process.wait_note("second-inbound-accepted");
     process.resume();
-    process.wait_reached("after:adopt_pending_batch");
+    process.wait_reached("after:settle_model_turn");
     process.sigkill();
 
     let durable = lab.durable();
@@ -789,11 +783,8 @@ fn an_answered_turn_is_not_continued_after_reopen() {
 #[test]
 fn assistant_canonical_commit_is_atomic() {
     let before = Lab::new();
-    let mut process = before.spawn(
-        child::TEXT_TURN,
-        Some("before:commit_canonical_publication"),
-    );
-    process.wait_reached("before:commit_canonical_publication");
+    let mut process = before.spawn(child::TEXT_TURN, Some("before:settle_model_turn"));
+    process.wait_reached("before:settle_model_turn");
     process.sigkill();
     let durable = before.durable();
     assert_eq!(shapes(&durable.canonical()), vec!["user", "context"]);
@@ -801,8 +792,8 @@ fn assistant_canonical_commit_is_atomic() {
     assert_publication_implication(&durable);
 
     let after = Lab::new();
-    let mut process = after.spawn(child::TEXT_TURN, Some("after:commit_canonical_publication"));
-    process.wait_reached("after:commit_canonical_publication");
+    let mut process = after.spawn(child::TEXT_TURN, Some("after:settle_model_turn"));
+    process.wait_reached("after:settle_model_turn");
     process.sigkill();
     let durable = after.durable();
     assert_eq!(
@@ -892,11 +883,8 @@ fn background_terminal_publication_is_atomic() {
 #[test]
 fn kill_before_p_with_released_frames_is_incomplete() {
     let lab = Lab::new();
-    let mut process = lab.spawn(
-        child::TEXT_TURN,
-        Some("before:event:model_request_completed"),
-    );
-    process.wait_reached("before:event:model_request_completed");
+    let mut process = lab.spawn(child::TEXT_TURN, Some("during:model_settlement_provider"));
+    process.wait_reached("during:model_settlement_provider");
     process.sigkill();
 
     let durable = lab.durable();
@@ -960,7 +948,7 @@ fn structural_finish_failure_is_incomplete_without_p() {
 fn p_committed_and_u_missing_is_incomplete() {
     let lab = Lab::new();
     let mut process = lab.spawn(
-        child::TEXT_TURN,
+        child::REJECTED_TOOL_TURN,
         Some("after:event:model_request_completed"),
     );
     process.wait_reached("after:event:model_request_completed");
@@ -994,7 +982,10 @@ fn p_committed_and_u_missing_is_incomplete() {
 #[test]
 fn u_committed_and_c_missing_is_unaccepted() {
     let lab = Lab::new();
-    let mut process = lab.spawn(child::TEXT_TURN, Some("after:commit_publication_terminal"));
+    let mut process = lab.spawn(
+        child::REJECTED_TOOL_TURN,
+        Some("after:commit_publication_terminal"),
+    );
     process.wait_reached("after:commit_publication_terminal");
     process.sigkill();
 
@@ -1023,28 +1014,29 @@ fn u_committed_and_c_missing_is_unaccepted() {
     );
 }
 
-/// A turn whose whole payload fits in the terminal transaction still reaches U
-/// as one atomic final frame plus terminal marker, and still never precedes P.
+/// A terminal-only turn commits provider outcome, frames, canonical acceptance
+/// and the empty-inbox Attempt terminal together, before any final publication.
 #[test]
-fn terminal_only_publication_reaches_u_atomically() {
+fn terminal_only_publication_settles_atomically() {
     let lab = Lab::new();
-    let mut process = lab.spawn(
-        child::TERMINAL_ONLY_TURN,
-        Some("after:commit_publication_terminal"),
-    );
-    process.wait_reached("after:commit_publication_terminal");
+    let gate = "after:settle_model_turn";
+    let mut process = lab.spawn(child::TERMINAL_ONLY_TURN, Some(gate));
+    process.wait_reached(gate);
     process.sigkill();
-
     let durable = lab.durable();
-    let streams = durable.unsettled_publications();
-    assert_eq!(streams.len(), 1);
-    assert!(streams[0].reached_publication_terminal());
-    assert!(has_p(&durable), "U may never precede P");
-    assert_publication_implication(&durable);
+    assert!(has_p(&durable) && has_c(&durable));
+    assert!(durable.unsettled_publications().is_empty());
     assert_eq!(
-        durable.recover().publication_classes()[0].kind,
-        PublicationAuditKind::Unaccepted
+        shapes(&durable.canonical()),
+        vec!["user", "context", "assistant"]
     );
+    assert_publication_implication(&durable);
+    let report = durable.recover();
+    assert_eq!(
+        report.attempt_class(),
+        &AttemptRecoveryClass::AlreadyTerminal
+    );
+    assert!(report.publication_classes().is_empty());
 }
 
 /// C committed: the Message Ledger is the authority, the stream settled
@@ -1052,8 +1044,8 @@ fn terminal_only_publication_reaches_u_atomically() {
 #[test]
 fn c_committed_settles_canonically_without_an_audit() {
     let lab = Lab::new();
-    let mut process = lab.spawn(child::TEXT_TURN, Some("after:commit_canonical_publication"));
-    process.wait_reached("after:commit_canonical_publication");
+    let mut process = lab.spawn(child::TEXT_TURN, Some("after:settle_model_turn"));
+    process.wait_reached("after:settle_model_turn");
     process.sigkill();
 
     let durable = lab.durable();
@@ -1082,12 +1074,11 @@ fn no_boundary_creates_u_without_p_or_c_without_u() {
     for gate in [
         "after:open_publication_stream",
         "after:stage_publication_frames",
-        "before:event:model_request_completed",
-        "after:event:model_request_completed",
-        "before:commit_publication_terminal",
-        "after:commit_publication_terminal",
-        "before:commit_canonical_publication",
-        "after:commit_canonical_publication",
+        "during:model_settlement_provider",
+        "during:model_settlement_frames",
+        "during:model_settlement_canonical",
+        "before:settle_model_turn",
+        "after:settle_model_turn",
     ] {
         let lab = Lab::new();
         let mut process = lab.spawn(child::TEXT_TURN, Some(gate));
@@ -1096,6 +1087,14 @@ fn no_boundary_creates_u_without_p_or_c_without_u() {
 
         let durable = lab.durable();
         assert_publication_implication(&durable);
+        let committed = gate == "after:settle_model_turn";
+        assert_eq!(has_p(&durable), committed, "provider at {gate}");
+        assert_eq!(has_c(&durable), committed, "canonical at {gate}");
+        assert_eq!(
+            durable.has_event(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. })),
+            committed,
+            "terminal at {gate}"
+        );
         // Recovery is the second chance to violate the implication, so it is
         // re-checked after the audits terminalize.
         durable.recover();
@@ -1107,27 +1106,25 @@ fn no_boundary_creates_u_without_p_or_c_without_u() {
 // 3. Model-proposed tool calls never become execution through audit
 // ---------------------------------------------------------------------------
 
-/// A complete proposal whose canonical acceptance never committed settles as
-/// Unaccepted and never authorizes an execution — not before the crash, and
+/// A proposal whose atomic final settlement never committed settles as
+/// Incomplete and never authorizes an execution — not before the crash, and
 /// not through recovery.
 #[test]
-fn an_unaccepted_proposal_never_becomes_an_execution() {
+fn an_uncommitted_proposal_never_becomes_an_execution() {
     let lab = Lab::new();
-    let mut process = lab.spawn(
-        child::TOOL_TURN,
-        Some("before:commit_canonical_publication"),
-    );
-    process.wait_reached("before:commit_canonical_publication");
+    let mut process = lab.spawn(child::TOOL_TURN, Some("before:settle_model_turn"));
+    process.wait_reached("before:settle_model_turn");
     process.sigkill();
 
     let durable = lab.durable();
+    assert!(!has_p(&durable));
     assert!(!has_c(&durable));
     assert!(!has_tool_start(&durable), "no execution started before C");
 
     let report = durable.recover();
     assert_eq!(
         report.publication_classes()[0].kind,
-        PublicationAuditKind::Unaccepted
+        PublicationAuditKind::Incomplete
     );
     assert!(
         !has_tool_start(&durable),
@@ -1145,7 +1142,10 @@ fn an_unaccepted_proposal_never_becomes_an_execution() {
 #[test]
 fn a_publication_audit_carryover_stays_request_only() {
     let lab = Lab::new();
-    let mut process = lab.spawn(child::TEXT_TURN, Some("after:commit_publication_terminal"));
+    let mut process = lab.spawn(
+        child::REJECTED_TOOL_TURN,
+        Some("after:commit_publication_terminal"),
+    );
     process.wait_reached("after:commit_publication_terminal");
     process.sigkill();
     let durable = lab.durable();
@@ -1153,7 +1153,7 @@ fn a_publication_audit_carryover_stays_request_only() {
 
     assert!(
         !audit_text(&durable.transcript()).is_empty(),
-        "the Unaccepted audit body exists"
+        "the rejected output audit body exists"
     );
     assert!(
         !durable
@@ -1322,17 +1322,17 @@ fn unresolved_output_carryover_recovery_reuses_the_same_audit_across_second_cras
 }
 
 /// Internal retry generations are not unresolved logical steps. If the final
-/// retry reaches canonical acceptance and the owning attempt dies before its
-/// terminal transaction, recovery must not resurrect an earlier partial audit
+/// retry atomically commits canonical acceptance and its terminal, process
+/// death before publication must not resurrect an earlier partial audit
 /// as carryover.
 #[test]
 fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
     let lab = Lab::new();
     let mut process = lab.spawn(
         child::INTERNAL_RETRY_SUCCESS,
-        Some("before:event:attempt_completed"),
+        Some("after:settle_model_turn"),
     );
-    process.wait_reached("before:event:attempt_completed");
+    process.wait_reached("after:settle_model_turn");
     process.sigkill();
 
     let durable = lab.durable();
@@ -1365,14 +1365,16 @@ fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
             .load_pending_unresolved_output_stream_id()
             .expect("pending carryover source before recovery"),
         None,
-        "the live attempt-terminal transaction had not installed carryover"
+        "the accepted final settlement did not install old carryover"
     );
 
-    // Recovery sees the accepted final retry through durable facts. It may
-    // terminalize the interrupted attempt, but the shared selector is not
-    // allowed to choose either older audit generation for this already
-    // canonical logical step.
-    durable.recover();
+    // Recovery sees the accepted final retry and terminal in one commit.
+    // It must not choose an older audit for this canonical logical step.
+    let report = durable.recover();
+    assert_eq!(
+        report.attempt_class(),
+        &AttemptRecoveryClass::AlreadyTerminal
+    );
     assert_eq!(
         durable
             .store()
@@ -1382,8 +1384,8 @@ fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
     );
     assert_eq!(
         durable.count_events(|event| matches!(event, RuntimeEvent::AttemptFailed { .. })),
-        1,
-        "recovery terminalizes the interrupted attempt exactly once"
+        0,
+        "recovery cannot fabricate failure after atomic final completion"
     );
 
     // A later primary request remains ordinary canonical input: no old retry
@@ -2945,7 +2947,7 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
         ),
     ] {
         let lab = Lab::new();
-        let mut process = lab.spawn(child::TEXT_TURN, Some(gate));
+        let mut process = lab.spawn(child::REJECTED_TOOL_TURN, Some(gate));
         process.wait_reached(gate);
         process.sigkill();
         let durable = lab.durable();
@@ -2997,7 +2999,7 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
 /// with a client-facing consumer attached.
 #[test]
 fn client_presence_at_crash_time_changes_no_durable_result() {
-    let gate = "after:commit_publication_terminal";
+    let gate = "during:model_settlement_frames";
 
     let with_client = Lab::new();
     let mut process = with_client.spawn(child::TEXT_TURN, Some(gate));
@@ -3041,11 +3043,11 @@ fn streaming_output_and_pending_inbound_compose() {
     let lab = Lab::new();
     let mut process = lab.spawn(
         child::STREAMING_INBOUND,
-        Some("before:event:model_request_completed"),
+        Some("during:model_settlement_provider"),
     );
     process.wait_note("second-inbound-accepted");
     process.resume();
-    process.wait_reached("before:event:model_request_completed");
+    process.wait_reached("during:model_settlement_provider");
     process.sigkill();
 
     let durable = lab.durable();
@@ -3076,11 +3078,8 @@ fn streaming_output_and_pending_inbound_compose() {
 #[test]
 fn background_capable_turn_and_streaming_publication_compose() {
     let lab = Lab::new();
-    let mut process = lab.spawn(
-        child::BACKGROUND_TOOL,
-        Some("before:commit_canonical_publication"),
-    );
-    process.wait_reached("before:commit_canonical_publication");
+    let mut process = lab.spawn(child::BACKGROUND_TOOL, Some("before:settle_model_turn"));
+    process.wait_reached("before:settle_model_turn");
     process.sigkill();
 
     let durable = lab.durable();

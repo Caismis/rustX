@@ -332,7 +332,8 @@ fn count_conversation_store_open() {
 /// Version 72 excludes unrelated NULL-key rows from scoped event indexes.
 /// Version 73 derives state field previews lazily from retained geometry and bytes.
 /// Version 74 removes independent original-capture Source witness seats.
-pub const SQLITE_SCHEMA_VERSION: i64 = 74;
+/// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
+pub const SQLITE_SCHEMA_VERSION: i64 = 75;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -3535,101 +3536,15 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("adopt transaction: {error}")))?;
-        #[cfg(test)]
-        if let Some(probe) = self
-            .pending_adoption_transaction_probe
-            .lock()
-            .unwrap()
-            .take()
-        {
-            probe();
-        }
-        ensure_surface_head(&transaction)?;
-
-        let items = load_pending_until(&transaction, watermark)?;
-        for item in &items {
-            let block = MessageBlock::User(item.message.clone());
-            let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
-            if cursor != item.transcript_cursor {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
-                    item.message_id, item.transcript_cursor, cursor
-                )));
-            }
-        }
-        transaction
-            .execute(
-                "DELETE FROM pending_inbound WHERE sequence <= ?1",
-                [seq_to_i64(watermark.get())?],
-            )
-            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
-        for item in &items {
-            // The removed native pending row fences these derived bytes even
-            // if cleanup fails; their deletion cannot refuse adoption.
-            let _ = optional_display_layout(&transaction, || {
-                content::clear_pending(&transaction, &item.sequence.get().to_string())
-            });
-        }
-        if !items.is_empty() {
-            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
-        }
-        let mut adoption = None;
-        if !items.is_empty() {
-            let fact = crate::durable::inbox::inbound_adoption_event(
-                &self.conversation_id,
-                attempt_id,
-                items.iter().map(|item| item.message_id.clone()).collect(),
-            );
-            adoption = Some(persist_event_tx(&transaction, &self.conversation_id, fact)?.event);
-        }
-        #[cfg(test)]
-        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
-            || Self::consume(&self.fail_adopt_remaining)
-        {
-            return Err(storage("fault injected: adopt commit"));
-        }
-        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
-        let canonical_receipts = canonical_observation_batch(
-            &transaction,
-            &self.conversation_id,
-            &items
-                .iter()
-                .map(|item| (&item.message_id, item.transcript_cursor))
-                .collect::<Vec<_>>(),
-            adoption
-                .as_ref()
-                .map(|event| (event.sequence, event.sequence)),
-        )?;
-        if let Some(event) = &mut adoption {
-            event.observation = canonical_receipts.first().and_then(|receipt| {
-                observation_receipt::canonical(
-                    &transaction,
-                    &self.conversation_id,
-                    event,
-                    Arc::clone(&receipt.observation),
-                )
-            });
-        }
-        let pending_observation = observation_receipt::pending(
-            &transaction,
-            &self.conversation_id,
-            None,
-            None,
-            Some((watermark.get(), items.len() as u64)),
-        );
+        let adopted =
+            self.adopt_pending_tx(&transaction, &mut validation, watermark, attempt_id)?;
         process_death::reach("before:adopt_pending_batch");
         transaction
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
         validation.committed(&connection);
         process_death::reach("after:adopt_pending_batch");
-        Ok(crate::durable::inbox::AdoptedBatch {
-            pending_observation,
-            canonical_receipts,
-            read_cut,
-            items,
-            adoption,
-        })
+        Ok(adopted)
     }
 
     fn edit_pending(
@@ -5712,62 +5627,11 @@ impl ConversationStore for SqliteConversationStore {
         stream_id: &PublicationStreamId,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
-        if frames.is_empty() {
-            return Err(ConversationStoreError::PublicationViolation(
-                "the publication terminal transaction must carry a final frame".to_owned(),
-            ));
-        }
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("publication terminal transaction: {error}")))?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_publication_terminal_remaining) {
-            return Err(storage("fault injected: publication terminal commit"));
-        }
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
-            &transaction,
-            &self.conversation_id,
-            &stream.start.request_id,
-        )?;
-        validate_publication_generation(&snapshot, &stream.start)?;
-        // U may never precede P: prove the exact provider outcome before the
-        // frame/proposal staging transaction does any durable work.
-        if !request_outcome_is_durable(
-            &transaction,
-            &self.conversation_id,
-            &snapshot,
-            completed_sequence,
-        )? {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication terminal for {stream_id} has no durable provider outcome for request {}",
-                stream.start.request_id
-            )));
-        }
-        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
-        if stream.start.stream_id != *stream_id {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "terminal frames belong to publication stream {}, not {stream_id}",
-                stream.start.stream_id
-            )));
-        }
-        if stream.terminal_sequence.is_some() {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} already committed its terminal boundary"
-            )));
-        }
-        let terminal_sequence = frames
-            .last()
-            .map(|frame| frame.sequence)
-            .ok_or_else(|| storage("terminal frames are empty"))?;
-        // The final frame and the terminal marker share this one transaction.
-        transaction
-            .execute(
-                "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
-                params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
-            )
-            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+        let receipts = self.publication_terminal_tx(&transaction, stream_id, frames)?;
         process_death::reach("before:commit_publication_terminal");
         transaction
             .commit()
@@ -5776,8 +5640,14 @@ impl ConversationStore for SqliteConversationStore {
         Ok(receipts)
     }
 
-    // Keep native acceptance, event/staging and COMMIT in one auditable boundary.
-    #[allow(clippy::too_many_lines)]
+    fn settle_model_turn(
+        &self,
+        settlement: crate::durable::inbox::ModelTurnSettlement<'_>,
+    ) -> Result<crate::durable::inbox::CommittedModelTurn, ConversationStoreError> {
+        self.settle_model_turn_native(settlement)
+    }
+
+    // Workflow preparation uses the same canonical transaction body.
     fn commit_canonical_publication(
         &self,
         stream_id: &PublicationStreamId,
@@ -5789,113 +5659,20 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
-        let stream = require_publication_stream(&transaction, stream_id)?;
-        let (snapshot, _, completed_sequence) = require_started_request_tx(
+        let result = self.canonical_publication_tx(
             &transaction,
-            &self.conversation_id,
-            &stream.start.request_id,
-        )?;
-        validate_publication_generation(&snapshot, &stream.start)?;
-        validate_canonical_publication_event(
-            &self.conversation_id,
-            &stream.start,
+            &mut validation,
+            stream_id,
             message,
-            &event,
-        )?;
-        validate_canonical_tool_proposals(&transaction, stream_id, message)?;
-        if let Some(settlement) = stream.settlement {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
-                settlement.as_str()
-            )));
-        }
-        // C may never precede U for a published stream.
-        if stream.terminal_sequence.is_none() {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
-            )));
-        }
-        if !matches!(message, MessageBlock::Assistant(_)) {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "canonical acceptance of publication stream {stream_id} requires an Assistant message"
-            )));
-        }
-        if !request_outcome_is_durable(
-            &transaction,
-            &self.conversation_id,
-            &snapshot,
-            completed_sequence,
-        )? {
-            return Err(ConversationStoreError::PublicationViolation(format!(
-                "canonical acceptance of publication stream {stream_id} has no durable provider outcome for request {}",
-                stream.start.request_id
-            )));
-        }
-        ensure_surface_head(&transaction)?;
-
-        let transcript_cursor =
-            validation
-                .append(&transaction, message, None)?
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "canonical publication must receive a transcript cursor".to_owned(),
-                    )
-                })?;
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: canonical publication commit"));
-        }
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        content::settle_canonical(&transaction, stream_id, message)?;
-        rebind_published_read_layouts(&transaction, message, &persisted.event)?;
-        // The canonical transition clears the lifecycle staging of the stream:
-        // the Ledger is now the long-term authority and no transient frame
-        // survives it.
-        clear_publication_staging(&transaction, stream_id)?;
-        // Proposal ownership remains as one bounded `(stream_id, call_id)`
-        // fact after C. Recovery ToolResult repair and later Tool Plane
-        // transitions must still resolve the exact accepted proposal rather
-        // than falling back to a bare call id.
-        transaction
-            .execute(
-                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
-                params![
-                    PublicationSettlement::Canonical.as_str(),
-                    stream_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
-        transaction
-            .execute(
-                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
-                params![
-                    PublicationSettlement::Canonical.as_str(),
-                    stream_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
-        let mut receipt = canonical_observation_receipt(
-            &transaction,
-            &self.conversation_id,
-            message,
-            Some(transcript_cursor),
-            persisted.event.tool_occurrence.clone(),
+            event,
         )?;
         process_death::reach("before:commit_canonical_publication");
-        let sequence = persisted.event.sequence;
-        set_canonical_range(&mut receipt, Some((sequence, sequence)));
-        persisted.event.observation = observation_receipt::canonical(
-            &transaction,
-            &self.conversation_id,
-            &persisted.event,
-            Arc::clone(&receipt.observation),
-        );
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
         validation.committed(&connection);
         process_death::reach("after:commit_canonical_publication");
-        Ok((persisted.event, receipt))
+        Ok(result)
     }
 
     fn terminalize_publication_audit(
@@ -14114,6 +13891,10 @@ mod tests {
         use super::*;
         include!("sqlite/request_probe_tests.rs");
     }
+    mod final_settlement_tests {
+        use super::*;
+        include!("sqlite/final_settlement_tests.rs");
+    }
     mod request_snapshot_validation_tests {
         use super::*;
         include!("sqlite/request_snapshot_validation_tests.rs");
@@ -19485,7 +19266,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 74);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19554,7 +19335,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 74);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -21613,3 +21394,5 @@ mod projection;
 mod observation_projection;
 
 mod projection_publication;
+
+mod final_settlement;

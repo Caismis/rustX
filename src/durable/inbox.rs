@@ -28,6 +28,55 @@ use crate::runtime::identity::{
 };
 use crate::runtime::inbound::InboundSequence;
 
+/// One accepted model output and its optional no-tool inbox boundary.
+/// The native store commits these facts together before any receipt is released.
+pub struct ModelTurnSettlement<'a> {
+    /// Exact previously opened publication stream.
+    pub stream_id: &'a PublicationStreamId,
+    /// Structurally validated completion of that stream's request.
+    pub provider: RuntimeEventEnvelope,
+    /// Final pending frames, including a terminal-only frame when empty.
+    pub frames: &'a [PublicationFrame],
+    /// Prepared canonical Assistant.
+    pub assistant: &'a MessageBlock,
+    /// Canonical acceptance event for that Assistant.
+    pub canonical: RuntimeEventEnvelope,
+    /// No-tool final boundary; absent when tools must still execute.
+    pub boundary: Option<ModelTurnBoundary>,
+}
+
+/// Finite pending selection protected by the mailbox publication owner.
+pub struct ModelTurnBoundary {
+    /// Selected finite watermark; None asserts an empty native inbox.
+    pub pending_watermark: Option<InboundSequence>,
+    /// Completion of the accepted model turn.
+    pub turn_completed: RuntimeEventEnvelope,
+    /// Candidate terminal, committed only if there is no selected inbound work.
+    pub attempt_completed: RuntimeEventEnvelope,
+}
+
+/// Receipts from one successful native model-output COMMIT.
+pub struct CommittedModelTurn {
+    /// Ordered provider completion fact.
+    pub provider: RuntimeEventEnvelope,
+    /// Ordered canonical acceptance fact.
+    pub canonical: RuntimeEventEnvelope,
+    /// Exact canonical content receipt.
+    pub canonical_receipt: TranscriptCommitReceipt,
+    /// Optional committed no-tool boundary.
+    pub boundary: Option<CommittedModelTurnBoundary>,
+}
+
+/// The same transaction either adopted a finite batch or completed the Attempt.
+pub struct CommittedModelTurnBoundary {
+    /// Ordered turn completion fact.
+    pub turn_completed: RuntimeEventEnvelope,
+    /// Native adopted content and exact observation receipts.
+    pub adopted: Option<AdoptedBatch>,
+    /// Present only for the empty-inbox completion winner.
+    pub attempt_completed: Option<RuntimeEventEnvelope>,
+}
+
 /// The default bounded page used when a Runtime Client first attaches.
 pub const TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT: usize = 64;
 
@@ -3109,6 +3158,15 @@ pub trait ConversationStore: Send + Sync + 'static {
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError>;
 
+    /// Atomically accepts ordinary model output, including provider completion,
+    /// final frames and canonical acceptance. No-tool output also commits its
+    /// finite inbox adoption or empty-inbox Attempt completion in this boundary.
+    /// No prior provider completion is accepted by this operation.
+    fn settle_model_turn(
+        &self,
+        settlement: ModelTurnSettlement<'_>,
+    ) -> Result<CommittedModelTurn, ConversationStoreError>;
+
     /// Commits **C** for a published stream as one compound transition.
     ///
     /// The transition validates that the exact stream is publication-complete
@@ -3117,6 +3175,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// clears the stream's publication staging — all in one transaction. The
     /// store rejects C without U, and rejects C for a stream that already
     /// settled as an audit.
+    /// Workflow-owned preparation retains its separate owner boundary.
     fn commit_canonical_publication(
         &self,
         stream_id: &PublicationStreamId,

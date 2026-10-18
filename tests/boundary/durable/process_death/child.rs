@@ -57,6 +57,9 @@ use super::harness::{CONVERSATION, MODEL};
 
 /// One inbound message answered by one plain streaming text turn.
 pub(crate) const TEXT_TURN: &str = "text_turn";
+/// Structurally complete provider output rejected by native tool preflight.
+/// Its provider/publication facts never authorize canonical tool execution.
+pub(crate) const REJECTED_TOOL_TURN: &str = "rejected_tool_turn";
 pub(crate) const GOAL_ROUND: &str = "goal_round";
 pub(crate) const GOAL_REOPEN_PAUSED: &str = "goal_reopen_paused";
 pub(crate) const GOAL_RECOVER_INTERRUPT: &str = "goal_recover_interrupt";
@@ -1050,10 +1053,17 @@ async fn scenario_body(root: &Path, scenario: &str) {
         GOAL_RECOVER_INTERRUPT | GOAL_RECOVER_STALE_INTERRUPT | HUMAN_RECOVER_INTERRUPT => {
             recovered_interrupt(root, scenario).await;
         }
-        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE => {
+        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE
+        | REJECTED_TOOL_TURN => {
             let script = match scenario {
                 TERMINAL_ONLY_TURN => short_text_turn(),
                 STRUCTURAL_FAILURE => structurally_incomplete_turn(),
+                REJECTED_TOOL_TURN => calling_turn(&ScriptedCall {
+                    id: "call-unknown",
+                    tool_id: "unknown-tool",
+                    name: "unknown_tool",
+                    arguments: serde_json::json!({}),
+                }),
                 _ => wide_text_turn(),
             };
             let client = scenario != TEXT_TURN_NO_CLIENT;
