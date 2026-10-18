@@ -186,7 +186,7 @@ class SummaryTests(unittest.TestCase):
 
     def test_unavailable_counters_are_none_not_zero(self):
         p={'process':{'stat':None,'io':None,'smaps_rollup':None}}
-        self.assertEqual(http.counters(p),dict.fromkeys(('cpu_ms','write_bytes','rss_kib','pss_kib')))
+        self.assertEqual(http.counters(p),dict.fromkeys(('cpu_ms','write_bytes','rss_kib','pss_kib','anon_pss_kib')))
         self.assertIsNone(http.delta(p,p,'cpu_ms'))
 
     def pairs(self, before=(1,100,101), after=(2,99,101)):
@@ -251,6 +251,27 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result['before_close_wal_logical'],1025)
         self.assertEqual(result['before_close_wal_allocated'],4096)
         self.assertEqual(result['closed_footprint_wal_allocated'],0)
+
+    def test_cold_append_operation_counters_do_not_include_reopens(self):
+        self.test_append_endpoints_and_footprints()
+        for side in ('before','after'):
+            path=self.root/f'0-64-{side}.json';value=json.loads(path.read_text())
+            value.update(cold=True,operation_counters=[{'before':process(10,100),'after':process(11,200)}]*32)
+            path.write_text(json.dumps(value))
+        result=paired.summarize([self.root],append=True)['medians']['64']['before']
+        self.assertEqual(result['append_cpu_ms_per_append'],10)
+        self.assertEqual(result['append_write_mib_per_append'],100/2**20)
+        self.assertEqual(result['append_phase_with_reopens_cpu_ms_per_append'],100/32)
+        path=self.root/'0-64-after.json';value=json.loads(path.read_text());value['cold']=False
+        path.write_text(json.dumps(value))
+        with self.assertRaises(ValueError):paired.summarize([self.root],append=True)
+        value['cold']=True;value['operation_counters'].pop();path.write_text(json.dumps(value))
+        with self.assertRaises(ValueError):paired.summarize([self.root],append=True)
+
+    def test_anonymous_memory_is_separate_and_unavailable_is_not_zero(self):
+        p=process();self.assertIsNone(http.counters({'process':p})['anon_pss_kib'])
+        p['smaps_rollup']+='Pss_Anon: 256 kB\n'
+        self.assertEqual(http.counters({'process':p})['anon_pss_kib'],256)
 
 
 if __name__ == '__main__':unittest.main()

@@ -39,6 +39,23 @@ python3 benchmarks/runtime/summarize-comparisons.py --append /absolute/new-appen
 python3 benchmarks/runtime/summarize-http.py /absolute/new-pi-evidence
 ```
 
+For the structural stages after `5457e1c3`, build both checkpoints with the
+identical updated conformance fixture and also run:
+
+```sh
+python3 benchmarks/runtime/compare-append.py --before /absolute/before \
+  --after /absolute/after --output /absolute/new-cold-append-evidence --pairs 3 --cold
+python3 benchmarks/runtime/summarize-comparisons.py --append /absolute/new-cold-append-evidence
+```
+
+Cold mode closes/reopens before each measured append. Per-operation wall excludes
+reopen; CPU/write brackets include counter-sampling overhead and retain raw values
+for all 32 appends. Whole-phase and lifecycle counters include reopen, checkpoint,
+verification and sampling costs. They are not derived by subtracting medians.
+Normal mode retains the existing steady sequence after seeding. Report both;
+10 ms CPU resolution can produce zero denominators, which have no invented ratio.
+Summaries also expose sampled anonymous PSS, with unavailable counters as null.
+
 `pack-evidence.py --root /absolute/evidence --output evidence.tar.xz 'run/*'`
 copies selected raw files, records lengths/SHA-256 in `MANIFEST.json`, and
 verifies every archive member. It does not delete original evidence. Perform

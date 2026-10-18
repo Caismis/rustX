@@ -42,6 +42,22 @@ pub(crate) enum FieldPreview<'a> {
     Skipped,
 }
 
+/// Facts from the exact-byte indexing pass, borrowed during ordered traversal.
+/// These describe the original representation, not the normalized preview.
+pub(crate) struct FieldMetadata<'a> {
+    pub path: &'a [String],
+    pub encoded_path: &'a str,
+    pub parent: Option<(&'a [String], &'a str, u64)>,
+    pub start: u64,
+    pub end: u64,
+    pub children: u64,
+    pub recursive_nodes: u64,
+    pub object: bool,
+    pub container: bool,
+    pub key_span: Option<(u64, u64)>,
+    pub key: Option<&'a str>,
+}
+
 /// Immutable source reads have no mutable lease or cursor-expiration authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ObservationReadError {
@@ -624,7 +640,59 @@ impl SeekableObservationSource {
         ) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
         let reader = self.field_reader()?;
-        Self::visit_selected_fields_in(&reader, first, last, include, preview_policy, visit)
+        let mut preview_policy = preview_policy;
+        let mut visit = visit;
+        Self::visit_selected_fields_in(
+            &reader,
+            first,
+            last,
+            include,
+            |field| preview_policy(field.path),
+            |field, preview| {
+                visit(
+                    field.path,
+                    field.encoded_path,
+                    field.parent.map(|(_, encoded, ordinal)| (encoded, ordinal)),
+                    field.start,
+                    field.end,
+                    field.children,
+                    field.key_span,
+                    preview,
+                )
+            },
+        )
+    }
+    /// Filter by exact span before reading any preview. Ancestor traversal still
+    /// validates paths and ordering, including ancestors outside the selection.
+    pub(crate) fn visit_field_metadata(
+        &self,
+        start: u64,
+        end: u64,
+        mut visit: impl FnMut(FieldMetadata<'_>, &Value) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        if start > end || end > self.layout.written {
+            return Err("native field selection exceeds source");
+        }
+        let reader = self.field_reader()?;
+        Self::visit_selected_fields_in(
+            &reader,
+            0,
+            SAFE,
+            |_| true,
+            |field| {
+                if field.start >= start && field.end <= end {
+                    FieldPreviewPolicy::Inline
+                } else {
+                    FieldPreviewPolicy::Skip
+                }
+            },
+            |field, preview| {
+                if let FieldPreview::Inline(value) = preview {
+                    visit(field, value)?;
+                }
+                Ok(())
+            },
+        )
     }
     fn field_reader(&self) -> Result<FieldReader<'_>, &'static str> {
         #[cfg(test)]
@@ -643,17 +711,8 @@ impl SeekableObservationSource {
         first: u64,
         last: u64,
         mut include: impl FnMut(u64) -> bool,
-        mut preview_policy: impl FnMut(&[String]) -> FieldPreviewPolicy,
-        mut visit: impl FnMut(
-            &[String],
-            &str,
-            Option<(&str, u64)>,
-            u64,
-            u64,
-            u64,
-            Option<(u64, u64)>,
-            FieldPreview<'_>,
-        ) -> Result<(), &'static str>,
+        mut preview_policy: impl FnMut(&FieldMetadata<'_>) -> FieldPreviewPolicy,
+        mut visit: impl FnMut(FieldMetadata<'_>, FieldPreview<'_>) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
         let mut stack: Vec<(u64, usize, String, bool)> = Vec::new();
         let mut path = Vec::new();
@@ -694,7 +753,22 @@ impl SeekableObservationSource {
             } else {
                 "[]".to_owned()
             };
-            let policy = preview_policy(&path);
+            let field = FieldMetadata {
+                path: &path,
+                encoded_path: &path_json,
+                parent: stack
+                    .last()
+                    .map(|(_, depth, encoded, _)| (&path[..*depth], encoded.as_str(), ordinal)),
+                start: node.start,
+                end: node.end,
+                children: node.children,
+                recursive_nodes: node.recursive_nodes,
+                object: node.object,
+                container: node.container,
+                key_span: node.key_span,
+                key: node.key.as_deref().filter(|_| node.key_complete),
+            };
+            let policy = preview_policy(&field);
             let requested = policy == FieldPreviewPolicy::Inline;
             #[cfg(test)]
             FIELD_PREVIEWS.with(|work| {
@@ -712,16 +786,7 @@ impl SeekableObservationSource {
             } else {
                 FieldPreview::Skipped
             };
-            visit(
-                &path,
-                &path_json,
-                stack.last().map(|(_, _, path, _)| (path.as_str(), ordinal)),
-                node.start,
-                node.end,
-                node.children,
-                node.key_span,
-                preview,
-            )?;
+            visit(field, preview)?;
             stack.push((id, path.len(), path_json, node.object));
             Ok(())
         };

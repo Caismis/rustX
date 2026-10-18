@@ -315,6 +315,18 @@ async fn measure_runtime() {
 #[test]
 #[ignore = "offline canonical append measurement; no timing gate"]
 fn measure_canonical_append() {
+    canonical_append_measurement(false);
+}
+
+/// Reopen before each measured append; reopen cost stays in lifecycle counters,
+/// while operation counters and elapsed time surround only append itself.
+#[test]
+#[ignore = "offline cold canonical append measurement; no timing gate"]
+fn measure_cold_canonical_append() {
+    canonical_append_measurement(true);
+}
+
+fn canonical_append_measurement(cold: bool) {
     use rustx::message::types::{InboundKind, UserMessageBlock, UserSource};
     use rustx::runtime::identity::{ConversationId, MessageId};
     let history: usize = std::env::var("RUSTX_BENCH_HISTORY")
@@ -345,12 +357,22 @@ fn measure_canonical_append() {
         store.append_canonical(&message(index)).unwrap();
     }
     lifecycle_sample(&mut lifecycle, "after_seed", began);
+    let mut store = Some(store);
     let mut samples = Vec::new();
+    let mut operations = Vec::new();
     for index in history..history + 32 {
         let message = message(index);
+        if cold {
+            drop(store.take());
+            store = Some(SqliteConversationStore::open_existing(cid.clone(), &database).unwrap());
+        }
+        let before = cold.then(process_sample);
         let start = Instant::now();
-        store.append_canonical(&message).unwrap();
+        store.as_ref().unwrap().append_canonical(&message).unwrap();
         samples.push(start.elapsed().as_nanos());
+        if let Some(before) = before {
+            operations.push(json!({"before":before,"after":process_sample()}));
+        }
     }
     lifecycle_sample(&mut lifecycle, "after_appends", began);
     let before_close = footprint(root.path());
@@ -369,6 +391,7 @@ fn measure_canonical_append() {
     std::fs::write(
         output,
         serde_json::to_vec_pretty(&json!({"history":history,"measured":32,
+            "cold":cold,"operation_counters":operations,
             "append_ns":samples,"lifecycle":lifecycle,"before_close":before_close,
             "closed_footprint":closed_footprint,"oracle":"passed",
             "schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION}))

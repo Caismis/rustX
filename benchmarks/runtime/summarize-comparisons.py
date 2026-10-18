@@ -23,6 +23,20 @@ def append_sample(path):
         'max_sampled_rss_mib':max(summary.counters(p)['rss_kib'] for p in value['lifecycle'])/1024,
         'max_sampled_pss_mib':max(summary.counters(p)['pss_kib'] for p in value['lifecycle'])/1024,
     }
+    memory = [summary.counters(p)['anon_pss_kib'] for p in value['lifecycle']]
+    result['max_sampled_anon_pss_mib'] = summary.scaled(max((x for x in memory if x is not None), default=None),1024)
+    result['lifecycle_ms'] = (phases['after_cleanup']['elapsed_us']-phases['before_initialization']['elapsed_us'])/1000
+    if value.get('cold',False):
+        operations = value['operation_counters']
+        if len(operations) != value['measured']:
+            raise ValueError('cold operation counters incomplete')
+        # Preserve whole-phase counters, including reopen and sampling overhead.
+        result['append_phase_with_reopens_cpu_ms_per_append'] = result['append_cpu_ms_per_append']
+        result['append_phase_with_reopens_write_mib_per_append'] = result['append_write_mib_per_append']
+        for key,field,divisor in [('cpu_ms','append_cpu_ms_per_append',value['measured']),
+                                  ('write_bytes','append_write_mib_per_append',value['measured']*2**20)]:
+            deltas = [summary.delta({'process':op['before']},{'process':op['after']},key) for op in operations]
+            result[field] = sum(deltas)/divisor if all(x is not None for x in deltas) else None
     for phase in ('before_close','closed_footprint'):
         for kind,suffix in (('db','.sqlite'),('wal','-wal'),('shm','-shm')):
             for size in ('logical','allocated'):
@@ -56,7 +70,7 @@ def summarize(directories, append=False):
                 status = json.loads(path.with_name(path.stem+'.process.json').read_text())
                 assert status['accepted'], f'failed sample retained: {path}'
                 raw = json.loads(path.read_text())
-                workload.append((raw['history'], raw['measured']))
+                workload.append((raw['history'], raw['measured'], raw.get('cold',False) if append else False))
                 if append:
                     assert raw['history'] == int(case), f'history differs from pair label: {path}'
                 else:

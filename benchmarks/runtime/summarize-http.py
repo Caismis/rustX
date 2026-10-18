@@ -18,7 +18,8 @@ def counters(point):
     mem = dict(line.split(':', 1) for line in p['smaps_rollup'].splitlines() if ':' in line) if p['smaps_rollup'] else {}
     return {'cpu_ms':cpu,'write_bytes':int(io['write_bytes']) if 'write_bytes' in io else None,
             'rss_kib':int(mem['Rss'].split()[0]) if 'Rss' in mem else None,
-            'pss_kib':int(mem['Pss'].split()[0]) if 'Pss' in mem else None}
+            'pss_kib':int(mem['Pss'].split()[0]) if 'Pss' in mem else None,
+            'anon_pss_kib':int(mem['Pss_Anon'].split()[0]) if 'Pss_Anon' in mem else None}
 
 
 def delta(a,b,key):
@@ -48,6 +49,7 @@ def sample(path):
         'lifecycle_ms':(final['elapsed_us']-initial['elapsed_us'])/1000,
         'max_sampled_rss_mib':scaled(max((p['rss_kib'] for p in memory if p['rss_kib'] is not None),default=None),1024),
         'max_sampled_pss_mib':scaled(max((p['pss_kib'] for p in memory if p['pss_kib'] is not None),default=None),1024),
+        'max_sampled_anon_pss_mib':scaled(max((p['anon_pss_kib'] for p in memory if p['anon_pss_kib'] is not None),default=None),1024),
         'phases':[]}
     previous=initial
     for current in s['lifecycle'][1:]:

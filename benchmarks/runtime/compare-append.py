@@ -15,10 +15,13 @@ p.add_argument('--after', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--pairs', type=int, default=3)
 p.add_argument('--pair-offset',type=int,default=0)
+p.add_argument('--cold', action='store_true', help='Reopen before each append; retain separate operation counters')
 a = p.parse_args()
+if a.cold:
+    TEST = TEST.replace("measure_canonical_append", "measure_cold_canonical_append")
 a.output.mkdir(parents=True, exist_ok=False)
 env = {k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN','SECRET','CREDENTIAL','API_KEY'))}
-manifest = {'clock_ticks':os.sysconf('SC_CLK_TCK'), 'pairs':a.pairs, 'pair_offset':a.pair_offset,
+manifest = {'clock_ticks':os.sysconf('SC_CLK_TCK'), 'cold':a.cold, 'pairs':a.pairs, 'pair_offset':a.pair_offset,
             'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
             'executables':{n:{'path':str(getattr(a,n).resolve()), 'sha256':hashlib.file_digest(getattr(a,n).open('rb'),'sha256').hexdigest()} for n in ('before','after')}}
 (a.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
@@ -36,6 +39,10 @@ for pair in range(a.pair_offset,a.pair_offset+a.pairs):
                 sample = json.loads(stem.with_suffix('.json').read_text())
                 assert result.returncode == 0 and f'test {TEST} ... ok' in stem.with_suffix('.log').read_text()
                 assert sample['history']==history and sample['measured']==32 and sample['oracle']=='passed'
+                assert sample.get('cold',False)==a.cold
+                if a.cold:
+                    assert len(sample['operation_counters'])==32
+                    assert all(set(x)=={'before','after'} for x in sample['operation_counters'])
                 assert len(sample['append_ns'])==32 and all(isinstance(n,int) and n>=0 for n in sample['append_ns'])
                 assert [x['phase'] for x in sample['lifecycle']]==['before_initialization','after_seed','after_appends','after_close','after_reopen_verification','after_cleanup']
                 record['accepted']=True
