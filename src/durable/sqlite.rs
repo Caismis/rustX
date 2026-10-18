@@ -330,7 +330,8 @@ fn count_conversation_store_open() {
 /// Version 70 removes the redundant serialized active history from the Surface head.
 /// Version 71 stores authenticated Source pages with a bounded binary codec.
 /// Version 72 excludes unrelated NULL-key rows from scoped event indexes.
-pub const SQLITE_SCHEMA_VERSION: i64 = 72;
+/// Version 73 derives state field previews lazily from retained geometry and bytes.
+pub const SQLITE_SCHEMA_VERSION: i64 = 73;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8739,15 +8740,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS state_observation_ledger_idx ON state_observation_sources(domain,ledger_position,source_id);
             CREATE INDEX IF NOT EXISTS state_observation_journal_idx ON state_observation_sources(domain,journal_sequence,source_id);
-            CREATE TABLE IF NOT EXISTS state_observation_fields (
-                source_id TEXT NOT NULL,
-                path_json TEXT NOT NULL,parent_path TEXT,ordinal INTEGER,
-                key_path TEXT,key_header BLOB CHECK(key_header IS NULL OR length(key_header)<=4096),
-                start INTEGER NOT NULL CHECK(start>=0),end INTEGER NOT NULL CHECK(end>=start),
-                children INTEGER NOT NULL CHECK(children>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
-                PRIMARY KEY(source_id,path_json)
-            ) WITHOUT ROWID;
-            CREATE UNIQUE INDEX IF NOT EXISTS state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal);
             CREATE TABLE IF NOT EXISTS request_observation_fields (
                 source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),
                 path_json TEXT NOT NULL CHECK(path_json='[]'),
@@ -8933,6 +8925,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
     content::create_binary_schema(connection)?;
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
+    observation_request::state_preview::create_schema(connection)?;
     connection
         .execute_batch(&projection::completion_index_sql())
         .map_err(|error| storage(error.to_string()))?;
@@ -9535,7 +9528,10 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
                 "path_json",
                 "parent_path",
                 "ordinal",
-                "header_json",
+                "source_kind",
+                "preview_nodes",
+                "preview_kind",
+                "preview_key",
             ],
         ),
         (
@@ -9656,6 +9652,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
+    observation_request::state_preview::verify_schema(connection)?;
     Ok(())
 }
 
@@ -19511,7 +19508,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 73);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19580,7 +19577,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 73);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

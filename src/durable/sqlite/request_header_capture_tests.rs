@@ -222,8 +222,8 @@ fn t08_t19_generic_json_message_lookalikes_never_claim_native_header_placeholder
         .unwrap();
     assert_eq!(observation_request::take_header_constructions(), 0);
     let (computed, skipped) = crate::runtime::read_layout::take_field_preview_work();
-    assert!(computed > 0);
-    assert_eq!(skipped, 0);
+    assert_eq!(computed, 0, "generic state previews are now lazy too");
+    assert!(skipped > 0);
     assert_eq!(
         connection
             .query_row(

@@ -523,8 +523,9 @@ impl SeekableObservationSource {
         Ok(offset)
     }
 
-    /// Reads a trusted span already supplied by this immutable layout's visitor.
-    /// The native producer avoids resolving the same path and reopening its index.
+    /// Reads a trusted span for the independent eager-preview test oracle.
+    /// Production fragment reads use one pinned `ObservationByteReader` instead.
+    #[cfg(test)]
     pub(crate) fn indexed_span(
         &self,
         start: u64,
@@ -669,6 +670,21 @@ impl SeekableObservationSource {
                 }
                 Ok(())
             },
+        )
+    }
+    /// Visit immutable navigation geometry without constructing unused previews.
+    pub(crate) fn visit_field_geometry(
+        &self,
+        mut visit: impl FnMut(FieldMetadata<'_>) -> Result<(), &'static str>,
+    ) -> Result<(), &'static str> {
+        let reader = self.field_reader()?;
+        Self::visit_selected_fields_in(
+            &reader,
+            0,
+            SAFE,
+            |_| true,
+            |_| FieldPreviewPolicy::Skip,
+            |field, _| visit(field),
         )
     }
     fn field_reader(&self) -> Result<FieldReader<'_>, &'static str> {
