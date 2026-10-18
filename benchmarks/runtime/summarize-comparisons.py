@@ -31,11 +31,11 @@ def append_sample(path):
 
 
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('directory',type=Path)
+p.add_argument('directory',type=Path,nargs='+')
 p.add_argument('--append',action='store_true')
 a = p.parse_args()
 groups = {}
-for before in sorted(a.directory.glob('*-before.json')):
+for before in sorted(path for directory in a.directory for path in directory.glob('*-before.json')):
     stem = before.stem.removesuffix('-before')
     pair,case = stem.split('-',1)
     after = before.with_name(stem+'-after.json')

@@ -27,6 +27,24 @@ checkpoint executables at least three times, and retain failures. It performs
 no request/context construction. Seed, append, close, reopened validation and
 cleanup counters are separate; evidence output follows the cleanup endpoint.
 
+For the staged revision comparisons and summaries:
+
+```sh
+python3 benchmarks/runtime/compare-revisions.py --before /absolute/before \
+  --after /absolute/after --output /absolute/new-runtime-evidence --pairs 3
+python3 benchmarks/runtime/compare-append.py --before /absolute/before \
+  --after /absolute/after --output /absolute/new-append-evidence --pairs 3
+python3 benchmarks/runtime/summarize-comparisons.py /absolute/new-runtime-evidence
+python3 benchmarks/runtime/summarize-comparisons.py --append /absolute/new-append-evidence
+python3 benchmarks/runtime/summarize-http.py /absolute/new-pi-evidence
+```
+
+`pack-evidence.py --root /absolute/evidence --output evidence.tar.xz 'run/*'`
+copies selected raw files, records lengths/SHA-256 in `MANIFEST.json`, and
+verifies every archive member. It does not delete original evidence. Perform
+compression after formal samples finish. The reports under `docs/issue-481`
+separate baseline, Source-only, canonical incremental and combined comparisons.
+
 The remaining documentation describes the **historical issue 480 harness**.
 Its `run.py` expects the old measurement executable and must not be used with
 the new controller-handshake executable. Old Pi in-process timings are not an
