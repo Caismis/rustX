@@ -1,0 +1,201 @@
+diff --git a/src/runtime/read_layout.rs b/src/runtime/read_layout.rs
+index 27e120c9..27ede718 100644
+--- a/src/runtime/read_layout.rs
++++ b/src/runtime/read_layout.rs
+@@ -1165,6 +1165,26 @@ impl LayoutParser<'_> {
+         self.reader.consume(count);
+         self.position += count as u64;
+     }
++    fn whitespace(&mut self) -> Result<(), &'static str> {
++        use std::io::BufRead as _;
++        loop {
++            if self.layout.expired() {
++                return Err("native source indexing deadline reached");
++            }
++            let buffer = self
++                .reader
++                .fill_buf()
++                .map_err(|_| "native source parser unavailable")?;
++            let count = buffer
++                .iter()
++                .take_while(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
++                .count();
++            if count == 0 {
++                return Ok(());
++            }
++            self.consume(count);
++        }
++    }
+     fn expect(&mut self, byte: u8) -> Result<(), &'static str> {
+         if self.peek()? != Some(byte) {
+             return Err("native source JSON invalid");
+@@ -1223,6 +1243,7 @@ impl LayoutParser<'_> {
+             None
+         };
+         let complete = name.is_some();
++        self.whitespace()?;
+         self.expect(b':')?;
+         Ok((name.unwrap_or_default(), complete, (begin, end)))
+     }
+@@ -1269,7 +1290,13 @@ impl LayoutParser<'_> {
+             .checked_add(1)
+             .filter(|next| *next <= SAFE)
+             .ok_or("native source nodes exhausted")?;
+-        let start = self.position;
++        let root_start = self.position;
++        self.whitespace()?;
++        let start = if parent.is_none() {
++            root_start
++        } else {
++            self.position
++        };
+         let byte = self.peek()?.ok_or("native source JSON truncated")?;
+         let container = matches!(byte, b'{' | b'[');
+         let object = byte == b'{';
+@@ -1279,10 +1306,12 @@ impl LayoutParser<'_> {
+         let (mut children, mut recursive) = (0_u64, 1_u64);
+         if container {
+             self.consume(1);
++            self.whitespace()?;
+             let close = if object { b'}' } else { b']' };
+             while self.peek()? != Some(close) {
+                 if children > 0 {
+                     self.expect(b',')?;
++                    self.whitespace()?;
+                 }
+                 let child_key = if object {
+                     Some(self.child_key()?)
+@@ -1292,18 +1321,21 @@ impl LayoutParser<'_> {
+                 let (_, count) = self.value(Some(id), children, child_key, depth + 1)?;
+                 recursive = (recursive + count).min(33);
+                 children += 1;
++                self.whitespace()?;
+             }
+             self.expect(close)?;
+         } else if byte == b'"' {
+             self.string()?;
+         } else {
+-            while self
+-                .peek()?
+-                .is_some_and(|byte| !matches!(byte, b',' | b'}' | b']'))
+-            {
++            while self.peek()?.is_some_and(|byte| {
++                !matches!(byte, b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t')
++            }) {
+                 self.consume(1);
+             }
+         }
++        if parent.is_none() {
++            self.whitespace()?;
++        }
+         let end = self.position;
+         // IDs remain preorder; completed rows need no placeholder update.
+         if let Some(index) = &mut self.layout.small_index {
+diff --git a/src/durable/sqlite/observation_request/state_preview_tests.rs b/src/durable/sqlite/observation_request/state_preview_tests.rs
+index 008c9955..42058944 100644
+--- a/src/durable/sqlite/observation_request/state_preview_tests.rs
++++ b/src/durable/sqlite/observation_request/state_preview_tests.rs
+@@ -274,3 +285,103 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
+         72
+     );
+ }
++
++#[derive(serde::Serialize, schemars::JsonSchema)]
++struct LexicalFixture<'a> {
++    #[schemars(with = "serde_json::Value")]
++    raw: &'a serde_json::value::RawValue,
++}
++
++#[test]
++fn lazy_raw_value_previews_preserve_lexical_ranges_and_duplicate_ordinal_keys() {
++    for raw in [
++        r#"{ "z" : 1.00, "a":-0.0, "e":1e+03, "s":"\u6c34", "u":18446744073709551615, "empty":{ }, "array":[ 1, true, null, "x" ] }"#.to_owned(),
++        r#"{"@same":1.00,"@same":2e0,"$key":"first","$key":"second"}"#.to_owned(),
++        format!(
++            r#"{{"@same":1.00,"@same":2e0,"large":"{}","tail":"\u6c34"}}"#,
++            "x".repeat(70_000)
++        ),
++    ] {
++        let raw = serde_json::value::RawValue::from_string(raw).unwrap();
++        let fixture = LexicalFixture { raw: &raw };
++        assert_lazy_matches_eager(&fixture);
++        let connection = connection();
++        index_state(&connection, "preview_test", "raw", &fixture).unwrap();
++        let mut bytes = Vec::new();
++        while bytes.len() < raw.get().len() {
++            let chunk = read_from(
++                &connection,
++                "preview_test",
++                "state_observation_fields",
++                "raw",
++                &["raw".into()],
++                bytes.len() as u64,
++                31,
++            )
++            .unwrap();
++            assert!(!chunk.bytes.is_empty() && chunk.bytes.len() <= 31);
++            let (segments, returned) = crate::durable::sqlite::content::last_read_work();
++            assert!(segments <= 2 && returned <= 31);
++            bytes.extend_from_slice(&chunk.bytes);
++        }
++        assert_eq!(
++            bytes,
++            raw.get().as_bytes(),
++            "no number/escape/key-order normalization"
++        );
++    }
++}
++
++#[test]
++fn duplicate_named_paths_keep_existing_optional_failure_and_historical_bytes() {
++    let raw = serde_json::value::RawValue::from_string(r#"{"same":1,"same":2}"#.into()).unwrap();
++    let fixture = LexicalFixture { raw: &raw };
++    let source = SeekableObservationSource::new(&fixture).unwrap();
++    let mut paths = std::collections::HashSet::new();
++    let mut duplicate = false;
++    source
++        .visit_fields(|path, _, _, _, _, _, _, _| {
++            duplicate |= !paths.insert(path.to_vec());
++            Ok(())
++        })
++        .unwrap();
++    assert!(
++        duplicate,
++        "the eager path-keyed table also rejects this collision"
++    );
++    let connection = connection();
++    index_state(
++        &connection,
++        "preview_test",
++        "historical",
++        &serde_json::json!({"kept":7}),
++    )
++    .unwrap();
++    let before = field_from(&connection, "state_observation_fields", "historical", &[]).unwrap();
++    let failed = crate::durable::sqlite::optional_display_layout(&connection, || {
++        index_state(&connection, "preview_test", "duplicate", &fixture)
++    });
++    assert!(failed.is_none());
++    for table in [
++        "state_observation_fields",
++        "content_segments",
++        "content_frontiers",
++    ] {
++        let count: u64 = connection
++            .query_row(
++                &format!("SELECT count(*) FROM {table} WHERE source_id='duplicate'"),
++                [],
++                |row| row.get(0),
++            )
++            .unwrap();
++        assert_eq!(count, 0, "no incomplete optional source: {table}");
++    }
++    assert_eq!(
++        field_from(&connection, "state_observation_fields", "historical", &[]).unwrap(),
++        before
++    );
++    assert_eq!(
++        source.read(&["raw".into()], 0, 64).unwrap().bytes,
++        raw.get().as_bytes()
++    );
++}
