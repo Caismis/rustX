@@ -48,3 +48,31 @@ This removes history-wide rewrite/allocation work, not every history-dependent
 operation. The ordinary integrity scan remains bounded O(n); checkpoints retain
 the full validation path. There is no whole-request O(1) claim or new cache
 of active-history authority.
+
+A separate instrumented pre-canonical 2,048-history lifecycle completed with
+648,483 `pread64`, 318,475 `pwrite64` and 352 `fsync` calls. It includes seeding,
+32 appends, close/reopen verification and cleanup; these are not marginal-append
+counts. Its 26.75-second instrumented wall time is not a formal timing sample.
+The syscall-summary percentages describe instrumented syscall time, not CPU
+percentages. The profile overlapped compilation and is used only for counts.
+
+Implementation commit: `eb7a9be6c960e71e8626134feff4dae24cd1d3bb`.
+Combined optimized executable SHA-256:
+`82a273f78f8e845e26cbca304a48c946f2afce185b377ecbb703e13c74e5881e`.
+The fixed build uses the same Rust/compiler flags and default features as the
+baseline. The corrected marginal fixture is identical on both sides.
+
+All 20 focused append tests and 367 durable SQLite tests passed. New regressions
+cover sparse frontiers, invalid SQL types/UTF-8/oversize identities, atomic
+rejection, the exact 8,192 pre-append boundary, inconsistent revision, retired
+layout rejection, and checkpoint Original dependency loss. Two initial corruption
+fixtures failed to install their corruption because foreign keys correctly
+rejected it. They now explicitly disable foreign keys only while installing
+external-corruption fixtures; all product rejection assertions remain unchanged.
+The initial failed test log is retained.
+
+The separate after profile had 621,622 `pread64`, 262,649 `pwrite64` and 283
+`fsync` calls over the same seeded lifecycle. Fewer WAL pages change automatic
+checkpoint work; application transaction and publication boundaries are unchanged.
+This profile overlapped other validation, so its 68.69-second instrumented wall
+is not comparable performance evidence. No syscall percentage is reported as CPU.

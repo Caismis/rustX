@@ -42,8 +42,8 @@ medians of three per-run means/counters, not differences of unrelated runs.
 | cancel | 50.31 / 49.22 | 70 / 70 | 157.11 / 157.16 |
 
 The small memory increase is a tradeoff of retaining a bounded SQLite
-connection. Streaming wall time regressed slightly; the provider's deliberate
-chunk schedule dominates that case. Three repeats are descriptive evidence,
+connection. The provider's deliberate chunk schedule dominates streaming;
+absolute medians and same-pair ratios differ at this noise level. Three repeats are descriptive evidence,
 not a significance claim. CPU resolution is 10 ms. All baseline scope and
 native-contract qualifications still apply. Lifecycle writes remained essentially
 unchanged (short-small 128.08/128.05 MiB, short-large 330.74/330.66 MiB).
@@ -61,3 +61,10 @@ All 361 durable SQLite owner tests passed after the focused 20 layout tests.
 The marginal-append fixture initially failed before measurement because its
 ConversationId was not a production UUIDv7; every failed record remains in
 `source-append`. The corrected benchmark is measured separately.
+
+Median **same-pair** after/before ratios (wall / CPU / sampled RSS) were:
+short-small 0.9255 / 0.9431 / 1.0060; short-large 0.9399 / 0.9509 / 1.0041;
+stream 0.9931 / 0.9474 / 0.9882; large 0.9775 / 1.0000 / 1.0039;
+tool 0.9434 / 0.9333 / 1.0127; cancel 0.9713 / 1.0000 / 1.0028.
+`summarize-comparisons.py` retains each paired numerator/denominator and phase
+scope; these ratios are not computed by dividing unrelated medians.

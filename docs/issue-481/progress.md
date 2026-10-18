@@ -84,5 +84,9 @@ Rust compilation and are not performance evidence. Failed attempts are
 retained under `/workspace/issue-481-evidence` alongside their logs.
 
 The fresh baseline and separate syscall profile are complete; see `baseline.md`.
-Source optimization is under focused validation. Canonical optimization, combined
+Source optimization passed focused/durable validation and three paired repeats
+of every workload; see `source.md`. The schema-70 canonical append change is
+implemented; its 20 focused append tests and all 367 durable tests pass. The
+optimized combined build and five Rust, eight Node and nine Python oracle/harness
+tests pass. Clippy is running. Combined measurements, final FULL
 validation and the draft PR remain pending. This file records progress, not acceptance.
