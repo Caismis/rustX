@@ -83,10 +83,11 @@ oracle tests passed, including negative cases. These smoke runs overlapped
 Rust compilation and are not performance evidence. Failed attempts are
 retained under `/workspace/issue-481-evidence` alongside their logs.
 
-The fresh baseline and separate syscall profile are complete; see `baseline.md`.
-Source optimization passed focused/durable validation and three paired repeats
-of every workload; see `source.md`. The schema-70 canonical append change is
-implemented; its 20 focused append tests and all 367 durable tests pass. The
-optimized combined build and five Rust, eight Node and nine Python oracle/harness
-tests pass. Clippy is running. Combined measurements, final FULL
-validation and the draft PR remain pending. This file records progress, not acceptance.
+The fresh baseline, Source-only and canonical incremental/combined measurements
+are complete; see `baseline.md`, `source.md`, `canonical.md` and `combined.md`.
+All 20 focused append tests and 367 durable tests pass. The optimized combined
+build, five Rust, eight Node and nine Python oracle/harness tests, formatting,
+and all-target/all-feature Clippy pass. Draft PR #484 retains explicit RSS and
+runtime-wall regressions. Exact-head FULL/independent review remain required;
+the authoritative current status and head/base/main identities are in the PR.
+No merge or auto-merge is authorized.

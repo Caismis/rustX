@@ -42,7 +42,9 @@ python3 benchmarks/runtime/summarize-http.py /absolute/new-pi-evidence
 `pack-evidence.py --root /absolute/evidence --output evidence.tar.xz 'run/*'`
 copies selected raw files, records lengths/SHA-256 in `MANIFEST.json`, and
 verifies every archive member. It does not delete original evidence. Perform
-compression after formal samples finish. The reports under `docs/issue-481`
+compression after formal samples finish. `profile-footprints.py` separately samples product-owned Source temporary-file
+logical/allocated bytes from the external controller; it is never a formal timing
+run and does not claim a true peak. The reports under `docs/issue-481`
 separate baseline, Source-only, canonical incremental and combined comparisons.
 
 The remaining documentation describes the **historical issue 480 harness**.
