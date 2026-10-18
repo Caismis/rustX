@@ -229,7 +229,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 74, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Content-addressed Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; exact healthy-source bytes remain unchanged. Source integrity uses bounded content checksums and native request identities; separate original-capture witness rows and origin-proof walks are removed. A coherently rewritten optional Source graph is no longer independently authenticated against its original capture. Native-state previews are derived on demand from retained bounded geometry and byte segments; navigation remains eager and direct range reads do not construct previews. Scoped event indexes exclude absent identities; the event sequence uses its INTEGER PRIMARY KEY without a duplicate index. Older schemas are refused without migration.
+The current SQLite development schema is 75, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts and exact request manifests. Content-addressed Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; exact healthy-source bytes remain unchanged. Source integrity uses bounded content checksums and native request identities; separate original-capture witness rows and origin-proof walks are removed. A coherently rewritten optional Source graph is no longer independently authenticated against its original capture. Native-state previews are derived on demand from retained bounded geometry and byte segments; navigation remains eager and direct range reads do not construct previews. Scoped event indexes exclude absent identities; the event sequence uses its INTEGER PRIMARY KEY without a duplicate index. Older schemas are refused without migration.
 Version 51 (Issue #462) binds every Agent and Workflow to the shared Session
 workspace: ownership facts carry one absolute workspace path, and Agent
 worktree disposal, Workflow workspace ownership, Candidate invocation and
@@ -297,7 +297,7 @@ enforcement, and the explicit bounded writer busy handler. A successful SQLite
 commit is the local publication and process-crash durability linearization point.
 Committed facts survive process termination while the OS/filesystem remains healthy.
 Power loss or OS failure may lose recent transactions; there is no promised time
-window or per-commit stable-media guarantee. P, U and C still commit independently.
+window or per-commit stable-media guarantee. Ordinary accepted model output commits P, U and C together, including its no-tool inbox/terminal boundary.
 Known write/commit failures remain errors. SQLite owns WAL/SHM recovery and the
 1,000-page automatic checkpoint; no per-turn forced checkpoint is added.
 See [the durability audit](issue-480/durability.md) for connection and lifetime rules.
@@ -5833,45 +5833,46 @@ canonical conversation acceptance. It exists to hold one user-facing contract:
 > No semantic output is released to a user-facing Runtime Client before rustX
 > has durably committed that publication.
 
-### 6.1.1 Three linearization points
+### 6.1.1 Atomic ordinary final settlement
 
-Any request that emits user-facing model output has three distinct commit
-points, owned by three distinct planes:
+Provider outcome (P), final publication frames and terminal marker (U), and
+canonical Assistant acceptance (C) remain distinct typed facts. Ordinary accepted
+model output commits all three in one native SQLite transaction. For a no-tool
+answer it also commits TurnCompleted and either adoption of the finite selected
+inbox batch or AttemptCompleted when that inbox is empty. Tool output commits
+P/U/C before Tool Plane intent or effects; tool execution/result settlement stays
+with its existing owner.
 
-```text
-P — Provider outcome         ModelRequestCompleted durable   (Event Journal)
-U — Publication outcome      final frame + terminal marker   (publication plane)
-C — Conversation acceptance  canonical Assistant durable     (Message Ledger)
-```
+The durable implication remains `C => U => P`. A crash inside any part of ordinary
+final settlement rolls back all final facts, leaving only previously committed
+partial frames. After commit, all accepted final facts survive healthy-OS process
+termination, even if the observer has received none of them. Provider, canonical, turn and terminal/adoption notifications follow commit
+in that order. The complete accepted output is published by its canonical
+receipt. Final staging frames are consumed inside this commit and their live
+prefix receipts are not released after their backing disappears. Previously
+published partial frames retain the normal live-to-canonical transition.
+No whole-request or external-effect atomicity is claimed.
 
-The required commit ordering is:
+The existing mailbox publication mutex fences selection, native adoption or
+empty-inbox completion, and ordered notifications. A later acceptance cannot
+overtake publication of the committed terminal. Selected inbound identities,
+order, transcript cursors and revisions retain their native authorities. An
+unexpected nonempty inbox at an empty boundary refuses the whole transaction.
 
-```text
-P < U < C
-```
+Native validation still checks the exact frozen request, its started envelope,
+stream generation, provider completion owner, provisional Assistant identity,
+canonical event and tool proposal ownership. Repeated settlement and foreign
+terminal envelopes fail before commit. Append-validation certificates are seated
+only after the outer commit succeeds; optional inspection remains fail-open.
 
-and the durable store — not only Agent Loop control flow — enforces the
-implication:
-
-```text
-C => U => P
-```
-
-The store proves this chain on every dependent transition. U and C reload and
-decode the exact Request Snapshot, verify its durable `ModelRequestStarted`
-envelope, and re-check the successful `ModelRequestCompleted` fact for that
-same request. C additionally requires the frozen provisional Assistant
-`MessageId`, an `AssistantMessageCommitted` event whose conversation,
-attempt, and turn envelope equal the stream, and an event payload naming that
-same message. These checks happen before the compound transaction can change
-the Ledger, Surface, Journal, staging, proposal, or settlement state.
-
-P and U are deliberately never combined into one transaction. "The provider
-finished" and "rustX committed this output for release" are different facts,
-and a crash between them must stay distinguishable. Likewise
-`ModelRequestCompleted` is never merged with the Assistant commit: provider
-completion remains an external execution fact even when canonicalization later
-fails.
+Workflow output retains its cross-owner preparation protocol: provider and
+publication facts precede the Workflow owner's submission. Ordinary output
+rejected before canonical acceptance also retains provider/publication/audit
+settlement; it cannot enter the accepted-output transaction or authorize tools.
+These are explicit ownership paths, not old-layout readers or compatibility
+fallbacks. Their P-only and U-only recovery cuts remain tested with a rejected
+unknown-tool proposal. Current development gate 75 rejects older layouts without
+migration; there is no new event wire format or persistence queue.
 
 ### 6.1.2 Pipeline
 
@@ -5899,10 +5900,10 @@ tests install a manually advanced clock; no wall-clock sleep decides a flush.
 ### 6.1.3 The U transaction
 
 There is deliberately no "write the final frame, publish, then mark the stream
-complete" sequence to crash inside. When P has committed and provider
-completion is structurally accepted, the remaining publication payload and the
-publication terminal marker commit in **one** transaction; only then is the
-final buffered payload released. When no payload remains, a terminal-only
+complete" sequence to crash inside. The remaining publication payload and terminal marker commit together. For
+ordinary accepted output this is the final settlement transaction described
+above; the prepared Workflow/rejected-output path requires its provider fact
+first. Only after commit is the final buffered payload released. When no payload remains, a terminal-only
 frame still carries the terminal transition, so nothing visible is delayed
 that does not exist.
 

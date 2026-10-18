@@ -643,6 +643,7 @@ pub struct AgentExecution<'a> {
         std::sync::Mutex<Option<test_sync::ToolPhysicalSettlementPause>>,
     turn: u32,
     terminal_emitted: bool,
+    precommitted_terminal: Option<RuntimeEvent>,
 }
 
 /// Publishes the newly committed start-owned Event Journal facts through the
@@ -684,6 +685,7 @@ struct OpenPublication {
     coalescer: PublicationCoalescer,
     /// Whether the publication terminal transaction (U) committed.
     terminal_committed: bool,
+    provider_completion: Option<RuntimeEventEnvelope>,
 }
 
 /// How one model stream of a turn ended.
@@ -1314,6 +1316,7 @@ impl<'a> AgentExecution<'a> {
             tool_physical_settlement_pause: std::sync::Mutex::new(None),
             turn: 0,
             terminal_emitted: false,
+            precommitted_terminal: None,
         })
     }
 
@@ -1834,7 +1837,7 @@ impl<'a> AgentExecution<'a> {
     /// continuation retention, message commit, tool execution, and the
     /// turn-completion event. Returns the terminal outcome when the attempt
     /// settled.
-    #[allow(clippy::too_many_lines)] // One P -> U -> C ordering, one place.
+    #[allow(clippy::too_many_lines)] // One model completion and owner settlement path.
     async fn complete_turn(
         &mut self,
         assistant_message_id: MessageId,
@@ -1867,27 +1870,23 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         };
-        // P: the provider outcome of this exact request becomes durable.
-        // This downstream copy is derived only after canonical assembly has
-        // validated and retained the event's terminal fact.
         let finish_reason = turn_assembly.finish_reason.clone();
         let generation = self.settle_generation_evidence();
-        self.emit(RuntimeEvent::ModelRequestCompleted {
+        let completion = self.event_envelope(RuntimeEvent::ModelRequestCompleted {
             request_id,
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),
             generation,
         });
-        if let Some(terminal) = self.durable_failure_terminal_from_state() {
-            return Some(terminal);
-        }
-        // U: P is durable and provider completion is structurally accepted,
-        // so the remaining publication payload and the publication terminal
-        // marker commit in one transaction — and only then is the final
-        // buffered payload released. This is the intentional tail-latency
-        // cost of correct ordering; with nothing buffered, a terminal-only
-        // frame commits and no visible text waits.
-        if let Err(error) = self.commit_publication_terminal() {
+        self.publication
+            .as_mut()
+            .expect("completed request owns publication")
+            .provider_completion = Some(completion);
+        // Workflow output belongs to its separate owner. Preserve its prepared
+        // provider/publication facts before invoking that owner's transaction.
+        if self.workflow_output.is_some()
+            && let Err(error) = self.commit_publication_terminal()
+        {
             return Some(Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
             });
@@ -1990,14 +1989,21 @@ impl<'a> AgentExecution<'a> {
                 });
             }
         };
-        if let Err(error) =
-            self.commit_assistant_message(&assistant_message_id, &turn_assembly.content)
-        {
-            return Some(self.commit_failure_terminal(
-                "the assembled Assistant message cannot be committed",
-                error,
-            ));
+        if !has_tool_calls && self.cancellation.is_cancelled() {
+            return Some(Terminal::Cancelled {
+                reason: self.cancellation.reason(),
+            });
         }
+        let boundary =
+            match self.commit_assistant_message(&assistant_message_id, &turn_assembly.content) {
+                Ok(boundary) => boundary,
+                Err(error) => {
+                    return Some(self.commit_failure_terminal(
+                        "the assembled Assistant message cannot be committed",
+                        error,
+                    ));
+                }
+            };
         // C succeeded: the logical model step is no longer unresolved, even
         // if a later tool/result phase causes the attempt itself to fail.
         self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
@@ -2019,21 +2025,13 @@ impl<'a> AgentExecution<'a> {
             None
         };
         if !has_tool_calls {
-            self.emit(RuntimeEvent::TurnCompleted);
-            if let Some(terminal) = self.durable_failure_terminal_from_state() {
-                return Some(terminal);
-            }
-            // Safe boundary for a completed no-tool turn: the attempt may
-            // settle only when the boundary snapshot observes no eligible
-            // inbound work. A drained batch keeps the attempt running for
-            // one further model turn, so a pending inbound message prevents
-            // a successful Stop from settling before it is observed.
-            return match self.safe_boundary_drain() {
-                Ok(true) => None,
-                Ok(false) => Some(Terminal::Completed { finish_reason }),
-                Err(terminal) => Some(terminal),
+            return if boundary.expect("no-tool output commits its native boundary") {
+                None
+            } else {
+                Some(Terminal::Completed { finish_reason })
             };
         }
+
         // The entire tool-result batch is structurally settled exactly once
         // inside `execute_tools` before this point returns: every logical
         // call of the committed batch receives exactly one canonical
@@ -2236,11 +2234,18 @@ impl<'a> AgentExecution<'a> {
             .map_err(|error| {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             })?;
+        Ok(self.install_adopted_boundary(adopted))
+    }
+
+    fn install_adopted_boundary(
+        &mut self,
+        adopted: crate::runtime::inbound::AdoptedInbound,
+    ) -> bool {
         let adoption = adopted.adoption;
         let canonical_receipts = adopted.canonical_receipts;
         let adopted = adopted.items;
         if adopted.is_empty() {
-            return Ok(false);
+            return false;
         }
         let prepared: Vec<_> = adopted
             .iter()
@@ -2282,7 +2287,7 @@ impl<'a> AgentExecution<'a> {
             );
         }
         self.pending_fresh_inbound = Some(fresh);
-        Ok(true)
+        true
     }
 
     /// Prepares the next model turn without committing anything (Issue #12,
@@ -5422,24 +5427,32 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Commits **C**: the assembled Assistant message joins canonical history
-    /// as one compound durable transition with its publication stream.
-    ///
-    /// The transition validates that the exact stream is publication-complete,
-    /// appends the canonical Ledger fact, advances the Surface, records
-    /// `AssistantMessageCommitted`, and clears the stream's publication
-    /// staging — all in one transaction. `ModelRequestCompleted` is
-    /// deliberately not part of it: provider completion remains an external
-    /// execution fact even when canonicalization later fails.
+    /// Accepts ordinary output atomically with its pending provider completion,
+    /// final frames and optional no-tool inbox boundary. Workflow-owned output
+    /// retains its already prepared provider/publication facts across that owner.
     fn commit_assistant_message(
         &mut self,
         message_id: &MessageId,
         content: &[crate::message::types::AssistantContentBlock],
-    ) -> Result<(), CanonicalCommitError> {
+    ) -> Result<Option<bool>, CanonicalCommitError> {
         let block = MessageBlock::Assistant(AssistantMessageBlock {
             id: message_id.clone(),
             content: content.to_vec(),
         });
+        if self
+            .publication
+            .as_ref()
+            .is_some_and(|publication| publication.provider_completion.is_some())
+        {
+            return self.commit_model_output(&block);
+        }
+        if self.workflow_output.is_none() {
+            return Err(CanonicalCommitError::Durable(
+                crate::durable::ConversationStoreError::PublicationViolation(
+                    "ordinary model output requires its atomic completion boundary".into(),
+                ),
+            ));
+        }
         let Some(publication) = self.publication.as_ref() else {
             return Err(CanonicalCommitError::Durable(
                 crate::durable::ConversationStoreError::PublicationViolation(format!(
@@ -5466,7 +5479,7 @@ impl<'a> AgentExecution<'a> {
             observer.observe_committed(&self.request.attempt_id, &block, &receipt);
         }
         self.record_persisted_event(persisted);
-        Ok(())
+        Ok(None)
     }
 
     /// Commits one complete `ToolResult` batch atomically.
@@ -5570,6 +5583,7 @@ impl<'a> AgentExecution<'a> {
             start,
             coalescer,
             terminal_committed: false,
+            provider_completion: None,
         });
     }
 
@@ -5668,14 +5682,30 @@ impl<'a> AgentExecution<'a> {
         self.release_publication(&frames, &receipts);
     }
 
-    /// Commits **U** — the final publication frame and the publication
-    /// terminal marker in one transaction — and only then releases the final
-    /// buffered payload.
+    /// Prepares Workflow or rejected output: commits pending P, then U, and
+    /// releases its final buffered payload. Ordinary accepted output uses
+    /// the atomic model settlement and publishes its canonical receipt.
     ///
-    /// P must already be durable; the durable store enforces that. When no
+    /// The native U transition requires durable P. When no
     /// visible payload remains, a terminal-only frame still commits and no
     /// visible text is delayed.
     fn commit_publication_terminal(&mut self) -> Result<(), RuntimeError> {
+        if let Some(completion) = self
+            .publication
+            .as_mut()
+            .and_then(|publication| publication.provider_completion.take())
+        {
+            match self.store.append_event(completion) {
+                Ok(persisted) => self.record_persisted_event(persisted),
+                Err(error) => {
+                    let message = format!("provider completion could not be committed: {error}");
+                    self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+                    self.durable_failure = Some(message.clone());
+                    return Err(RuntimeError::DurableStore { message });
+                }
+            }
+        }
+
         let Some(publication) = self.publication.as_mut() else {
             return Ok(());
         };
@@ -5726,6 +5756,15 @@ impl<'a> AgentExecution<'a> {
     /// Unaccepted (or the reverse) no matter which control-flow exit reached
     /// it. Canonical acceptance of the stream becomes permanently forbidden.
     fn settle_publication_audit(&mut self) -> Result<(), RuntimeError> {
+        if self.durable_failure.is_none()
+            && self
+                .publication
+                .as_ref()
+                .is_some_and(|publication| publication.provider_completion.is_some())
+        {
+            self.commit_publication_terminal()?;
+        }
+
         // A failed request may have ended before the coalescer's normal byte
         // or latency boundary. Flush that pending payload first so the audit
         // retains every partial text/reasoning/refusal/tool proposal that was
@@ -5882,6 +5921,17 @@ impl<'a> AgentExecution<'a> {
                 error: failure.clone(),
             },
         };
+        if let Some(committed) = self.precommitted_terminal.take() {
+            assert_eq!(
+                committed, event,
+                "the native final-commit winner cannot be reclassified"
+            );
+            debug_assert!(
+                self.terminal_emitted,
+                "committed terminal published under mailbox ownership"
+            );
+            return;
+        }
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
         if matches!(self.terminal_commit_state, TerminalCommitState::Blocked) {
             // Publication evidence or source selection did not reach the
@@ -7000,6 +7050,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingObserver {
+        cancel_after_completion: Option<AgentCancellation>,
         start_gap: Option<(
             Arc<crate::runtime::monotonic::ManualMonotonicClock>,
             Arc<crate::durable::SqliteConversationStore>,
@@ -7040,6 +7091,11 @@ mod tests {
             _tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
             _receipt: Option<&crate::durable::observation::NativeObservationBatch>,
         ) {
+            if matches!(event, RuntimeEvent::ModelRequestCompleted { .. })
+                && let Some(cancellation) = &self.cancel_after_completion
+            {
+                cancellation.cancel();
+            }
             if matches!(event, RuntimeEvent::ModelRequestStarted { .. })
                 && let Some((clock, store)) = &self.start_gap
             {
@@ -8289,12 +8345,122 @@ mod tests {
         }
     }
 
-    /// A terminal Event Journal append is a required durable publication.
-    /// If it fails, the execution settlement candidate remains available to
-    /// the caller, but neither the local event projection nor an observer may
-    /// fabricate the uncommitted terminal fact.
+    /// Cancellation at the first post-commit notification cannot reclassify
+    /// the already committed empty-inbox completion winner.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn terminal_event_append_failure_never_fabricates_terminal_fact() {
+    #[allow(clippy::too_many_lines)] // Complete execution fixture and exact publication oracle.
+    async fn cancellation_after_atomic_final_commit_preserves_completed_winner() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
+            ModelEvent::Started,
+            ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            },
+            ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            },
+        ]]));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ))
+            .expect("in-memory store"),
+        );
+        let tool_runtime = tool_runtime_with_store(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            Some(store.clone()),
+        );
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let observer = RecordingObserver {
+            cancel_after_completion: Some(cancellation.clone()),
+            ..Default::default()
+        };
+        let mut execution = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction");
+        execution.observe(&observer);
+
+        let result = execution.run().await;
+        assert!(
+            cancellation.is_cancelled(),
+            "outcome: {:?}; durable error: {:?}",
+            result.outcome,
+            result.durable_failure
+        );
+        assert_eq!(
+            result.outcome,
+            AttemptOutcome::Completed {
+                finish_reason: ModelFinishReason::Stop
+            }
+        );
+        assert!(result.durable_failure.is_none());
+        let durable: Vec<_> = store
+            .read_events(None, 64)
+            .unwrap()
+            .events
+            .into_iter()
+            .map(|envelope| envelope.event)
+            .collect();
+        let published = observer.events();
+        assert_eq!(
+            published, durable,
+            "every committed event is published once in native order"
+        );
+        assert!(matches!(
+            durable.last(),
+            Some(RuntimeEvent::AttemptCompleted { .. })
+        ));
+        assert_eq!(
+            durable
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::AssistantMessageCommitted { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            durable
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !durable
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+        );
+        assert_eq!(
+            store
+                .load_canonical()
+                .unwrap()
+                .iter()
+                .filter(|message| matches!(message, MessageBlock::Assistant(_)))
+                .count(),
+            1
+        );
+        assert!(
+            store
+                .load_unsettled_publication_streams()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Failing the final Attempt terminal rolls back the entire accepted answer.
+    /// A failure terminal/audit may subsequently describe the durable error;
+    /// neither canonical success nor a successful terminal may be fabricated.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn final_terminal_failure_rolls_back_answer_and_never_publishes_success() {
         let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
             ModelEvent::Started,
             ModelEvent::TextDelta {
@@ -8335,63 +8501,48 @@ mod tests {
 
         let result = execution.run().await;
 
-        assert!(matches!(
-            result.outcome,
-            AttemptOutcome::Completed {
-                finish_reason: ModelFinishReason::Stop
-            }
-        ));
+        assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
         assert_eq!(
             result.durable_failure_kind,
-            Some(super::DurableFailureKind::EventJournal)
+            Some(super::DurableFailureKind::CanonicalCommit)
         );
         assert!(result.durable_failure.is_some());
         let events = event_history(store.as_ref());
         assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::AttemptStarted { .. }))
+        );
+        assert!(
             !events.iter().any(|event| matches!(
                 event,
                 RuntimeEvent::AttemptCompleted { .. }
-                    | RuntimeEvent::AttemptCancelled { .. }
-                    | RuntimeEvent::AttemptTimedOut { .. }
-                    | RuntimeEvent::AttemptLimitExceeded { .. }
-                    | RuntimeEvent::AttemptFailed { .. }
+                    | RuntimeEvent::AssistantMessageCommitted { .. }
+                    | RuntimeEvent::ModelRequestCompleted { .. }
             )),
-            "an uncommitted terminal candidate never enters the local projection"
+            "the rejected final transaction leaves no accepted final facts"
         );
         assert!(
-            !observer
-                .events
-                .lock()
-                .expect("observer event lock")
-                .iter()
-                .any(|event| matches!(
-                    event,
-                    RuntimeEvent::AttemptCompleted { .. }
-                        | RuntimeEvent::AttemptCancelled { .. }
-                        | RuntimeEvent::AttemptTimedOut { .. }
-                        | RuntimeEvent::AttemptLimitExceeded { .. }
-                        | RuntimeEvent::AttemptFailed { .. }
-                )),
-            "publication follows the durable Event Journal commit"
-        );
-        let persisted = store.read_events(None, 64).expect("event journal").events;
-        assert!(
-            persisted
-                .iter()
-                .any(|envelope| matches!(envelope.event, RuntimeEvent::AttemptStarted { .. }))
-        );
-        assert!(
-            !persisted.iter().any(|envelope| matches!(
-                envelope.event,
+            !observer.events().iter().any(|event| matches!(
+                event,
                 RuntimeEvent::AttemptCompleted { .. }
-                    | RuntimeEvent::AttemptCancelled { .. }
-                    | RuntimeEvent::AttemptTimedOut { .. }
-                    | RuntimeEvent::AttemptLimitExceeded { .. }
-                    | RuntimeEvent::AttemptFailed { .. }
+                    | RuntimeEvent::AssistantMessageCommitted { .. }
+                    | RuntimeEvent::ModelRequestCompleted { .. }
             )),
-            "the failed terminal transaction leaves no durable terminal fact"
+            "observers cannot acknowledge rolled-back final facts"
         );
-        assert_eq!(store.terminal_event_attempts(), 1);
+        assert!(
+            !store
+                .load_canonical()
+                .unwrap()
+                .iter()
+                .any(|message| matches!(message, MessageBlock::Assistant(_)))
+        );
+        assert_eq!(
+            store.terminal_event_attempts(),
+            2,
+            "one rejected final boundary and one honest failure terminal"
+        );
     }
 
     /// A completed canonical stream whose finish reason says `ToolCalls` but
@@ -10093,3 +10244,5 @@ mod tests {
         );
     }
 }
+
+mod model_settlement;
