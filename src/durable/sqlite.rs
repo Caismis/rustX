@@ -329,7 +329,8 @@ fn count_conversation_store_open() {
 /// Version 69 requires explicit native artifact settlement evidence.
 /// Version 70 removes the redundant serialized active history from the Surface head.
 /// Version 71 stores authenticated Source pages with a bounded binary codec.
-pub const SQLITE_SCHEMA_VERSION: i64 = 71;
+/// Version 72 excludes unrelated NULL-key rows from scoped event indexes.
+pub const SQLITE_SCHEMA_VERSION: i64 = 72;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8402,54 +8403,58 @@ fn presentation_statements(
     Ok(statements)
 }
 
+#[cfg(test)]
+mod scoped_event_index_tests;
+
+// Full index suffixes, including predicates that every matching reader implies.
 const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
         "events_context_reading_idx",
-        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence",
+        "(json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null'), sequence) WHERE (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null') = 1",
     ),
     (
         "events_message_id_kind_idx",
-        "json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.message_id') IS NOT NULL",
     ),
     (
         "events_kind_idx",
-        "json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.type'), sequence)",
     ),
     (
         "events_attempt_kind_idx",
-        "attempt_id, json_extract(event_json, '$.event.type'), sequence",
+        "(attempt_id, json_extract(event_json, '$.event.type'), sequence)",
     ),
     (
         "events_step_kind_idx",
-        "attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+        "(attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL",
     ),
     (
         "events_compaction_operation_kind_idx",
-        "json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.operation_id') IS NOT NULL",
     ),
     (
         "events_request_id_kind_idx",
-        "json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.request_id') IS NOT NULL",
     ),
     (
         "events_tool_call_scope_kind_idx",
-        "json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.tool_call_id') IS NOT NULL",
     ),
     (
         "events_execution_id_kind_idx",
-        "json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.execution_id') IS NOT NULL",
     ),
     (
         "events_subagent_id_kind_idx",
-        "json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.subagent_id') IS NOT NULL",
     ),
     (
         "events_run_id_kind_idx",
-        "json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.run_id') IS NOT NULL",
     ),
     (
         "events_interaction_id_kind_idx",
-        "json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence) WHERE json_extract(event_json, '$.event.interaction_id') IS NOT NULL",
     ),
 ];
 
@@ -8871,7 +8876,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL;
-            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence);
+            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL;
             CREATE TABLE IF NOT EXISTS event_observation_readiness (
                 sequence INTEGER PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
                 ready INTEGER NOT NULL CHECK(ready IN (0,1)),
@@ -8887,7 +8892,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS events_observation_statistics_idx ON events(sequence) WHERE observation_statistics IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase,sequence) WHERE observation_tool_phase IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block,sequence) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
-            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence);
+            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_members_idx ON events(attempt_id,sequence) WHERE observation_members IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id,sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_holes_sequence_idx ON events(sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
@@ -8915,9 +8920,8 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
             CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
-            CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
 
-            CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
+            CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence) WHERE attempt_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
             CREATE INDEX IF NOT EXISTS contribution_emission_heads_lookup_idx ON contribution_emission_heads(producer, semantic_key);
             CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
@@ -8932,9 +8936,9 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
     connection
         .execute_batch(&projection::completion_index_sql())
         .map_err(|error| storage(error.to_string()))?;
-    for (name, expression) in PRESENTATION_INDEXES {
+    for (name, definition) in PRESENTATION_INDEXES {
         connection
-            .execute_batch(&format!("CREATE INDEX {name} ON events({expression});"))
+            .execute_batch(&format!("CREATE INDEX {name} ON events{definition};"))
             .map_err(|error| storage(format!("create presentation index: {error}")))?;
     }
     connection
@@ -9021,9 +9025,30 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             )));
         }
     }
-    for (name, expression) in PRESENTATION_INDEXES {
+    for (name, expected) in [
+        (
+            "events_attempt_idx",
+            "CREATE INDEX events_attempt_idx ON events(attempt_id, sequence) WHERE attempt_id IS NOT NULL",
+        ),
+        (
+            "events_workflow_coordinates_idx",
+            "CREATE INDEX events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.attempt_id'),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.run_id.conversation_id') IS NOT NULL",
+        ),
+        (
+            "events_observation_tool_idx",
+            "CREATE INDEX events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL",
+        ),
+    ] {
+        let actual: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        if actual.as_deref() != Some(expected) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid scoped event index {name}"
+            )));
+        }
+    }
+    for (name, definition) in PRESENTATION_INDEXES {
         let sql: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
-        if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events({expression})").as_str()) {
+        if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events{definition}").as_str()) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "missing or invalid presentation index {name}"
             )));
@@ -19486,7 +19511,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 71);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19555,7 +19580,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 71);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 72);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -20530,10 +20555,8 @@ mod tests {
     #[test]
     fn trace_schema_indexes_are_required_and_queries_use_them() {
         use super::super::presentation::{FactQuery, FactScope};
-        let store = SqliteConversationStore::in_memory(ConversationId::new(
-            "conv_ab18a567-5190-73a5-8156-2e8693be6392",
-        ))
-        .unwrap();
+        let id = ConversationId::new("conv_ab18a567-5190-73a5-8156-2e8693be6392");
+        let store = SqliteConversationStore::in_memory(id).unwrap();
         let connection = store.conn.lock().unwrap();
         verify_schema_shape(&connection).unwrap();
         let scopes = [
@@ -20547,6 +20570,10 @@ mod tests {
                 "events_step_kind_idx",
             ),
             (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+            (
+                FactScope::Compaction(crate::runtime::identity::CompactionOperationId::new("o")),
+                "events_compaction_operation_kind_idx",
+            ),
             (FactScope::Message("m".into()), "events_message_id_kind_idx"),
             (FactScope::ContextReading, "events_context_reading_idx"),
             (
@@ -20604,7 +20631,7 @@ mod tests {
                 }
             }
         }
-        for (name, expression) in PRESENTATION_INDEXES {
+        for (name, definition) in PRESENTATION_INDEXES {
             connection
                 .execute_batch(&format!("DROP INDEX {name}"))
                 .unwrap();
@@ -20621,7 +20648,7 @@ mod tests {
             );
             connection
                 .execute_batch(&format!(
-                    "DROP INDEX {name}; CREATE INDEX {name} ON events({expression})"
+                    "DROP INDEX {name}; CREATE INDEX {name} ON events{definition}"
                 ))
                 .unwrap();
             verify_schema_shape(&connection).unwrap();
