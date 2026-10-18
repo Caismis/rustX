@@ -19,6 +19,10 @@
     "bytes": 460,
     "sha256": "36175a1f6ee64cc106c6fd5e936d7def8944d132534a125a8786da2dfd7c5374"
   },
+  "compact-final-cpu-display.py": {
+    "bytes": 1250,
+    "sha256": "c30e092fc78557a93044ed403c62b67901a64725ddb54bfab75461affd2b938d"
+  },
   "compact-pages-append-cold-paired/0-0-after.json": {
     "bytes": 90422,
     "sha256": "e682a4e89432780830ddf3d928ae07b2d91bd077a968bf969d357565a272ee65"
@@ -3186,6 +3190,10 @@
   "origin-verified-build-driver.log": {
     "bytes": 2357,
     "sha256": "ac091841a384949967abf5753a496a3430c8d60bb0837574354148198487027d"
+  },
+  "pack-final-evidence.py": {
+    "bytes": 1543,
+    "sha256": "db24bd42b594959d4f388fc80cdba1178088b1b70440e270468b51bab43f2adc"
   },
   "profile-final-structural.py": {
     "bytes": 2249,

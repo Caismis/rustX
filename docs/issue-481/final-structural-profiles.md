@@ -47,9 +47,10 @@ Full per-path logical/allocated observations are archived.
 
 ## CPU samples and measurement work
 
-The [plain counts](evidence/final-structural-cpu-counts.json) expose every reported
-symbol numerator and an independently checked denominator from the complete raw
-profile. Each steady profile covers 32 measured turns. Cumulative rows overlap;
+The [plain counts](evidence/final-structural-cpu-counts.json) expose selected symbol numerators and
+an independently checked denominator from the complete raw profile. The first
+40 cumulative rows plus Source/index and harness functions are displayed; every
+reported symbol remains in the archived full reports. Each steady profile covers 32 measured turns. Cumulative rows overlap;
 never add them or treat overlapping elapsed scopes as CPU percentages.
 
 | Stage | Case | Total samples | `sqlite3Prepare` cumulative samples | Counter sampler cumulative samples |
