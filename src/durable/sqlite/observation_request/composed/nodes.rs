@@ -7,66 +7,20 @@ pub(super) fn stored_hash(
     native: &manifest::NodeRef,
 ) -> Result<index::Hash, ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
-    let _profile = super::profile::Timer::new(super::profile::Phase::Authenticate);
+    let _profile = super::profile::Timer::new(super::profile::Phase::Lookup);
     #[cfg(feature = "issue-387-profile")]
-    super::profile::auth_call();
+    super::profile::lookup_call();
     #[cfg(test)]
     let _measurement = super::measurement::Measurement::new(
-        crate::agent::execution::attribution::SourceScope::Authenticate,
+        crate::agent::execution::attribution::SourceScope::Lookup,
     );
-    let (digest,origin,rank):(Option<Vec<u8>>,Option<String>,u64)=connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END,CASE WHEN typeof(origin_source_id)='text' AND length(CAST(origin_source_id AS BLOB))<=20 THEN origin_source_id END,origin_rank FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(|error|storage(error.to_string()))?;
-    let digest: index::Hash = digest
+    let digest: Option<Vec<u8>> = connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()], |row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    digest
         .ok_or_else(|| storage("native selected Source augmentation unavailable"))?
         .try_into()
-        .map_err(|_| storage("selected Source hash unavailable"))?;
-    let origin = origin.ok_or_else(|| storage("original Source node seat unavailable"))?;
-    #[cfg(feature = "issue-387-profile")]
-    super::profile::origin_root_load();
-    let root = super::load_root(connection, &origin)?;
-    let mut at = root
-        .native
-        .ok_or_else(|| storage("original Source native root unavailable"))?;
-    let mut expected = root
-        .source_hash
-        .ok_or_else(|| storage("original Source root hash unavailable"))?;
-    let mut first = 0;
-    for depth in 0..manifest::MAX_HEIGHT {
-        if at == *native {
-            if expected != digest {
-                return Err(storage("original Source node capture differs"));
-            }
-            #[cfg(feature = "issue-387-profile")]
-            super::profile::proof_visit(connection, at, expected, &root, true);
-            return Ok(expected);
-        }
-        #[cfg(feature = "issue-387-profile")]
-        super::profile::path_hop(depth + 1);
-        #[cfg(not(feature = "issue-387-profile"))]
-        let _ = depth;
-        let node = load(connection, at, expected)?;
-        #[cfg(feature = "issue-387-profile")]
-        super::profile::proof_visit(connection, at, expected, &root, false);
-        match node.content {
-            Content::Branch {
-                left,
-                left_hash,
-                right,
-                right_hash,
-            } => {
-                if rank < first + left.count {
-                    at = left;
-                    expected = left_hash;
-                } else {
-                    first += left.count;
-                    at = right;
-                    expected = right_hash;
-                }
-            }
-            Content::Leaf { .. } => break,
-        }
-    }
-    Err(storage("Source node has no original capture path"))
+        .map_err(|_| storage("selected Source hash unavailable"))
 }
+
 pub(super) fn load(
     connection: &Connection,
     native: manifest::NodeRef,
@@ -190,8 +144,6 @@ pub(super) fn hole(
 fn store(
     connection: &Connection,
     node: &Augmentation,
-    sequence: u64,
-    rank: u64,
 ) -> Result<index::Hash, ConversationStoreError> {
     #[cfg(test)]
     super::WORK.with(|work| {
@@ -201,12 +153,11 @@ fn store(
     });
     let bytes = bounded(node, 65536)?;
     let digest = hash(&bytes);
-    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata,origin_source_id,origin_rank) VALUES(?1,?2,?3,?4,?5,?6)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes,sequence.to_string(),rank]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata) VALUES(?1,?2,?3,?4)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes]).map_err(|error|storage(error.to_string()))?;
     Ok(digest)
 }
 struct Capture<'a> {
     connection: &'a Connection,
-    sequence: u64,
     scope: &'a crate::runtime::identity::ConversationId,
     input: &'a crate::model::SelectedModelInput,
     snapshot: &'a crate::model::RequestSnapshot,
@@ -293,8 +244,6 @@ impl Capture<'_> {
                 max_key_path,
                 content,
             },
-            self.sequence,
-            rank,
         )?;
         if self.created.len()
             >= usize::try_from(manifest::MAX_ITEMS * 2)
@@ -308,7 +257,6 @@ impl Capture<'_> {
 }
 pub(super) fn capture(
     connection: &Connection,
-    sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
@@ -316,7 +264,6 @@ pub(super) fn capture(
 ) -> Result<Option<index::Hash>, ConversationStoreError> {
     let mut capture = Capture {
         connection,
-        sequence,
         scope,
         input,
         snapshot,

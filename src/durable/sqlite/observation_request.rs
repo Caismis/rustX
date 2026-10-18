@@ -372,7 +372,7 @@ pub(super) fn field_coordinates(
     id: &str,
     path: &[String],
 ) -> Result<(u64, u64, u64), ConversationStoreError> {
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::coordinates(connection, id, path);
     }
@@ -468,7 +468,7 @@ fn field_with_key(
     path: &[String],
 ) -> Result<FieldWithKey, ConversationStoreError> {
     field_path(path)?;
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         return composed::field(connection, id, path);
     }
     let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|storage(error.to_string()))?
@@ -507,11 +507,11 @@ pub(super) fn header_at(
     validate_start(connection, sequence, through)?;
     let key = sequence.to_string();
     let (start, end, children_total, bytes) =
-        field_from(connection, "request_observation_fields", &key, &[])?;
+        field_from(connection, "request_source_roots", &key, &[])?;
     let summary = super::observation_trace::summary(connection, sequence, through)?;
     let count = field_coordinates(
         connection,
-        "request_observation_fields",
+        "request_source_roots",
         &key,
         &["messages".into()],
     )?
@@ -552,7 +552,7 @@ pub(super) fn page_at(
     validate_start(connection, sequence, through)?;
     page_from(
         connection,
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         path,
         offset,
@@ -600,7 +600,7 @@ pub(super) fn page_from(
     if limit == 0 || limit > HEADER_PAGE_MAX {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::page(connection, id, path, offset, limit);
     }
@@ -673,7 +673,7 @@ pub(super) fn read_at(
     read_from(
         connection,
         "trace_request",
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         path,
         offset,
@@ -706,7 +706,7 @@ pub(super) fn read_from(
     offset: u64,
     max_bytes: u32,
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::range(connection, id, path, offset, max_bytes);
     }
@@ -752,11 +752,11 @@ pub(super) fn field_header_at(
     validate_start(connection, sequence, through)?;
     let key = sequence.to_string();
     let (start, end, children_total, bytes, name) =
-        field_with_key(connection, "request_observation_fields", &key, path)?;
+        field_with_key(connection, "request_source_roots", &key, path)?;
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| storage("native request field corrupt"))?;
     let deferred = end - start > bytes.len() as u64
-        || message_descriptor_deferred("request_observation_fields", path, &value);
+        || message_descriptor_deferred("request_source_roots", path, &value);
     Ok(RequestObservationField {
         path: path.to_vec(),
         key: name
@@ -766,8 +766,8 @@ pub(super) fn field_header_at(
             })
             .transpose()?,
         value,
-        content: metadata_list("request_observation_fields", path, &bytes, "content")?,
-        collections: metadata_list("request_observation_fields", path, &bytes, "collections")?,
+        content: metadata_list("request_source_roots", path, &bytes, "content")?,
+        collections: metadata_list("request_source_roots", path, &bytes, "collections")?,
         encoded_bytes: end - start,
         children_total,
         deferred,
@@ -985,7 +985,7 @@ pub(super) fn outcome_read(
 // Only a native request-message producer owns this descriptor flag. An
 // identically named property inside arbitrary original JSON stays opaque.
 fn message_descriptor_deferred(table: &str, path: &[String], value: &serde_json::Value) -> bool {
-    table == "request_observation_fields"
+    table == "request_source_roots"
         && path.len() == 2
         && path[0] == "messages"
         && path[1].parse::<u64>().is_ok()
@@ -1000,7 +1000,7 @@ fn metadata_list<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
 ) -> Result<Vec<T>, ConversationStoreError> {
     // Only message_value appends these typed fields. Original Journal, state
     // and arbitrary request JSON retain their own property-name semantics.
-    if table != "request_observation_fields"
+    if table != "request_source_roots"
         || path.len() != 2
         || path[0] != "messages"
         || path[1].parse::<u64>().is_err()

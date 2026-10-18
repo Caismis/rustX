@@ -441,19 +441,11 @@ pub(in crate::durable::sqlite::observation_request) fn page(
         let value: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|_| storage("composed field header JSON unavailable"))?;
         let content =
-            super::super::metadata_list("request_observation_fields", &path, &bytes, "content")?;
-        let collections = super::super::metadata_list(
-            "request_observation_fields",
-            &path,
-            &bytes,
-            "collections",
-        )?;
+            super::super::metadata_list("request_source_roots", &path, &bytes, "content")?;
+        let collections =
+            super::super::metadata_list("request_source_roots", &path, &bytes, "collections")?;
         let deferred = end - start > bytes.len() as u64
-            || super::super::message_descriptor_deferred(
-                "request_observation_fields",
-                &path,
-                &value,
-            );
+            || super::super::message_descriptor_deferred("request_source_roots", &path, &value);
         fields.push(RequestObservationField {
             path,
             value,

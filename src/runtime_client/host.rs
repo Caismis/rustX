@@ -8258,9 +8258,9 @@ mod tests {
                 &previous.source_capture,
             ),
             (
-                "source_authenticate",
-                &current.source_authenticate,
-                &previous.source_authenticate,
+                "source_lookup",
+                &current.source_lookup,
+                &previous.source_lookup,
             ),
             ("source_leaf", &current.source_leaf, &previous.source_leaf),
             (
@@ -8310,9 +8310,9 @@ mod tests {
         for (scope, current, previous) in [
             ("request", &current.source_work, &previous.source_work),
             (
-                "authenticate",
-                &current.source_auth_work,
-                &previous.source_auth_work,
+                "lookup",
+                &current.source_lookup_work,
+                &previous.source_lookup_work,
             ),
             (
                 "new_leaf",
@@ -8362,7 +8362,7 @@ mod tests {
         );
         assert!(agent.source_work.new_leaves > 0 && agent.source_work.new_nodes > 0);
         if turns > 1 {
-            assert!(agent.source_auth_work.samples > 0);
+            assert!(agent.source_lookup_work.samples > 0);
         }
     }
 

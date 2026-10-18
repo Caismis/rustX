@@ -163,7 +163,7 @@ fn add(a: u64, b: u64) -> Result<u64, ConversationStoreError> {
 fn invalid() -> ConversationStoreError {
     ConversationStoreError::InvalidReference("request field is unavailable".into())
 }
-fn root_witness(root: &[u8]) -> index::Hash {
+fn root_checksum(root: &[u8]) -> index::Hash {
     let mut sha = Sha256::new();
     sha.update(b"rustx-composed-request-source-v1\0");
     sha.update(root);
@@ -189,7 +189,7 @@ pub(super) fn index_selection(
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceCapture,
         );
-        nodes::capture(connection, sequence, scope, input, snapshot, selection)?
+        nodes::capture(connection, scope, input, snapshot, selection)?
     };
     let (scalar, messages_start, messages_end) = {
         #[cfg(feature = "issue-387-profile")]
@@ -250,11 +250,11 @@ pub(super) fn index_selection(
         length,
     };
     let bytes = bounded(&root, 16_384)?;
-    let witness = root_witness(&bytes);
+    let checksum = root_checksum(&bytes);
     connection
         .execute(
-            "INSERT INTO request_source_roots(source_id,metadata,witness) VALUES(?1,?2,?3)",
-            params![sequence.to_string(), bytes, witness.as_slice()],
+            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+            params![sequence.to_string(), bytes, checksum.as_slice()],
         )
         .map_err(|error| storage(error.to_string()))?;
     connection
@@ -263,9 +263,6 @@ pub(super) fn index_selection(
             params![sequence.to_string(), length],
         )
         .map_err(|error| storage(error.to_string()))?;
-    // A separate original-R scalar seat prevents rehashing a corrupt optional
-    // root from being accepted as the original capture on subsequent reads.
-    connection.execute("INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json,shape_witness) VALUES(?1,'[]',NULL,NULL,0,?2,0,'inline',x'6e756c6c',?3)",params![sequence.to_string(),length,witness.as_slice()]).map_err(|error|storage(error.to_string()))?;
     #[cfg(feature = "issue-387-profile")]
     profile.layout_completed();
     Ok(())
@@ -273,9 +270,9 @@ pub(super) fn index_selection(
 type RootRow = (
     Option<Vec<u8>>,
     Option<Vec<u8>>,
-    Option<Vec<u8>>,
     Option<u64>,
     Option<Vec<u8>>,
+    u64,
     u64,
 );
 fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStoreError> {
@@ -283,20 +280,23 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
     if sequence == 0 || sequence.to_string() != id {
         return Err(invalid());
     }
-    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.witness)='blob' AND length(r.witness)=32 THEN r.witness END,CASE WHEN typeof(f.shape_witness)='blob' AND length(f.shape_witness)=32 THEN f.shape_witness END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count FROM request_source_roots r JOIN request_observation_fields f ON f.source_id=r.source_id AND f.path_json='[]' JOIN request_snapshots s ON s.observation_source_id=r.source_id WHERE r.source_id=?1").map_err(|error|storage(error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|storage(error.to_string()))?;
+    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.checksum)='blob' AND length(r.checksum)=32 THEN r.checksum END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count,f.readable_end FROM request_source_roots r JOIN request_snapshots s ON s.observation_source_id=r.source_id JOIN content_frontiers f ON f.source_kind='trace_request' AND f.source_id=r.source_id AND f.block_index=0 AND f.representation='canonical_json_v1' AND f.revision=1 WHERE r.source_id=?1").map_err(|error|storage(error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|storage(error.to_string()))?;
     let bytes = row
         .0
         .ok_or_else(|| storage("composed request root unavailable"))?;
     #[cfg(test)]
     record_metadata(bytes.len());
-    let digest = root_witness(&bytes);
-    if row.1.as_deref() != Some(digest.as_slice()) || row.2.as_deref() != Some(digest.as_slice()) {
-        return Err(storage("original composed request witness differs"));
+    let digest = root_checksum(&bytes);
+    if row.1.as_deref() != Some(digest.as_slice()) {
+        return Err(storage("composed request root checksum differs"));
     }
     let root: Root =
         serde_json::from_slice(&bytes).map_err(|_| storage("composed request root malformed"))?;
     if root.sequence != sequence
         || root.length > SAFE
+        || root.length != row.5
+        || root.scalar.length > root.length
+        || root.kind != RootKind::Request && root.length != root.scalar.length
         || root.native.is_some_and(|node| {
             node.count == 0
                 || node.count > manifest::MAX_ITEMS
@@ -307,9 +307,9 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
             && (root.messages_start >= root.messages_end
                 || root.messages_end - root.messages_start != 2)
         || root.messages_end > root.scalar.length
-        || root.native.map(|node| node.id) != row.3
-        || root.native.map_or(0, |node| node.count) != row.5
-        || root.native.as_ref().map(|node| node.digest.as_slice()) != row.4.as_deref()
+        || root.native.map(|node| node.id) != row.2
+        || root.native.map_or(0, |node| node.count) != row.4
+        || root.native.as_ref().map(|node| node.digest.as_slice()) != row.3.as_deref()
         || root.kind == RootKind::Request && root.native.is_some() != root.source_hash.is_some()
     {
         return Err(storage("original composed request identity differs"));
@@ -350,7 +350,7 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         messages_end: 0,
     };
     let bytes = bounded(&root, 16384)?;
-    let witness = root_witness(&bytes);
+    let checksum = root_checksum(&bytes);
     connection
         .execute(
             "DELETE FROM request_source_roots WHERE source_id=?1",
@@ -359,11 +359,10 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         .map_err(|error| storage(error.to_string()))?;
     connection
         .execute(
-            "INSERT INTO request_source_roots(source_id,metadata,witness) VALUES(?1,?2,?3)",
-            params![sequence.to_string(), bytes, witness.as_slice()],
+            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+            params![sequence.to_string(), bytes, checksum.as_slice()],
         )
         .map_err(|error| storage(error.to_string()))?;
-    connection.execute("INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json,shape_witness) VALUES(?1,'[]',NULL,NULL,0,?2,0,'inline',x'6e756c6c',?3)",params![sequence.to_string(),root.length,witness.as_slice()]).map_err(|error|storage(error.to_string()))?;
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
