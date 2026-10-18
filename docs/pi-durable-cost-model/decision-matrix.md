@@ -285,4 +285,3 @@ canonical-only tool projection repair. Its benefit is workload-dependent and
 comes with less frequent live publication and a larger uncommitted crash tail.
 It remains synchronous commit-before-live with pressure exceptions; it is not
 identical to Pi's timer-only persistence behavior.
-

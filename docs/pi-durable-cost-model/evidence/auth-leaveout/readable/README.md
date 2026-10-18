@@ -18,3 +18,6 @@ provider/process records remain in the parent directory's original evidence arch
 This readable subset does not replace the archive or claim independent raw review.
 Standalone baseline lexical validation is linked from
 [the correctness evidence](../../rawvalue-correctness/manifest.json).
+
+Readable log copies omit trailing blank lines for repository whitespace checks;
+original logs remain byte-for-byte in the archive.

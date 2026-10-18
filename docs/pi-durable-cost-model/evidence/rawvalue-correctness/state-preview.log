@@ -500,4 +500,3 @@ test durable::sqlite::observation_request::state_preview_tests::lazy_raw_value_p
 test durable::sqlite::observation_request::state_preview_tests::state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle ... ok
 
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 4263 filtered out; finished in 0.67s
-

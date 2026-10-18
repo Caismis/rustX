@@ -52,5 +52,6 @@
     ],
     "verified": true,
     "end_utc": "2026-10-18T16:37:37.955065+00:00"
-  }
+  },
+  "readable_logs_note": "Readable log copies omit trailing blank lines for repository whitespace checks. Baseline validation archive preserves original logs byte-for-byte."
 }
