@@ -1,8 +1,11 @@
 //! Seekable immutable observation bytes derived from existing native authority.
+mod byte_carrier;
 #[cfg(test)]
 mod byte_reader_tests;
 pub(crate) mod canonical;
 mod key_order;
+#[cfg(test)]
+mod resident_byte_tests;
 mod small;
 use rusqlite::OptionalExtension as _;
 use serde_json::Value;
@@ -117,8 +120,8 @@ impl Node {
 }
 #[derive(Debug)]
 struct Layout {
-    directory: tempfile::TempDir,
-    file: Option<std::fs::File>,
+    directory: Option<tempfile::TempDir>,
+    bytes: byte_carrier::Bytes,
     connection: std::sync::Mutex<Option<rusqlite::Connection>>,
     written: u64,
     small_index: Option<small::SmallIndex>,
@@ -200,16 +203,7 @@ impl std::io::Write for Layout {
                 "pending source indexing deadline reached",
             ));
         }
-        #[cfg(test)]
-        FILE_WORK.with(|work| {
-            let (writes, opens) = work.get();
-            work.set((writes + 1, opens));
-        });
-        let count = self
-            .file
-            .as_mut()
-            .ok_or_else(|| std::io::Error::other("source sealed"))?
-            .write(&bytes[..bytes.len().min(65_536)])?;
+        let count = self.bytes.write(bytes, &mut self.directory)?;
         self.written = self
             .written
             .checked_add(count as u64)
@@ -229,7 +223,7 @@ impl Layout {
     fn seal(&mut self) -> Result<(), &'static str> {
         if let Some(index) = &mut self.small_index {
             index.seal(self.next_node, self.written)?;
-            self.file = None;
+            self.bytes.seal();
             return Ok(());
         }
         self.connection
@@ -239,7 +233,7 @@ impl Layout {
             .ok_or("native source already sealed")?
             .execute_batch("CREATE UNIQUE INDEX nodes_ordinal ON nodes(parent,ordinal); CREATE INDEX nodes_key ON nodes(parent,key) WHERE key_complete=1; COMMIT")
             .map_err(|_| "native source index commit unavailable")?;
-        self.file = None;
+        self.bytes.seal();
         *self
             .connection
             .get_mut()
@@ -267,7 +261,11 @@ impl Layout {
         #[cfg(test)]
         INDEX_OPENS.with(|count| count.set(count.get() + 1));
         let connection = rusqlite::Connection::open_with_flags(
-            self.directory.path().join("index.sqlite"),
+            self.directory
+                .as_ref()
+                .ok_or("native source directory unavailable")?
+                .path()
+                .join("index.sqlite"),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|_| "native source index unavailable")?;
@@ -278,27 +276,20 @@ impl Layout {
     }
 
     fn new() -> Result<Self, &'static str> {
-        let mut layout = Self::unindexed()?;
+        let mut layout = Self::unindexed();
         layout.initialize_index(false)?;
         Ok(layout)
     }
-    fn unindexed() -> Result<Self, &'static str> {
-        let directory = tempfile::tempdir().map_err(|_| "pending source directory unavailable")?;
-        let file = std::fs::File::options()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(directory.path().join("bytes"))
-            .map_err(|_| "pending source file unavailable")?;
-        Ok(Self {
-            directory,
-            file: Some(file),
+    fn unindexed() -> Self {
+        Self {
+            directory: None,
+            bytes: byte_carrier::Bytes::default(),
             connection: std::sync::Mutex::new(None),
             written: 0,
             small_index: None,
             next_node: 0,
             deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(5)),
-        })
+        }
     }
     fn initialize_index(&mut self, memory: bool) -> Result<(), &'static str> {
         if memory {
@@ -310,7 +301,9 @@ impl Layout {
             self.small_index = Some(small::SmallIndex::default());
             return Ok(());
         }
-        let connection = rusqlite::Connection::open(self.directory.path().join("index.sqlite"))
+        let directory = byte_carrier::directory(&mut self.directory)
+            .map_err(|_| "pending source directory unavailable")?;
+        let connection = rusqlite::Connection::open(directory.path().join("index.sqlite"))
             .map_err(|_| "pending source index unavailable")?;
         // Derived observation only: this is not the durable execution journal.
         connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-1024; CREATE TABLE nodes(id INTEGER PRIMARY KEY,parent INTEGER,ordinal INTEGER NOT NULL,start INTEGER NOT NULL,end INTEGER NOT NULL,children INTEGER NOT NULL,recursive_nodes INTEGER NOT NULL,container INTEGER NOT NULL,object INTEGER NOT NULL,key TEXT,key_start INTEGER,key_end INTEGER,key_complete INTEGER NOT NULL); BEGIN;").map_err(|_|"pending source index unavailable")?;
@@ -386,25 +379,19 @@ impl Layout {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| "pending source page unavailable")
     }
-    fn byte_file(&self) -> Result<std::fs::File, &'static str> {
-        #[cfg(test)]
-        FILE_WORK.with(|work| {
-            let (writes, opens) = work.get();
-            work.set((writes, opens + 1));
-        });
-        self.file
-            .as_ref()
-            .map_or_else(
-                || std::fs::File::open(self.directory.path().join("bytes")),
-                std::fs::File::try_clone,
-            )
+    fn open_bytes(&self) -> Result<byte_carrier::Reader, &'static str> {
+        self.bytes
+            .reader(self.directory.as_ref())
             .map_err(|_| "native byte source unavailable")
     }
     fn bytes(&self, start: u64, count: usize) -> Result<Vec<u8>, &'static str> {
-        Self::read_bytes(&self.byte_file()?, start, count)
+        Self::read_bytes(&self.open_bytes()?, start, count)
     }
-    fn read_bytes(file: &std::fs::File, start: u64, count: usize) -> Result<Vec<u8>, &'static str> {
-        use std::os::unix::fs::FileExt as _;
+    fn read_bytes(
+        file: &byte_carrier::Reader,
+        start: u64,
+        count: usize,
+    ) -> Result<Vec<u8>, &'static str> {
         let mut bytes = vec![0; count];
         file.read_exact_at(&mut bytes, start)
             .map_err(|_| "pending byte source unavailable")?;
@@ -424,11 +411,11 @@ pub(crate) struct SeekableObservationSource {
     layout: Layout,
 }
 /// One synchronous byte reader borrowed from its immutable source. The borrow
-/// pins the scratch directory; the `File` is closed when the capture scope ends.
+/// pins the resident bytes or scratch directory; file readers close with the scope.
 /// It owns neither a task nor a cached index/authentication result.
 pub(crate) struct ObservationByteReader<'a> {
     source: &'a SeekableObservationSource,
-    file: std::fs::File,
+    file: byte_carrier::Reader,
 }
 impl ObservationByteReader<'_> {
     pub(crate) fn indexed_span(
@@ -443,7 +430,7 @@ impl ObservationByteReader<'_> {
 }
 struct FieldReader<'a> {
     connection: IndexReader<'a>,
-    bytes: std::fs::File,
+    bytes: byte_carrier::Reader,
 }
 pub(crate) type ObservationLayoutCache =
     Arc<std::sync::OnceLock<Result<SeekableObservationSource, &'static str>>>;
@@ -473,13 +460,13 @@ impl SeekableObservationSource {
     pub(crate) fn byte_reader(&self) -> Result<ObservationByteReader<'_>, ObservationReadError> {
         Ok(ObservationByteReader {
             source: self,
-            file: self.layout.byte_file()?,
+            file: self.layout.open_bytes()?,
         })
     }
     pub(crate) fn new<T: serde::Serialize + schemars::JsonSchema>(
         value: &T,
     ) -> Result<Self, &'static str> {
-        let mut layout = Layout::unindexed()?;
+        let mut layout = Layout::unindexed();
         {
             use std::io::Write as _;
             let mut writer = std::io::BufWriter::with_capacity(65_536, &mut layout);
@@ -490,12 +477,8 @@ impl SeekableObservationSource {
                 .map_err(|_| "native observation source flush unavailable")?;
         }
         layout.initialize_index(layout.written <= MEMORY_INDEX_BYTES as u64)?;
-        let reader = layout
-            .file
-            .as_ref()
-            .ok_or("source sealed")?
-            .try_clone()
-            .map_err(|_| "native source reader unavailable")?;
+        layout.bytes.seal();
+        let reader = layout.open_bytes()?;
         let mut reader = std::io::BufReader::with_capacity(
             usize::try_from(layout.written.clamp(1, 65_536))
                 .map_err(|_| "native parser buffer exceeds platform capacity")?,
@@ -512,19 +495,13 @@ impl SeekableObservationSource {
         Ok(Self { layout })
     }
     /// Copies this completed source's exact original extent into its native owner.
-    /// The borrow pins the source directory until the synchronous copy finishes;
+    /// The borrow pins the source storage until the synchronous copy finishes;
     /// each window is bounded and does not reopen or query the field index.
     pub(crate) fn copy_original_bytes_to(
         &self,
         destination: &mut impl std::io::Write,
     ) -> std::io::Result<u64> {
-        use std::os::unix::fs::FileExt as _;
-        let file = std::fs::File::open(self.layout.directory.path().join("bytes"))?;
-        #[cfg(test)]
-        FILE_WORK.with(|work| {
-            let (writes, opens) = work.get();
-            work.set((writes, opens + 1));
-        });
+        let file = self.layout.bytes.reader(self.layout.directory.as_ref())?;
         let capacity = usize::try_from(self.layout.written.min(65_536))
             .map_err(|_| std::io::Error::other("native copy buffer exceeds platform capacity"))?;
         let mut buffer = vec![0; capacity];
@@ -695,14 +672,8 @@ impl SeekableObservationSource {
         )
     }
     fn field_reader(&self) -> Result<FieldReader<'_>, &'static str> {
-        #[cfg(test)]
-        FILE_WORK.with(|work| {
-            let (writes, opens) = work.get();
-            work.set((writes, opens + 1));
-        });
         Ok(FieldReader {
-            bytes: std::fs::File::open(self.layout.directory.path().join("bytes"))
-                .map_err(|_| "native byte source unavailable")?,
+            bytes: self.layout.open_bytes()?,
             connection: self.layout.index_reader()?,
         })
     }
@@ -795,7 +766,7 @@ impl SeekableObservationSource {
     }
     fn preview_node(
         connection: &IndexReader<'_>,
-        bytes: &std::fs::File,
+        bytes: &byte_carrier::Reader,
         id: u64,
         node: &Node,
         budget: &mut usize,
@@ -880,13 +851,7 @@ impl SeekableObservationSource {
         ) -> Result<(), &'static str>,
     ) -> Result<(), &'static str> {
         let mut stack: Vec<(u64, Vec<String>, String)> = Vec::new();
-        #[cfg(test)]
-        FILE_WORK.with(|work| {
-            let (writes, opens) = work.get();
-            work.set((writes, opens + 1));
-        });
-        let bytes = std::fs::File::open(self.layout.directory.path().join("bytes"))
-            .map_err(|_| "native byte source unavailable")?;
+        let bytes = self.layout.open_bytes()?;
         let connection = self.layout.index_reader()?;
         connection.visit(
             0,
@@ -943,7 +908,7 @@ impl SeekableObservationSource {
     #[cfg(test)]
     fn preview_node_legacy(
         connection: &IndexReader<'_>,
-        bytes: &std::fs::File,
+        bytes: &byte_carrier::Reader,
         id: u64,
         budget: &mut usize,
     ) -> Result<Value, &'static str> {
@@ -1165,7 +1130,7 @@ impl SeekableObservationSource {
 }
 
 struct LayoutParser<'a> {
-    reader: std::io::BufReader<std::fs::File>,
+    reader: std::io::BufReader<byte_carrier::Reader>,
     position: u64,
     layout: &'a mut Layout,
 }
@@ -1482,8 +1447,7 @@ mod tests {
         let original = original_layout_bytes(&small);
         let mut layout = Layout::new().unwrap();
         layout.write_all(&original).unwrap();
-        let mut reader =
-            std::io::BufReader::new(layout.file.as_ref().unwrap().try_clone().unwrap());
+        let mut reader = std::io::BufReader::new(layout.open_bytes().unwrap());
         reader.rewind().unwrap();
         LayoutParser {
             reader,
@@ -1533,7 +1497,11 @@ mod tests {
             assert_eq!(source.layout.written, (length + 2) as u64);
             assert_eq!(source.layout.small_index.is_some(), memory);
             assert_eq!(
-                source.layout.directory.path().join("index.sqlite").exists(),
+                source
+                    .layout
+                    .directory
+                    .as_ref()
+                    .is_some_and(|directory| directory.path().join("index.sqlite").exists()),
                 !memory
             );
             INDEX_OPENS.with(|n| n.set(0));
@@ -1920,7 +1888,7 @@ mod tests {
             )
             .unwrap();
         assert!(layout.seal().is_err());
-        assert!(layout.file.is_some());
+        assert!(matches!(layout.bytes, byte_carrier::Bytes::Writing(_)));
         assert!(layout.connection.get_mut().unwrap().is_some());
     }
 
@@ -2064,9 +2032,16 @@ mod tests {
             if let Some(index) = &mut source.layout.small_index {
                 index.nodes.clear();
             } else {
-                let connection =
-                    rusqlite::Connection::open(source.layout.directory.path().join("index.sqlite"))
-                        .unwrap();
+                let connection = rusqlite::Connection::open(
+                    source
+                        .layout
+                        .directory
+                        .as_ref()
+                        .unwrap()
+                        .path()
+                        .join("index.sqlite"),
+                )
+                .unwrap();
                 connection.execute("DROP TABLE nodes", []).unwrap();
             }
             assert!(matches!(
@@ -2105,7 +2080,10 @@ mod tests {
             .get_or_init(|| SeekableObservationSource::new(&native))
             .as_ref()
             .unwrap();
-        assert!(source.layout.file.is_none());
+        assert!(matches!(
+            source.layout.bytes,
+            byte_carrier::Bytes::Disk(None)
+        ));
         assert!(source.layout.connection.lock().unwrap().is_none());
         let page = source.page(&[], 0, 32).unwrap();
         assert_eq!(page.total, 3);
@@ -2149,7 +2127,10 @@ mod tests {
                 .read(&["title".into()], expected.len() as u64 + 1, 65536)
                 .is_err()
         );
-        assert!(source.layout.file.is_none());
+        assert!(matches!(
+            source.layout.bytes,
+            byte_carrier::Bytes::Disk(None)
+        ));
         assert!(source.layout.connection.lock().unwrap().is_none());
     }
 }
