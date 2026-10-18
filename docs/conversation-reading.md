@@ -428,11 +428,11 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 69 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 70 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 69 stores frozen Request metadata separately from the native
+SQLite schema 70 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -516,3 +516,16 @@ ContentRead still reads at most two segments; lineage verification does not add 
 whole-file scan to range reads. Session archive streaming also verifies each
 existing 64 KiB source buffer before compression and checks the seal aggregate
 before successful completion; it does not prescan bodies under the capture barrier.
+
+## Canonical append frontier
+
+SQLite schema 70 removes `surface_head.active_json`. The immutable Ledger and
+selected projection checkpoint remain the authorities for active identities.
+Ordinary append validates the same frontier and bounded suffix using borrowed
+identity bytes, without materializing an identity vector/tree or rewriting a
+history-wide JSON value. Checkpoint appends retain full Original dependency,
+ordering, duplicate suppression and suffix validation. The integrity scan is
+still linear in the bounded suffix; request context construction is not O(1).
+Canonical acceptance, events and staging remain atomic, and publication still
+follows its committed native transition. Older layouts are rejected; there is
+no migration, compatibility reader or dual write.

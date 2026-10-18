@@ -327,7 +327,8 @@ fn count_conversation_store_open() {
 /// Version 67 stores child lookup paths rather than duplicate Source Fact payloads.
 /// Version 68 binds canonical binary `ContentRefs` to frozen fixed-chunk digests.
 /// Version 69 requires explicit native artifact settlement evidence.
-pub const SQLITE_SCHEMA_VERSION: i64 = 69;
+/// Version 70 removes the redundant serialized active history from the Surface head.
+pub const SQLITE_SCHEMA_VERSION: i64 = 70;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -3846,7 +3847,7 @@ impl ConversationStore for SqliteConversationStore {
                 apply_surface_op(&mut active, operation)?;
             }
             if revision != SurfaceRevision::INITIAL {
-                update_surface_head(&transaction, revision, generation, &active)?;
+                update_surface_head(&transaction, revision, generation)?;
             }
             transaction
                 .execute(
@@ -8646,8 +8647,7 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             CREATE TABLE IF NOT EXISTS surface_head (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 revision INTEGER NOT NULL,
-                compaction_generation INTEGER NOT NULL,
-                active_json TEXT NOT NULL
+                compaction_generation INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS projection_checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
@@ -9348,10 +9348,7 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             "surface_ops",
             &["revision", "compaction_generation", "op_json"],
         ),
-        (
-            "surface_head",
-            &["revision", "compaction_generation", "active_json"],
-        ),
+        ("surface_head", &["revision", "compaction_generation"]),
         (
             "request_snapshots",
             &[
@@ -9516,6 +9513,11 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
             .map_err(|error| storage(format!("inspect schema columns {table}: {error}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("read schema columns {table}: {error}")))?;
+        if table == "surface_head" && columns.iter().any(|column| column == "active_json") {
+            return Err(ConversationStoreError::IncompatibleSchema(
+                "surface_head retains retired active_json layout".into(),
+            ));
+        }
         for column in required_columns {
             if !columns.iter().any(|candidate| candidate == column) {
                 return Err(ConversationStoreError::IncompatibleSchema(format!(
@@ -9717,25 +9719,31 @@ fn ensure_surface_head(transaction: &Transaction<'_>) -> Result<(), Conversation
             "canonical frontier metadata missing".into(),
         ));
     }
-    transaction.execute("INSERT INTO surface_head(id,revision,compaction_generation,active_json) VALUES(1,0,0,'[]')",[]).map_err(|e|storage(e.to_string()))?;
+    transaction
+        .execute(
+            "INSERT INTO surface_head(id,revision,compaction_generation) VALUES(1,0,0)",
+            [],
+        )
+        .map_err(|e| storage(e.to_string()))?;
     Ok(())
 }
 
 fn read_surface_head(
     connection: &Connection,
-) -> Result<Option<(i64, i64, String)>, ConversationStoreError> {
+) -> Result<Option<(i64, i64)>, ConversationStoreError> {
     connection
         .query_row(
-            "SELECT revision,compaction_generation,active_json FROM surface_head WHERE id=1",
+            "SELECT revision,compaction_generation FROM surface_head WHERE id=1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(|error| storage(format!("load Surface head: {error}")))
 }
 
-fn load_head(connection: &Connection) -> Result<DurableConversationHead, ConversationStoreError> {
-    use crate::context::checkpoint::CheckpointMessage;
+fn head_frontier(
+    connection: &Connection,
+) -> Result<(i64, Option<super::projection::ProjectionCheckpoint>), ConversationStoreError> {
     let ledger: i64 = connection
         .query_row(
             "SELECT coalesce(max(position),0) FROM message_ledger",
@@ -9755,8 +9763,6 @@ fn load_head(connection: &Connection) -> Result<DurableConversationHead, Convers
         ));
     }
     let checkpoint = projection::head(connection)?;
-    let mut ids = Vec::new();
-    let mut seen = BTreeSet::new();
     let base = checkpoint
         .as_ref()
         .map_or(0, |checkpoint| checkpoint.candidate.base_frontier.0);
@@ -9765,6 +9771,27 @@ fn load_head(connection: &Connection) -> Result<DurableConversationHead, Convers
             "checkpoint base exceeds canonical frontier".into(),
         ));
     }
+    Ok((ledger, checkpoint))
+}
+
+fn load_head(connection: &Connection) -> Result<DurableConversationHead, ConversationStoreError> {
+    let (ledger, checkpoint) = head_frontier(connection)?;
+    materialize_head(connection, ledger, checkpoint)
+}
+
+const CANONICAL_SUFFIX_IDS: &str = "SELECT CASE WHEN octet_length(message_id)<=4096 THEN message_id END FROM message_ledger WHERE position>?1 AND position<=?2 ORDER BY position LIMIT 8193";
+
+fn materialize_head(
+    connection: &Connection,
+    ledger: i64,
+    checkpoint: Option<super::projection::ProjectionCheckpoint>,
+) -> Result<DurableConversationHead, ConversationStoreError> {
+    use crate::context::checkpoint::CheckpointMessage;
+    let mut ids = Vec::new();
+    let mut seen = BTreeSet::new();
+    let base = checkpoint
+        .as_ref()
+        .map_or(0, |checkpoint| checkpoint.candidate.base_frontier.0);
     if let Some(checkpoint) = &checkpoint {
         for item in &checkpoint.candidate.items {
             if let CheckpointMessage::Original(reference) = &item.message {
@@ -9779,7 +9806,9 @@ fn load_head(connection: &Connection) -> Result<DurableConversationHead, Convers
             }
         }
     }
-    let mut statement=connection.prepare("SELECT CASE WHEN octet_length(message_id)<=4096 THEN message_id END FROM message_ledger WHERE position>?1 AND position<=?2 ORDER BY position LIMIT 8193").map_err(|e|storage(e.to_string()))?;
+    let mut statement = connection
+        .prepare(CANONICAL_SUFFIX_IDS)
+        .map_err(|e| storage(e.to_string()))?;
     let rows = statement
         .query_map(params![seq_to_i64(base)?, ledger], |row| {
             row.get::<_, Option<String>>(0)
@@ -9806,20 +9835,56 @@ fn load_head(connection: &Connection) -> Result<DurableConversationHead, Convers
     })
 }
 
+/// Appending needs the frontier, not an owned copy of every active identity.
+/// Without a checkpoint the ledger UNIQUE identity constraint supplies the
+/// uniqueness proof. Still visit the bounded suffix and validate each borrowed
+/// UTF-8 value: this preserves corruption/resource checks without allocating an
+/// identity vector and tree. This is a bounded scan, not constant-time context.
+fn append_head(connection: &Connection) -> Result<(SurfaceRevision, u64), ConversationStoreError> {
+    let (ledger, checkpoint) = head_frontier(connection)?;
+    if checkpoint.is_some() {
+        // Original dependencies, duplicate suppression and suffix bounds retain
+        // exactly the same checkpoint validation as full historical readers.
+        let head = materialize_head(connection, ledger, checkpoint)?;
+        return Ok((head.revision, head.compaction_generation));
+    }
+    let mut statement = connection
+        .prepare(CANONICAL_SUFFIX_IDS)
+        .map_err(|e| storage(e.to_string()))?;
+    let mut rows = statement
+        .query(params![0, ledger])
+        .map_err(|e| storage(e.to_string()))?;
+    let mut count = 0;
+    while let Some(row) = rows.next().map_err(|e| storage(e.to_string()))? {
+        if count >= 8192 {
+            return Err(crate::context::resources::bound(
+                "canonical working set exceeds bounded projection size",
+            ));
+        }
+        let value = row.get_ref(0).map_err(|e| storage(e.to_string()))?;
+        if value == rusqlite::types::ValueRef::Null {
+            return Err(crate::context::resources::bound(
+                "canonical identity record exceeds bound",
+            ));
+        }
+        value.as_str().map_err(|e| storage(e.to_string()))?;
+        count += 1;
+    }
+    Ok((
+        SurfaceRevision::new(nonnegative(ledger, "canonical frontier")?),
+        0,
+    ))
+}
+
 fn update_surface_head(
     transaction: &Transaction<'_>,
     revision: SurfaceRevision,
     generation: u64,
-    active: &[MessageId],
 ) -> Result<(), ConversationStoreError> {
     transaction
         .execute(
-            "UPDATE surface_head SET revision=?1,compaction_generation=?2,active_json=?3 WHERE id=1",
-            params![
-                seq_to_i64(revision.get())?,
-                seq_to_i64(generation)?,
-                encode(&active, "Surface head")?
-            ],
+            "UPDATE surface_head SET revision=?1,compaction_generation=?2 WHERE id=1",
+            params![seq_to_i64(revision.get())?, seq_to_i64(generation)?],
         )
         .map_err(|error| storage(format!("update Surface head: {error}")))?;
     Ok(())
@@ -9896,22 +9961,17 @@ fn append_message_and_surface_internal(
     allowed_pending_message_id: Option<&MessageId>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     let id = crate::conversation::message_id_of(message);
-    let head = load_head(transaction)?;
-    if head.active_message_ids.contains(&id) {
-        return Err(ConversationStoreError::DuplicateMessageId(id));
-    }
+    let (head_revision, generation) = append_head(transaction)?;
     let transcript_cursor =
         append_message_ledger(transaction, message, allowed_pending_message_id)?;
-    let mut active = head.active_message_ids;
-    active.push(id.clone());
-    let revision = head.revision.next();
+    let revision = head_revision.next();
     append_surface_op(
         transaction,
         revision,
-        head.compaction_generation,
+        generation,
         &SurfaceOp::Append { message_id: id },
     )?;
-    update_surface_head(transaction, revision, head.compaction_generation, &active)?;
+    update_surface_head(transaction, revision, generation)?;
     Ok(transcript_cursor)
 }
 
@@ -10898,7 +10958,7 @@ fn load_user_message_boundaries_page_internal(
             "historical user-message boundary page limit must be positive",
         ));
     }
-    let Some((head_revision, _, _head_active_json)) = read_surface_head(connection)? else {
+    let Some((head_revision, _)) = read_surface_head(connection)? else {
         if through == SurfaceRevision::INITIAL {
             return Ok(SurfaceUserMessageBoundaryPage {
                 boundaries: Vec::new(),
@@ -11050,7 +11110,7 @@ fn replay_surface_history(
     connection: &Connection,
     revision: SurfaceRevision,
 ) -> Result<(Vec<MessageId>, Vec<SurfaceOp>), ConversationStoreError> {
-    let Some((head_revision, _, _)) = read_surface_head(connection)? else {
+    let Some((head_revision, _)) = read_surface_head(connection)? else {
         if revision == SurfaceRevision::INITIAL {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -13651,12 +13711,7 @@ pub(crate) fn append_assistant_history_fixture(
         )?;
         persist_event_tx(&transaction, store.conversation_id(), event.clone())?;
     }
-    update_surface_head(
-        &transaction,
-        head.revision,
-        head.compaction_generation,
-        &head.active_message_ids,
-    )?;
+    update_surface_head(&transaction, head.revision, head.compaction_generation)?;
     // Verify the same final durable invariants as ordinary appends, once.
     load_head(&transaction)?;
     transaction
@@ -13988,6 +14043,10 @@ mod pending_transaction_tests;
 
 #[cfg(test)]
 mod tests {
+    mod append_head_tests {
+        use super::*;
+        include!("sqlite/append_head_tests.rs");
+    }
     include!("sqlite/observation_trace_tests.rs");
     include!("sqlite/observation_inspection_tests.rs");
     include!("sqlite/observation_occupancy_tests.rs");
@@ -15190,7 +15249,6 @@ mod tests {
         let store = store();
         store.initialize(&[user_message("a", "A")]).unwrap();
         let missing = MessageId::new("missing");
-        let active = serde_json::to_string(&vec![MessageId::new("a"), missing.clone()]).unwrap();
         let operation = serde_json::to_string(&SurfaceOp::Append {
             message_id: missing.clone(),
         })
@@ -15203,10 +15261,7 @@ mod tests {
             )
             .unwrap();
         connection
-            .execute(
-                "UPDATE surface_head SET revision=2,active_json=?1 WHERE id=1",
-                [active.clone()],
-            )
+            .execute("UPDATE surface_head SET revision=2 WHERE id=1", [])
             .unwrap();
         drop(connection);
         assert!(matches!(
@@ -19410,7 +19465,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 69);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 70);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19479,7 +19534,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 69);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 70);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

@@ -2420,3 +2420,50 @@ fn current_head_validation_is_bounded_by_publication_not_timeline_length() {
 }
 
 mod trace_preview_tests;
+
+#[test]
+fn append_retains_checkpoint_original_dependency_validation() {
+    let store = store();
+    let messages: Vec<_> = (1..=3).map(message).collect();
+    store.initialize(&messages).unwrap();
+    let original = CheckpointItem {
+        message: CheckpointMessage::Original(CanonicalMessageRef::of(
+            store.conversation_id(),
+            &messages[0],
+        )),
+        call_sources: Vec::new(),
+        result_call: None,
+    };
+    store
+        .commit_projection(commit_input(
+            &store,
+            "append-check",
+            candidate(&store, "append-head", vec![original]),
+            &CancellationSignal::new(),
+        ))
+        .unwrap();
+    store.append_canonical(&message(4)).unwrap();
+    {
+        let connection = store.lock().unwrap();
+        let full = super::super::load_head(&connection).unwrap();
+        assert_eq!(
+            full.active_message_ids,
+            vec![MessageId::new("M1"), MessageId::new("M4")]
+        );
+        assert_eq!(
+            super::super::append_head(&connection).unwrap(),
+            (full.revision, full.compaction_generation)
+        );
+        // Deliberate external corruption of the Original dependency. The
+        // candidate and activation remain unchanged and must not be reblessed.
+        connection.execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM message_ledger WHERE message_id='M1'; PRAGMA foreign_keys=ON").unwrap();
+        assert!(
+            matches!(super::super::append_head(&connection), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("Original dependency"))
+        );
+    }
+    assert!(store.append_canonical(&message(5)).is_err());
+    assert!(
+        !super::super::ledger_message_exists(&store.lock().unwrap(), &MessageId::new("M5"))
+            .unwrap()
+    );
+}
