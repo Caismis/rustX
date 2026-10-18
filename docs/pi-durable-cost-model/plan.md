@@ -12,7 +12,9 @@ final results, unbounded lazy reads or claiming exactly-once external tools.
   withdrawn/repaired evidence unchanged in history.
 - Depend on #484 at `7d659c06f692277d4711c54b579f9fe0f8d8792d`. That adds only a
   deterministic real-Unix fixture cleanup fix and operation-level diagnostics.
-  Its new FULL run is 39117994005; the prior macOS failure remains documented.
+  Its exact-head FULL and Merge verification passed in run 39117994005; the
+  prior macOS failure remains documented. #484 remains draft and unmerged for
+  independent review.
 - Work in branch `codex/pi-durable-cost-model`, separate worktree
   `/workspace/rustX-pi-durable`, and a separate draft PR based on #484's branch.
   The original issue explicitly preserved guarantees this work intentionally
