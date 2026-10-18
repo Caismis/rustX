@@ -428,11 +428,11 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 71 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 72 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 71 stores frozen Request metadata separately from the native
+SQLite schema 72 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -452,7 +452,7 @@ optional row as authoritative. Native root identity, readable cut, representatio
 and original publication authorization remain mandatory.
 
 Fragment pages are authenticated and limited to 65,536 bytes before allocation.
-Schema 71 uses the `RXSP` version-1 binary page encoding: a typed leaf or branch,
+Schema 72 uses the `RXSP` version-1 binary page encoding: a typed leaf or branch,
 bounded little-endian lengths, raw value bytes and raw 32-byte child hashes.
 Decoding rejects unknown versions/types, excess count/length, invalid UTF-8 keys,
 truncation, trailing bytes and inconsistent ordering/depth. There is no JSON-page
@@ -528,7 +528,7 @@ before successful completion; it does not prescan bodies under the capture barri
 
 ## Canonical append frontier
 
-Schema 70 removed `surface_head.active_json`; schema 71 retains that layout.
+Schema 70 removed `surface_head.active_json`; schema 72 retains that layout.
 The immutable Ledger and selected checkpoint remain the active-identity authorities.
 Cold/invalidated append validates the same bounded suffix and Original dependencies.
 Warm append may reuse a disposable connection-local validation count, checked
