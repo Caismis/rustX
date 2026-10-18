@@ -7,6 +7,8 @@ use rusqlite::OptionalExtension as _;
 use serde_json::Value;
 use std::sync::Arc;
 const ITEM_BYTES: usize = 16_384;
+/// At most 4 KiB of original JSON can contribute nodes/keys to this index.
+const MEMORY_INDEX_BYTES: u64 = 4096;
 const SAFE: u64 = 9_007_199_254_740_991;
 #[cfg(test)]
 thread_local! { pub(crate) static READ_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) }; }
@@ -102,19 +104,20 @@ struct Layout {
     file: Option<std::fs::File>,
     connection: std::sync::Mutex<Option<rusqlite::Connection>>,
     written: u64,
+    memory_index: bool,
     next_node: u64,
     deadline: Option<std::time::Instant>,
 }
 
 enum LayoutConnection<'a> {
-    Building(std::sync::MutexGuard<'a, Option<rusqlite::Connection>>),
+    Borrowed(std::sync::MutexGuard<'a, Option<rusqlite::Connection>>),
     Reading(rusqlite::Connection),
 }
 impl std::ops::Deref for LayoutConnection<'_> {
     type Target = rusqlite::Connection;
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Building(guard) => guard.as_ref().expect("native construction owns index"),
+            Self::Borrowed(guard) => guard.as_ref().expect("native source owns index"),
             Self::Reading(connection) => connection,
         }
     }
@@ -162,10 +165,12 @@ impl Layout {
             .execute_batch("CREATE UNIQUE INDEX nodes_ordinal ON nodes(parent,ordinal); CREATE INDEX nodes_key ON nodes(parent,key) WHERE key_complete=1; COMMIT")
             .map_err(|_| "native source index commit unavailable")?;
         self.file = None;
-        *self
-            .connection
-            .get_mut()
-            .map_err(|_| "native source index poisoned")? = None;
+        if !self.memory_index {
+            *self
+                .connection
+                .get_mut()
+                .map_err(|_| "native source index poisoned")? = None;
+        }
         Ok(())
     }
     fn reader_connection(&self) -> Result<LayoutConnection<'_>, &'static str> {
@@ -174,7 +179,7 @@ impl Layout {
             .lock()
             .map_err(|_| "native source index poisoned")?;
         if guard.is_some() {
-            return Ok(LayoutConnection::Building(guard));
+            return Ok(LayoutConnection::Borrowed(guard));
         }
         drop(guard);
         #[cfg(test)]
@@ -191,6 +196,11 @@ impl Layout {
     }
 
     fn new() -> Result<Self, &'static str> {
+        let mut layout = Self::unindexed()?;
+        layout.initialize_index(false)?;
+        Ok(layout)
+    }
+    fn unindexed() -> Result<Self, &'static str> {
         let directory = tempfile::tempdir().map_err(|_| "pending source directory unavailable")?;
         let file = std::fs::File::options()
             .read(true)
@@ -198,19 +208,45 @@ impl Layout {
             .create_new(true)
             .open(directory.path().join("bytes"))
             .map_err(|_| "pending source file unavailable")?;
-        let connection = rusqlite::Connection::open(directory.path().join("index.sqlite"))
-            .map_err(|_| "pending source index unavailable")?;
-        // This ephemeral immutable layout is derived from the original Arc;
-        // it is never a durable interaction journal or settlement authority.
-        connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-1024; CREATE TABLE nodes(id INTEGER PRIMARY KEY,parent INTEGER,ordinal INTEGER NOT NULL,start INTEGER NOT NULL,end INTEGER NOT NULL,children INTEGER NOT NULL,recursive_nodes INTEGER NOT NULL,container INTEGER NOT NULL,object INTEGER NOT NULL,key TEXT,key_start INTEGER,key_end INTEGER,key_complete INTEGER NOT NULL); BEGIN;").map_err(|_|"pending source index unavailable")?;
         Ok(Self {
             directory,
             file: Some(file),
-            connection: std::sync::Mutex::new(Some(connection)),
+            connection: std::sync::Mutex::new(None),
             written: 0,
+            memory_index: false,
             next_node: 0,
             deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(5)),
         })
+    }
+    fn initialize_index(&mut self, memory: bool) -> Result<(), &'static str> {
+        let connection = if memory {
+            // Admission uses the completed original encoding, never an estimate
+            // or a second serialization. JSON size bounds node and key storage.
+            if self.written > MEMORY_INDEX_BYTES {
+                return Err("native memory index exceeds byte bound");
+            }
+            rusqlite::Connection::open_in_memory()
+        } else {
+            rusqlite::Connection::open(self.directory.path().join("index.sqlite"))
+        }
+        .map_err(|_| "pending source index unavailable")?;
+        if memory {
+            // Cap SQLite index pages as well as the admitted source bytes.
+            // Sorting at most 4 KiB of JSON also has a bounded temporary set.
+            connection
+                .execute_batch(
+                    "PRAGMA page_size=4096; PRAGMA max_page_count=256; PRAGMA temp_store=MEMORY",
+                )
+                .map_err(|_| "native memory index bound unavailable")?;
+        }
+        // Derived observation only: this is not the durable execution journal.
+        connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-1024; CREATE TABLE nodes(id INTEGER PRIMARY KEY,parent INTEGER,ordinal INTEGER NOT NULL,start INTEGER NOT NULL,end INTEGER NOT NULL,children INTEGER NOT NULL,recursive_nodes INTEGER NOT NULL,container INTEGER NOT NULL,object INTEGER NOT NULL,key TEXT,key_start INTEGER,key_end INTEGER,key_complete INTEGER NOT NULL); BEGIN;").map_err(|_|"pending source index unavailable")?;
+        self.memory_index = memory;
+        *self
+            .connection
+            .get_mut()
+            .map_err(|_| "native source index poisoned")? = Some(connection);
+        Ok(())
     }
     fn node(&self, id: u64) -> Result<Node, &'static str> {
         let connection = self.reader_connection()?;
@@ -374,7 +410,7 @@ impl SeekableObservationSource {
     pub(crate) fn new<T: serde::Serialize + schemars::JsonSchema>(
         value: &T,
     ) -> Result<Self, &'static str> {
-        let mut layout = Layout::new()?;
+        let mut layout = Layout::unindexed()?;
         {
             use std::io::Write as _;
             let mut writer = std::io::BufWriter::with_capacity(65_536, &mut layout);
@@ -384,6 +420,7 @@ impl SeekableObservationSource {
                 .flush()
                 .map_err(|_| "native observation source flush unavailable")?;
         }
+        layout.initialize_index(layout.written <= MEMORY_INDEX_BYTES)?;
         let reader = layout
             .file
             .as_ref()
@@ -1292,6 +1329,106 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn small_index_admission_uses_exact_encoded_bytes_and_retains_navigation() {
+        for (length, memory) in [(4094, true), (4095, false)] {
+            let value = "x".repeat(length);
+            let source = SeekableObservationSource::new(&value).unwrap();
+            assert_eq!(source.layout.written, (length + 2) as u64);
+            assert_eq!(source.layout.memory_index, memory);
+            assert_eq!(
+                source.layout.directory.path().join("index.sqlite").exists(),
+                !memory
+            );
+            INDEX_OPENS.with(|n| n.set(0));
+            assert_eq!(
+                source.read(&[], 0, 65536).unwrap().bytes,
+                serde_json::to_vec(&value).unwrap()
+            );
+            assert_eq!(source.page(&[], 0, 1).unwrap().total, 1);
+            assert_eq!(INDEX_OPENS.with(std::cell::Cell::get) == 0, memory);
+        }
+    }
+
+    #[test]
+    fn small_index_dense_input_is_bounded_and_pagination_is_exact() {
+        let values = vec![0; 2047]; // 4,095 bytes, 2,048 index nodes.
+        let source = SeekableObservationSource::new(&values).unwrap();
+        assert!(source.layout.memory_index);
+        {
+            let connection = source.layout.reader_connection().unwrap();
+            let bytes: u64 = connection
+                .query_row(
+                    "SELECT page_count*page_size FROM pragma_page_count(),pragma_page_size()",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(bytes <= 1_048_576);
+            let limit: u64 = connection
+                .query_row("PRAGMA max_page_count", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(limit, 256);
+        }
+        let mut offset = 0;
+        loop {
+            let page = source.page(&[], offset, 32).unwrap();
+            assert_eq!(page.total, 2047);
+            for (index, field) in page.fields.iter().enumerate() {
+                assert_eq!(field.ordinal, offset + index as u64);
+                assert_eq!(field.value, Some(serde_json::json!(0)));
+            }
+            match page.next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+    }
+
+    #[test]
+    fn small_index_preserves_lexical_bytes_keys_and_u64_evidence() {
+        #[derive(serde::Serialize, schemars::JsonSchema)]
+        struct Fixture<'a> {
+            revision: u64,
+            #[schemars(with = "serde_json::Value")]
+            raw: &'a serde_json::value::RawValue,
+        }
+        let raw = serde_json::value::RawValue::from_string(
+            "{\"z\":1.00,\"a\":-0.0,\"escaped\":\"\\u6c34\",\"u\":18446744073709551615}".into(),
+        )
+        .unwrap();
+        let fixture = Fixture {
+            revision: u64::MAX,
+            raw: &raw,
+        };
+        let source = SeekableObservationSource::new(&fixture).unwrap();
+        assert!(source.layout.memory_index);
+        let mut expected = Vec::new();
+        crate::runtime_client::structural_json::to_writer(&mut expected, &fixture).unwrap();
+        let mut copied = Vec::new();
+        assert_eq!(
+            source.copy_original_bytes_to(&mut copied).unwrap(),
+            expected.len() as u64
+        );
+        assert_eq!(copied, expected);
+        assert_eq!(
+            source.read(&["raw".into()], 0, 4096).unwrap().bytes,
+            raw.get().as_bytes()
+        );
+        let page = source.page(&["raw".into()], 0, 32).unwrap();
+        assert_eq!(
+            page.fields
+                .iter()
+                .map(|f| f.key.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["z", "a", "escaped", "u"]
+        );
+        assert_eq!(
+            source.read(&["revision".into()], 0, 4096).unwrap().bytes,
+            serde_json::to_vec(&u64::MAX.to_string()).unwrap()
+        );
+    }
+
     #[derive(serde::Serialize, schemars::JsonSchema)]
     struct NativeSource<'a> {
         title: &'a str,
@@ -1732,10 +1869,11 @@ mod tests {
             source.value(&["revision".into()]).unwrap(),
             Some(Value::String(u64::MAX.to_string()))
         );
-        let connection =
-            rusqlite::Connection::open(source.layout.directory.path().join("index.sqlite"))
-                .unwrap();
-        connection.execute("DROP TABLE nodes", []).unwrap();
+        {
+            // Corrupt the actual selected backend, including bounded memory indexes.
+            let connection = source.layout.reader_connection().unwrap();
+            connection.execute("DROP TABLE nodes", []).unwrap();
+        }
         assert!(matches!(
             source.read(&["title".into()], 0, 1).unwrap_err(),
             ObservationReadError::Unavailable(_)
