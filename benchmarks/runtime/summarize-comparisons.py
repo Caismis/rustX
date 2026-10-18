@@ -30,28 +30,68 @@ def append_sample(path):
     return result
 
 
-p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('directory',type=Path,nargs='+')
-p.add_argument('--append',action='store_true')
-a = p.parse_args()
-groups = {}
-for before in sorted(path for directory in a.directory for path in directory.glob('*-before.json')):
-    stem = before.stem.removesuffix('-before')
-    pair,case = stem.split('-',1)
-    after = before.with_name(stem+'-after.json')
-    records = {}
-    for name,path in (('before',before),('after',after)):
-        status = json.loads(path.with_name(path.stem+'.process.json').read_text())
-        assert status['accepted'], f'failed sample retained: {path}'
-        records[name] = append_sample(path) if a.append else summary.sample(path)
-    ratios = {key:records['after'][key]/value for key,value in records['before'].items()
-              if isinstance(value,(int,float)) and value != 0 and isinstance(records['after'][key],(int,float))}
-    groups.setdefault(case,[]).append({'pair':int(pair),**records,'after_over_before':ratios})
-medians = {}
-for case,records in groups.items():
-    medians[case] = {}
-    for side in ('before','after','after_over_before'):
-        medians[case][side] = {key:statistics.median(r[side][key] for r in records)
-            for key,value in records[0][side].items() if isinstance(value,(int,float))}
-print(json.dumps({'scope':'See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction',
-                  'samples':groups,'medians':medians},indent=2))
+def summarize(directories, append=False):
+    groups = {}
+    seen = set()
+    identities = set()
+    for directory in directories:
+        manifest = directory / 'manifest.json'
+        if manifest.exists():
+            value = json.loads(manifest.read_text())
+            if 'executables' in value:
+                identities.add(tuple(value['executables'][side]['sha256'] for side in ('before','after')))
+        before_paths = {path.stem.removesuffix('-before'):path for path in directory.glob('*-before.json')}
+        after_paths = {path.stem.removesuffix('-after'):path for path in directory.glob('*-after.json')}
+        if before_paths.keys() != after_paths.keys():
+            raise ValueError(f'unmatched before/after samples in {directory}')
+        for stem,before in sorted(before_paths.items()):
+            pair,case = stem.split('-',1)
+            identity = (int(pair),case)
+            if identity in seen:
+                raise ValueError(f'duplicate pair {identity}')
+            seen.add(identity)
+            records = {}
+            workload = []
+            for name,path in (('before',before),('after',after_paths[stem])):
+                status = json.loads(path.with_name(path.stem+'.process.json').read_text())
+                assert status['accepted'], f'failed sample retained: {path}'
+                raw = json.loads(path.read_text())
+                workload.append((raw['history'], raw['measured']))
+                if append:
+                    assert raw['history'] == int(case), f'history differs from pair label: {path}'
+                else:
+                    assert raw['case'] == case, f'case differs from pair label: {path}'
+                records[name] = append_sample(path) if append else summary.sample(path)
+            if workload[0] != workload[1]:
+                raise ValueError(f'workload differs within pair {identity}')
+            ratios = {key:records['after'][key]/value for key,value in records['before'].items()
+                      if isinstance(value,(int,float)) and value != 0 and isinstance(records['after'][key],(int,float))}
+            groups.setdefault(case,[]).append({'pair':int(pair),**records,'after_over_before':ratios})
+    if not groups:
+        raise ValueError('no paired samples')
+    if len(identities) > 1:
+        raise ValueError('executable identities differ between paired directories')
+    medians = {}
+    for case,records in groups.items():
+        medians[case] = {}
+        for side in ('before','after','after_over_before'):
+            keys = set().union(*(record[side] for record in records))
+            medians[case][side] = {}
+            for key in sorted(keys):
+                values = [record[side].get(key) for record in records]
+                if all(value is None or isinstance(value,(int,float)) for value in values):
+                    medians[case][side][key] = statistics.median(values) if all(value is not None for value in values) else None
+    return {'scope':'See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction',
+            'samples':groups,'medians':medians}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('directory',type=Path,nargs='+')
+    p.add_argument('--append',action='store_true')
+    a = p.parse_args()
+    print(json.dumps(summarize(a.directory,a.append),indent=2))
+
+
+if __name__ == '__main__':
+    main()

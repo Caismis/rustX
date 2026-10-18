@@ -84,7 +84,7 @@ RSS/PSS are maximum **sampled** values, not true peaks. Allocation profiling and
 
 ## Validation and reproducibility
 
-Local passes: 20 Source tests, 20 focused append tests, 367 durable SQLite tests, five Rust oracle regressions, eight Node oracle tests, nine Python harness tests, formatting and all-target/all-feature Clippy. Two initial corruption fixtures failed at setup under foreign keys and were corrected without weakening rejection assertions; all logs are retained. Initial invalid-ID benchmark failures and baseline smoke controller failures remain in their earlier archives.
+Local passes: 20 Source tests, 20 focused append tests, 367 durable SQLite tests, five Rust oracle regressions, eight Node oracle tests, nine legacy v2 Python tests, formatting and all-target/all-feature Clippy. Two initial corruption fixtures failed at setup under foreign keys and were corrected without weakening rejection assertions; all logs are retained. Initial invalid-ID benchmark failures and baseline smoke controller failures remain in their earlier archives.
 
 Commands are in [the benchmark README](../../benchmarks/runtime/README.md). `--pair-offset 3 --pairs 3` supplied the balanced confirmation pairs in separate directories. `confirmation-harness-identity.json` records exact controller blobs and the invocation/commit timing; original manifest heads are not rewritten. `pack-evidence.py` verifies every archived member against its length/SHA-256 and leaves raw originals intact.
 

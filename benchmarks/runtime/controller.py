@@ -20,6 +20,53 @@ def control(base, path):
         return json.load(r)
 
 
+RUST_PHASES = ['before_initialization', 'after_provider_start', 'after_initialization',
+               'after_turns', 'after_verification', 'after_shutdown', 'after_driver_drop',
+               'after_final_writer_close', 'after_reopen_verification', 'after_cleanup']
+PI_PHASES = [p for p in RUST_PHASES if p not in ('after_shutdown', 'after_driver_drop')]
+
+
+def validate_lifecycle(sample):
+    phases = sample['lifecycle']
+    expected = RUST_PHASES if 'measurement_version' in sample else PI_PHASES
+    assert [point['phase'] for point in phases] == expected, 'missing, duplicate or reordered lifecycle endpoint'
+    elapsed = [point['elapsed_us'] for point in phases]
+    assert all(isinstance(value, int) and value >= 0 for value in elapsed) and elapsed == sorted(elapsed)
+    assert all(set(point['process']) == {'stat', 'io', 'smaps_rollup'} for point in phases)
+    return {point['phase']: point for point in phases}
+
+
+def validate_sample(result, sample, case, log_text):
+    assert result['product_exit'] == result['provider_exit'] == 0
+    assert result['provider_report']['ok'] is True
+    assert sample['oracle'] == 'passed'
+    expected_requests = {'short-small':40,'short-large':96,'tool':2}.get(case,1)
+    assert result['provider_report']['requestCount'] == expected_requests
+    wire = sample.get('wire_requests', sample.get('requests'))
+    assert isinstance(wire,list) and len(wire) == expected_requests
+    assert wire == result['provider_report']['requests']
+    expected_history={'short-small':8,'short-large':64}.get(case,0)
+    expected_measured=32 if expected_history else 1
+    assert sample['history']==expected_history and sample['measured']==expected_measured
+    assert len(sample['samples'])==expected_history+expected_measured
+    for i,point in enumerate(sample['samples']):
+        assert point['turn']==i and point['measured']==(i>=expected_history)
+        assert isinstance(point['settled_us'],int) and point['settled_us']>=0
+        assert isinstance(point['accepted_us'],int) and point['accepted_us']>=0
+        assert set(point['process'])=={'stat','io','smaps_rollup'}
+    validate_lifecycle(sample)
+    if 'measurement_version' in sample:
+        assert sample['measurement_version'] == 3
+        assert sample['verified_live_requests'] == sample['verified_reopened_requests'] == expected_requests
+        assert len(sample['live_requests']) == len(sample['reopened_requests']) == expected_requests
+        assert sample['live_requests'] == sample['reopened_requests']
+        assert f'test {TEST} ... ok' in log_text
+    else:
+        assert len(sample['captures']) == len(sample['reopenedRequests']) == expected_requests
+        assert [c['messages'] for c in sample['captures']] == sample['reopenedRequests']
+    assert sample['lifecycle'][-1]['phase'] == 'after_cleanup'
+
+
 def run(argv, stem, case, env, project):
     began = time.monotonic_ns()
     product = provider = None
@@ -56,35 +103,7 @@ def run(argv, stem, case, env, project):
             result['provider_exit'] = provider.wait()
             result['provider_teardown_ns'] = time.monotonic_ns() - teardown
             sample = json.loads(stem.with_suffix('.json').read_text())
-            assert result['product_exit'] == result['provider_exit'] == 0
-            assert result['provider_report']['ok'] is True
-            assert sample['oracle'] == 'passed'
-            expected_requests = {'short-small':40,'short-large':96,'tool':2}.get(case,1)
-            assert result['provider_report']['requestCount'] == expected_requests
-            wire = sample.get('wire_requests', sample.get('requests'))
-            assert isinstance(wire,list) and len(wire) == expected_requests
-            assert wire == result['provider_report']['requests']
-            expected_history={'short-small':8,'short-large':64}.get(case,0)
-            expected_measured=32 if expected_history else 1
-            assert sample['history']==expected_history and sample['measured']==expected_measured
-            assert len(sample['samples'])==expected_history+expected_measured
-            for i,point in enumerate(sample['samples']):
-                assert point['turn']==i and point['measured']==(i>=expected_history)
-                assert isinstance(point['settled_us'],int) and point['settled_us']>=0
-                assert isinstance(point['accepted_us'],int) and point['accepted_us']>=0
-                assert set(point['process'])=={'stat','io','smaps_rollup'}
-            elapsed=[p['elapsed_us'] for p in sample['lifecycle']]
-            assert all(isinstance(v,int) and v>=0 for v in elapsed) and elapsed==sorted(elapsed)
-            if 'measurement_version' in sample:
-                assert sample['measurement_version'] == 3
-                assert sample['verified_live_requests'] == sample['verified_reopened_requests'] == expected_requests
-                assert len(sample['live_requests']) == len(sample['reopened_requests']) == expected_requests
-                assert sample['live_requests'] == sample['reopened_requests']
-                assert f'test {TEST} ... ok' in stem.with_suffix('.log').read_text()
-            else:
-                assert len(sample['captures']) == len(sample['reopenedRequests']) == expected_requests
-                assert [c['messages'] for c in sample['captures']] == sample['reopenedRequests']
-            assert sample['lifecycle'][-1]['phase'] == 'after_cleanup'
+            validate_sample(result, sample, case, stem.with_suffix('.log').read_text())
             result['accepted'] = True
     except Exception as error:
         result['error'] = traceback.format_exc()

@@ -86,7 +86,7 @@ retained under `/workspace/issue-481-evidence` alongside their logs.
 The fresh baseline, Source-only and canonical incremental/combined measurements
 are complete; see `baseline.md`, `source.md`, `canonical.md` and `combined.md`.
 All 20 focused append tests and 367 durable tests pass. The optimized combined
-build, five Rust, eight Node and nine Python oracle/harness tests, formatting,
+build, five Rust, eight Node and nine legacy v2 Python tests, formatting,
 and all-target/all-feature Clippy pass. Draft PR #484 retains explicit RSS and
 runtime-wall regressions. Exact-head FULL/independent review remain required;
 the authoritative current status and head/base/main identities are in the PR.

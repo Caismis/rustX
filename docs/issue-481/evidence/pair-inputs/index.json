@@ -1,0 +1,181 @@
+{
+  "clock_ticks_per_second": 100,
+  "scope": "Exactly the retained cloud samples; self CPU only. Per-operation means exclude seeds; lifecycle includes initialization through cleanup. Max sampled memory is not peak. Input/status SHA-256 verified against archive manifests. Pair ratios must be computed per pair before taking their median. Native rustX/Pi tool schemas and contracts differ; no full-request parity claim.",
+  "manifests": {
+    "baseline-manifest.json": "7993cb1b1a4e7bf684456d1224cd9e02065933d9c6ee05f319240b0845f63140",
+    "source-manifest.json": "8063878c9c28fc014903d39489bf8bf70a531da58a2fe5d39b83f30e54f3f4c5",
+    "combined.tar.manifest.json": "6b34f866869bd3bc990e6ca781db040d5b37055198a174136e169d530e1f26e2"
+  },
+  "files": {
+    "source-cancel.json": {
+      "pairs": 3,
+      "sha256": "70805520363f6f82b679e50b3124e8e691ecd4ab6e1214b2636ee56fbf74faea",
+      "bytes": 6216
+    },
+    "source-large.json": {
+      "pairs": 3,
+      "sha256": "fe26a1bf31b0b1ca9b014e2786c5bae95e1524b85c5eebca104ea0ac6790c69d",
+      "bytes": 6245
+    },
+    "source-short-large.json": {
+      "pairs": 3,
+      "sha256": "1a49f9f9c9411cd79ec5343ca665789c2698802d924a21ee8df3062f7e2d2e38",
+      "bytes": 7528
+    },
+    "source-short-small.json": {
+      "pairs": 3,
+      "sha256": "bc2869eced8170e6f969ccb0ea106adac44aa303fe838595bbe69b6cdf14b335",
+      "bytes": 7507
+    },
+    "source-stream.json": {
+      "pairs": 3,
+      "sha256": "0df37609967f04c9c3246e0b9c5785bce7cb3fb2634f9a39633b7aae043b2cec",
+      "bytes": 6243
+    },
+    "source-tool.json": {
+      "pairs": 3,
+      "sha256": "f6a5e232e2641e2df5f78ff93bde6ce2f504feeb3614f2c07d93c65d2c2bb1a7",
+      "bytes": 6208
+    },
+    "canonical-runtime-cancel.json": {
+      "pairs": 6,
+      "sha256": "8bf0c7e870b0a8b8810571021be17c04db789c1b9e065684c77ac61be8900e9b",
+      "bytes": 12705
+    },
+    "canonical-runtime-large.json": {
+      "pairs": 6,
+      "sha256": "2f7c793dd43b48aea4ed84004bdcbf6b1f68070c345cd785abdfbe0d4fe9a7c3",
+      "bytes": 12761
+    },
+    "canonical-runtime-short-large.json": {
+      "pairs": 6,
+      "sha256": "7a39c256923578fc46d5d7bcc1bcc7243ca7448451119eebb4d2c36f620de5d7",
+      "bytes": 15376
+    },
+    "canonical-runtime-short-small.json": {
+      "pairs": 6,
+      "sha256": "d50e151bf6b09cf975bc37cbaef2d36b267566148ce43f1ae7d8e2d88985067a",
+      "bytes": 15315
+    },
+    "canonical-runtime-stream.json": {
+      "pairs": 6,
+      "sha256": "54b86c4b04598d50375c883a832fcaa09ab4faf3c3039579fbf51a542e1548e6",
+      "bytes": 12764
+    },
+    "canonical-runtime-tool.json": {
+      "pairs": 6,
+      "sha256": "d260b9b4ddb1655b303ea7585d373457058f4e06dd145ea85df6e1f695c9aea8",
+      "bytes": 12689
+    },
+    "combined-cancel.json": {
+      "pairs": 6,
+      "sha256": "28298a5b834391eb074a8d89cd6ab104539250bdae1b0c4fa3bd035d1f2af947",
+      "bytes": 12479
+    },
+    "combined-large.json": {
+      "pairs": 6,
+      "sha256": "8e7ea9a89de51dfd7a6218bd4f7f5e23889a3a2a0a8283154b8314f52e97de92",
+      "bytes": 12538
+    },
+    "combined-short-large.json": {
+      "pairs": 6,
+      "sha256": "0577f822eb8cbd08972af4db1f64a999725f7b590f70082e51bd9cc0bcbc384f",
+      "bytes": 15169
+    },
+    "combined-short-small.json": {
+      "pairs": 6,
+      "sha256": "62aa4d100a9b19baa7457d5a3a9a06298230a4724db015e4c7794d188c4c079c",
+      "bytes": 15101
+    },
+    "combined-stream.json": {
+      "pairs": 6,
+      "sha256": "55cf3c6780a94338cc1efc2c60ac5be886b252249f9bc1371c665b4a970b3b5a",
+      "bytes": 12538
+    },
+    "combined-tool.json": {
+      "pairs": 6,
+      "sha256": "2e4345e0219ca2b8f211fa5fb7f49261515c9a596c0733ff2a730ef38fe29df8",
+      "bytes": 12465
+    },
+    "canonical-append-0.json": {
+      "pairs": 6,
+      "sha256": "a02b8770cefa4b1def4c6140e12fd23c11d1eaba49a46e8bd506bc25ad79ca98",
+      "bytes": 15147
+    },
+    "canonical-append-2048.json": {
+      "pairs": 6,
+      "sha256": "b896522d803ac8b7a789004a63ee51812e17bdbdffa295a147e26f033ec95682",
+      "bytes": 15764
+    },
+    "canonical-append-512.json": {
+      "pairs": 6,
+      "sha256": "5d5bebff6858748ed4f63f5cfc9d7f4463c0dccb76b87980a1b24d63426ca00d",
+      "bytes": 15518
+    },
+    "canonical-append-64.json": {
+      "pairs": 6,
+      "sha256": "84871219afc5722644fea87cd9da0c93b9b44854bd2f6daaee20b9a43c30f6fb",
+      "bytes": 15239
+    },
+    "baseline-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "49505ab6b85c78f69945ebaf6bb76e086c133a5c6248bc43ddc1d6b370b8c4b0",
+      "bytes": 6197
+    },
+    "baseline-pi-large.json": {
+      "pairs": 3,
+      "sha256": "2fa07a7528839d9d7fb9475180d66261d05b103c60e878a1ab03e2027d9ee5ed",
+      "bytes": 6205
+    },
+    "baseline-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "58ded1eb2dfd11398ae1977ebcccd18f1e490e8689f91033b707eea09a458f3f",
+      "bytes": 7402
+    },
+    "baseline-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "577d7485f851d93a01f6c0def3d1ceb68080879a6c38848c60fea445431dad95",
+      "bytes": 7371
+    },
+    "baseline-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "eee29eb78617a2c2ab39ad59e4da74bd872a4c3358f2096bdea2330e7c35587c",
+      "bytes": 6229
+    },
+    "baseline-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "58eea4454da7f2be225c755550a48289c800b73bbe6808a94830361871719781",
+      "bytes": 6182
+    },
+    "combined-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "5d46142a29e617978da6cec1646601ff89dabc6ca3694a0600b42ddbd8b42243",
+      "bytes": 6231
+    },
+    "combined-pi-large.json": {
+      "pairs": 3,
+      "sha256": "f016fa74c89f22f8c748965f638c63745ded9f9ee26f7031fa63015e7141e0f2",
+      "bytes": 6241
+    },
+    "combined-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "279bbf1ca2d43995e97257e68a8b3402cd091697f77ef9cb901e9d95586a0e27",
+      "bytes": 7456
+    },
+    "combined-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "f8d986e92392bce89da8b719e01dcae3b944d73dfdaa404181acf7cebeda0572",
+      "bytes": 7413
+    },
+    "combined-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "13f9c1e2525ed37c8db567303a5b9b42388fe56b7a2d9f918df6e9e2f908e522",
+      "bytes": 6267
+    },
+    "combined-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "a61a120bcadee01dd5269f4f7b165c48a66d9b00ec7c1b4619510f8a6d12a94f",
+      "bytes": 6217
+    }
+  }
+}

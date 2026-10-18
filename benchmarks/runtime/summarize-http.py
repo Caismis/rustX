@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import statistics
 import os
+from controller import validate_lifecycle
 
 
 def counters(point):
@@ -31,7 +32,7 @@ def scaled(value, divisor):
 
 def sample(path):
     s=json.loads(path.read_text())
-    lifecycle={p['phase']:p for p in s['lifecycle']}
+    lifecycle=validate_lifecycle(s)
     samples=s['samples']
     start=samples[s['history']-1] if s['history'] else lifecycle['after_initialization']
     end=samples[-1]
