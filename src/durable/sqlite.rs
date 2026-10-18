@@ -328,7 +328,8 @@ fn count_conversation_store_open() {
 /// Version 68 binds canonical binary `ContentRefs` to frozen fixed-chunk digests.
 /// Version 69 requires explicit native artifact settlement evidence.
 /// Version 70 removes the redundant serialized active history from the Surface head.
-pub const SQLITE_SCHEMA_VERSION: i64 = 70;
+/// Version 71 stores authenticated Source pages with a bounded binary codec.
+pub const SQLITE_SCHEMA_VERSION: i64 = 71;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -19485,7 +19486,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 70);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 71);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19554,7 +19555,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 70);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 71);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

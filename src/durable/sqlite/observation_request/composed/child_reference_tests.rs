@@ -25,7 +25,7 @@ fn fixture() -> Fixture {
 }
 fn entries(connection: &Connection, root: &index::Reference) -> Vec<(String, Vec<u8>)> {
     let raw = index::load_blob(connection, root.hash).unwrap();
-    let page: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let page = index::inspect_page(&raw);
     match page["type"].as_str().unwrap() {
         "leaf" => page["entries"]
             .as_array()
@@ -34,9 +34,7 @@ fn entries(connection: &Connection, root: &index::Reference) -> Vec<(String, Vec
             .map(|entry| {
                 (
                     entry[0].as_str().unwrap().to_owned(),
-                    base64::engine::general_purpose::STANDARD
-                        .decode(entry[1].as_str().unwrap())
-                        .unwrap(),
+                    serde_json::from_value(entry[1].clone()).unwrap(),
                 )
             })
             .collect(),
@@ -62,7 +60,7 @@ fn tree_bytes(
         return 0;
     }
     let raw = index::load_blob(connection, root.hash).unwrap();
-    let page: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let page = index::inspect_page(&raw);
     raw.len()
         + page
             .get("children")

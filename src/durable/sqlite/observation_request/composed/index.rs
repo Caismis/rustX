@@ -1,13 +1,14 @@
 //! Authenticated bounded pages inside one immutable observation fragment.
 //! This index owns bytes/field facts only; native manifest nodes own selection.
 use super::{Connection, ConversationStoreError, params, storage};
-use base64::Engine as _;
 use rusqlite::OptionalExtension as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 pub(super) const PAGE_BYTES: usize = 65_536;
-const FANOUT: usize = 4;
+const FANOUT: usize = 64;
+#[path = "page_codec.rs"]
+mod codec;
 const MAX_DEPTH: usize = 16;
 pub(super) type Hash = [u8; 32];
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -16,22 +17,23 @@ pub(super) struct Reference {
     pub(super) last: String,
     pub(super) depth: u8,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(test, derive(Serialize, Deserialize))]
+#[cfg_attr(test, serde(tag = "type", rename_all = "snake_case"))]
 enum Page {
-    Leaf { entries: Vec<(String, String)> },
+    Leaf { entries: Vec<(String, Vec<u8>)> },
     Branch { children: Vec<Reference> },
 }
 fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(page, PAGE_BYTES)
-        .ok_or_else(|| storage("observation fragment page exceeds bound"))
+    codec::encode(page)
 }
 fn persist(connection: &Connection, page: &Page) -> Result<Reference, ConversationStoreError> {
     let (last, depth) = match page {
         Page::Leaf { entries } => (entries.last().map(|entry| &entry.0), 0),
         Page::Branch { children } => (
             children.last().map(|child| &child.last),
-            children.first().map_or(0, |child| child.depth + 1),
+            children
+                .first()
+                .map_or(0, |child| child.depth.saturating_add(1)),
         ),
     };
     let last = last
@@ -92,8 +94,7 @@ fn load(connection: &Connection, reference: &Reference) -> Result<Page, Conversa
     if Hash::from(Sha256::digest(&bytes)) != reference.hash {
         return Err(storage("original fragment page digest differs"));
     }
-    let page: Page =
-        serde_json::from_slice(&bytes).map_err(|_| storage("fragment page JSON unavailable"))?;
+    let page = codec::decode(&bytes)?;
     let valid = match &page {
         Page::Leaf { entries } => {
             reference.depth == 0
@@ -101,7 +102,7 @@ fn load(connection: &Connection, reference: &Reference) -> Result<Page, Conversa
                 && entries.len() <= FANOUT
                 && entries
                     .iter()
-                    .all(|(key, value)| key.len() <= 4160 && value.len() <= 54_616)
+                    .all(|(key, value)| key.len() <= 4160 && value.len() <= 40_960)
                 && entries.windows(2).all(|pair| pair[0].0 < pair[1].0)
                 && entries
                     .last()
@@ -125,13 +126,14 @@ fn load(connection: &Connection, reference: &Reference) -> Result<Page, Conversa
     }
     Ok(page)
 }
-/// Builder consumes lexicographically ordered facts from the producer's disk
-/// spool. It retains at most one bounded leaf and FANOUT references per level.
+/// Builder consumes ordered facts from the bounded memory/disk spool.
+/// It retains one byte/count-bounded leaf and bounded references per level.
 pub(super) struct Builder<'a> {
     connection: &'a Connection,
-    entries: Vec<(String, String)>,
+    entries: Vec<(String, Vec<u8>)>,
     levels: Vec<Vec<Reference>>,
     previous: Option<String>,
+    entry_bytes: usize,
 }
 impl<'a> Builder<'a> {
     pub(super) fn new(connection: &'a Connection) -> Self {
@@ -140,6 +142,7 @@ impl<'a> Builder<'a> {
             entries: Vec::new(),
             levels: Vec::new(),
             previous: None,
+            entry_bytes: codec::HEADER,
         }
     }
     pub(super) fn push(
@@ -156,21 +159,15 @@ impl<'a> Builder<'a> {
         {
             return Err(storage("fragment fact exceeds bound or repeats"));
         }
-        if !self.entries.is_empty() {
-            let size = self
-                .entries
-                .iter()
-                .map(|(key, value)| key.len() * 2 + value.len() + 32)
-                .sum::<usize>();
-            if self.entries.len() == FANOUT
-                || size + key.len() * 2 + (value.len().div_ceil(3) * 4) + 32 > PAGE_BYTES - 1024
-            {
-                self.flush()?;
-            }
+        let size = codec::leaf_size(&key, &value);
+        if !self.entries.is_empty()
+            && (self.entries.len() == FANOUT || self.entry_bytes + size > PAGE_BYTES)
+        {
+            self.flush()?;
         }
         self.previous = Some(key.clone());
-        self.entries
-            .push((key, base64::engine::general_purpose::STANDARD.encode(value)));
+        self.entry_bytes += size;
+        self.entries.push((key, value));
         Ok(())
     }
     fn flush(&mut self) -> Result<(), ConversationStoreError> {
@@ -181,6 +178,7 @@ impl<'a> Builder<'a> {
                     entries: std::mem::take(&mut self.entries),
                 },
             )?;
+            self.entry_bytes = codec::HEADER;
             self.admit(0, reference)?;
         }
         Ok(())
@@ -192,8 +190,15 @@ impl<'a> Builder<'a> {
         if self.levels.len() == level {
             self.levels.push(Vec::new());
         }
-        self.levels[level].push(reference);
-        if self.levels[level].len() == FANOUT {
+        let size = codec::HEADER
+            + self.levels[level]
+                .iter()
+                .map(codec::branch_size)
+                .sum::<usize>();
+        if !self.levels[level].is_empty()
+            && (self.levels[level].len() == FANOUT
+                || size + codec::branch_size(&reference) > PAGE_BYTES)
+        {
             let parent = persist(
                 self.connection,
                 &Page::Branch {
@@ -202,6 +207,7 @@ impl<'a> Builder<'a> {
             )?;
             self.admit(level + 1, parent)?;
         }
+        self.levels[level].push(reference);
         Ok(())
     }
     pub(super) fn finish(mut self) -> Result<Option<Reference>, ConversationStoreError> {
@@ -234,15 +240,10 @@ pub(super) fn get(
     for _ in 0..MAX_DEPTH {
         match load(connection, &reference)? {
             Page::Leaf { entries } => {
-                return entries
+                return Ok(entries
                     .into_iter()
                     .find(|entry| entry.0 == key)
-                    .map(|entry| {
-                        base64::engine::general_purpose::STANDARD
-                            .decode(entry.1)
-                            .map_err(|_| storage("fragment fact encoding unavailable"))
-                    })
-                    .transpose();
+                    .map(|entry| entry.1));
             }
             Page::Branch { children } => {
                 let Some(child) = children
@@ -305,4 +306,19 @@ mod tests {
             "a warm statement must observe schema invalidation"
         );
     }
+}
+
+#[cfg(test)]
+#[path = "page_codec_tests.rs"]
+mod codec_tests;
+
+// Test inspection/mutation uses typed pages, then the production binary codec.
+// These helpers never act as a persisted JSON-page reader.
+#[cfg(test)]
+pub(super) fn inspect_page(bytes: &[u8]) -> serde_json::Value {
+    serde_json::to_value(codec::decode(bytes).unwrap()).unwrap()
+}
+#[cfg(test)]
+pub(super) fn encode_test_page(page: serde_json::Value) -> Vec<u8> {
+    codec::encode(&serde_json::from_value(page).unwrap()).unwrap()
 }

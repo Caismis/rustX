@@ -76,11 +76,11 @@ fn legacy_capture(
                 } else {
                     fact
                 };
-                persist_fact(connection, &fact)?;
+                legacy_persist_fact(connection, &fact)?;
                 if let Some((key_start, key_end)) = key_span
                     && path.last().is_some_and(|part| part.starts_with('@'))
                 {
-                    max_key_path = max_key_path.max(persist_key_fact(
+                    max_key_path = max_key_path.max(legacy_persist_key_fact(
                         connection,
                         path,
                         key_start - start,
@@ -261,4 +261,86 @@ fn range_filter_skips_preview_work_but_keeps_selected_facts() {
     assert_eq!(new.0, 1, "only the tail field needs a preview");
     assert!(old.0 > 70);
     assert_eq!(old.0, new.0 + new.1);
+}
+
+// Independent original SQL fact encoding/spooling oracle.
+fn legacy_persist_key_fact(
+    connection: &Connection,
+    path: &[String],
+    start: u64,
+    end: u64,
+) -> Result<u64, ConversationStoreError> {
+    let mut path = path.to_vec();
+    path.push("$key".into());
+    let length = super::super::super::encoded_path(&path)?.len() as u64;
+    legacy_persist_fact(
+        connection,
+        &Fact {
+            path,
+            parent: None,
+            ordinal: None,
+            start,
+            end,
+            children: 0,
+            nodes: 1,
+            object: false,
+            container: false,
+            header: base64::engine::general_purpose::STANDARD.encode(b"\"\""),
+            key: None,
+            name: None,
+        },
+    )?;
+    Ok(length)
+}
+
+fn legacy_persist_fact(connection: &Connection, fact: &Fact) -> Result<(), ConversationStoreError> {
+    let encoded = super::super::super::field_path(&fact.path)?;
+    let parent = fact
+        .parent
+        .as_ref()
+        .map(|path| super::super::super::encoded_path(path))
+        .transpose()?;
+    legacy_persist_encoded_fact(
+        connection,
+        fact,
+        &encoded,
+        parent.as_deref().zip(fact.ordinal),
+    )
+}
+
+fn legacy_persist_encoded_fact(
+    connection: &Connection,
+    fact: &Fact,
+    encoded: &str,
+    parent: Option<(&str, u64)>,
+) -> Result<(), ConversationStoreError> {
+    // The source traversal supplies canonical JSON encoding. Preserve the
+    // request locator's independent component/count/encoded-byte limits.
+    if fact.path.len() > 256
+        || fact.path.iter().any(|part| part.len() > 256)
+        || encoded.len() > 4096
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "request field locator exceeds bound".into(),
+        ));
+    }
+    let bytes = bounded(fact, 40960)?;
+    let field = format!("F{encoded}");
+    let mut statement = connection
+        .prepare_cached("INSERT INTO request_source_fact_spool(key,value) VALUES(?1,?2)")
+        .map_err(|error| storage(error.to_string()))?;
+    statement
+        .execute(params![field, bytes])
+        .map_err(|error| storage(error.to_string()))?;
+    if let Some((parent, ordinal)) = parent {
+        // The field index owns the complete Fact. Pagination needs only its path;
+        // the authenticated child key already owns the parent/ordinal relation.
+        statement
+            .execute(params![
+                format!("C{parent}:{ordinal:020}"),
+                &field.as_bytes()[1..]
+            ])
+            .map_err(|error| storage(error.to_string()))?;
+    }
+    Ok(())
 }
