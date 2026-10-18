@@ -1,0 +1,7 @@
+{
+  "origin_commit": "5e37b9240290723483ac00855cee7eee58760c81",
+  "applies_to": "b5840bd903d2508e693e1a4f80c3dc6173c9e29b",
+  "sha256": "3dce4532e3c78e12697ff2fdb16441c67a2fa66e3611c5366e6eb050317dd3e8",
+  "bytes": 7536,
+  "scope": "Standalone lexical parser correctness fix and differential fixtures, excluding integrity schema/gate changes. Verified git apply --check on frozen lazy baseline. Existing behavioral checks are archived with the original integrity stage; this artifact is not a new measured build."
+}

@@ -116,3 +116,13 @@ python3 benchmarks/runtime/summarize-comparisons.py /workspace/issue-481-evidenc
 python3 /workspace/issue-481-evidence/pi-integrity-profile/run.py
 python3 /workspace/issue-481-evidence/pi-integrity-profile/analyze.py
 ```
+
+## Independently recoverable lexical repair
+
+The [standalone correctness patch](evidence/rawvalue-correctness/correctness.patch)
+and [manifest](evidence/rawvalue-correctness/manifest.json) extract only the
+whitespace parser repair and RawValue/duplicate-key differential fixtures from
+`5e37b924`. `git apply --check` passed on frozen `b5840bd9`. The patch excludes
+integrity schema and gate changes. This preserves an independent repair artifact
+without rewriting reviewed history; final authentication-restored variants must
+retain and validate it. It is not a separately measured executable.
