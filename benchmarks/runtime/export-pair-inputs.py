@@ -14,12 +14,18 @@ p.add_argument('--root',type=Path,required=True);p.add_argument('--output',type=
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
 assert not any(a.output.iterdir()), 'refuse to overwrite existing summaries'
 archives=Path('docs/issue-481/evidence')
-manifest_files=['baseline-manifest.json','source-manifest.json','combined.tar.manifest.json','reservations.tar.manifest.json','statement-reuse.tar.manifest.json','continued-runtime.tar.manifest.json']
+manifest_files=['baseline-manifest.json','source-manifest.json','combined.tar.manifest.json','reservations.tar.manifest.json','statement-reuse.tar.manifest.json','continued-runtime.tar.manifest.json','sql-removal-candidate.tar.manifest.json']
 manifests={}
 for file in manifest_files:
     for path,metadata in json.loads((archives/file).read_text()).items():
         manifests.setdefault(path,set()).add(metadata['sha256'])
 stages={
+ 'without-sql-source':(['selected-source-paired'],('before','after')),
+ 'without-sql-continued':(['selected-continued-paired'],('before','after')),
+ 'without-sql-baseline':(['selected-baseline-paired'],('before','after')),
+ 'without-sql-pi':(['selected-pi-paired'],('rust','pi')),
+ 'without-sql-append':(['selected-append-paired'],('before','after')),
+ 'sql-removal-six':(['selected-sql-removal-paired','sql-removal-confirmation'],('before','after')),
  'compact-source':(['compact-source-paired'],('before','after')),
  'continued-combined':(['continued-combined-paired'],('before','after')),
  'final-combined':(['final-combined-paired'],('before','after')),
@@ -76,7 +82,7 @@ for stage,(directories,sides) in stages.items():
         for first in sorted((a.root/directory).glob('*-'+sides[0]+'.json')):
             stem=first.stem.removesuffix('-'+sides[0]);pair,case=stem.split('-',1)
             record={'pair':int(pair)}
-            for side in sides:record[side]=inputs(first.with_name(stem+'-'+side+'.json'),stage in ('canonical-append','final-append'))
+            for side in sides:record[side]=inputs(first.with_name(stem+'-'+side+'.json'),stage in ('canonical-append','final-append','without-sql-append'))
             cases.setdefault(case,[]).append(record)
     for case,records in cases.items():
         records.sort(key=lambda r:r['pair']);assert len({r['pair'] for r in records})==len(records)

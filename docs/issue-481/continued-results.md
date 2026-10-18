@@ -1,10 +1,11 @@
-# Candidate measurements before removing unproven SQL reuse
+# Final combination measurements
 
 Measured candidate production head: `99da5d688178227ecb0c75d7db8ac5c73cb3918f`.
-The SQL reuse candidate was subsequently removed in `218b5043` because neither
-its paired runtime matrix nor aggregate SQLite allocation traffic demonstrated
-a benefit. These results describe the preserved `99da5d68` executable, not the
-post-removal executable. See the subsequent selected-combination report.
+SQL reuse was provisionally removed in `218b5043`, then restored in
+`ef11f5de` after the bounded balanced comparison passed its predefined rule.
+The final production Rust/Cargo/test trees exactly match this measured candidate.
+See [final selection and evidence](final-selection.md); earlier contradictory
+stage results remain retained.
 
 Base/main: `3c355f152d405a201482d53b6e45497df4f44a7f` (verified ancestor).
 Optimized executable SHA-256:

@@ -2,7 +2,9 @@
 
 These diagnostics describe the preserved `99da5d68` candidate and its preceding
 SQL stage. They informed removal of the unproven SQL patch in `218b5043`.
-Subsequent selected-combination measurements must identify their own executable.
+The subsequent balanced comparison restored this exact production tree in
+`ef11f5de`; see [final selection](final-selection.md). The allocation finding below
+is unchanged and does not establish the cause of the later runtime difference.
 
 ## Allocation traffic
 
@@ -31,8 +33,9 @@ residual adverse wall results remain in `continued-results.md`. Compact Source
 has both an isolated repeated-turn CPU benefit and reduced allocation traffic;
 it does not establish lower total sampled RSS. The SQL patch has neither a broad
 paired runtime gain nor lower aggregate SQLite allocator traffic. Its selected
-fragment/index owner rows also do not establish a reduction. It was removed;
-we do not retain it merely because prepared-statement reuse sounds plausible.
+fragment/index owner rows also do not establish a reduction. It was provisionally removed. The final decision uses the subsequent direct
+balanced comparison, not a claim that these allocation diagnostics proved a
+benefit from reuse.
 
 ## CPU samples and overhead
 

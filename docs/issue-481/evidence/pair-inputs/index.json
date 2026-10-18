@@ -7,9 +7,180 @@
     "combined.tar.manifest.json": "6b34f866869bd3bc990e6ca781db040d5b37055198a174136e169d530e1f26e2",
     "reservations.tar.manifest.json": "5b949397ade5f1baf8a5371b5764f2fadc548d646b422d0ee113f09eb709dd0f",
     "statement-reuse.tar.manifest.json": "ca4ed153ebb30dc489d7d05f12753570984939ded68062223a677e9563604db0",
-    "continued-runtime.tar.manifest.json": "108d75fdc87aef9e6c71796b5fa9cf34367182681aca6c22fcc701051a00c93d"
+    "continued-runtime.tar.manifest.json": "108d75fdc87aef9e6c71796b5fa9cf34367182681aca6c22fcc701051a00c93d",
+    "sql-removal-candidate.tar.manifest.json": "d8fde2b0bc9e6426dc0d5053f19544a1f955eee1ced1584fb6637c8ed8ebaa91"
   },
   "files": {
+    "without-sql-source-cancel.json": {
+      "pairs": 3,
+      "sha256": "73d213808185e1d5a81fc43d1b8b6c9816d1556d598d27bfbc7130216ce453d3",
+      "bytes": 6335
+    },
+    "without-sql-source-large.json": {
+      "pairs": 3,
+      "sha256": "a3a1ce6936713aa84afd47e6a892c1f896c73db10d5afa1f23bf5bcabd7411ae",
+      "bytes": 6365
+    },
+    "without-sql-source-short-large.json": {
+      "pairs": 3,
+      "sha256": "4bac92f2fc3e261ce1a52f407dcbd7c3a9c230e29c2253798c14a56bb3091909",
+      "bytes": 7650
+    },
+    "without-sql-source-short-small.json": {
+      "pairs": 3,
+      "sha256": "4edcd3af4a11e3003db1345d1b4d58a890de03afca14382e05f122b599bab90b",
+      "bytes": 7627
+    },
+    "without-sql-source-stream.json": {
+      "pairs": 3,
+      "sha256": "23085c39c4beb1eeda67b921ab8b2ddb7c95db2f32a3ff97da4f692b6baeeded",
+      "bytes": 6364
+    },
+    "without-sql-source-tool.json": {
+      "pairs": 3,
+      "sha256": "ac5c64c23b0b3ec1b36a558202ee5cb2a34fbd01a73a5bb38d62fcb0edb26925",
+      "bytes": 6328
+    },
+    "without-sql-continued-cancel.json": {
+      "pairs": 3,
+      "sha256": "5f0e7a73c813de0e78329103c618ac04ced212635d2b3f125dacd4e7b12aaa9e",
+      "bytes": 6375
+    },
+    "without-sql-continued-large.json": {
+      "pairs": 3,
+      "sha256": "914007d98f0981e43390e2afdb37667b3622b4e93f7f54dc9c07e9fb6cdaf801",
+      "bytes": 6403
+    },
+    "without-sql-continued-short-large.json": {
+      "pairs": 3,
+      "sha256": "37021ff0a0a62da9d0af1ae55724b07659098050c20692b36232629bad316cee",
+      "bytes": 7695
+    },
+    "without-sql-continued-short-small.json": {
+      "pairs": 3,
+      "sha256": "5753c8a4bfc0384ea55d29a762394719d99b30428273dc6e9f7e01eb8efaa5ab",
+      "bytes": 7661
+    },
+    "without-sql-continued-stream.json": {
+      "pairs": 3,
+      "sha256": "3f6bdaccc1522ca317e1874cdedeebfe18a0ceca799d0fe8dde0cc7ab757be76",
+      "bytes": 6405
+    },
+    "without-sql-continued-tool.json": {
+      "pairs": 3,
+      "sha256": "f0049ba897b00c271e0d1439617723216ce18168c71347f5e0987ef3008394bb",
+      "bytes": 6365
+    },
+    "without-sql-baseline-cancel.json": {
+      "pairs": 3,
+      "sha256": "88a6d6c92bad4b2fe48a135cc9b38423ca582ea98394302c4fa0e28d9ae6653d",
+      "bytes": 6361
+    },
+    "without-sql-baseline-large.json": {
+      "pairs": 3,
+      "sha256": "e504f00368a4ff7d37ec03fb00b9732987d8243d0da84b54d4c9cf450b6f5b7a",
+      "bytes": 6390
+    },
+    "without-sql-baseline-short-large.json": {
+      "pairs": 3,
+      "sha256": "af8b3c220b78d31fb818b58a619dcbe981452a857d4cbe64352b807863b74d11",
+      "bytes": 7689
+    },
+    "without-sql-baseline-short-small.json": {
+      "pairs": 3,
+      "sha256": "1e4a6afcadf8251970d70cbada38941e1ea523f5881cd0802218b21bcbc5ed92",
+      "bytes": 7649
+    },
+    "without-sql-baseline-stream.json": {
+      "pairs": 3,
+      "sha256": "b4c8e2a3d1d9dbcec937b126e639b22878ef79f03ef52eb4af07ffb5970a8ffa",
+      "bytes": 6390
+    },
+    "without-sql-baseline-tool.json": {
+      "pairs": 3,
+      "sha256": "6e88c7f5dc9d8b6bbd7c392ba39bcf2eee7852059f9032833b139f534d4c67b8",
+      "bytes": 6352
+    },
+    "without-sql-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "7718eaa317801b34a9e3dec2a6f5a898a1b06c817452409d5882c697eaa7af13",
+      "bytes": 6239
+    },
+    "without-sql-pi-large.json": {
+      "pairs": 3,
+      "sha256": "36ffca0161043c6a5e46903e530dcc5b91bfd795d78e010f50c5fd3613506d8e",
+      "bytes": 6245
+    },
+    "without-sql-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "cbf5788bfed567ffe50b01b3c410959f0e27f0f6eb51693dc20e7a56b059f91f",
+      "bytes": 7432
+    },
+    "without-sql-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "95241eaa9e3c579bf876911dbc1601a9605fae867f17e92c8b949a6c861bba15",
+      "bytes": 7400
+    },
+    "without-sql-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "d5ded83b48668b374bff2802783bbc7c03d05203f1b7566f23cb0f5d5c31de82",
+      "bytes": 6267
+    },
+    "without-sql-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "660affb27e0cefcfbbfc6ae52b1cb69f52fb40e454a75ad1d2d9add92493f154",
+      "bytes": 6217
+    },
+    "without-sql-append-0.json": {
+      "pairs": 3,
+      "sha256": "365f35ce49b73096d7c7bd2095dfc20087ed8fff4d065fd27c76a9c8274611ca",
+      "bytes": 7558
+    },
+    "without-sql-append-2048.json": {
+      "pairs": 3,
+      "sha256": "a883a223e3d4eb632913adeb330040d281d1b1aaaec400f7a243cff471a7beee",
+      "bytes": 7877
+    },
+    "without-sql-append-512.json": {
+      "pairs": 3,
+      "sha256": "ff938fa39944ca447cf92262b9b42debcaf351a38e5e229388aac23004874165",
+      "bytes": 7751
+    },
+    "without-sql-append-64.json": {
+      "pairs": 3,
+      "sha256": "42fd3568eb4230946b91ea885eb757874dc15a55745d31cc19f0975c1c8001d3",
+      "bytes": 7606
+    },
+    "sql-removal-six-cancel.json": {
+      "pairs": 6,
+      "sha256": "3980d55188b76c0d14aa20ad3a0f25a24b40e9b95cd3b4821a06b35804d51c1c",
+      "bytes": 12665
+    },
+    "sql-removal-six-large.json": {
+      "pairs": 6,
+      "sha256": "04fa606cf693772f4545cb9fb1ed672eb221eedb2357d5b896959a08d49be99c",
+      "bytes": 12722
+    },
+    "sql-removal-six-short-large.json": {
+      "pairs": 6,
+      "sha256": "bbf603d3a7b666344fd48f54488a3df1dfffb59cbf1a856f4f90a72de4a95662",
+      "bytes": 15287
+    },
+    "sql-removal-six-short-small.json": {
+      "pairs": 6,
+      "sha256": "154bc6cc06420d85cdb9dc81f70968782f7ded033ab5d4ffd05f2d0693e0b4d4",
+      "bytes": 15230
+    },
+    "sql-removal-six-stream.json": {
+      "pairs": 6,
+      "sha256": "02ea6749c62a62ad22af42da3fe152d031f8e10b113d41965918ba9653d5de06",
+      "bytes": 12721
+    },
+    "sql-removal-six-tool.json": {
+      "pairs": 6,
+      "sha256": "6ea24aaa16ceba93ee63781dcee523790898d7d94352a82f123420ce4de8c34a",
+      "bytes": 12638
+    },
     "compact-source-cancel.json": {
       "pairs": 3,
       "sha256": "2a00f01746a0cae07093212dcb5fc35af15d655d104a213543717e43475772c2",
