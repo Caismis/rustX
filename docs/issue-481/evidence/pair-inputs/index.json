@@ -4,9 +4,40 @@
   "manifests": {
     "baseline-manifest.json": "7993cb1b1a4e7bf684456d1224cd9e02065933d9c6ee05f319240b0845f63140",
     "source-manifest.json": "8063878c9c28fc014903d39489bf8bf70a531da58a2fe5d39b83f30e54f3f4c5",
-    "combined.tar.manifest.json": "6b34f866869bd3bc990e6ca781db040d5b37055198a174136e169d530e1f26e2"
+    "combined.tar.manifest.json": "6b34f866869bd3bc990e6ca781db040d5b37055198a174136e169d530e1f26e2",
+    "reservations.tar.manifest.json": "5b949397ade5f1baf8a5371b5764f2fadc548d646b422d0ee113f09eb709dd0f"
   },
   "files": {
+    "reservations-cancel.json": {
+      "pairs": 3,
+      "sha256": "ff5e8f1ed38b6871e574a507194b3d72a41799de61c972e5326c87f1c40c0c96",
+      "bytes": 6296
+    },
+    "reservations-large.json": {
+      "pairs": 3,
+      "sha256": "2b08c692df9b4b8f4e2968cffc5d9cbdd8e911a3bfade8ab4a17594702547cde",
+      "bytes": 6321
+    },
+    "reservations-short-large.json": {
+      "pairs": 3,
+      "sha256": "a2ade248ae684f58a87aaa627480ad752fbdd5ca113580453644ce5f34837db2",
+      "bytes": 7613
+    },
+    "reservations-short-small.json": {
+      "pairs": 3,
+      "sha256": "047d10698a3281e74fed2a8d30700a5a787242dcef6618ab9dfd0674a7cd3a6e",
+      "bytes": 7580
+    },
+    "reservations-stream.json": {
+      "pairs": 3,
+      "sha256": "3884efb6c6edca3aeac3ce33dcaa6e0421808bbdbcb9d47648e3b959fb3b7ab6",
+      "bytes": 6324
+    },
+    "reservations-tool.json": {
+      "pairs": 3,
+      "sha256": "91f6ac9fbd305be88527c07a7819f9ff69a2c63e36b171e64bd27fc317c4af0a",
+      "bytes": 6286
+    },
     "source-cancel.json": {
       "pairs": 3,
       "sha256": "70805520363f6f82b679e50b3124e8e691ecd4ab6e1214b2636ee56fbf74faea",

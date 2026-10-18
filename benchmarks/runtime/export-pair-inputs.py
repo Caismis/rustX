@@ -14,12 +14,13 @@ p.add_argument('--root',type=Path,required=True);p.add_argument('--output',type=
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
 assert not any(a.output.iterdir()), 'refuse to overwrite existing summaries'
 archives=Path('docs/issue-481/evidence')
-manifest_files=['baseline-manifest.json','source-manifest.json','combined.tar.manifest.json']
+manifest_files=['baseline-manifest.json','source-manifest.json','combined.tar.manifest.json','reservations.tar.manifest.json']
 manifests={}
 for file in manifest_files:
     for path,metadata in json.loads((archives/file).read_text()).items():
         manifests.setdefault(path,set()).add(metadata['sha256'])
 stages={
+ 'reservations':(['reservations-paired'],('before','after')),
  'source':(['source-paired'],('before','after')),
  'canonical-runtime':(['canonical-runtime-paired','canonical-runtime-confirmation'],('before','after')),
  'combined':(['combined-paired','combined-confirmation'],('before','after')),
