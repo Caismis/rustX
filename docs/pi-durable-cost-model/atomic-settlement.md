@@ -34,8 +34,8 @@ unknown-tool preflight rejection rather than an unreachable ordinary-output cut.
 Internal retry success commits its Attempt terminal with the final answer, so
 recovery must not resurrect an earlier partial audit.
 
-Targeted validation passed as recorded below; measured results and final FULL
-client validation are pending. The partial coalescer change is
+Targeted validation and isolated measurements are recorded below; final FULL
+client validation remains pending. The partial coalescer change is
 not included here. No whole-request O(1), exactly-once tool execution, power-loss
 safety, or end-to-end performance gain is claimed.
 
@@ -79,8 +79,8 @@ loop, or weakened recovery oracle was used. Final lint-only fixture formatting a
 a documented test-length lint allowance followed the behavioral checks.
 
 These are targeted checks, not an exact-head FULL/Merge-verification claim.
-Partial cadence is unchanged at this stage. Performance and final dependency
-comparisons remain necessary before a retain/revert recommendation.
+Partial cadence is unchanged at this stage. Final dependency comparisons remain
+necessary before the user selects retained scope.
 
 ## Client notification and concurrent-inbox follow-up
 

@@ -41,3 +41,13 @@ an ENOSPC link failure before tests ran. Only regenerable build caches were
 removed to recover space; original evidence and benchmark executables remain.
 Formal isolated/combined measurements and exact final-head FULL/Merge CI remain
 pending. See evidence/partial-validation for raw checks and a hash manifest.
+
+FULL follow-up found two stale external fixtures, both retained in the validation
+archive: the Source point-query still named the removed witness column, and the
+three-protocol streamed-turn test expected all reasoning only as inline deltas.
+The point-query now names checksum with identical point-index/no-scan assertions.
+The protocol test requires one exact canonical client answer, exact reasoning,
+equality with the native original body, any partial as an exact prefix, and the
+unchanged exactly-once/last terminal checks. Its local optimized test passed all
+three production protocols in 2.95 s with the mandatory fake provider. Production
+code and the preserved cadence benchmark executable are unchanged by these fixes.
