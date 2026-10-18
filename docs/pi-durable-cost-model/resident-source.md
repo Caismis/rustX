@@ -1,8 +1,7 @@
 # Stage 2: bounded resident Source bytes
 
-A Source whose completed original encoding is at most 4,096 bytes now keeps
-those bytes in an immutable shared allocation beside its existing bounded
-navigation index. It creates no scratch directory, byte file or SQLite index.
+The initial 4 KiB implementation stores completed encodings of at most 4,096
+bytes in an immutable shared allocation beside the bounded navigation index. It creates no scratch directory, byte file or SQLite index.
 Larger encodings spill once into the Source-owned directory; the prefix and
 remaining bytes are written without loss or a second serialization. Serializer
 write size cannot increase the resident threshold. Existing bounded file reads
@@ -93,3 +92,6 @@ Repeat the separate syscall command with the before binary for its diagnostic.
 The archive preserves the initial Clippy finding and an interleaved retry log;
 `pi-resident-clippy-final.log` is the clean successful final invocation. Originals
 remain under `/workspace/issue-481-evidence`; no failed or slow sample is removed.
+
+The subsequent [16 KiB byte-bound refinement](resident-bound.md) preserves these
+4 KiB results as historical stage evidence and keeps navigation at its 4 KiB bound.

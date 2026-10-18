@@ -24,16 +24,19 @@ fn raw_source(raw: &[u8], chunks: usize) -> SeekableObservationSource {
 
 #[test]
 fn resident_threshold_and_split_writes_preserve_exact_source_bytes() {
-    for length in [4095, 4096, 4097, 65_537] {
+    for length in [4095, 4096, 4097, 16_383, 16_384, 16_385, 65_537] {
         let raw = format!("\"{}\"", "x".repeat(length - 2)).into_bytes();
         for chunk in [1, 4095, 65_536] {
             FILE_WORK.with(|work| work.set((0, 0)));
             let source = raw_source(&raw, chunk);
             assert_eq!(source.layout.written, length as u64);
-            assert_eq!(source.layout.directory.is_none(), length <= 4096);
+            assert_eq!(
+                source.layout.directory.is_none(),
+                length <= MEMORY_INDEX_BYTES
+            );
             assert_eq!(
                 matches!(source.layout.bytes, byte_carrier::Bytes::Resident(_)),
-                length <= 4096
+                length <= byte_carrier::RESIDENT_BYTES
             );
             let reader = source.byte_reader().unwrap();
             let mut actual = Vec::new();
@@ -45,7 +48,7 @@ fn resident_threshold_and_split_writes_preserve_exact_source_bytes() {
                 );
             }
             assert_eq!(actual, raw);
-            if length <= 4096 {
+            if length <= byte_carrier::RESIDENT_BYTES {
                 assert_eq!(FILE_WORK.with(std::cell::Cell::get), (0, 0));
             }
         }
@@ -98,8 +101,10 @@ fn failed_spill_does_not_replace_existing_bytes_or_lose_resident_prefix() {
     std::fs::write(&path, b"existing owner").unwrap();
     let mut bytes = byte_carrier::Bytes::default();
     assert_eq!(
-        bytes.write(&vec![b'x'; 4096], &mut directory).unwrap(),
-        4096
+        bytes
+            .write(&vec![b'x'; byte_carrier::RESIDENT_BYTES], &mut directory)
+            .unwrap(),
+        byte_carrier::RESIDENT_BYTES
     );
     assert!(bytes.write(b"y", &mut directory).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"existing owner");
@@ -110,9 +115,9 @@ fn failed_spill_does_not_replace_existing_bytes_or_lose_resident_prefix() {
         1
     );
     let reader = bytes.reader(directory.as_ref()).unwrap();
-    let mut original = vec![0; 4096];
+    let mut original = vec![0; byte_carrier::RESIDENT_BYTES];
     reader.read_exact_at(&mut original, 0).unwrap();
-    assert_eq!(original, vec![b'x'; 4096]);
+    assert_eq!(original, vec![b'x'; byte_carrier::RESIDENT_BYTES]);
 }
 
 #[test]
