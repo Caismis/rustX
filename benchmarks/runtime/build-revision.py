@@ -54,7 +54,12 @@ def main():
                 'production_tree': git('rev-parse', 'HEAD:src'),
                 'harness': {str(path.relative_to(repo)): digest(path) for path in harness},
                 'start_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                'commands': []}
+                'commands': [],
+                'rustc': subprocess.check_output(['rustc', '--version', '--verbose'], env=env, text=True),
+                'cargo': subprocess.check_output(['cargo', '--version'], env=env, text=True),
+                'build_environment': {key: value for key, value in env.items()
+                                      if key in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_JOBS')
+                                      or key.startswith('CARGO_PROFILE_RELEASE_')}}
     try:
         for name, command in (
             ('clean', ['cargo', 'clean', '--release', '--package', 'rustx']),
