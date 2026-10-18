@@ -930,8 +930,18 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
             .registry
             .snapshot(&root_child.accepted.subagent_id)
             .unwrap();
-        // Release even if an assertion fails, so fixture cleanup never leaves
-        // a blocked physical driver holding the test process alive.
+        // Cancel through the Leaf's existing action owner while the Middle's
+        // physical seal is still gated. Granting that seal first lets Middle
+        // shutdown retire the Leaf interaction before this cleanup command.
+        let cancellation = async {
+            let (attachment, _) = leaf
+                .host
+                .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)?;
+            attachment.cancel_interaction(&header.interaction).await
+        }
+        .await;
+        // Release even if cancellation or an assertion fails, so fixture cleanup
+        // never leaves a blocked physical driver holding the process alive.
         seal.release();
         assert_eq!(after_read.state, stopping.state);
         assert!(
@@ -948,16 +958,7 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
             ),
             "stopping source classification: {read:?}"
         );
-        // Stopping retires the intermediate route; cleanup uses the Leaf's
-        // existing action owner after the source-isolation assertions above.
-        let (attachment, _) = leaf
-            .host
-            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-            .unwrap();
-        attachment
-            .cancel_interaction(&header.interaction)
-            .await
-            .unwrap();
+        cancellation.unwrap();
     } else {
         let (attachment, _) = root_host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
