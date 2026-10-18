@@ -234,3 +234,4 @@ measured-window total divided by turn count, including driver/sample overhead;
 it is not an exclusive runtime profile or an allocation count.
 
 Fresh structural-stage results and binary identities: [Source metadata reuse](../../docs/issue-481/source-metadata.md).
+The next isolated stage is [append certificate measurements](../../docs/issue-481/append-certificate-results.md), including warm/cold regressions and complete lifecycle counters.
