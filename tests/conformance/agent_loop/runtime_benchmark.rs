@@ -4,6 +4,7 @@ use super::*;
 use serde_json::json;
 use std::time::Instant;
 
+mod profiling;
 mod request_oracle;
 
 fn footprint(root: &std::path::Path) -> serde_json::Value {
@@ -43,6 +44,7 @@ fn process_sample() -> serde_json::Value {
 fn lifecycle_sample(samples: &mut Vec<serde_json::Value>, phase: &str, began: Instant) {
     let process = process_sample();
     samples.push(json!({"phase":phase,"elapsed_us":began.elapsed().as_micros(),"process":process}));
+    profiling::boundary(phase);
 }
 
 fn verify_requests(
@@ -155,6 +157,9 @@ async fn measure_runtime() {
     lifecycle_sample(&mut lifecycle, "after_initialization", lifecycle_began);
     let mut samples = Vec::new();
     for turn in 0..history + measured {
+        if turn == history {
+            profiling::boundary("before_measured_turns");
+        }
         let began = Instant::now();
         driver.submit(&format!("benchmark turn {turn:04}"));
         let accepted_us = began.elapsed().as_micros();

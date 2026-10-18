@@ -1,0 +1,300 @@
+{
+  "production_head": "fb6d7ff4c112d9258076a9822180626f4638c4d1",
+  "diagnostic_binary_sha256": "b5c58303ec9960e67afe75dd23548de7e82d90aeed511f7c9953daa0235f8345",
+  "scope": "Single diagnostic observations, not headline comparisons. Heap replaces allocator; CPU cumulative scopes overlap. See attribution.md.",
+  "allocations": {
+    "before_header": "heap profile: 764610: 84577237 [3073163: 546845413] @ heapprofile",
+    "after_header": "heap profile: 886031: 101478653 [11219686: 2234110212] @ heapprofile",
+    "top_leaf_bytes": [
+      [
+        "sqlite3MemMalloc",
+        609077616
+      ],
+      [
+        "<alloc::raw_vec::RawVecInner>::finish_grow",
+        466707488
+      ],
+      [
+        "<rustx::runtime::observation::PendingObservations>::drain",
+        80392192
+      ],
+      [
+        "<serde_json::value::ser::Serializer as serde_core::ser::Serializer>::serialize_map",
+        43025736
+      ],
+      [
+        "<alloc::string::String as core::clone::Clone>::clone",
+        35510452
+      ],
+      [
+        "rustx::durable::sqlite::observation_request::index_state::<rustx::events::types::RuntimeEventEnvelope>",
+        33554432
+      ],
+      [
+        "<alloc::vec::Vec<rustx::runtime_client::trace::types::TraceRecord> as core::clone::Clone>::clone",
+        30720000
+      ],
+      [
+        "<rusqlite::row::Row>::get::<usize, core::option::Option<alloc::vec::Vec<u8>>>",
+        26521019
+      ],
+      [
+        "<alloc::boxed::Box<[u8]>>::new_uninit_slice",
+        23068672
+      ],
+      [
+        "sqlite3MemRealloc",
+        22122904
+      ],
+      [
+        "<rustx::runtime_client::projection::RuntimeClientProjection>::apply_native_batch",
+        21168128
+      ],
+      [
+        "<rusqlite::cache::StatementCache>::get",
+        19737304
+      ],
+      [
+        "<rustx::runtime::read_layout::SeekableObservationSource>::copy_original_bytes_to::<rustx::durable::sqlite::observation_request::SourceWriter>",
+        16777216
+      ],
+      [
+        "external:0x7fad39c779c5",
+        14701568
+      ],
+      [
+        "external:0x7fad39c77962",
+        11551232
+      ],
+      [
+        "base64::engine::Engine::encode::inner::<base64::engine::general_purpose::GeneralPurpose>",
+        10927792
+      ],
+      [
+        "<hashbrown::raw::RawTable<usize> as core::clone::Clone>::clone_from",
+        10090112
+      ],
+      [
+        "<rustx::app_server::registration::Publication>::hand_off::<(), <rustx::app_server::connection::AppServerConnection>::next_notification::{closure#0}::{closure#0}>",
+        8845573
+      ],
+      [
+        "<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_string::<serde_core::de::impls::StringVisitor>",
+        8804967
+      ],
+      [
+        "<rusqlite::row::Row>::get::<usize, alloc::vec::Vec<u8>>",
+        8529447
+      ],
+      [
+        "<alloc::vec::Vec<rustx::durable::trace::TraceFactHeader> as alloc::vec::spec_from_iter::SpecFromIter<rustx::durable::trace::TraceFactHeader, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<u64>, rustx::durable::sqlite::observation_trace::facts::{closure#8}>, core::result::Result<core::convert::Infallible, rustx::durable::inbox::ConversationStoreError>>>>::from_iter",
+        7896704
+      ],
+      [
+        "<hashbrown::raw::RawTable<usize>>::reserve_rehash::<indexmap::inner::get_hash<alloc::string::String, serde_json::value::Value>::{closure#0}>",
+        7788752
+      ],
+      [
+        "<hashbrown::raw::RawTable<usize>>::with_capacity_in",
+        7521692
+      ],
+      [
+        "<alloc::vec::Vec<rustx::runtime_client::checkpoint::ContentBinding> as core::clone::Clone>::clone",
+        7219200
+      ],
+      [
+        "rustx::durable::sqlite::observation_request::encoded_path",
+        6719232
+      ],
+      [
+        "<alloc::sync::Arc<str>>::from_box_in",
+        5658008
+      ],
+      [
+        "rustx::runtime::read_layout::append_field_path",
+        5498432
+      ],
+      [
+        "<rustx::runtime::read_layout::Layout>::read_bytes",
+        5467836
+      ],
+      [
+        "<serde_json::value::ser::Serializer as serde_core::ser::Serializer>::serialize_seq",
+        4984488
+      ],
+      [
+        "alloc::fmt::format::format_inner",
+        4863838
+      ]
+    ],
+    "top_owner_bytes": [
+      [
+        "<rustx::runtime_client::checkpoint::Buffer as std::io::Write>::write_all",
+        120847284
+      ],
+      [
+        "rustx::durable::sqlite::observation_trace::facts",
+        91739444
+      ],
+      [
+        "rustx::durable::sqlite::observation_request::composed::fragments::persist_fact",
+        85347824
+      ],
+      [
+        "<rustx::runtime::observation::PendingObservations>::drain",
+        80411298
+      ],
+      [
+        "rustx::durable::sqlite::observation_request::index_state::<rustx::events::types::RuntimeEventEnvelope>",
+        50736720
+      ],
+      [
+        "<alloc::raw_vec::RawVec<rustx::runtime_client::trace::types::TraceRecord>>::grow_one",
+        48384000
+      ],
+      [
+        "rustx::durable::sqlite::observation_request::composed::fragments::persist_part",
+        43690096
+      ],
+      [
+        "rustx::durable::sqlite::persist_event_tx_internal",
+        41518606
+      ],
+      [
+        "<alloc::vec::Vec<rustx::runtime_client::snapshot::RuntimeClientTool> as core::clone::Clone>::clone",
+        41000544
+      ],
+      [
+        "<rustx::runtime_client::capability_source::prepared::PreparedPage<rustx::runtime_client::snapshot::RuntimeClientTool>>::capture",
+        36298368
+      ],
+      [
+        "<rustx::runtime::read_layout::Layout>::initialize_index",
+        31917440
+      ],
+      [
+        "<alloc::vec::Vec<rustx::runtime_client::trace::types::TraceRecord> as core::clone::Clone>::clone",
+        31220687
+      ],
+      [
+        "<rusqlite::statement::Statement>::query_row::<core::option::Option<alloc::vec::Vec<u8>>, [&[u8]; 1], rustx::durable::sqlite::observation_request::composed::index::load_blob::{closure#1}>",
+        29183328
+      ],
+      [
+        "<rustx::app_server::transport::Record as std::io::Write>::write",
+        25159680
+      ],
+      [
+        "<rustx::runtime_client::checkpoint::Capture>::transcript_entry",
+        24476173
+      ],
+      [
+        "rustx::durable::sqlite::observation_readiness::mark",
+        21585920
+      ],
+      [
+        "<rustx::runtime_client::projection::RuntimeClientProjection>::apply_native_batch",
+        21178624
+      ],
+      [
+        "<alloc::vec::Vec<rustx::runtime_client::trace::types::TraceRecord> as alloc::vec::spec_from_iter::SpecFromIter<rustx::runtime_client::trace::types::TraceRecord, core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::slice::iter::Iter<rustx::durable::trace::TraceFactHeader>, <rustx::runtime_client::trace::TraceProjection>::page::{closure#2}>, core::result::Result<core::convert::Infallible, rustx::durable::inbox::ConversationStoreError>>>>::from_iter",
+        17640000
+      ],
+      [
+        "rustx::durable::sqlite::observation_readiness::mark_direct",
+        16914432
+      ],
+      [
+        "rustx::durable::sqlite::observation_readiness::insert",
+        16835952
+      ],
+      [
+        "<rustx::runtime::read_layout::SeekableObservationSource>::copy_original_bytes_to::<rustx::durable::sqlite::observation_request::SourceWriter>",
+        16788736
+      ],
+      [
+        "rustx::durable::sqlite::observation_statistics::event",
+        15633648
+      ],
+      [
+        "rustx::tools::schema::validate_canonical_schema",
+        15323456
+      ],
+      [
+        "<rustx::durable::sqlite::observation_request::SourceWriter>::drain",
+        15197920
+      ],
+      [
+        "conformance::agent_loop::runtime_benchmark::footprint::visit",
+        15151360
+      ],
+      [
+        "rustx::durable::sqlite::observation_request::index_fields",
+        15150128
+      ],
+      [
+        "<serde::private::de::content::TaggedContentVisitor<<rustx::durable::sqlite::observation_request::composed::Content as serde_core::de::Deserialize>::deserialize::__Field> as serde_core::de::Visitor>::visit_map::<serde_json::de::MapAccess<serde_json::read::SliceRead>>",
+        14737408
+      ],
+      [
+        "<rustx::durable::sqlite::manifest::MutationColumns>::invalidates",
+        14486000
+      ],
+      [
+        "rustx::durable::sqlite::optional_display_layout::<(), rustx::durable::sqlite::persist_event_tx_internal::{closure#24}>",
+        13523248
+      ],
+      [
+        "rustx::durable::sqlite::optional_display_layout::<(), rustx::durable::sqlite::persist_event_tx_internal::{closure#20}>",
+        13426584
+      ]
+    ]
+  },
+  "logical_writes": {
+    "completed_calls": {
+      "other/openat": 1673,
+      "other/close": 1718,
+      "other/write": 384,
+      "other/fsync": 96,
+      "database/openat": 9,
+      "database/pread64": 6268,
+      "other/pwrite64": 9182,
+      "other/pread64": 1,
+      "database/pwrite64": 7210,
+      "database/fsync": 27,
+      "other/unlink": 136,
+      "wal/openat": 7,
+      "wal/pwrite64": 50866,
+      "wal/fsync": 53,
+      "source-bytes/openat": 1649,
+      "source-bytes/write": 442,
+      "source-bytes/pread64": 91712,
+      "source-bytes/close": 2091,
+      "other/unlinkat": 946,
+      "wal/pread64": 8864,
+      "wal/close": 7,
+      "database/close": 9,
+      "failed/openat": 6,
+      "source-index/openat": 160,
+      "source-index/pread64": 1000,
+      "source-index/pwrite64": 480,
+      "source-index/close": 160
+    },
+    "successful_write_bytes": {
+      "other": 33547735,
+      "database": 29532160,
+      "wal": 104731232,
+      "source-bytes": 692646,
+      "source-index": 1966080
+    },
+    "source_bytes_files_written": 442,
+    "source_bytes_files_at_most_4096": 402,
+    "source_index_files_written": 40,
+    "unresolved": 0,
+    "limitations": "Syscall return bytes, not physical device writes. Source index openat counts approximate connection work; not SQL statement counts or CPU attribution. Profile is separate from formal timing."
+  },
+  "archive": {
+    "bytes": 15146748,
+    "sha256": "8d6fe1542bc82a1705e8753246f76a0fc21431b0d051d9960e4cb24760ce35d0"
+  }
+}
