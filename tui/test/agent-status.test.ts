@@ -439,7 +439,7 @@ describe("Agent Status bounded-window convergence", () => {
       ) {
         authoritative.push(status);
         if (authoritative.length > bound) {
-          evicted = authoritative.shift()?.status_message_id;
+          evicted = authoritative.shift()?.status_message_id ?? undefined;
         }
       }
       events.push({
@@ -693,4 +693,21 @@ describe("typed Agent Status sections", () => {
       assert.ok(line.length <= 200, `detail line was ${line.length} wide`);
     }
   });
+});
+
+it('T14 T15 native Status locators remain distinct and FreshInbound T anchors deferred canonical rows', () => {
+  const first=agentStatus({status_message_id:null,source_locator:{type:'by_ledger_position',position:17},opportunities:{fresh_inbound:{target_message_id:null,target_locator:{type:'by_ledger_position',position:12},transcript_anchor:'4'},post_tool_batch:{transcript_anchor:'9'}},sections:[temporalSection()]});
+  const second=agentStatus({status_message_id:null,source_locator:{type:'by_ledger_position',position:18},opportunities:{post_tool_batch:{transcript_anchor:'9'}},sections:[temporalSection()]});
+  assert.deepEqual(agentStatusAnchor(first),{kind:'transcript_position',cursor:'4'});
+  const native=snapshot({statuses:[first,second],transcript:{entries:[],deferred_entries:[{offset:"4",identity:'ledger:12',value:null,content:[],deferred:true}]}});
+  const initial=replaceFromSnapshot(native,runtimeCursor(7));
+  assert.equal(initial.statuses.length,2);
+  const blocks=renderBlocks(initial);
+  assert.equal(blocks.filter(row=>row.key.startsWith('agent-status:')).length,1);
+  const annotation=blocks.find(row=>row.key.startsWith('agent-status:'));
+  assert.ok(annotation?.kind==='text');
+  assert.match(annotation.text,/15:42 UTC/);
+  const next=reduce(initial,{cursor:runtimeCursor(8),event:{type:'agent_status_composed',attempt_id:'a1',turn:1,status:second,evicted_status_locator:first.source_locator}});
+  assert.equal(next.statuses.length,1);
+  assert.deepEqual(next.statuses[0]?.source_locator,second.source_locator);
 });

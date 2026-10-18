@@ -1,13 +1,13 @@
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v49';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v50';
 import type { SessionView } from '../client/app-server';
 /** Select only canonical snapshot messages. Streaming is a separately labelled
  * server projection and disappears when its canonical identity is committed. */
 export function conversation(snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt'>) {
   const messages = snapshot.messages;
   const inFlight = snapshot.attempt?.in_flight;
-  return { messages, streaming: inFlight && snapshot.attempt?.phase.type !== 'settled' && !messages.some(message => message.id === inFlight.message_id) ? inFlight : undefined };
+  return { messages, streaming: inFlight && !!snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) && !messages.some(message => message.id === inFlight.message_id) ? inFlight : undefined };
 }
-export const activeAttempt = (snapshot?: RuntimeClientSnapshot) => !!snapshot?.attempt && snapshot.attempt.phase.type !== 'settled';
+export const activeAttempt = (snapshot?: RuntimeClientSnapshot) => !!snapshot?.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type);
 /** Product guard, not execution authority. Acknowledged MessageIds close the
  * projection gap until native pending/canonical observations reconcile them. */
 export function executionIdle(view?: Pick<SessionView, 'snapshot' | 'submissions'>): boolean {

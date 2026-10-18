@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/tmp/rustx-480-evidence/after-conformance",
+    "agent_loop::runtime_benchmark::measure_runtime",
+    "--exact",
+    "--ignored",
+    "--nocapture"
+  ],
+  "returncode": 0,
+  "elapsed_seconds": 3.354210266843438,
+  "pair": 0,
+  "case": "short-small",
+  "label": "after"
+}

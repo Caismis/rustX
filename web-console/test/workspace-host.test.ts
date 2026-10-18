@@ -67,7 +67,7 @@ it('unavailable roots fail fresh admission, unregister preserves it, and symlink
   const { host, a, b, config, endpoint } = fixture();
   const [workspace] = (await host.listWorkspaces()).workspaces;
   const { WorkspaceSessionAdmission } = await import('../src/workspaces/session-admission');
-  const client = { getSnapshot: () => ({ generation: 1, endpoint }), request: async () => ({ settings: { cwd: a } }) } as unknown as import('../src/client/app-server').AppServerClient;
+  const client = { getSnapshot: () => ({ generation: 1, endpoint }), request: async () => ({type:'settings',projection:{revision:'0',cwd:a,inline:{cwd:a},reference:null}}) } as unknown as import('../src/client/app-server').AppServerClient;
   const admission = new WorkspaceSessionAdmission(new WorkspaceAuthority(host), client);
   expect(await (await admission.admit('native-session', () => true) as import('../src/client/app-server').OperationAdmission).validate(new AbortController().signal)).toBe(true);
   rmSync(a, { recursive: true });

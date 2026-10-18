@@ -5,6 +5,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, chooseWorkspace } from './shell-actions';
 import { wireProbe } from './wire-probe';
+import { transitionFacts } from '../../../protocol/app-server/projection';
 
 test('native child live cuts, independent title, active and file-only resume uploads, file and image preview', async ({ page }, info) => {
   page.setDefaultTimeout(15_000);
@@ -31,10 +32,10 @@ test('native child live cuts, independent title, active and file-only resume upl
     const id = await child.getAttribute('data-agent-id');
     const activation = await child.getAttribute('data-activation-id');
     await expect(child.getByText('Live child first chunk.', { exact: true })).toBeVisible();
-    expect(wire.requests.some(request => request.method === 'agent/conversation')).toBe(true);
+    expect(wire.requests.some(request => request.method === 'agent/observe')).toBe(true);
     // Leave a live read, reopen from an authoritative cut, then advance one delta.
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
-    await expect.poll(() => wire.requests.filter(request => request.method === 'agent/conversationCancel').length).toBeGreaterThan(0);
+    await expect.poll(() => wire.requests.filter(request => request.method === 'agent/observeCancel').length).toBeGreaterThan(0);
     await open();
     await expect(child.getByText('Live child first chunk.', { exact: true })).toBeVisible();
     await fixture.release(`child-first-${childGate}`); await fixture.gate(`child-second-${childGate}`);
@@ -81,10 +82,10 @@ test('native child live cuts, independent title, active and file-only resume upl
     await page.setViewportSize({ width: 1440, height: 1000 });
     await preview.getByRole('button', { name: /^Close preview / }).first().click();
     const process = child.locator('[data-turn-process][aria-expanded]').last();
-    if (await process.getAttribute('aria-expanded') === 'false') await process.click();
+    if (await process.isVisible() && await process.getAttribute('aria-expanded') === 'false') await process.click();
     const tool = child.locator('[data-tool-call-id="child-image"]').last();
     const step = child.locator('[data-step-process]').filter({ has: page.locator('[data-tool-call-id="child-image"]') }).last().locator(':scope > button');
-    if (await step.getAttribute('aria-expanded') === 'false') await step.click();
+    if (await step.isVisible() && await step.getAttribute('aria-expanded') === 'false') await step.click();
     const disclosure = tool.getByRole('button', { expanded: false });
     if (await disclosure.count()) await disclosure.click();
     await child.getByRole('button', { name: 'Load attachment', exact: true }).click();
@@ -126,7 +127,23 @@ test('native child live cuts, independent title, active and file-only resume upl
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await fixture.release(`child-first-${parentGate}`); await fixture.release(`child-second-${parentGate}`);
     await expect(page.getByText('Parent and child remain independent.', { exact: true })).toBeVisible();
+    const parentTarget=wire.requests.find(request=>request.method==='turn/start')!.params.target;
+    const rootFacts=()=>wire.notifications.filter(note=>note.method==='session/event'
+      &&JSON.stringify(note.params.target)===JSON.stringify(parentTarget)).flatMap(note=>transitionFacts(note.params.event));
+    const parentAttempt=rootFacts().find(fact=>fact.type==='attempt_started');
+    if(!parentAttempt||parentAttempt.type!=='attempt_started')throw new Error('Original Parent Attempt was not observed.');
+    // Final C text and AttemptSettled precede the native completed-process page.
+    // Reveal its disclosure only once that original membership is published.
+    await expect.poll(()=>rootFacts().some(fact=>{
+      const transcript=fact.type==='read_domains_updated'?fact.transcript:fact.type==='checkpoint_advanced'?fact.checkpoint.snapshot.transcript:undefined;
+      return transcript?.entries?.some(entry=>{
+        const process=entry.turn_process;
+        return process!=null&&process.conversation_id===parentTarget.conversation_id
+          &&process.attempt_id===parentAttempt.attempt_id&&process.outcome==='completed';
+      });
+    })).toBe(true);
     const parentProcess = page.locator('[data-turn-process][aria-expanded]:visible').last();
+    await expect(parentProcess).toHaveAttribute('data-turn-process',JSON.stringify([parentTarget.conversation_id,parentAttempt.attempt_id]));
     if (await parentProcess.getAttribute('aria-expanded') === 'false') await parentProcess.click();
     const parentTool = page.locator('[data-tool-call-id="child-capabilities-create"]');
     const parentStep = page.locator('[data-step-process]:visible').filter({ has: parentTool }).last().locator(':scope > button');

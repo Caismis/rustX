@@ -1,0 +1,291 @@
+{
+  "case": "cancel",
+  "schema": 69,
+  "protocol": 50,
+  "history": 0,
+  "measured": 1,
+  "requests": 1,
+  "open_us": 156831,
+  "samples": [
+    {
+      "turn": 0,
+      "measured": true,
+      "accepted_us": 4463,
+      "settled_us": 62155,
+      "first_consumed_publication_us": 59176,
+      "notification_records": 15,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 26998 0 0 0 17 6 0 0 20 0 10 0 351674558 796250112 38912 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 7287504\nwchar: 3906680\nsyscr: 6794\nsyscw: 1699\nread_bytes: 0\nwrite_bytes: 3960832\ncancelled_write_bytes: 253952\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159424 kB\nPss:              157135 kB\nPss_Dirty:        104132 kB\nPss_Anon:         104100 kB\nPss_File:          53035 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52940 kB\nPrivate_Dirty:    104132 kB\nReferenced:       159424 kB\nAnonymous:        104100 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      },
+      "footprint": [
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/rustx.toml",
+          "logical": 2306,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/.product-writer.lock",
+          "logical": 0,
+          "allocated": 0
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/conversation-reservations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c",
+          "logical": 41,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/catalog.json",
+          "logical": 1216,
+          "allocated": 4096
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite",
+          "logical": 757760,
+          "allocated": 757760
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite-shm",
+          "logical": 32768,
+          "allocated": 32768
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite-wal",
+          "logical": 2068272,
+          "allocated": 2068480
+        },
+        {
+          "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/workspace/note.txt",
+          "logical": 31,
+          "allocated": 4096
+        }
+      ]
+    }
+  ],
+  "initial_process": {
+    "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 24562 0 0 0 10 4 0 0 20 0 7 0 351674558 588582912 35072 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+    "io": "rchar: 6370330\nwchar: 1586021\nsyscr: 4198\nsyscw: 615\nread_bytes: 0\nwrite_bytes: 1679360\ncancelled_write_bytes: 53248\n",
+    "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              143500 kB\nPss:              141273 kB\nPss_Dirty:         94864 kB\nPss_Anon:          94832 kB\nPss_File:          46441 kB\nPss_Shmem:             0 kB\nShared_Clean:       2288 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     46348 kB\nPrivate_Dirty:     94864 kB\nReferenced:       143500 kB\nAnonymous:         94832 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+  },
+  "lifecycle": [
+    {
+      "phase": "before_initialization",
+      "elapsed_us": 515,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 1009 0 0 0 0 0 0 0 20 0 6 0 351674558 385060864 2752 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 10003\nwchar: 16\nsyscr: 41\nsyscw: 1\nread_bytes: 0\nwrite_bytes: 4096\ncancelled_write_bytes: 0\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:               11668 kB\nPss:                9685 kB\nPss_Dirty:          3480 kB\nPss_Anon:           3480 kB\nPss_File:           6205 kB\nPss_Shmem:             0 kB\nShared_Clean:       2032 kB\nShared_Dirty:          0 kB\nPrivate_Clean:      6156 kB\nPrivate_Dirty:      3480 kB\nReferenced:        11668 kB\nAnonymous:          3480 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_initialization",
+      "elapsed_us": 243933,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 24575 0 0 0 10 5 0 0 20 0 7 0 351674558 588582912 35264 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 6371489\nwchar: 1586021\nsyscr: 4215\nsyscw: 615\nread_bytes: 0\nwrite_bytes: 1679360\ncancelled_write_bytes: 53248\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              143576 kB\nPss:              141349 kB\nPss_Dirty:         94940 kB\nPss_Anon:          94908 kB\nPss_File:          46441 kB\nPss_Shmem:             0 kB\nShared_Clean:       2288 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     46348 kB\nPrivate_Dirty:     94940 kB\nReferenced:       143576 kB\nAnonymous:         94908 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_turns",
+      "elapsed_us": 310221,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27010 0 0 0 17 6 0 0 20 0 10 0 351674558 796250112 38912 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 7288666\nwchar: 3906680\nsyscr: 6811\nsyscw: 1699\nread_bytes: 0\nwrite_bytes: 3960832\ncancelled_write_bytes: 253952\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159444 kB\nPss:              157155 kB\nPss_Dirty:        104152 kB\nPss_Anon:         104120 kB\nPss_File:          53035 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     52940 kB\nPrivate_Dirty:    104152 kB\nReferenced:       159444 kB\nAnonymous:        104120 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_verification",
+      "elapsed_us": 313425,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27050 0 0 0 18 6 0 0 20 0 10 0 351674558 796250112 39040 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 7367652\nwchar: 3906768\nsyscr: 6847\nsyscw: 1702\nread_bytes: 0\nwrite_bytes: 3960832\ncancelled_write_bytes: 253952\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159724 kB\nPss:              157435 kB\nPss_Dirty:        104304 kB\nPss_Anon:         104272 kB\nPss_File:          53163 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53068 kB\nPrivate_Dirty:    104304 kB\nReferenced:       159724 kB\nAnonymous:        104272 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_shutdown",
+      "elapsed_us": 314754,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27051 0 0 0 18 7 0 0 20 0 10 0 351674558 796250112 39104 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 7368814\nwchar: 3906792\nsyscr: 6864\nsyscw: 1705\nread_bytes: 0\nwrite_bytes: 3960832\ncancelled_write_bytes: 253952\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159788 kB\nPss:              157499 kB\nPss_Dirty:        104304 kB\nPss_Anon:         104272 kB\nPss_File:          53227 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53132 kB\nPrivate_Dirty:    104304 kB\nReferenced:       159788 kB\nAnonymous:        104272 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_driver_drop",
+      "elapsed_us": 315696,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27052 0 0 0 18 7 0 0 20 0 10 0 351674558 796217344 39104 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 7369976\nwchar: 3906792\nsyscr: 6881\nsyscw: 1705\nread_bytes: 0\nwrite_bytes: 3960832\ncancelled_write_bytes: 253952\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159820 kB\nPss:              157531 kB\nPss_Dirty:        104272 kB\nPss_Anon:         104272 kB\nPss_File:          53259 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53196 kB\nPrivate_Dirty:    104272 kB\nReferenced:       159820 kB\nAnonymous:        104272 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_final_writer_close",
+      "elapsed_us": 326079,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27062 0 0 0 18 7 0 0 20 0 10 0 351674558 796217344 39104 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 10635542\nwchar: 5037296\nsyscr: 7694\nsyscw: 1989\nread_bytes: 0\nwrite_bytes: 5120000\ncancelled_write_bytes: 315392\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159820 kB\nPss:              157531 kB\nPss_Dirty:        104272 kB\nPss_Anon:         104272 kB\nPss_File:          53259 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53196 kB\nPrivate_Dirty:    104272 kB\nReferenced:       159820 kB\nAnonymous:        104272 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_reopen_verification",
+      "elapsed_us": 330789,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27064 0 0 0 18 7 0 0 20 0 10 0 351674558 796217344 39104 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 10800665\nwchar: 5037304\nsyscr: 7753\nsyscw: 1997\nread_bytes: 0\nwrite_bytes: 5152768\ncancelled_write_bytes: 315392\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159820 kB\nPss:              157531 kB\nPss_Dirty:        104272 kB\nPss_Anon:         104272 kB\nPss_File:          53259 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53196 kB\nPrivate_Dirty:    104272 kB\nReferenced:       159820 kB\nAnonymous:        104272 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_cleanup",
+      "elapsed_us": 331743,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27064 0 0 0 18 7 0 0 20 0 10 0 351674558 796217344 39104 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 10801828\nwchar: 5037304\nsyscr: 7770\nsyscw: 1997\nread_bytes: 0\nwrite_bytes: 5152768\ncancelled_write_bytes: 356352\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159820 kB\nPss:              157531 kB\nPss_Dirty:        104272 kB\nPss_Anon:         104272 kB\nPss_File:          53259 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53196 kB\nPrivate_Dirty:    104272 kB\nReferenced:       159820 kB\nAnonymous:        104272 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    },
+    {
+      "phase": "after_provider_teardown",
+      "elapsed_us": 345081,
+      "process": {
+        "stat": "1246475 (after-review-fi) S 1226833 1226833 1226833 0 -1 4194304 27065 5829 0 0 18 7 6 2 20 0 10 0 351674558 796217344 39104 18446744073709551615 101743911185024 101743987578624 140727716786432 0 0 0 0 4096 1088 0 0 0 17 31 0 0 0 0 0 101743990851424 101743990882104 101744950292480 140727716794035 140727716794167 140727716794167 140727716798401 0\n",
+        "io": "rchar: 13620367\nwchar: 5050756\nsyscr: 8157\nsyscw: 2010\nread_bytes: 0\nwrite_bytes: 5152768\ncancelled_write_bytes: 356352\n",
+        "smaps_rollup": "5c891857b000-7ffdb99b1000 ---p 00000000 00:00 0                          [rollup]\nRss:              159884 kB\nPss:              157598 kB\nPss_Dirty:        104272 kB\nPss_Anon:         104272 kB\nPss_File:          53326 kB\nPss_Shmem:             0 kB\nShared_Clean:       2352 kB\nShared_Dirty:          0 kB\nPrivate_Clean:     53260 kB\nPrivate_Dirty:    104272 kB\nReferenced:       159884 kB\nAnonymous:        104272 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+      }
+    }
+  ],
+  "measurement_version": 2,
+  "oracle_version": 2,
+  "verified_live_requests": 1,
+  "verified_reopened_requests": 1,
+  "shutdown_us": 749,
+  "reopen_us": 3859,
+  "final_writer_close_us": 9703,
+  "checkpoint_footprint": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/conversation-reservations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/catalog.json",
+      "logical": 1216,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite",
+      "logical": 1392640,
+      "allocated": 1392640
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "before_close": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/conversation-reservations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/catalog.json",
+      "logical": 1216,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite",
+      "logical": 757760,
+      "allocated": 757760
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite-shm",
+      "logical": 32768,
+      "allocated": 32768
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite-wal",
+      "logical": 2068272,
+      "allocated": 2068480
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "closed_footprint": [
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/rustx.toml",
+      "logical": 2306,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/.product-writer.lock",
+      "logical": 0,
+      "allocated": 0
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/conversation-reservations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c",
+      "logical": 41,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/catalog.json",
+      "logical": 1216,
+      "allocated": 4096
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite",
+      "logical": 757760,
+      "allocated": 757760
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite-shm",
+      "logical": 32768,
+      "allocated": 32768
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/private/sessions/ses_01a14b85-23a4-79b3-a93c-b4b959859dc9/conversations/conv_01a14b85-23a4-79b3-a93c-b4d993f8d48c/conversation.sqlite-wal",
+      "logical": 2068272,
+      "allocated": 2068480
+    },
+    {
+      "path": "/tmp/rustx-480-evidence/paired-review/.tmpdfQZuc/workspace/note.txt",
+      "logical": 31,
+      "allocated": 4096
+    }
+  ],
+  "close_us": 176,
+  "cleanup_us": 369,
+  "oracle": "passed",
+  "sql_statements": null,
+  "allocations": null
+}

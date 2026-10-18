@@ -130,7 +130,6 @@ pub use invocation::{
     MAX_OVERRIDE_SKILLS, MAX_OVERRIDE_TOOLS, SubagentInvocationOverride, SubagentOverrideError,
 };
 pub use process::SubagentSpawnPlan;
-pub(crate) use registry::InteractionPublicationAuthority;
 pub use registry::{
     ActivationAdmission, AgentActivationOrigin, AgentControlError, AgentMessageAccepted,
     AgentSnapshot, AgentState, AgentWaitResult, DurableAgentAuthority, MAX_AGENT_LIST_LIMIT,
@@ -140,8 +139,11 @@ pub use registry::{
     SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentSteerError,
     SubagentTerminalMode,
 };
+pub(crate) use registry::{
+    AgentObservationValue, ChildPendingHeadProof, InteractionPublicationAuthority,
+};
 #[cfg(test)]
-pub(crate) use registry::{CommitBoundaryHook, ResumeTestGates};
+pub(crate) use registry::{CommitBoundaryHook, ResumeTestGates, TerminalAuthorityHook};
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool,
     SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION, SubagentExecutionProfileDigest, SubagentResolution,
@@ -596,6 +598,8 @@ pub(crate) fn ownership_event(
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: subagent_ownership_event_id(subagent_id),
         sequence: 0,
@@ -725,6 +729,8 @@ pub(crate) fn admission_event(
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: admission_event_id(activation_id, &phase),
         sequence: 0,
@@ -755,6 +761,8 @@ pub(crate) fn physical_settlement_event(
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: physical_settlement_event_id(subagent_id),
         sequence: 0,
@@ -786,6 +794,8 @@ pub(crate) fn terminal_settlement(
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: terminal_settlement_event_id(subagent_id),
         sequence: 0,
@@ -816,6 +826,8 @@ pub(crate) fn workflow_output_event(
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: workflow_output_event_id(subagent_id),
         sequence: 0,
@@ -864,6 +876,8 @@ pub(crate) fn terminal_publication(
         timestamp: Some(timestamp),
     };
     let event = RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: terminal_event_id(subagent_id),
         sequence: 0,

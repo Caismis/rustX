@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v49. It does not parse
+The TUI is a projection/control client of App Server protocol v50. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v49.ts`](../protocol/app-server/v49.ts).
+[`protocol/app-server/v50.ts`](../protocol/app-server/v50.ts).
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
@@ -168,13 +168,32 @@ the Conversation projection and never treated as invalid protocol input.
 Ctrl+Up/Down selects a Subagent, Enter opens its read-only transcript, `i` opens
 status details, and Esc returns to Main with the exact parent draft preserved.
 The popup shares transcript rendering and keeps a single 32-entry page; PageUp
-reads older and Home resumes newest reads. It polls only transcript authority,
-never derives content from status/activity. Parent epochs plus child read
-generations fence late reads and paging. Reconnect/resync remembers only the
-selected AgentId and reconstructs through `agent/transcript` on the current
-parent AttachmentTarget, displaying explicit unavailable history when needed.
-No child Session/Composer or HITL owner is created. See the
-[protocol contract](app-server-protocol.md#read-only-native-agent-conversations-v35).
+reads older and Home resumes observation from its locally Applied Child cursor.
+Native `agent/observe` supplies the exact live or DurableOnly source; explicit
+history pages use `agent/transcript` through the current parent AttachmentTarget.
+Parent attachment epochs and selected Child conversation/Activation/view
+ownership fence late reads. Reconnect and resync retain the selected AgentId and
+reconstruct through those native owners.
+
+The popup’s `t` key selects a loaded non-Request Trace record and explicitly reads
+its finite `agent/traceDetail` head on that same parent connection. `m` selects an original message head, `b` selects its advertised canonical
+blocks or Tool collection, and `p` advances the current collection, replacing
+one bounded viewport. For a Tool head, `b` directly selects the advertised
+original result collections.
+`c` selects original fields, including an available frozen Tool Definition, and
+`n` reads the next byte window, at most 65,536 bytes. Definition absence and
+source unavailability are separate facts. Every selected field and continuation
+retains the head’s returned cut and captured Child Registry Activation; an
+unrelated publication does not substitute a newer cut. Closing or replacing the
+view retires its outstanding reads.
+
+For the focused Root Session, `/observation` lists domains and loaded Trace
+record IDs. `/observation trace <native-record-id>` opens a finite head;
+`/observation <domain> [page-offset]` reads its advertised collection, and
+`/content [index [byte-offset]]` reads selected original fields. The terminal
+presents these through its existing inspection viewport and byte readers.
+See the [protocol contract](app-server-protocol.md) and
+[command reference](../tui/README.md#model-and-capability-inspection).
 
 ## Job and Agent control
 

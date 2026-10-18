@@ -116,7 +116,7 @@ fn python_source(name: &str) -> CapabilitySourceDescriptor {
     }
 }
 
-/// Attaches the Runtime Client and returns the initialized snapshot.
+/// Attaches the Runtime Client and explicitly loads its bounded checkpoint.
 fn attach_snapshot(
     runtime: &LocalConversationRuntime,
 ) -> rustx::runtime_client::RuntimeClientSnapshot {
@@ -124,10 +124,14 @@ fn attach_snapshot(
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
-    let RuntimeClientResult::Initialized { snapshot, .. } = result else {
-        panic!("initialize returns the snapshot");
+    let RuntimeClientResult::Initialized { .. } = result else {
+        panic!("initialize returns the bounded identity receipt");
     };
-    snapshot
+    runtime
+        .host()
+        .checkpoint()
+        .expect("bounded native checkpoint")
+        .snapshot
 }
 
 /// The availability view of one source, when the source was evaluated.
@@ -782,12 +786,23 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         },
     )
     .await;
-    let rustx::app_server::protocol::MethodResult::Attached {
-        target, snapshot, ..
-    } = attached
-    else {
+    let rustx::app_server::protocol::MethodResult::Attached { target, .. } = attached else {
         panic!("session/attach must compose the Session: {attached:?}");
     };
+    let rustx::app_server::protocol::MethodResult::Checkpoint { checkpoint } = app_server_call(
+        &mut stdin,
+        &mut stdout,
+        20,
+        rustx::app_server::protocol::Method::SessionCheckpoint {
+            target: target.clone(),
+            trace_records: vec![],
+        },
+    )
+    .await
+    else {
+        panic!("bounded checkpoint")
+    };
+    let snapshot = checkpoint.snapshot;
     let names = tool_names(&snapshot);
     for expected in ["read", "write", "bash"] {
         assert!(
@@ -814,7 +829,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     assert!(
         matches!(
             models,
-            rustx::app_server::protocol::MethodResult::Models { .. }
+            rustx::app_server::protocol::MethodResult::DomainPage { .. }
         ),
         "the runtime keeps serving: {models:?}"
     );

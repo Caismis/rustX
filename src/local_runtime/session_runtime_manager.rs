@@ -238,7 +238,45 @@ pub struct SessionResidencyDiagnostic {
 }
 
 /// Private, non-cloneable server-operation ownership. Never lent to a client.
-struct OperationLease(Option<Arc<ResidentRuntime>>);
+pub(crate) struct OperationLease(Option<Arc<ResidentRuntime>>);
+
+impl OperationLease {
+    /// Select the already-admitted incarnation without retaining another owner.
+    pub(crate) fn configuration_source(&self) -> ConfigurationObservationSource {
+        ConfigurationObservationSource {
+            resident: Arc::downgrade(self.0.as_ref().expect("operation resident")),
+        }
+    }
+}
+
+/// A read selector lent only to the server operation whose lease owns its
+/// lifetime. It cannot admit work, extend residency, or expose a runtime handle.
+pub(crate) struct ConfigurationObservationSource {
+    resident: Weak<ResidentRuntime>,
+}
+impl ConfigurationObservationSource {
+    /// Preserve the original native application publication fence while reading
+    /// the admitted incarnation, including while registry retirement drains it.
+    pub(crate) fn read(
+        &self,
+        manager: &SessionRuntimeManager,
+        session: &SessionId,
+    ) -> Option<super::configuration::settings::EffectiveConfiguration> {
+        let resident = self.resident.upgrade()?;
+        if !Weak::ptr_eq(
+            &resident.identity.registry,
+            &Arc::downgrade(&manager.registry),
+        ) {
+            return None;
+        }
+        let application = manager.applications.lock();
+        let composition = resident.composition.lock().expect("composition mutex");
+        let mut view = composition.as_ref()?.runtime().configuration_view()?;
+        view.application = application.view(session.as_ref());
+        view.process_bindings = Some(manager.process_policy());
+        Some(view)
+    }
+}
 
 impl Drop for OperationLease {
     fn drop(&mut self) {
@@ -303,7 +341,7 @@ impl ManagedRuntimeClient {
     ) -> Result<tokio::sync::oneshot::Receiver<T>, RuntimeManagerError>
     where
         T: Send + 'static,
-        F: FnOnce() -> Fut + Send + 'static,
+        F: FnOnce(&OperationLease) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = T> + Send + 'static,
     {
         let lease = self.admit_operation()?;
@@ -321,10 +359,10 @@ impl ManagedRuntimeClient {
                 .get(&identity.conversation)
                 .cloned()
         };
-        // Capture native authority synchronously after residency admission. The
-        // caller can serialize this cut with connection close; only execution
-        // of the resulting future moves to the server-owned task.
-        let operation = operation();
+        // The synchronous factory selects only the original admitted owner;
+        // it cannot borrow this lease into its static execution future. Full
+        // reads run later in the server task, whose lease covers retirement.
+        let operation = operation(&lease);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             #[cfg(test)]
@@ -353,7 +391,7 @@ impl ManagedRuntimeClient {
         &self,
     ) -> Result<
         (
-            crate::runtime_client::attachment::AttachedSnapshot,
+            crate::runtime_client::attachment::RuntimeAttachment,
             RuntimeResidencyPin,
         ),
         RuntimeManagerError,
@@ -385,7 +423,7 @@ impl ManagedRuntimeClient {
             .ok_or(RuntimeManagerError::StaleIncarnation)?
             .host()
             .inner
-            .admit_attachment(false, true)
+            .admit_attachment_identity(false)
             .map_err(RuntimeManagerError::Client)?;
         Ok((snapshot, external))
     }
@@ -443,15 +481,10 @@ impl ManagedRuntimeClient {
     /// Rejects stale incarnations and projection failures.
     /// # Panics
     /// Panics if an internal residency mutex was poisoned.
-    pub fn snapshot(
+    pub fn checkpoint(
         &self,
-    ) -> Result<
-        (
-            crate::runtime_client::snapshot::RuntimeClientSnapshot,
-            crate::runtime_client::types::RuntimeClientCursor,
-        ),
-        RuntimeManagerError,
-    > {
+    ) -> Result<crate::runtime_client::checkpoint::RuntimeClientCheckpoint, RuntimeManagerError>
+    {
         let lease = self.admit_operation()?;
         let runtime = lease.0.as_ref().expect("operation resident");
         let composition = runtime.composition.lock().expect("composition mutex");
@@ -459,7 +492,7 @@ impl ManagedRuntimeClient {
             .as_ref()
             .ok_or(RuntimeManagerError::StaleIncarnation)?
             .host()
-            .snapshot()
+            .checkpoint()
             .map_err(|e| error(format!("{e:?}")))
     }
 }
@@ -964,6 +997,37 @@ impl SessionRuntimeManager {
         resident.and_then(|resident| resident.shutdown_runtime())
     }
 
+    /// A live node's read authorization comes from its sole native Projection.
+    /// Loading/unloading residency cannot silently become a cold Store-head read.
+    pub(crate) fn history_observation_cut(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<Option<crate::runtime_client::checkpoint::CheckpointReadCut>, RuntimeManagerError>
+    {
+        let resident = {
+            let state = self.registry.0.lock().expect("registry mutex");
+            match state.entries.get(conversation) {
+                None => return Ok(None),
+                Some(Entry::Loaded(resident)) if !state.fenced(conversation) => resident.clone(),
+                _ => return Err(RuntimeManagerError::StaleIncarnation),
+            }
+        };
+        let lease = resident.identity.client().admit_operation()?;
+        let host = resident
+            .composition
+            .lock()
+            .expect("composition mutex")
+            .as_ref()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?
+            .host()
+            .clone();
+        let cut = host
+            .published_read_cut()
+            .map_err(RuntimeManagerError::Client)?;
+        drop(lease);
+        Ok(Some(cut))
+    }
+
     /// The resident Session's Runtime Client host, for observing the
     /// projection a client attachment would observe.
     #[cfg(test)]
@@ -991,6 +1055,20 @@ impl SessionRuntimeManager {
         self.applications.lock().view(id.as_ref())
     }
 
+    /// Independent native configuration oracle for bounded serializer tests.
+    /// Server reads instead use the original admitted operation's source.
+    #[cfg(test)]
+    pub(crate) fn effective_configuration_observation(
+        &self,
+        id: &SessionId,
+    ) -> Option<super::configuration::settings::EffectiveConfiguration> {
+        let application = self.applications.lock();
+        let mut view = self.configuration_runtime(id)?.configuration_view()?;
+        view.application = application.view(id.as_ref());
+        view.process_bindings = Some(self.process_policy());
+        Some(view)
+    }
+
     /// Process-local automatic source repair observations (Issue #464).
     pub(crate) fn source_repairs(&self) -> &super::configuration::repair::RepairLedger {
         self.configuration.repairs()
@@ -1000,10 +1078,11 @@ impl SessionRuntimeManager {
         self.applications.subscribe()
     }
 
-    pub(crate) fn configuration_applications(
+    pub(crate) fn next_configuration_application(
         &self,
-    ) -> Vec<super::configuration::application::ConfigurationApplication> {
-        self.applications.lock().views()
+        versions: &std::collections::BTreeMap<String, u64>,
+    ) -> Option<super::configuration::application::ConfigurationApplication> {
+        self.applications.lock().next_view(versions)
     }
 
     /// Native ownership starts before capture and survives loss of the RPC.
@@ -1013,105 +1092,144 @@ impl SessionRuntimeManager {
         &self,
         session: &SessionId,
         selection: crate::model::session::SessionModelConfig,
-    ) -> Result<crate::model::session::SessionModelView, ModelSelectionError> {
+    ) -> Result<(crate::model::session::SessionModelView, u64), ModelSelectionError> {
+        self.set_model_update(session, ModelSelectionInput::Configuration(selection))
+            .await
+    }
+
+    pub(crate) async fn select_catalog_model(
+        &self,
+        session: &SessionId,
+        choice: crate::model::session::CatalogModelSelection,
+    ) -> Result<(crate::model::session::SessionModelView, u64), ModelSelectionError> {
+        self.set_model_update(session, ModelSelectionInput::Catalog(choice))
+            .await
+    }
+
+    async fn set_model_update(
+        &self,
+        session: &SessionId,
+        input: ModelSelectionInput,
+    ) -> Result<(crate::model::session::SessionModelView, u64), ModelSelectionError> {
         use crate::runtime::conversation_runtime::ModelUpdateError;
         let owner = self.clone();
         let session = session.clone();
-        tokio::task::spawn_blocking(move || {
-            let (runtime, candidate, adopted, expected_settings, source_identity) = {
-                let application = owner.applications.lock();
-                let catalog = owner.sessions.catalog.blocking_lock();
-                let expected_settings = catalog.settings_revision(&session)?;
-                let adopted = owner
-                    .sessions
-                    .configuration_bindings
-                    .lock()
-                    .expect("Session configuration bindings")
-                    .get(&session)
-                    .cloned()
-                    .ok_or(ModelUpdateError::Inactive)?;
-                let runtime = owner
-                    .configuration_runtime(&session)
-                    .ok_or(ModelUpdateError::Inactive)?;
-                let candidate = runtime.capture_model_selection()?;
-                if candidate.baseline != adopted.binding_revision {
-                    return Err(ModelUpdateError::Conflict.into());
-                }
-                let identity = application.view(session.as_ref()).map(|view| view.desired);
-                (runtime, candidate, adopted, expected_settings, identity)
-            };
-            let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
-            #[cfg(test)]
-            owner
-                .configuration
-                .test_hooks
-                .reach("model_selection_prepared");
+        tokio::task::spawn_blocking(move || owner.set_model_update_blocking(&session, input))
+            .await
+            .map_err(|_| {
+                ModelSelectionError::Model(ModelUpdateError::DurabilityFailed {
+                    message: "Session model operation interrupted; reread Session authority".into(),
+                })
+            })?
+    }
 
-            let mut application = owner.applications.lock();
-            if application.view(session.as_ref()).map(|view| view.desired) != source_identity {
+    fn set_model_update_blocking(
+        &self,
+        session: &SessionId,
+        input: ModelSelectionInput,
+    ) -> Result<(crate::model::session::SessionModelView, u64), ModelSelectionError> {
+        use crate::runtime::conversation_runtime::ModelUpdateError;
+        let owner = self;
+        let (runtime, candidate, adopted, expected_settings, source_identity) = {
+            let application = owner.applications.lock();
+            let catalog = owner.sessions.catalog.blocking_lock();
+            let expected_settings = catalog.settings_revision(session)?;
+            let adopted = owner
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .get(session)
+                .cloned()
+                .ok_or(ModelUpdateError::Inactive)?;
+            let runtime = owner
+                .configuration_runtime(session)
+                .ok_or(ModelUpdateError::Inactive)?;
+            let candidate = runtime.capture_model_selection()?;
+            if candidate.baseline != adopted.binding_revision {
                 return Err(ModelUpdateError::Conflict.into());
             }
-            let mut catalog = owner.sessions.catalog.blocking_lock();
-            if catalog.settings_revision(&session)? != expected_settings {
-                return Err(ModelUpdateError::Conflict.into());
+            let identity = application.view(session.as_ref()).map(|view| view.desired);
+            (runtime, candidate, adopted, expected_settings, identity)
+        };
+        let selection = match input {
+            ModelSelectionInput::Configuration(selection) => selection,
+            ModelSelectionInput::Catalog(choice) => candidate.catalog_selection(&choice)?,
+        };
+        let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
+        #[cfg(test)]
+        owner
+            .configuration
+            .test_hooks
+            .reach("model_selection_prepared");
+
+        let mut application = owner.applications.lock();
+        if application.view(session.as_ref()).map(|view| view.desired) != source_identity {
+            return Err(ModelUpdateError::Conflict.into());
+        }
+        let mut catalog = owner.sessions.catalog.blocking_lock();
+        if catalog.settings_revision(session)? != expected_settings {
+            return Err(ModelUpdateError::Conflict.into());
+        }
+        let (_, mut settings) = catalog.lineage(session, None)?;
+        let selection_is_persisted = settings.model.as_ref() == Some(&selection);
+        settings.model = Some(selection.clone());
+        let mut persistence_error = None;
+        let result = runtime.commit_model_selection(candidate, |revision| {
+            if selection_is_persisted && revision == adopted.binding_revision {
+                return Ok(false);
             }
-            let (_, mut settings) = catalog.lineage(&session, None)?;
-            let selection_is_persisted = settings.model.as_ref() == Some(&selection);
-            settings.model = Some(selection.clone());
-            let mut persistence_error = None;
-            let result = runtime.commit_model_selection(candidate, |revision| {
-                if selection_is_persisted && revision == adopted.binding_revision {
-                    return Ok(false);
+            // Linearization: catalog visibility under the runtime admission
+            // gate. Before visibility, failure publishes nothing. Once visible,
+            // even an uncertain directory fsync must publish the same authority;
+            // the caller receives that typed failure, never success or rollback.
+            if let Err(error) = catalog.replace_settings(session, expected_settings, settings) {
+                let committed = error.committed();
+                let diagnostic = error.to_string();
+                persistence_error = Some(error);
+                if !committed {
+                    return Err(ModelUpdateError::DurabilityFailed {
+                        message: diagnostic,
+                    });
                 }
-                // Linearization: catalog visibility under the runtime admission
-                // gate. Before visibility, failure publishes nothing. Once visible,
-                // even an uncertain directory fsync must publish the same authority;
-                // the caller receives that typed failure, never success or rollback.
-                if let Err(error) = catalog.replace_settings(&session, expected_settings, settings)
-                {
-                    let committed = error.committed();
-                    let diagnostic = error.to_string();
-                    persistence_error = Some(error);
-                    if !committed {
-                        return Err(ModelUpdateError::DurabilityFailed {
-                            message: diagnostic,
-                        });
-                    }
-                }
-                owner
-                    .sessions
-                    .configuration_bindings
-                    .lock()
-                    .expect("Session configuration bindings")
-                    .insert(
-                        session.clone(),
-                        adopted.with_model_selection(selection.clone(), revision),
-                    );
-                Ok(true)
-            });
-            let changed = result.as_ref().is_ok_and(|commit| commit.changed);
-            if changed {
-                application.selection_changed(session.as_ref(), selection);
-                owner.applications.notify(&application);
             }
-            drop(catalog);
-            drop(application);
-            if changed {
-                owner.applications.run(owner.clone());
-            }
-            if let Some(error) = persistence_error {
-                return Err(ModelSelectionError::Persistence(error));
-            }
-            result
-                .map(|commit| commit.view)
-                .map_err(ModelSelectionError::Model)
-        })
-        .await
-        .map_err(|_| {
-            ModelSelectionError::Model(ModelUpdateError::DurabilityFailed {
-                message: "Session model operation interrupted; reread Session authority".into(),
+            owner
+                .sessions
+                .configuration_bindings
+                .lock()
+                .expect("Session configuration bindings")
+                .insert(
+                    session.clone(),
+                    adopted.with_model_selection(selection.clone(), revision),
+                );
+            Ok(true)
+        });
+        let changed = result.as_ref().is_ok_and(|commit| commit.changed);
+        if changed {
+            application.selection_changed(session.as_ref(), selection);
+            owner.applications.notify(&application);
+        }
+        let settings_revision = result
+            .as_ref()
+            .ok()
+            .map(|_| catalog.settings_revision(session))
+            .transpose()?;
+        drop(catalog);
+        drop(application);
+        if changed {
+            owner.applications.run(owner.clone());
+        }
+        if let Some(error) = persistence_error {
+            return Err(ModelSelectionError::Persistence(error));
+        }
+        result
+            .map(|commit| {
+                (
+                    commit.view,
+                    settings_revision.expect("confirmed native settings revision"),
+                )
             })
-        })?
+            .map_err(ModelSelectionError::Model)
     }
 
     pub(crate) fn adopt_configuration(
@@ -1286,32 +1404,13 @@ impl SessionRuntimeManager {
     pub async fn source_settings(
         &self,
         target: &super::configuration::settings::SourceTarget,
-        mutation: Option<(String, super::configuration::settings::SourceMutation)>,
     ) -> Result<super::configuration::settings::SourceSettings, SourceSettingsError> {
         let owner = self.clone();
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
             target.validate().map_err(SourceSettingsError::Source)?;
-            let mut application = owner.applications.lock();
-            let committed = mutation.is_some();
-            let result = match mutation {
-                Some((expected, mutation)) => owner
-                    .configuration
-                    .write_source_settings(&target, &expected, mutation),
-                None => owner.configuration.read_source_settings(&target),
-            };
-            if committed
-                && (result.is_ok()
-                    || matches!(
-                        &result,
-                        Err(super::configuration::settings::SettingsError::Committed)
-                    ))
-            {
-                // Linearization: persisted source belongs to native coordination
-                // before releasing the publication lock or replying to the client.
-                owner.capture_source_consumers(&mut application, &target);
-                owner.applications.notify(&application);
-            }
+            let application = owner.applications.lock();
+            let result = owner.configuration.read_source_settings(&target);
             let mut projection = result;
             if let Ok(projection) = &mut projection {
                 projection.application = application.view(&target.application_scope());
@@ -1332,15 +1431,59 @@ impl SessionRuntimeManager {
                 });
             }
             drop(application);
-            if committed {
-                owner.applications.run(owner.clone());
-                #[cfg(test)]
-                owner
-                    .configuration
-                    .test_hooks
-                    .reach("after_coordination_transfer");
-            }
             projection.map_err(SourceSettingsError::Source)
+        })
+        .await
+        .map_err(|_| {
+            SourceSettingsError::Source(super::configuration::settings::SettingsError::Committed)
+        })?
+    }
+    /// Commit one source edit and transfer its application responsibility.
+    /// The revision is captured from candidate bytes at native publication,
+    /// never from a subsequent current-state read.
+    /// # Errors
+    /// Stale/invalid sources and unconfirmed durable commitment remain explicit.
+    pub async fn write_source_settings(
+        &self,
+        target: &super::configuration::settings::SourceTarget,
+        expected: String,
+        mutation: super::configuration::settings::SourceMutation,
+    ) -> Result<super::configuration::observation::SourceWriteReceipt, SourceSettingsError> {
+        let owner = self.clone();
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || {
+            target.validate().map_err(SourceSettingsError::Source)?;
+            let mut application = owner.applications.lock();
+            let result = owner
+                .configuration
+                .write_source_settings(&target, &expected, mutation);
+            if result.is_ok()
+                || matches!(
+                    &result,
+                    Err(super::configuration::settings::SettingsError::Committed)
+                )
+            {
+                owner.capture_source_consumers(&mut application, &target);
+                owner.applications.notify(&application);
+            }
+            let configuration_revision = application
+                .view(&target.application_scope())
+                .map(|application| application.version);
+            drop(application);
+            owner.applications.run(owner.clone());
+            #[cfg(test)]
+            owner
+                .configuration
+                .test_hooks
+                .reach("after_coordination_transfer");
+            result
+                .map(
+                    |revision| super::configuration::observation::SourceWriteReceipt {
+                        revision,
+                        configuration_revision,
+                    },
+                )
+                .map_err(SourceSettingsError::Source)
         })
         .await
         .map_err(|_| {
@@ -2140,4 +2283,10 @@ impl From<super::session::SessionError> for ModelSelectionError {
 #[derive(Debug)]
 pub enum SourceSettingsError {
     Source(super::configuration::settings::SettingsError),
+}
+
+/// Native selection inputs share the existing capture/resolve/commit owner.
+enum ModelSelectionInput {
+    Configuration(crate::model::session::SessionModelConfig),
+    Catalog(crate::model::session::CatalogModelSelection),
 }

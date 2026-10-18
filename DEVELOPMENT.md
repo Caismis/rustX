@@ -2,6 +2,12 @@
 
 Use Node 24+, the pinned pnpm (Corepack), and the repository's Rust toolchain.
 The native runtime currently supports Unix (Linux/macOS; use WSL on Windows).
+Install libclang 9 or newer before building: `sudo apt install libclang-dev`
+on Debian/Ubuntu, or `brew install llvm` and
+`export LIBCLANG_PATH="$(brew --prefix llvm)/lib"` on macOS.
+The bundled SQLite build uses rusqlite's safe preupdate-hook bindings to
+invalidate native selection certificates on same-transaction mutations;
+[bindgen requires libclang](https://rust-lang.github.io/rust-bindgen/requirements.html).
 From the repository root:
 
 ```sh

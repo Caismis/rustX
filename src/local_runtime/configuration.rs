@@ -3,6 +3,8 @@
 //! Source content is reread per call; admitted configurations own their capture.
 
 pub mod application;
+pub mod effective_observation;
+pub mod observation;
 pub mod repair;
 pub mod settings;
 

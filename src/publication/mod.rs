@@ -103,6 +103,6 @@ pub use carryover::{
 pub use coalescer::{CoalescePolicy, PublicationCoalescer};
 pub use frame::{
     PublicationAudit, PublicationAuditBlock, PublicationAuditKind, PublicationFrame,
-    PublicationPayload, PublicationSettlement, PublicationStreamRecord, PublicationStreamStart,
-    consolidate_audit_content,
+    PublicationFrameReceipt, PublicationPayload, PublicationSettlement, PublicationStreamRecord,
+    PublicationStreamStart, consolidate_audit_content,
 };

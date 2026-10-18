@@ -10,3 +10,5 @@
 
 mod mcp_capability;
 mod python_capability;
+
+mod observation;

@@ -8,7 +8,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
 
-test('CFG3 committed write and reconciliation response loss reconstructs native state without replay', async ({ page }) => {
+test('CFG3 committed write and reconciliation response loss reconstructs native state without replay', { tag: '@smoke' }, async ({ page }) => {
   const fixture = await startDogfood(); const wire = await wireProbe(page);
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');

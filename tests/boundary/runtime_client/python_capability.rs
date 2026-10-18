@@ -20,7 +20,7 @@ use super::super::support::runtime_client_conformance as conformance;
 use std::sync::Arc;
 
 use rustx::runtime::identity::ToolId;
-use rustx::runtime_client::{RuntimeClientRequest, RuntimeClientResult};
+use rustx::runtime_client::RuntimeClientRequest;
 use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
@@ -92,9 +92,13 @@ async fn capability_projection_covers_native_python_and_skills() {
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),
     });
-    let Some(RuntimeClientResult::Capability { capabilities }) = response.result else {
-        panic!("capability result");
+    let rustx::runtime_client::RuntimeClientResult::DomainPage { page } =
+        response.result.expect("successful native domain read")
+    else {
+        panic!("bounded capability domain page");
     };
+    let cut = page.read_cut;
+    let capabilities = complete_capabilities(&attachment, &cut);
 
     // The candidate activated a new revision (Skill + Python package content).
     assert!(capabilities.revision.get() >= 1);
@@ -108,15 +112,7 @@ async fn capability_projection_covers_native_python_and_skills() {
         .map(|tool| tool.name.as_str())
         .collect();
     assert_eq!(names, vec!["ls", "read", "py_echo"]);
-    let second = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
-        id: rustx::runtime_client::RequestId::new(2),
-    });
-    let Some(RuntimeClientResult::Capability {
-        capabilities: second_view,
-    }) = second.result
-    else {
-        panic!("capability result");
-    };
+    let second_view = complete_capabilities(&attachment, &cut);
     assert_eq!(second_view, capabilities, "deterministic ordering");
 
     // Origin metadata is correct and typed: the managed Python package
@@ -153,6 +149,120 @@ async fn capability_projection_covers_native_python_and_skills() {
         );
     }
     assert!(json.contains(&location));
+}
+
+fn complete_capabilities(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+) -> rustx::runtime_client::snapshot::CapabilityView {
+    rustx::runtime_client::snapshot::CapabilityView {
+        revision: capability_value(attachment, cut, "capabilities", 0, &["revision".into()]),
+        configured_tools: capability_rows(attachment, cut, "capabilities.configured_tools"),
+        tools: capability_rows(attachment, cut, "capabilities.tools"),
+        available_tools: capability_rows(attachment, cut, "capabilities.available_tools"),
+        skills: capability_rows(attachment, cut, "capabilities.skills"),
+        sources: capability_rows(attachment, cut, "capabilities.sources"),
+    }
+}
+
+fn capability_rows<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    domain: &str,
+) -> Vec<T> {
+    let mut offset = 0;
+    let mut rows = Vec::new();
+    loop {
+        let response = attachment.handle_request(RuntimeClientRequest::CheckpointPageGet {
+            id: rustx::runtime_client::RequestId::new(3),
+            cut: cut.clone(),
+            domain: domain.into(),
+            offset,
+            limit: 32,
+        });
+        let rustx::runtime_client::RuntimeClientResult::CheckpointPage { page } =
+            response.result.expect("same-cut native capability page")
+        else {
+            panic!("native capability page");
+        };
+        assert_eq!(&page.read_cut, cut);
+        assert_eq!(page.domain, domain);
+        assert!(page.items.len() <= 32);
+        for item in page.items {
+            assert_eq!(item.offset, rows.len() as u64, "contiguous native catalog");
+            let row = if !item.deferred && item.body_complete != Some(false) {
+                rustx::runtime_client::checkpoint::decode_domain_value(
+                    item.value.expect("complete inline capability row"),
+                )
+                .expect("typed native capability row")
+            } else {
+                capability_value(attachment, cut, domain, item.offset, &[])
+            };
+            rows.push(row);
+        }
+        let Some(next) = page.next_offset else {
+            assert_eq!(rows.len() as u64, page.total, "complete original catalog");
+            return rows;
+        };
+        assert!(next > offset, "native capability page advances");
+        assert_eq!(next, rows.len() as u64);
+        offset = next;
+    }
+}
+
+fn capability_value<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    domain: &str,
+    item_offset: u64,
+    path: &[String],
+) -> T {
+    use base64::Engine as _;
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let response = attachment.handle_request(RuntimeClientRequest::CheckpointValueRead {
+            id: rustx::runtime_client::RequestId::new(4),
+            cut: cut.clone(),
+            domain: domain.into(),
+            item_offset,
+            path: path.to_owned(),
+            offset,
+            max_bytes: 65_536,
+        });
+        let rustx::runtime_client::RuntimeClientResult::CheckpointValueChunk { chunk } =
+            response.result.unwrap_or_else(|| {
+                panic!("same-cut original capability bytes: {domain} row {item_offset} path {path:?}: {:?}", response.error)
+            })
+        else {
+            panic!("native capability value chunk");
+        };
+        assert_eq!(&chunk.cut, cut);
+        assert_eq!(chunk.domain, domain);
+        assert_eq!(chunk.item_offset, item_offset);
+        assert_eq!(chunk.path, path);
+        assert_eq!(chunk.offset, offset);
+        assert_eq!(
+            chunk.representation,
+            rustx::runtime_client::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1,
+        );
+        let part = base64::engine::general_purpose::STANDARD
+            .decode(chunk.bytes_base64)
+            .expect("native base64 bytes");
+        assert!(part.len() <= 65_536);
+        bytes.extend_from_slice(&part);
+        let Some(next) = chunk.next_offset else {
+            assert_eq!(bytes.len() as u64, chunk.readable_end);
+            break;
+        };
+        assert!(next > offset);
+        assert_eq!(next, bytes.len() as u64);
+        offset = next;
+    }
+    rustx::runtime_client::checkpoint::decode_domain_value(
+        serde_json::from_slice(&bytes).expect("original native JSON"),
+    )
+    .expect("complete typed native capability field")
 }
 
 /// The Python-origin transport conformance scenario runs outside the

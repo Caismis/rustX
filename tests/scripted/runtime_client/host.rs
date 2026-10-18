@@ -164,13 +164,21 @@ async fn submit_idle_admits_and_settles_asynchronously() {
     );
 
     let events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }))
+            .filter(|event| event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. })))
             .count(),
         1,
         "terminal settlement observed exactly once"
@@ -196,7 +204,10 @@ async fn submit_idle_admits_and_settles_asynchronously() {
         )
     }));
 
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(snapshot.messages.len(), 3);
     assert!(matches!(
         snapshot.attempt.expect("attempt").phase,
@@ -244,7 +255,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
         content: text("first"),
     });
     receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. })
+        event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
     })
     .await;
     assert_eq!(
@@ -264,7 +275,10 @@ async fn submit_while_busy_queues_for_the_next_drain() {
     else {
         panic!("accepted");
     };
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot.inbound.pending.len(),
         1,
@@ -274,7 +288,11 @@ async fn submit_while_busy_queues_for_the_next_drain() {
 
     release_tx.send(true).expect("release");
     receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let requests = model_handle.requests();
@@ -285,7 +303,10 @@ async fn submit_while_busy_queues_for_the_next_drain() {
             .iter()
             .any(|message| matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user)) if user.id == second_id))
     );
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert!(snapshot.inbound.pending.is_empty());
 }
 
@@ -316,7 +337,11 @@ async fn cancel_current_attempt_is_acceptance_not_settlement() {
         content: text("go"),
     });
     receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptStarted { .. }))
     })
     .await;
     // Wait until the model is provably parked awaiting cancellation.
@@ -335,19 +360,23 @@ async fn cancel_current_attempt_is_acceptance_not_settlement() {
     ));
 
     let events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(
-                event.event,
+            .filter(|event| event.event.facts().iter().any(|fact| matches!(
+                fact,
                 RuntimeClientEvent::AttemptSettled {
                     outcome: RuntimeClientOutcome::Cancelled { .. },
                     ..
                 }
-            ))
+            )))
             .count(),
         1
     );
@@ -427,7 +456,11 @@ async fn foreground_tools_project_with_stable_identities() {
         content: text("run tools"),
     });
     let events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     controller.await.expect("controller");
@@ -436,30 +469,68 @@ async fn foreground_tools_project_with_stable_identities() {
     // order even though B completed physically first.
     let settled_calls: Vec<&str> = events
         .iter()
-        .filter_map(|event| match &event.event {
-            RuntimeClientEvent::ToolExecutionSettled { tool_call_id, .. } => {
-                Some(tool_call_id.as_str())
-            }
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
+            RuntimeClientEvent::ToolExecutionSettled { tool_call_id, .. } => Some(
+                tool_call_id
+                    .as_ref()
+                    .expect("small fixture call ID")
+                    .as_str(),
+            ),
             _ => None,
         })
         .collect();
     assert_eq!(settled_calls, vec!["call-a", "call-b"]);
     let started_calls: Vec<&str> = events
         .iter()
-        .filter_map(|event| match &event.event {
-            RuntimeClientEvent::ToolExecutionStarted { tool_call_id, .. } => {
-                Some(tool_call_id.as_str())
-            }
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
+            RuntimeClientEvent::ToolExecutionStarted { tool_call_id, .. } => Some(
+                tool_call_id
+                    .as_ref()
+                    .expect("small fixture call ID")
+                    .as_str(),
+            ),
             _ => None,
         })
         .collect();
     assert_eq!(started_calls, vec!["call-a", "call-b"]);
 
-    let (snapshot, _) = host.snapshot().expect("snapshot");
-    let foreground = &snapshot.attempt.expect("attempt").foreground;
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
+    assert!(
+        snapshot.attempt.expect("attempt").foreground.is_empty(),
+        "the subsequent stopping request contains no foreground calls"
+    );
+    let response = attachment.handle_request(RuntimeClientRequest::TranscriptPageGet {
+        id: rustx::runtime_client::RequestId::new(2),
+        before_cursor: None,
+        limit: 32,
+    });
+    let Some(RuntimeClientResult::TranscriptPage { page }) = response.result else {
+        panic!("bounded native transcript");
+    };
+    assert!(page.source_cut.is_some());
+    let foreground = support::runtime_client_conformance::transcript_tool_slots(&page);
     assert_eq!(foreground.len(), 2);
-    assert_eq!(foreground[0].call_id.as_str(), "call-a");
-    assert_eq!(foreground[1].call_id.as_str(), "call-b");
+    assert_eq!(
+        foreground[0]
+            .call_id
+            .as_ref()
+            .expect("small fixture call ID")
+            .as_str(),
+        "call-a"
+    );
+    assert_eq!(
+        foreground[1]
+            .call_id
+            .as_ref()
+            .expect("small fixture call ID")
+            .as_str(),
+        "call-b"
+    );
     assert!(foreground.iter().all(|slot| matches!(
         slot.state,
         rustx::runtime_client::ForegroundToolState::Settled { .. }
@@ -507,12 +578,15 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         content: text("go"),
     });
     receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. })
+        event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
     })
     .await;
 
     // Snapshot while the message is parked mid-stream.
-    let (snapshot, _cursor) = host.snapshot().expect("snapshot");
+    let (snapshot, _cursor) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     let in_flight = snapshot
         .attempt
         .as_ref()
@@ -530,13 +604,22 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
     // the client reconstructs "hello world" with no duplicate output.
     release_tx.send(true).expect("release");
     let resumed = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let deltas: Vec<String> = resumed
         .iter()
-        .filter_map(|event| match &event.event {
-            RuntimeClientEvent::AssistantTextDelta { delta, .. } => Some(delta.clone()),
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
+            RuntimeClientEvent::BlockContentAdvanced {
+                kind,
+                inline_delta: Some(delta),
+                ..
+            } if kind == "text" => Some(delta.clone()),
             _ => None,
         })
         .collect();
@@ -546,7 +629,10 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         "no duplicated output after resume"
     );
 
-    let (final_snapshot, _) = host.snapshot().expect("snapshot");
+    let (final_snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     let committed_text = final_snapshot
         .messages
         .iter()
@@ -660,7 +746,10 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
 
     // A fresh snapshot repairs every externally visible fact, and resuming
     // at its cursor is always serviceable.
-    let (snapshot, cursor) = host.snapshot().expect("snapshot");
+    let (snapshot, cursor) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot.messages.len(),
         2,
@@ -694,14 +783,22 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
                     expected,
                     "a subscription observes strictly contiguous cursors"
                 );
-                if matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }) {
+                if event
+                    .event
+                    .facts()
+                    .iter()
+                    .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+                {
                     break;
                 }
             }
             rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
                 repairs += 1;
                 assert!(repairs < 32, "repairing must converge");
-                let (repaired, repaired_cursor) = host.snapshot().expect("snapshot");
+                let (repaired, repaired_cursor) = host
+                    .checkpoint()
+                    .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+                    .expect("snapshot");
                 if repaired.attempt.as_ref().is_some_and(|attempt| {
                     matches!(
                         attempt.phase,
@@ -719,7 +816,10 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
         }
     }
 
-    let (final_snapshot, _) = host.snapshot().expect("snapshot");
+    let (final_snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(final_snapshot.messages.len(), 3);
     assert!(matches!(
         final_snapshot.attempt.expect("attempt").phase,
@@ -751,25 +851,38 @@ async fn agent_status_shares_one_composition() {
         content: text("go"),
     });
     let mut events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AgentStatusComposed { .. }))
     })
     .await;
     let terminal_events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     events.extend(terminal_events);
     assert_eq!(
         events
             .iter()
-            .filter(|event| matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
+            .filter(|event| event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::AgentStatusComposed { .. })))
             .count(),
         1,
         "ContextContributionEmitted remains an internal fact; one composition is the only client status event"
     );
     let (status_view, evicted_status_message_id) = events
         .iter()
-        .find_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .find_map(|event| match event {
             RuntimeClientEvent::AgentStatusComposed {
                 status,
                 evicted_status_message_id,
@@ -819,9 +932,9 @@ async fn agent_status_shares_one_composition() {
     let composed_wire = serde_json::to_value(
         events
             .iter()
-            .find(|event| matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
-            .map(|event| &event.event)
-            .expect("status event"),
+            .flat_map(|event| event.event.facts())
+            .find(|fact| matches!(fact, RuntimeClientEvent::AgentStatusComposed { .. }))
+            .expect("status fact in the complete transition"),
     )
     .expect("the composition event serializes");
     assert!(
@@ -858,7 +971,10 @@ async fn agent_status_shares_one_composition() {
             .is_none(),
         "PostToolBatch has no production wire field before it has a producer"
     );
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     // Placement is published, never inferred. This composition is
     // `FreshInbound`, so it is placed by the exact inbound message identity —
     // the stronger fact — and that message is a real durable transcript item
@@ -871,25 +987,48 @@ async fn agent_status_shares_one_composition() {
         .as_ref()
         .expect("FreshInbound is populated by the current producer")
         .target_message_id
-        .clone();
+        .clone()
+        .expect("native inline FreshInbound identity");
+    let response = attachment.handle_request(RuntimeClientRequest::TranscriptPageGet {
+        id: rustx::runtime_client::RequestId::new(2),
+        before_cursor: None,
+        limit: 32,
+    });
+    let Some(RuntimeClientResult::TranscriptPage { page }) = response.result else {
+        panic!("bounded native transcript");
+    };
+    assert!(page.source_cut.is_some());
+    let target_locator = status_view
+        .opportunities
+        .fresh_inbound
+        .as_ref()
+        .expect("native FreshInbound")
+        .target_locator
+        .as_ref()
+        .expect("positive canonical target locator");
+    let loaded = page.entries.iter().any(|entry| matches!(&entry.item, rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } if rustx::conversation::message_id_of(message) == target_message_id));
+    let deferred = page
+        .deferred_entries
+        .iter()
+        .filter_map(|item| item.value.as_ref())
+        .filter(|value| value.get("locator").is_some())
+        .any(|value| {
+            let descriptor: rustx::runtime_client::snapshot::RuntimeClientMessageDescriptor =
+                rustx::runtime_client::checkpoint::decode_domain_value(value.clone())
+                    .expect("finite original message descriptor");
+            descriptor.locator == *target_locator
+                && descriptor.identity.as_ref() == Some(&target_message_id)
+        });
     assert!(
-        snapshot
-            .transcript
-            .entries
-            .iter()
-            .any(|entry| match &entry.item {
-                rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } =>
-                    rustx::conversation::message_id_of(message) == target_message_id,
-                _ => false,
-            }),
-        "the referenced inbound turn is a durable transcript item"
+        loaded || deferred,
+        "the exact original inbound identity/locator belongs to the captured durable transcript"
     );
     assert!(
         !snapshot.transcript.entries.iter().any(|entry| matches!(
             &entry.item,
             rustx::runtime_client::RuntimeClientTranscriptItem::Message { message }
                 if rustx::conversation::message_id_of(message)
-                    == status_view.status_message_id
+                    == status_view.status_message_id.as_ref().expect("native inline status identity").clone()
         )),
         "the canonical Agent Status Context message stays out of the durable transcript"
     );
@@ -911,7 +1050,8 @@ async fn agent_status_shares_one_composition() {
         })
         .expect("canonical status message");
     assert_eq!(
-        status_view.status_message_id, committed_status.id,
+        status_view.status_message_id,
+        Some(committed_status.id.clone()),
         "structured status identifies its canonical User context message"
     );
     assert!(snapshot.messages.iter().any(|message| {
@@ -924,7 +1064,7 @@ async fn agent_status_shares_one_composition() {
                         .fresh_inbound
                         .as_ref()
                         .expect("FreshInbound is populated by the current producer")
-                        .target_message_id
+                        .target_message_id.as_ref().expect("native inline FreshInbound identity").clone()
         )
     }));
     assert!(matches!(
@@ -980,14 +1120,20 @@ async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() 
         content: text("go"),
     });
     let events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
-    assert!(
-        events
+    assert!(events.iter().all(|event| {
+        !event
+            .event
+            .facts()
             .iter()
-            .all(|event| !matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
-    );
+            .any(|fact| matches!(fact, RuntimeClientEvent::AgentStatusComposed { .. }))
+    }));
     let requests = model_handle.requests();
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].messages.iter().any(|message| {
@@ -1002,7 +1148,10 @@ async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() 
                 )
         )
     }));
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert!(snapshot.statuses.is_empty());
 }
 
@@ -1063,7 +1212,11 @@ async fn agent_status_is_composed_exactly_once_per_request() {
         content: text("go"),
     });
     let events = receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -1114,7 +1267,8 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     // caused no further composition.
     let status_events: Vec<_> = events
         .iter()
-        .filter_map(|event| match &event.event {
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
             RuntimeClientEvent::AgentStatusComposed { status, .. } => Some(status),
             _ => None,
         })
@@ -1133,7 +1287,10 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     }
 
     // Reading the projection is not a composition either.
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot
             .statuses
@@ -1197,9 +1354,10 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),
     });
-    let Some(RuntimeClientResult::Capability { capabilities }) = response.result else {
-        panic!("capability result");
-    };
+    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+        super::super::common::native_domain_single(
+            response.result.expect("successful native domain read"),
+        );
     // Bootstrap has no executable authority. Preparation publishes the
     // selected base registry as the first active generation.
     assert_eq!(capabilities.revision.get(), 1);
@@ -1211,7 +1369,10 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
 
     // The snapshot carries the same semantic projection (one
     // implementation, not two).
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(snapshot.capabilities, capabilities);
 }
 
@@ -1255,11 +1416,13 @@ async fn streamed_deltas_publish_no_adoption_eligibility_change() {
     let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
-    let eligibility = |event: &RuntimeClientProtocolEvent| match &event.event {
-        RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-            Some(eligibility.clone())
-        }
-        _ => None,
+    let eligibility = |event: &RuntimeClientProtocolEvent| {
+        event.event.facts().iter().find_map(|fact| match fact {
+            RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
+                Some(eligibility.clone())
+            }
+            _ => None,
+        })
     };
     let mut seen = receive_until(&subscription, |event| {
         eligibility(event) == Some(AdoptionEligibility::Eligible)
@@ -1279,7 +1442,11 @@ async fn streamed_deltas_publish_no_adoption_eligibility_change() {
     release_tx.send(true).expect("release");
     seen.extend(
         receive_until(&subscription, |event| {
-            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+            event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
         })
         .await,
     );
@@ -1294,15 +1461,20 @@ async fn streamed_deltas_publish_no_adoption_eligibility_change() {
     let deltas: Vec<usize> = streamed
         .iter()
         .enumerate()
-        .filter(|(_, event)| matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. }))
+        .filter(|(_, event)| event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text")))
         .map(|(index, _)| index)
         .collect();
     // Publication release may coalesce model deltas; every streamed byte is
     // still published between the first and last delta event.
     let text: String = streamed
         .iter()
-        .filter_map(|event| match &event.event {
-            RuntimeClientEvent::AssistantTextDelta { delta, .. } => Some(delta.as_str()),
+        .flat_map(|event| event.event.facts())
+        .filter_map(|event| match event {
+            RuntimeClientEvent::BlockContentAdvanced {
+                kind,
+                inline_delta: Some(delta),
+                ..
+            } if kind == "text" => Some(delta.as_str()),
             _ => None,
         })
         .collect();
@@ -1329,7 +1501,8 @@ async fn streamed_deltas_publish_no_adoption_eligibility_change() {
         "{published:?}"
     );
     assert_eq!(
-        host.snapshot()
+        host.checkpoint()
+            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
             .configuration_adoption_eligibility,

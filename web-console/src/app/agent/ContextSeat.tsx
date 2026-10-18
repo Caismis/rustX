@@ -1,5 +1,5 @@
 import { ProjectionHistory } from "./ProjectionHistory";
-import type { RuntimeClientContextView } from '../../../../protocol/app-server/v49';
+import type { RuntimeClientContextView } from '../../../../protocol/app-server/v50';
 import type { AppServerClient, CompactionRequestEvidence } from '../../client/app-server';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';

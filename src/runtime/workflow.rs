@@ -2501,6 +2501,8 @@ impl WorkflowRuntime {
             .send_modify(|events| events.push(event.clone()));
         let event_id = workflow_event_id(&event);
         let envelope = RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id,
             sequence: 0,
@@ -2510,15 +2512,10 @@ impl WorkflowRuntime {
             timestamp: Utc::now(),
             event,
         };
-        if let Ok(committed) = self.event_store.append_event(envelope)
-            && matches!(
-                committed.event,
-                RuntimeEvent::WorkflowStarted { .. }
-                    | RuntimeEvent::WorkflowCompleted { .. }
-                    | RuntimeEvent::WorkflowFailed { .. }
-                    | RuntimeEvent::WorkflowCancelled { .. }
-            )
-        {
+        if let Ok(committed) = self.event_store.append_event(envelope) {
+            // Every committed native progress fact releases its preceding
+            // read-model revisions. Waiting for the outer run's terminal fact
+            // would hide in-flight child/check state behind its own execution.
             self.read_model.publish_committed(committed.sequence);
         }
     }
@@ -2569,7 +2566,7 @@ impl WorkflowRuntime {
         })?;
         let spec = crate::runtime::subagent::SubagentStartSpec {
             authority: crate::runtime::subagent::DurableAgentAuthority {
-                title: node_id.node.clone(),
+                title: node_id.node.clone().into(),
                 execution_policy: context.execution_policy(),
                 resolved,
                 approval_mode: context.approval_mode(),
@@ -2796,7 +2793,7 @@ impl WorkflowRuntime {
                 detail: bound_workflow_diagnostic(
                     snapshot
                         .detail
-                        .unwrap_or_else(|| format!("native child settled as {state:?}")),
+                        .unwrap_or_else(|| format!("native child settled as {state:?}").into()),
                 ),
             }),
         }
@@ -3011,8 +3008,13 @@ fn bound_workflow_text(value: String) -> String {
     crate::runtime::subagent::bound_utf8(value, crate::runtime::subagent::MAX_RESULT_CONTENT_BYTES)
 }
 
-fn bound_workflow_diagnostic(value: String) -> String {
-    crate::runtime::subagent::bound_utf8(value, MAX_WORKFLOW_DIAGNOSTIC_BYTES)
+fn bound_workflow_diagnostic(value: impl AsRef<str>) -> String {
+    let value = value.as_ref();
+    let mut end = value.len().min(MAX_WORKFLOW_DIAGNOSTIC_BYTES);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
 }
 
 fn single_successor(
@@ -3031,6 +3033,8 @@ fn single_successor(
 #[cfg(test)]
 mod tests {
     mod authored_paths;
+    #[cfg(unix)]
+    mod publication_tests;
     mod scoped;
     mod templates;
     mod tools;

@@ -30,7 +30,9 @@ pub(crate) fn check_cancelled(signal: &CancellationSignal) -> Result<(), String>
         Ok(())
     }
 }
-fn image_ids(messages: &[ModelInputMessage]) -> BTreeSet<ArtifactId> {
+fn image_ids<'a>(
+    messages: impl IntoIterator<Item = &'a ModelInputMessage>,
+) -> BTreeSet<ArtifactId> {
     let mut ids = BTreeSet::new();
     for message in messages {
         match message.view() {
@@ -53,22 +55,67 @@ fn image_ids(messages: &[ModelInputMessage]) -> BTreeSet<ArtifactId> {
     }
     ids
 }
+// A fixed occurrence frontier, including duplicates, implements the exact
+// reverse image-budget rule without copying any User/Tool message body.
+fn newest_image_ids<'a>(
+    messages: impl IntoIterator<Item = &'a ModelInputMessage>,
+) -> BTreeSet<ArtifactId> {
+    let mut newest = std::collections::VecDeque::with_capacity(16);
+    let mut remember = |id: &ArtifactId| {
+        if newest.len() == 16 {
+            newest.pop_front();
+        }
+        newest.push_back(id.clone());
+    };
+    for message in messages {
+        match message.view() {
+            ModelMessageView::User(content) => {
+                for block in content {
+                    if let UserContentBlock::Image(image) = block {
+                        remember(&image.artifact_id);
+                    }
+                }
+            }
+            ModelMessageView::Tool(_, result) => {
+                for block in &result.content {
+                    if let ToolResultContent::Image(image) = block {
+                        remember(&image.artifact_id);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    newest.into_iter().collect()
+}
 impl MediaSnapshot {
     /// Capture the union needed by historical-only and complete primary views.
     /// Prefix deletion cannot promote an omitted image: its newer sixteen
     /// occurrences also survive. Fixed core inputs keep their surviving order.
     /// Upload rendering is message-local. Neither pure transform resamples I/O.
-    pub(crate) fn capture(
+    pub(crate) fn capture<'a, H, C>(
         previous: Option<&Self>,
-        historical: &[ModelInputMessage],
-        complete: &[ModelInputMessage],
+        historical: H,
+        complete: C,
         artifacts: Option<&ArtifactStore>,
         enabled: Option<bool>,
         owner: Option<&dyn UploadProjectionResolver>,
         signal: &CancellationSignal,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, String>
+    where
+        H: Clone + IntoIterator<Item = &'a ModelInputMessage>,
+        C: Clone + IntoIterator<Item = &'a ModelInputMessage>,
+        H::IntoIter: ExactSizeIterator,
+        C::IntoIter: ExactSizeIterator,
+    {
         check_cancelled(signal)?;
-        if historical.len().max(complete.len()) > 8192 {
+        if historical
+            .clone()
+            .into_iter()
+            .len()
+            .max(complete.clone().into_iter().len())
+            > 8192
+        {
             return Err("media input exceeds item budget".into());
         }
         let conversation = artifacts.map(|store| store.conversation_id().clone());
@@ -78,22 +125,24 @@ impl MediaSnapshot {
         let mut snapshot = previous.cloned().unwrap_or_default();
         snapshot.enabled = enabled;
         snapshot.conversation = conversation;
-        snapshot.capture_uploads(historical, complete, owner, signal)?;
+        snapshot.capture_uploads(historical.clone(), complete.clone(), owner, signal)?;
+        check_cancelled(signal)?;
+        snapshot.validate_render_budget(historical.clone())?;
+        snapshot.uploads.validate(historical.clone())?;
+        check_cancelled(signal)?;
+        snapshot.validate_render_budget(complete.clone())?;
+        snapshot.uploads.validate(complete.clone())?;
+        check_cancelled(signal)?;
         let mut required_images = BTreeSet::new();
-        for input in [historical, complete] {
+        if enabled == Some(true) {
+            // Upload rendering preserves every User image and its order. The
+            // image transform retains exactly the newest sixteen User/Tool
+            // occurrences; its resource set needs no rendered history copy.
+            required_images.extend(newest_image_ids(historical));
             check_cancelled(signal)?;
-            #[cfg(test)]
-            count_copy(input);
-            snapshot.validate_render_budget(input)?;
-            let mut rendered = input.to_vec();
-            snapshot.uploads.apply(&mut rendered)?;
-            if let Some(enabled) = enabled {
-                super::images::project(&mut rendered, enabled);
-            }
-            if enabled.is_some() {
-                required_images.extend(image_ids(&rendered));
-            }
+            required_images.extend(newest_image_ids(complete));
         }
+        check_cancelled(signal)?;
         if required_images.len() > 32 {
             return Err("media snapshot exceeds image union budget".into());
         }
@@ -122,15 +171,15 @@ impl MediaSnapshot {
         Ok(snapshot)
     }
 
-    fn capture_uploads(
+    fn capture_uploads<'a>(
         &mut self,
-        historical: &[ModelInputMessage],
-        complete: &[ModelInputMessage],
+        historical: impl Clone + IntoIterator<Item = &'a ModelInputMessage>,
+        complete: impl Clone + IntoIterator<Item = &'a ModelInputMessage>,
         owner: Option<&dyn UploadProjectionResolver>,
         signal: &CancellationSignal,
     ) -> Result<(), String> {
         let mut needed = BTreeSet::new();
-        for message in historical.iter().chain(complete) {
+        for message in historical.clone().into_iter().chain(complete.clone()) {
             check_cancelled(signal)?;
             if let ModelMessageView::User(content) = message.view() {
                 for block in content {
@@ -158,8 +207,13 @@ impl MediaSnapshot {
             // Pass only newly needed real references to the same Session owner.
             let mut input = Vec::new();
             let mut submitted = BTreeSet::new();
-            for message in historical.iter().chain(complete) {
+            for message in historical.into_iter().chain(complete) {
                 check_cancelled(signal)?;
+                if !matches!(message.view(), ModelMessageView::User(content)
+                    if content.iter().any(|block| matches!(block, UserContentBlock::UploadedFile(file) if missing.contains(file))))
+                {
+                    continue;
+                }
                 let mut message = message.clone();
                 let content = match &mut message {
                     ModelInputMessage::Canonical(MessageBlock::User(user)) => &mut user.content,
@@ -208,7 +262,10 @@ impl MediaSnapshot {
         Ok(())
     }
 
-    fn validate_render_budget(&self, messages: &[ModelInputMessage]) -> Result<(), String> {
+    fn validate_render_budget<'a>(
+        &self,
+        messages: impl IntoIterator<Item = &'a ModelInputMessage>,
+    ) -> Result<(), String> {
         let mut budget = 16usize * 1024 * 1024;
         let files: BTreeMap<_, _> = self
             .uploads
@@ -247,67 +304,214 @@ impl MediaSnapshot {
         Ok(())
     }
 
+    /// Capture only actual media-bearing occurrences from the same immutable input.
+    pub(crate) fn capture_selected(
+        previous: Option<&Self>,
+        historical: &super::SelectedModelInput,
+        complete: &super::SelectedModelInput,
+        artifacts: Option<&ArtifactStore>,
+        enabled: Option<bool>,
+        owner: Option<&dyn UploadProjectionResolver>,
+        signal: &CancellationSignal,
+    ) -> Result<Self, String> {
+        check_cancelled(signal)?;
+        if historical.len().max(complete.len()) > 8192 {
+            return Err("media input exceeds item budget".into());
+        }
+        let historical_ranks = historical.media_indices();
+        let complete_ranks = complete.media_indices();
+        Self::capture(
+            previous,
+            historical_ranks.iter().map(|index| &historical[*index]),
+            complete_ranks.iter().map(|index| &complete[*index]),
+            artifacts,
+            enabled,
+            owner,
+            signal,
+        )
+    }
+    /// Materializes only the actual media items, preserving their original ranks.
+    pub(crate) fn materialize_selected_with_changes(
+        &self,
+        messages: &mut super::SelectedModelInput,
+        manifest: Option<&super::SelectedInputManifest>,
+    ) -> Result<Vec<usize>, String> {
+        if manifest.is_some_and(|manifest| manifest.len() != messages.len()) {
+            return Err("media input manifest length changed".into());
+        }
+        let ranks = messages.media_indices();
+        if ranks.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut media: Vec<_> = ranks.iter().map(|index| messages[*index].clone()).collect();
+        #[cfg(test)]
+        count_copy(&media);
+        let changed = self.materialize_indexed(&mut media, manifest, Some(&ranks))?;
+        #[cfg(test)]
+        if !changed.is_empty() {
+            count_projection();
+        }
+        for index in &changed {
+            #[cfg(test)]
+            count_item_copy(&media[*index]);
+            messages.replace(ranks[*index], media[*index].clone());
+        }
+        Ok(changed.into_iter().map(|index| ranks[index]).collect())
+    }
+    pub(crate) fn selected_images_input(
+        &self,
+        messages: &super::SelectedModelInput,
+    ) -> Result<super::images::ResolvedImages, String> {
+        let ranks = messages.media_indices();
+        let mut count = 0usize;
+        for message in ranks.iter().map(|index| &messages[*index]) {
+            count += match message.view() {
+                ModelMessageView::User(content) => content
+                    .iter()
+                    .filter(|block| matches!(block, UserContentBlock::Image(_)))
+                    .count(),
+                ModelMessageView::Tool(_, result) => result
+                    .content
+                    .iter()
+                    .filter(|block| matches!(block, ToolResultContent::Image(_)))
+                    .count(),
+                _ => 0,
+            };
+        }
+        if count > 16 {
+            return Err("request exceeds the 16-image limit".into());
+        }
+        image_ids(ranks.iter().map(|index| &messages[*index]))
+            .into_iter()
+            .map(|id| {
+                self.images
+                    .get(&id)
+                    .cloned()
+                    .map(|bytes| (id, bytes))
+                    .ok_or_else(|| "image is outside frozen media resources".into())
+            })
+            .collect()
+    }
+    pub(crate) fn image_cost_input(&self, messages: &super::SelectedModelInput) -> u64 {
+        if self.enabled.is_none() {
+            return 0;
+        }
+        image_cost_input(messages, |id| self.costs.get(id).copied())
+    }
     /// Same provider-neutral content and scoped provenance as actual staging.
+    #[cfg(test)]
     pub(crate) fn materialize(&self, messages: &mut [ModelInputMessage]) -> Result<(), String> {
-        self.validate_render_budget(messages)?;
-        #[cfg(test)]
-        count_copy(messages);
-        let original = messages.to_vec();
-        self.uploads.apply(messages)?;
-        #[cfg(test)]
-        count_copy(messages);
-        let uploaded = messages.to_vec();
-        if let Some(enabled) = self.enabled {
-            super::images::project(messages, enabled);
+        self.materialize_with_changes(messages, None).map(|_| ())
+    }
+
+    /// Transform only the actual selected items and retain their native input
+    /// provenance. Unchanged message bodies are never copied or compared.
+    #[cfg(test)]
+    pub(crate) fn materialize_with_changes(
+        &self,
+        messages: &mut [ModelInputMessage],
+        manifest: Option<&super::SelectedInputManifest>,
+    ) -> Result<Vec<usize>, String> {
+        self.materialize_indexed(messages, manifest, None)
+    }
+    fn materialize_indexed(
+        &self,
+        messages: &mut [ModelInputMessage],
+        manifest: Option<&super::SelectedInputManifest>,
+        ranks: Option<&[usize]>,
+    ) -> Result<Vec<usize>, String> {
+        if ranks.is_none() && manifest.is_some_and(|manifest| manifest.len() != messages.len()) {
+            return Err("media input manifest length changed".into());
         }
-        if let Some(conversation) = &self.conversation {
-            for ((message, original), after_upload) in
-                messages.iter_mut().zip(&original).zip(&uploaded)
+        self.validate_render_budget(messages.iter())?;
+        let mut changed = BTreeSet::new();
+        let mut originals = BTreeMap::new();
+        let mut failure = None;
+        self.uploads.apply_with_changes(messages, |index, before| {
+            changed.insert(index);
+            match self.original_source(ranks.map_or(index, |ranks| ranks[index]), before, manifest)
             {
-                if let Some(source) = original.as_canonical() {
-                    let upload_changed = original != after_upload;
-                    let image_changed = after_upload != message;
-                    #[cfg(test)]
-                    if upload_changed || image_changed {
-                        WORK.with(|work| {
-                            let mut value = work.get();
-                            value.copied_bytes +=
-                                serde_json::to_vec(&message.view()).unwrap().len()
-                                    + serde_json::to_vec(source).unwrap().len();
-                            work.set(value);
-                        });
-                    }
-                    message.mark_transformed(
-                        source,
-                        conversation,
-                        if upload_changed {
-                            SemanticTransformation::UploadRendering
-                        } else {
-                            SemanticTransformation::ImageDowngrade
-                        },
-                    );
-                    if image_changed
-                        && let ModelInputMessage::Derived(d) = message
-                        && !d
-                            .transformations
-                            .contains(&SemanticTransformation::ImageDowngrade)
-                    {
-                        d.transformations
-                            .push(SemanticTransformation::ImageDowngrade);
-                    }
+                Ok(Some(source)) => {
+                    originals.insert(index, source);
                 }
+                Ok(None) => {}
+                Err(error) => failure = Some(error),
             }
+        })?;
+        if let Some(error) = failure.take() {
+            return Err(error);
         }
+        mark_transformed(messages, originals, SemanticTransformation::UploadRendering);
+        let mut originals = BTreeMap::new();
+        if let Some(enabled) = self.enabled {
+            super::images::project_with_changes(messages, enabled, |index, before| {
+                changed.insert(index);
+                match self.original_source(
+                    ranks.map_or(index, |ranks| ranks[index]),
+                    before,
+                    manifest,
+                ) {
+                    Ok(Some(source)) => {
+                        originals.insert(index, source);
+                    }
+                    Ok(None) => {}
+                    Err(error) => failure = Some(error),
+                }
+            });
+        }
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        mark_transformed(messages, originals, SemanticTransformation::ImageDowngrade);
         // Never price a newly introduced/unfrozen reference as zero cost.
         if self.enabled.is_some()
-            && image_ids(messages)
+            && image_ids(messages.iter())
                 .iter()
                 .any(|id| !self.images.contains_key(id))
         {
             return Err("image is outside frozen media resources".into());
         }
-        Ok(())
+        #[cfg(test)]
+        WORK.with(|work| {
+            let mut current = work.get();
+            current.changed_items += changed.len();
+            work.set(current);
+        });
+        Ok(changed.into_iter().collect())
     }
+
+    fn original_source(
+        &self,
+        index: usize,
+        message: &ModelInputMessage,
+        manifest: Option<&super::SelectedInputManifest>,
+    ) -> Result<Option<super::projected::CanonicalMessageRef>, String> {
+        let (Some(conversation), Some(message)) = (&self.conversation, message.as_canonical())
+        else {
+            return Ok(None);
+        };
+        if let Some(manifest) = manifest {
+            return match manifest.get(index) {
+                Some(super::projected::FrozenModelInput::Original(source))
+                    if &source.message_id == message.id() =>
+                {
+                    Ok(Some(source.clone()))
+                }
+                _ => Err("media input differs from its native Original selection".into()),
+            };
+        }
+        #[cfg(test)]
+        WORK.with(|work| {
+            let mut current = work.get();
+            current.original_hashes += 1;
+            work.set(current);
+        });
+        Ok(Some(super::projected::CanonicalMessageRef::of(
+            conversation,
+            message,
+        )))
+    }
+    #[cfg(test)]
     pub(crate) fn selected_images(
         &self,
         messages: &[ModelInputMessage],
@@ -326,6 +530,7 @@ impl MediaSnapshot {
             })
             .collect()
     }
+    #[cfg(test)]
     pub(crate) fn image_cost(&self, messages: &[ModelInputMessage]) -> u64 {
         if self.enabled.is_none() {
             return 0;
@@ -333,8 +538,49 @@ impl MediaSnapshot {
         image_cost(messages, |id| self.costs.get(id).copied())
     }
 }
+fn mark_transformed(
+    messages: &mut [ModelInputMessage],
+    originals: BTreeMap<usize, super::projected::CanonicalMessageRef>,
+    transformation: SemanticTransformation,
+) {
+    #[cfg(test)]
+    let mut counted_projection = false;
+    for (index, source) in originals {
+        if let ModelInputMessage::Canonical(message) = &messages[index] {
+            #[cfg(test)]
+            {
+                if !counted_projection {
+                    count_projection();
+                    counted_projection = true;
+                }
+                count_item_copy(&messages[index]);
+            }
+            messages[index] = ModelInputMessage::Derived(super::projected::DerivedModelMessage {
+                message: super::projected::ProjectedMessage::from(message),
+                sources: vec![source],
+                checkpoint_sources: Vec::new(),
+                transformations: vec![transformation],
+            });
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn image_cost(
     messages: &[ModelInputMessage],
+    cost: impl FnMut(&ArtifactId) -> Option<u64>,
+) -> u64 {
+    image_cost_iter(messages, cost)
+}
+pub(crate) fn image_cost_input(
+    messages: &super::SelectedModelInput,
+    cost: impl FnMut(&ArtifactId) -> Option<u64>,
+) -> u64 {
+    let ranks = messages.media_indices();
+    image_cost_iter(ranks.iter().map(|index| &messages[*index]), cost)
+}
+fn image_cost_iter<'a>(
+    messages: impl IntoIterator<Item = &'a ModelInputMessage>,
     mut cost: impl FnMut(&ArtifactId) -> Option<u64>,
 ) -> u64 {
     let mut total = 0u64;
@@ -365,24 +611,44 @@ pub(crate) fn image_cost(
 pub(crate) struct Work {
     pub reads: usize,
     pub resolutions: usize,
+    /// Copy passes over a selected input, rather than the number of items.
     pub projections: usize,
+    /// Actual values copied by those passes (including replacement leaves).
+    pub copied_items: usize,
+    /// Logical serialized source bytes copied, not allocator/RSS measurements.
     pub copied_bytes: usize,
+    pub original_hashes: usize,
+    pub changed_items: usize,
 }
 #[cfg(test)]
-thread_local! { static WORK: std::cell::Cell<Work> = const { std::cell::Cell::new(Work { reads: 0, resolutions: 0, projections: 0, copied_bytes: 0 }) }; }
+thread_local! { static WORK: std::cell::Cell<Work> = const { std::cell::Cell::new(Work { reads: 0, resolutions: 0, projections: 0, copied_items: 0, copied_bytes: 0, original_hashes: 0, changed_items: 0 }) }; }
 #[cfg(test)]
 pub(crate) fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
 }
 #[cfg(test)]
 pub(crate) fn count_copy(messages: &[ModelInputMessage]) {
+    if !messages.is_empty() {
+        count_projection();
+    }
+    for message in messages {
+        count_item_copy(message);
+    }
+}
+#[cfg(test)]
+fn count_projection() {
     WORK.with(|work| {
         let mut current = work.get();
         current.projections += 1;
-        current.copied_bytes += messages
-            .iter()
-            .map(|m| serde_json::to_vec(m).unwrap().len())
-            .sum::<usize>();
+        work.set(current);
+    });
+}
+#[cfg(test)]
+fn count_item_copy(message: &ModelInputMessage) {
+    WORK.with(|work| {
+        let mut current = work.get();
+        current.copied_items += 1;
+        current.copied_bytes += serde_json::to_vec(message).unwrap().len();
         work.set(current);
     });
 }
@@ -390,6 +656,10 @@ pub(crate) fn count_copy(messages: &[ModelInputMessage]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod selected_tests {
+        use super::*;
+        include!("media/selected_tests.rs");
+    }
     use crate::context::{ContextConfig, ContextEngine, DefaultTokenEstimator, TokenEstimator};
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::message::{
@@ -676,7 +946,7 @@ mod tests {
             .await
             .unwrap();
         assert!(engine.supports_monotone_compaction(&input));
-        let mut materialized = input.clone();
+        let mut materialized = input.to_vec();
         let images = engine.materialize_media(&mut materialized).unwrap();
         let ModelInputMessage::Derived(d) = &materialized[0] else {
             panic!("Derived provenance lost")

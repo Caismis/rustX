@@ -31,7 +31,7 @@ async function fixture() {
   const intake = server.client.attachmentIntakes.lookup(key)!;
   return { ui, editor, intake, key, origin, target: server.client.target('A'), text: editor().value };
 }
-const mutations = (from: number) => server.requests.slice(from).filter(({ request }) => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start', 'turn/steer', 'session/uploadPrepare', 'session/snapshot'].includes(request.method));
+const mutations = (from: number) => server.requests.slice(from).filter(({ request }) => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start', 'turn/steer', 'session/uploadPrepare', 'session/checkpoint'].includes(request.method));
 it.each(['Return to conversation', 'Open Session A'])('repeated read-only history visits via %s retain the exact editor, caret, intake/files/receipts and active controls', async back => {
   const activation = vi.spyOn(ComposerDraft.prototype, 'activate');
   const f = await fixture(), owner = activation.mock.contexts.at(-1) as ComposerDraft;
@@ -115,7 +115,7 @@ it.each(['Return to conversation', 'Open Session A'])('cold admission via %s ret
   expect(server.client.attachmentIntakes.lookup(f.key)).toBe(f.intake);
   expect(f.intake.snapshot()[0]).toMatchObject({ id: selected.id, file, status: 'draft', receipt: undefined });
   expect(f.intake.snapshot()[0].operation).not.toBe(selected.operation);
-  expect(mutations(before).map(row => row.request.method)).toEqual(['session/attach']);
+  expect(mutations(before).map(row => row.request.method)).toEqual(['session/attach','session/checkpoint']);
   expect(server.client.target('A').conversation_id).toBe(f.target.conversation_id);
   expect(server.client.target('A')).not.toEqual(f.target);
 });
@@ -385,7 +385,7 @@ it('reselecting the already committed Session and unrelated publication preserve
   expect(f.editor().value).toBe(f.text); expect([f.editor().selectionStart, f.editor().selectionEnd, f.editor().selectionDirection]).toEqual([7, 12, 'backward']);
   expect(f.intake.snapshot()).toBe(selected); expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
   // The fixture's explicit resync publication legitimately requests a snapshot.
-  expect(mutations(before).filter(row => row.request.method !== 'session/snapshot')).toEqual([]); expect(server.client.target('A')).toBe(f.target);
+  expect(mutations(before).filter(row => row.request.method !== 'session/checkpoint')).toEqual([]); expect(server.client.target('A')).toBe(f.target);
 });
 it.each(['reattach', 'switch'] as const)('known C1 acceptance after explicit lifecycle %s records the fact under exact canonical identity', async kind => {
   const f = await fixture(), submit = vi.spyOn(ComposerDraft.prototype, 'submit');

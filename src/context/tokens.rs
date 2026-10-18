@@ -17,201 +17,85 @@
 use crate::conversation::SurfaceRevision;
 use crate::message::types::MessageBlock;
 use crate::model::input::ModelInputMessage;
-use crate::runtime::identity::MessageId;
 use crate::tools::types::ModelToolDefinition;
 
-/// An observed provider-reported input measurement, tied to the request
-/// context it measured.
-///
-/// The measurement is authoritative for exactly the request it describes.
-/// The engine reuses it in two ways, and never in any other:
-///
-/// - **exactly**, when the request context being measured is
-///   fingerprint-identical to the observed one — the same Surface revision,
-///   the same hydrated messages, and the same Effective System Prompt;
-/// - **as an anchor**, when the measured context is a *prefix* of the one
-///   being measured and the non-conversation input is unchanged. The
-///   measured prefix keeps its provider-reported value and only the
-///   canonical messages appended since are estimated.
-///
-/// The second case is what keeps token accounting honest over a long
-/// conversation. A whole-conversation estimate compounds estimator error
-/// across every message ever sent, so a provider-neutral `bytes / 4`
-/// approximation drifts further from the truth the longer the conversation
-/// runs — which is exactly when the soft-limit decision matters most.
-/// Anchoring confines that error to the messages added since the last
-/// completed request. Otherwise the measurement is dropped and a full
-/// deterministic estimate is used.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Provider-reported input measured for one exact immutable selected request.
+/// The anchor retains its actual input root; it never rebuilds a history-sized
+/// identity list or substitutes a hash for exact native input equivalence.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderObservedInput {
-    /// The fingerprint of the request context the provider request used.
-    pub fingerprint: u64,
-    /// The reported `ModelUsage.input_tokens` of that request.
-    ///
-    /// This is the adapter-normalized *effective* input of the request,
-    /// including provider cache-read and cache-creation input where the
-    /// provider reports those categories separately.
+    /// Adapter-normalized effective input, including cache input where reported.
     pub input_tokens: u64,
-    /// The structural identity of the measured request context.
-    ///
-    /// Absent for a measurement recorded without one, which can then only be
-    /// reused on an exact fingerprint match.
-    pub anchor: Option<ObservedAnchor>,
+    pub anchor: ObservedAnchor,
 }
 
-/// The structural identity of one measured request context.
-///
-/// A hash cannot answer "is this a prefix of that", so the anchor keeps the
-/// ordered canonical identities the measured request projected, alongside a
-/// fingerprint of the non-conversation input the measurement already covers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One immutable measured input and the exact non-conversation context it used.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ObservedAnchor {
-    /// The ordered canonical message identities of the measured request.
-    pub message_ids: Vec<MessageId>,
-    /// The ordered identities of all provider-neutral input items. A
-    /// request-only item has a private fingerprint, never a canonical id.
-    input_items: Vec<ObservedInputIdentity>,
-    /// The fingerprint of the non-conversation request input the measurement
-    /// already accounts for: the exact Effective System Prompt and the
-    /// compiled tool definitions.
-    ///
-    /// Their cost is inside `input_tokens`, so anchoring is sound only while
-    /// they are unchanged. When either changes the anchor is refused rather
-    /// than patched up with a guessed delta.
-    pub non_conversation_fingerprint: u64,
+    surface_revision: SurfaceRevision,
+    input: crate::model::SelectedModelInput,
+    effective_system_prompt: String,
+    tool_definitions: std::sync::Arc<[ModelToolDefinition]>,
 }
 
 impl ObservedAnchor {
-    /// The anchor of one exact request context.
+    /// Retains the producer's exact final selected root, after media projection.
     #[must_use]
-    pub fn of(
-        messages: &[MessageBlock],
+    pub fn of_selected(
+        surface_revision: SurfaceRevision,
+        input: &crate::model::SelectedModelInput,
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> Self {
+        #[cfg(test)]
+        let _timer = crate::agent::execution::attribution::Timer::new(
+            crate::agent::execution::attribution::Phase::ContextObserve,
+        );
+        #[cfg(test)]
+        crate::agent::execution::attribution::record_context(
+            crate::agent::execution::attribution::ContextWork {
+                anchor_roots: 1,
+                ..Default::default()
+            },
+        );
         Self {
-            message_ids: messages
-                .iter()
-                .map(|message| message.id().clone())
-                .collect(),
-            input_items: messages
-                .iter()
-                .map(|message| input_identity(&ModelInputMessage::Canonical(message.clone())))
-                .collect(),
-            non_conversation_fingerprint: non_conversation_fingerprint(
-                effective_system_prompt,
-                tool_definitions,
-            ),
+            surface_revision,
+            input: input.clone(),
+            effective_system_prompt: effective_system_prompt.to_owned(),
+            tool_definitions: tool_definitions.into(),
         }
     }
 
-    /// Creates an anchor for an already ordered mixed request.
-    #[must_use]
-    pub fn of_model_input(
-        messages: &[ModelInputMessage],
-        effective_system_prompt: &str,
-        tool_definitions: &[ModelToolDefinition],
-    ) -> Self {
-        Self {
-            message_ids: messages
-                .iter()
-                .filter_map(ModelInputMessage::canonical_id)
-                .cloned()
-                .collect(),
-            input_items: messages.iter().map(input_identity).collect(),
-            non_conversation_fingerprint: non_conversation_fingerprint(
-                effective_system_prompt,
-                tool_definitions,
-            ),
-        }
+    fn same_context(&self, prompt: &str, tools: &[ModelToolDefinition]) -> bool {
+        self.effective_system_prompt == prompt && self.tool_definitions.as_ref() == tools
     }
 
-    /// Whether the measured request contained request-only context.
+    /// Exact content and scalar identity, without a collision-based shortcut.
     #[must_use]
-    pub fn has_request_only(&self) -> bool {
-        self.input_items
-            .iter()
-            .any(|item| matches!(item, ObservedInputIdentity::RequestOnly(_)))
-    }
-
-    /// Whether this anchor is a prefix of `messages` under the same
-    /// non-conversation input, and if so how many messages it covers.
-    ///
-    /// Equal length is a prefix: a context identical to the measured one
-    /// except for its Surface revision is still fully measured.
-    #[must_use]
-    pub fn covered_prefix(
+    pub fn matches_selected(
         &self,
-        messages: &[MessageBlock],
-        effective_system_prompt: &str,
-        tool_definitions: &[ModelToolDefinition],
-    ) -> Option<usize> {
-        if self.has_request_only() {
-            return None;
-        }
-        if self.non_conversation_fingerprint
-            != non_conversation_fingerprint(effective_system_prompt, tool_definitions)
-        {
-            return None;
-        }
-        if self.message_ids.len() > messages.len() {
-            return None;
-        }
-        self.input_items
-            .iter()
-            .zip(messages)
-            .all(|(measured, current)| {
-                measured == &input_identity(&ModelInputMessage::Canonical(current.clone()))
-            })
-            .then_some(self.message_ids.len())
+        revision: SurfaceRevision,
+        input: &crate::model::SelectedModelInput,
+        prompt: &str,
+        tools: &[ModelToolDefinition],
+    ) -> bool {
+        self.surface_revision == revision
+            && self.same_context(prompt, tools)
+            && self.input.same_input(input)
     }
 
-    /// Whether this anchor is an ordered prefix of a mixed request.
+    /// The original measured input must remain an exact ordered prefix.
+    /// Shared native subtrees are compared by their immutable ownership; distinct
+    /// roots use the native exact comparison rather than accepting a digest.
     #[must_use]
     pub fn covered_prefix_model_input(
         &self,
-        messages: &[ModelInputMessage],
-        effective_system_prompt: &str,
-        tool_definitions: &[ModelToolDefinition],
+        input: &crate::model::SelectedModelInput,
+        prompt: &str,
+        tools: &[ModelToolDefinition],
     ) -> Option<usize> {
-        if self.non_conversation_fingerprint
-            != non_conversation_fingerprint(effective_system_prompt, tool_definitions)
-        {
-            return None;
-        }
-        if self.input_items.len() > messages.len() {
-            return None;
-        }
-        self.input_items
-            .iter()
-            .zip(messages)
-            .all(|(measured, current)| measured == &input_identity(current))
-            .then_some(self.input_items.len())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ObservedInputIdentity {
-    Canonical(MessageId, u64),
-    RequestOnly(u64),
-}
-
-fn input_identity(message: &ModelInputMessage) -> ObservedInputIdentity {
-    // Canonical identity alone is insufficient: a request-only modality
-    // projection can change the visible content of the same canonical message.
-    let bytes = serde_json::to_vec(message).expect("model input serializes");
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    match message {
-        ModelInputMessage::Canonical(message) => {
-            ObservedInputIdentity::Canonical(message.id().clone(), hash)
-        }
-        ModelInputMessage::RequestOnly(_) | ModelInputMessage::Derived(_) => {
-            ObservedInputIdentity::RequestOnly(hash)
-        }
+        (self.same_context(prompt, tools) && input.covers_prefix(&self.input))
+            .then_some(self.input.len())
     }
 }
 
@@ -336,6 +220,30 @@ pub trait TokenEstimator: Send + Sync {
         tool_definitions: &[ModelToolDefinition],
     ) -> u64;
 
+    /// Prices the native immutable selection. Arbitrary estimators receive the
+    /// same complete ordered input as their slice API; only an implementation
+    /// with an exact aggregate rule may override this boundary.
+    fn estimate_selected(
+        &self,
+        messages: &crate::model::SelectedModelInput,
+        effective_system_prompt: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> u64 {
+        #[cfg(test)]
+        crate::agent::execution::attribution::record_context(
+            crate::agent::execution::attribution::ContextWork {
+                estimator_calls: 1,
+                materialized_items: messages.len() as u64,
+                ..Default::default()
+            },
+        );
+        self.estimate_input(
+            &messages.to_vec(),
+            effective_system_prompt,
+            tool_definitions,
+        )
+    }
+
     /// Whether compaction's whole-request prices are monotone for this input.
     ///
     /// Returning true promises that growing the rendered summary prefix cannot
@@ -347,9 +255,14 @@ pub trait TokenEstimator: Send + Sync {
         false
     }
 
+    /// The same monotonicity question for a shared native selection.
+    fn supports_monotone_selected(&self, messages: &crate::model::SelectedModelInput) -> bool {
+        self.supports_monotone_compaction(&messages.to_vec())
+    }
+
     /// Price final materialized input without selecting runtime resources again.
     fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
-        self.estimate_input(
+        self.estimate_selected(
             &request.messages,
             &request.effective_system_prompt,
             &request.tools,
@@ -450,6 +363,13 @@ impl DefaultTokenEstimator {
     }
 }
 
+/// One immutable leaf's exact model-visible JSON. Called only when the native
+/// node aggregate is first computed; unsupported Tool projections remain errors.
+pub(crate) fn model_visible_item_bytes(message: &ModelInputMessage) -> Option<u64> {
+    let visible = message.view().model_visible().ok()?;
+    Some(encoded_bytes(&visible))
+}
+
 /// Price semantic role/content directly into a counting sink. Message IDs,
 /// source digests and projection provenance never enter model token accounting.
 fn encoded_bytes(value: &(impl serde::Serialize + ?Sized)) -> u64 {
@@ -467,6 +387,13 @@ fn encoded_bytes(value: &(impl serde::Serialize + ?Sized)) -> u64 {
     serde_json::to_writer(&mut count, value).expect("semantic model content serializes");
     #[cfg(test)]
     ACCOUNTED_BYTES.with(|total| total.set(total.get().saturating_add(count.0)));
+    #[cfg(test)]
+    crate::agent::execution::attribution::record_context(
+        crate::agent::execution::attribution::ContextWork {
+            token_bytes: count.0,
+            ..Default::default()
+        },
+    );
     count.0
 }
 #[cfg(test)]
@@ -492,6 +419,10 @@ impl TokenEstimator for DefaultTokenEstimator {
         true
     }
 
+    fn supports_monotone_selected(&self, _messages: &crate::model::SelectedModelInput) -> bool {
+        true
+    }
+
     fn estimate_input(
         &self,
         messages: &[ModelInputMessage],
@@ -505,6 +436,34 @@ impl TokenEstimator for DefaultTokenEstimator {
             effective_system_prompt,
             tool_definitions,
         ))
+    }
+
+    fn estimate_selected(
+        &self,
+        messages: &crate::model::SelectedModelInput,
+        effective_system_prompt: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> u64 {
+        #[cfg(test)]
+        ESTIMATOR_CALLS.with(|total| total.set(total.get() + 1));
+        #[cfg(test)]
+        crate::agent::execution::attribution::record_context(
+            crate::agent::execution::attribution::ContextWork {
+                estimator_calls: 1,
+                ..Default::default()
+            },
+        );
+        let Some(items) = messages.visible_bytes(0..messages.len()) else {
+            return u64::MAX;
+        };
+        let prompt = if effective_system_prompt.is_empty() {
+            0
+        } else {
+            encoded_bytes(effective_system_prompt)
+        };
+        // Array brackets and commas are already included. Round once over the
+        // complete exact byte total, never once per leaf or subtree.
+        bytes_to_tokens(items + encoded_bytes(tool_definitions) + prompt)
     }
 
     fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
@@ -562,6 +521,9 @@ impl TokenEstimator for ClosureTokenEstimator {
 pub const fn bytes_to_tokens(bytes: u64) -> u64 {
     bytes.div_ceil(4)
 }
+
+#[cfg(test)]
+mod selected_tests;
 
 #[cfg(test)]
 mod tests {

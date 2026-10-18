@@ -59,7 +59,7 @@ fn select(
 ) -> tokio::task::JoinHandle<Result<crate::model::session::SessionModelView, ModelSelectionError>> {
     let manager = fixture.manager.clone();
     let id = fixture.sessions[0].id.clone();
-    tokio::spawn(async move { manager.set_model(&id, config).await })
+    tokio::spawn(async move { manager.set_model(&id, config).await.map(|(view, _)| view) })
 }
 
 async fn fixture() -> Fixture {
@@ -117,9 +117,9 @@ async fn assert_authority(fixture: &Fixture, expected: &SessionModelConfig) {
         .manager
         .configuration_host(id)
         .unwrap()
-        .snapshot()
+        .checkpoint()
         .unwrap()
-        .0;
+        .snapshot;
     assert_eq!(projected.model.unwrap().configured, *expected);
 }
 
@@ -141,6 +141,147 @@ async fn gate_entered(gate: &Arc<Gate>) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_generation() {
+    bounded(async {
+        let f = fixture().await;
+        let id = &f.sessions[0].id;
+        let runtime = f.manager.configuration_runtime(id).unwrap();
+        let mut original = selection("local/a");
+        let summary = SummaryModelPolicy::Explicit {
+            model: ModelRef::parse("local/b").unwrap(),
+            profile: None,
+            request_params: serde_json::Map::default(),
+            max_output_tokens: Some(128),
+        };
+        original.summary_model = summary.clone();
+        f.manager.set_model(id, original).await.unwrap();
+        let before = runtime.configuration_view().unwrap().adopted_binding;
+        let source = f
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap();
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
+        let enormous_model = format!("local/z{}", "m".repeat(160_000));
+        let enormous_profile = format!("profile-{}", "p".repeat(160_000));
+        let mut model = document["models"]["local/b"].clone();
+        // Profile-owned request parameters cannot coexist with model-level parameters.
+        model.as_table_mut().unwrap().remove("request_params");
+        model.as_table_mut().unwrap().insert(
+            "profiles".into(),
+            toml::Value::Table(
+                [(
+                    enormous_profile.clone(),
+                    toml::Value::Table(toml::map::Map::default()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        model
+            .as_table_mut()
+            .unwrap()
+            .insert("default_profile".into(), enormous_profile.clone().into());
+        document["models"]
+            .as_table_mut()
+            .unwrap()
+            .insert(enormous_model.clone(), model);
+        let encoded = toml::to_string(&document).unwrap();
+        assert!(
+            encoded.len() <= 1_048_576,
+            "fixture respects the native configuration source limit: {} encoded bytes",
+            encoded.len()
+        );
+        std::fs::write(source.user.path, encoded).unwrap();
+        f.manager
+            .reconcile_configuration(&SourceTarget::User)
+            .await
+            .unwrap();
+        super::configuration::settled(&f, 0).await;
+        // The independent Summary may select the same large catalog entry.
+        // Its configuration fits admission; the complete resolved primary +
+        // Summary view is genuinely larger than a transport record.
+        let summary = SummaryModelPolicy::Explicit {
+            model: ModelRef::parse(&enormous_model).unwrap(),
+            profile: Some(ModelProfileId::parse(&enormous_profile).unwrap()),
+            request_params: serde_json::Map::default(),
+            max_output_tokens: Some(128),
+        };
+        let mut retained = runtime.model_view().configured;
+        retained.summary_model = summary.clone();
+        f.manager.set_model(id, retained).await.unwrap();
+        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        assert_ne!(
+            before,
+            binding,
+            "{:?}",
+            f.manager.configuration_application(id)
+        );
+        let catalog = runtime.model_read_source().catalog_source();
+        let model_position = (0..catalog.model_count() as u64)
+            .find(|position| catalog.model_at(*position).unwrap().model.as_str() == enormous_model)
+            .unwrap();
+        let choice = crate::model::session::CatalogModelSelection {
+            binding_revision: binding,
+            model_position,
+            profile_position: Some(0),
+        };
+        let revision = f.manager.sessions.read_settings(id).await.unwrap().0;
+        let stale = crate::model::session::CatalogModelSelection {
+            binding_revision: before,
+            ..choice.clone()
+        };
+        assert!(matches!(
+            f.manager.select_catalog_model(id, stale).await,
+            Err(ModelSelectionError::Model(ModelUpdateError::Conflict))
+        ));
+        assert_eq!(
+            f.manager.sessions.read_settings(id).await.unwrap().0,
+            revision
+        );
+        assert!(serde_json::to_vec(&choice).unwrap().len() < 256);
+        let (_, committed_revision) = f.manager.select_catalog_model(id, choice).await.unwrap();
+        assert!(committed_revision > revision);
+        let model_view = runtime.model_view();
+        assert!(
+            serde_json::to_vec(&model_view).unwrap().len() > 1_048_576,
+            "resolved native identities and independent Summary exceed one complete record"
+        );
+        assert!(
+            crate::runtime_client::checkpoint::bounded_bytes(&model_view, 1_048_576).is_none(),
+            "native model body exceeds the complete transport record budget"
+        );
+        let configured = model_view.configured;
+        assert_eq!(configured.summary_model, summary);
+        assert_eq!(configured.model.as_str(), enormous_model);
+        assert_eq!(configured.profile.unwrap().as_str(), enormous_profile);
+        let (_, durable) = f.manager.sessions.read_settings(id).await.unwrap();
+        assert_eq!(
+            durable.model.as_ref().unwrap().model.as_str(),
+            enormous_model
+        );
+        let checkpoint = f
+            .manager
+            .configuration_host(id)
+            .unwrap()
+            .checkpoint()
+            .unwrap();
+        assert!(checkpoint.snapshot.model.is_none());
+        assert_eq!(
+            checkpoint.snapshot.model_status,
+            Some(crate::runtime_client::snapshot::RuntimeClientModelStatus {
+                available: true,
+                body_deferred: true,
+                binding_revision: Some(runtime.configuration_view().unwrap().adopted_binding)
+            })
+        );
+        assert!(crate::runtime_client::checkpoint::bounded_bytes(&checkpoint, 786_432).is_some());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders() {
     bounded(async {
         for selection_first in [true, false] {
@@ -150,7 +291,7 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
             let host = f.manager.configuration_host(id).unwrap();
             let source = f
                 .manager
-                .source_settings(&SourceTarget::User, None)
+                .source_settings(&SourceTarget::User)
                 .await
                 .unwrap();
             let mut document: toml::Value =
@@ -208,7 +349,8 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
             let (attachment, _) = host
                 .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
                 .unwrap();
-            let (_, before_cursor) = host.snapshot().unwrap();
+            let checkpoint = host.checkpoint().unwrap();
+            let (_, before_cursor) = (checkpoint.snapshot, checkpoint.cursor);
             let observations = attachment.subscribe_events(before_cursor).unwrap();
             let contention = Arc::new(tokio::sync::Notify::new());
             let held = Arc::new(Gate::default());
@@ -250,7 +392,8 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 gate_entered(&held).await;
                 // The frozen snapshot has been published under the still-held
                 // coordinator lock; no model request has started yet.
-                let (admitted, cursor) = host.snapshot().unwrap();
+                let checkpoint = host.checkpoint().unwrap();
+                let (admitted, cursor) = (checkpoint.snapshot, checkpoint.cursor);
                 assert_eq!(*admitted.attempt.unwrap().model.unwrap(), old_invocation);
                 assert!(f.provider.request_bodies().is_empty());
                 admission_cursor = Some(cursor);
@@ -261,7 +404,7 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
             drop(held_release);
             selection.await.unwrap().unwrap();
             f.gates[0].wait_entered().await;
-            let frozen = host.snapshot().unwrap().0.attempt.unwrap();
+            let frozen = host.checkpoint().unwrap().snapshot.attempt.unwrap();
             assert_authority(&f, &selected).await;
             assert_eq!(
                 f.manager.sessions.read_settings(id).await.unwrap().0,
@@ -292,19 +435,24 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 let EventDelivery::Event(event) = observations.next().await else {
                     panic!("live observations")
                 };
-                match event.event {
-                    RuntimeClientEvent::SessionModelChanged { model } => {
-                        assert_eq!(model.configured, selected);
-                        assert!(changed.replace(event.cursor).is_none());
+                for fact in event.event.facts() {
+                    match fact {
+                        RuntimeClientEvent::SessionModelChanged { model, .. } => {
+                            assert_eq!(
+                                model.as_deref().expect("finite fixture model").configured,
+                                selected
+                            );
+                            assert!(changed.replace(event.cursor).is_none());
+                        }
+                        RuntimeClientEvent::AttemptStarted {
+                            model, attempt_id, ..
+                        } => {
+                            assert_eq!(model.as_deref().unwrap(), expected);
+                            assert_eq!(Some(attempt_id), frozen.attempt_id.as_ref());
+                            assert!(started.replace(event.cursor).is_none());
+                        }
+                        _ => {}
                     }
-                    RuntimeClientEvent::AttemptStarted {
-                        model, attempt_id, ..
-                    } => {
-                        assert_eq!(model.as_deref().unwrap(), expected);
-                        assert_eq!(attempt_id, frozen.attempt_id);
-                        assert!(started.replace(event.cursor).is_none());
-                    }
-                    _ => {}
                 }
             }
             assert!(changed.unwrap() > before_cursor && started.unwrap() > before_cursor);
@@ -414,7 +562,7 @@ async fn r06_catalog_publication_rejects_prepared_selection_without_adopting_con
         gate.entered().await;
         let source = f
             .manager
-            .source_settings(&SourceTarget::User, None)
+            .source_settings(&SourceTarget::User)
             .await
             .unwrap();
         let mut document: toml::Value =
@@ -563,7 +711,8 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
             let binding = runtime.configuration_view().unwrap().adopted_binding;
             let (revision, _) = f.manager.sessions.read_settings(id).await.unwrap();
             let host = f.manager.configuration_host(id).unwrap();
-            let (_, cursor) = host.snapshot().unwrap();
+            let checkpoint = host.checkpoint().unwrap();
+            let (_, cursor) = (checkpoint.snapshot, checkpoint.cursor);
             {
                 let catalog = f.manager.sessions.catalog.lock().await;
                 if after_visibility {
@@ -596,7 +745,7 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
             );
             assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
             if !after_visibility {
-                assert_eq!(host.snapshot().unwrap().1, cursor);
+                assert_eq!(host.checkpoint().unwrap().cursor, cursor);
             }
             assert!(f.provider.request_bodies().is_empty());
             f.close().await;
@@ -668,7 +817,8 @@ async fn r10_native_selection_survives_request_waiter_abort_without_replay() {
         let original_settings = f.manager.sessions.read_settings(id).await.unwrap();
         let original_application = f.manager.configuration_application(id).unwrap();
         let host = f.manager.configuration_host(id).unwrap();
-        let (_, original_cursor) = host.snapshot().unwrap();
+        let checkpoint = host.checkpoint().unwrap();
+        let (_, original_cursor) = (checkpoint.snapshot, checkpoint.cursor);
         let mut gate = SelectionGate::prepared(&f);
         let pending = select(&f, selection("local/b"));
         gate.entered().await;
@@ -680,12 +830,11 @@ async fn r10_native_selection_survives_request_waiter_abort_without_replay() {
         let (readback, initialized) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        let crate::runtime_client::RuntimeClientResult::Initialized {
-            snapshot, cursor, ..
-        } = initialized
-        else {
+        let crate::runtime_client::RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("fresh readback")
         };
+        let checkpoint = readback.checkpoint().unwrap();
+        let (snapshot, cursor) = (checkpoint.snapshot, checkpoint.cursor);
         assert_eq!(snapshot.model.unwrap().configured, selection("local/a"));
         assert_eq!(cursor, original_cursor);
         let observations = readback.subscribe_events(cursor).unwrap();
@@ -700,14 +849,20 @@ async fn r10_native_selection_survives_request_waiter_abort_without_replay() {
             f.manager.configuration_application(id).unwrap(),
             original_application
         );
-        assert_eq!(host.snapshot().unwrap().1, original_cursor);
+        assert_eq!(host.checkpoint().unwrap().cursor, original_cursor);
         drop(gate);
         loop {
             let EventDelivery::Event(event) = observations.next().await else {
                 panic!("late native selection observation")
             };
-            if let RuntimeClientEvent::SessionModelChanged { model } = event.event {
-                assert_eq!(model.configured, selection("local/b"));
+            if let Some(model) = event.event.facts().iter().find_map(|fact| match fact {
+                RuntimeClientEvent::SessionModelChanged { model, .. } => Some(model),
+                _ => None,
+            }) {
+                assert_eq!(
+                    model.as_deref().expect("finite fixture model").configured,
+                    selection("local/b")
+                );
                 assert!(event.cursor > cursor);
                 break;
             }
@@ -715,13 +870,13 @@ async fn r10_native_selection_survives_request_waiter_abort_without_replay() {
         super::configuration::settled(&f, 0).await;
         assert_authority(&f, &selection("local/b")).await;
         readback.detach();
-        let (_reconnected, initialized) = host
+        let (reconnected, initialized) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        let crate::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
-        else {
+        let crate::runtime_client::RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("reconnect")
         };
+        let snapshot = reconnected.checkpoint().unwrap().snapshot;
         assert_eq!(snapshot.model.unwrap().configured, selection("local/b"));
         assert_eq!(
             f.manager.sessions.read_settings(id).await.unwrap().0,
@@ -747,10 +902,10 @@ async fn f4_later_deliberate_selection_fences_a_prepared_request_after_old_readb
         let (readback, initialized) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        let crate::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
-        else {
+        let crate::runtime_client::RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("old readback")
         };
+        let snapshot = readback.checkpoint().unwrap().snapshot;
         assert_eq!(snapshot.model.unwrap().configured, selection("local/a"));
         let mut deliberate = selection("local/a");
         deliberate
@@ -760,7 +915,8 @@ async fn f4_later_deliberate_selection_fences_a_prepared_request_after_old_readb
         super::configuration::settled(&f, 0).await;
         let settings = f.manager.sessions.read_settings(id).await.unwrap();
         let application = f.manager.configuration_application(id).unwrap();
-        let (_, cursor) = host.snapshot().unwrap();
+        let checkpoint = host.checkpoint().unwrap();
+        let (_, cursor) = (checkpoint.snapshot, checkpoint.cursor);
         assert_eq!(settings.0, initial_revision + 1);
         drop(gate);
         // Keep the native result for this independent CAS proof; the preceding
@@ -775,15 +931,15 @@ async fn f4_later_deliberate_selection_fences_a_prepared_request_after_old_readb
             f.manager.configuration_application(id).unwrap(),
             application
         );
-        assert_eq!(host.snapshot().unwrap().1, cursor);
+        assert_eq!(host.checkpoint().unwrap().cursor, cursor);
         readback.detach();
-        let (_reconnected, initialized) = host
+        let (reconnected, initialized) = host
             .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        let crate::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
-        else {
+        let crate::runtime_client::RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("new readback")
         };
+        let snapshot = reconnected.checkpoint().unwrap().snapshot;
         assert_eq!(snapshot.model.unwrap().configured, deliberate);
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;

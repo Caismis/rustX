@@ -1,4 +1,5 @@
-import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v49';
+import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
+import type { TurnProcessView, CompletedResponseView, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage } from '../../../protocol/app-server/v50';
 
 export type TurnNode =
   | { kind: 'fork-point' }
@@ -16,7 +17,7 @@ export function turnPresentation(entries: readonly RuntimeClientTranscriptEntry[
     nodes.push({ kind: 'entry', entry });
     const response = entry.completed_response;
     if (!response) continue;
-    const key = JSON.stringify([response.origin.conversation_id, response.origin.attempt_id]);
+    const key = attemptOwnerKey(response.origin);
     if (emitted.has(key)) continue;
     emitted.add(key);
     const closing = entries.find(candidate => candidate.item.type === 'message' && candidate.item.message.id === response.closing_message_id);
@@ -28,7 +29,7 @@ export function turnPresentation(entries: readonly RuntimeClientTranscriptEntry[
   const controls = new Map<string, TurnProcessView>();
   for (const entry of entries) {
     const process = entry.turn_process ?? (entry.item.type === 'attempt_terminal' ? entry.item.turn : undefined);
-    if (process && process.outcome !== 'completed') controls.set(JSON.stringify([process.conversation_id, process.attempt_id]), process);
+    if (process && process.outcome !== 'completed') controls.set(attemptOwnerKey(process), process);
   }
   for (const [key, process] of [...controls].sort((a, b) => BigInt(a[1].control_cursor) < BigInt(b[1].control_cursor) ? -1 : 1)) {
     const index = nodes.findIndex(node => node.kind === 'entry' && BigInt(node.entry.cursor) >= BigInt(process.control_cursor));

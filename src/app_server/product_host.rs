@@ -15,7 +15,7 @@ use std::{io, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const PATH: &str = "/product-host/file-read";
-pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v3";
+pub(crate) const SUBPROTOCOL: &str = "rustx.product-host.file-read.v4";
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -219,6 +219,9 @@ where
     let outbound = super::transport::Outbound::reply(super::connection::Reply {
         response,
         publication,
+        registration: None,
+        association: None,
+        may_have_committed: false,
     })?;
     tokio::select! {
         biased;
@@ -250,7 +253,8 @@ pub(crate) enum ReadSource {
     SessionFile {
         #[serde(skip_serializing_if = "Option::is_none")]
         agent_id: Option<crate::runtime::identity::AgentId>,
-        message_id: crate::runtime::identity::MessageId,
+        locator: crate::runtime_client::content::CanonicalContentLocator,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
     Artifact {
@@ -291,13 +295,13 @@ async fn read(
     let result = match source {
         ReadSource::SessionFile {
             agent_id,
-            message_id,
+            locator,
             delivery_index,
         } => {
             delivery_access::request(
                 host,
                 route,
-                message_id,
+                locator,
                 delivery_index,
                 delivery_access::Roots::Registered(roots),
                 agent_id.map_or(
@@ -326,8 +330,8 @@ async fn artifact(
     let client = route.client.clone();
     let owner = host.clone();
     let receiver = host
-        .admit_request(|request_owner| {
-            client.start_operation(move || {
+        .admit_request(super::RequestLane::Ordinary, |request_owner| {
+            client.start_operation(move |_| {
                 let authority = route.attachment.read_authority();
                 async move {
                     let _request = request_owner;

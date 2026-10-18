@@ -1,0 +1,176 @@
+{
+  "fixture_version": 2,
+  "harness_sha256": "2a27476da7b4e0ce097aa0d11c7b1ddaa617c0a022c4af1c40be97afe3da2ccc",
+  "checkout": "/home/capi/Documents/codes/pi-rustx-benchmark",
+  "revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+  "runs": [
+    {
+      "pair": 0,
+      "case": "short-small",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "short-small",
+        "/tmp/rustx-480-evidence/pi-corrected/0-short-small.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.3781147780828178
+    },
+    {
+      "pair": 0,
+      "case": "short-large",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "short-large",
+        "/tmp/rustx-480-evidence/pi-corrected/0-short-large.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.4724601060152054
+    },
+    {
+      "pair": 0,
+      "case": "large",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "large",
+        "/tmp/rustx-480-evidence/pi-corrected/0-large.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.2930987742729485
+    },
+    {
+      "pair": 0,
+      "case": "stream",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "stream",
+        "/tmp/rustx-480-evidence/pi-corrected/0-stream.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 1.6294075618498027
+    },
+    {
+      "pair": 1,
+      "case": "short-small",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "short-small",
+        "/tmp/rustx-480-evidence/pi-corrected/1-short-small.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.374813050031662
+    },
+    {
+      "pair": 1,
+      "case": "short-large",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "short-large",
+        "/tmp/rustx-480-evidence/pi-corrected/1-short-large.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.4746972690336406
+    },
+    {
+      "pair": 1,
+      "case": "large",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "large",
+        "/tmp/rustx-480-evidence/pi-corrected/1-large.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.27745562698692083
+    },
+    {
+      "pair": 1,
+      "case": "stream",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "stream",
+        "/tmp/rustx-480-evidence/pi-corrected/1-stream.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 1.6389966597780585
+    },
+    {
+      "pair": 2,
+      "case": "short-small",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "short-small",
+        "/tmp/rustx-480-evidence/pi-corrected/2-short-small.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.3693402400240302
+    },
+    {
+      "pair": 2,
+      "case": "short-large",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "short-large",
+        "/tmp/rustx-480-evidence/pi-corrected/2-short-large.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.4762463038787246
+    },
+    {
+      "pair": 2,
+      "case": "large",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "large",
+        "/tmp/rustx-480-evidence/pi-corrected/2-large.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 0.3002499518916011
+    },
+    {
+      "pair": 2,
+      "case": "stream",
+      "argv": [
+        "node",
+        "--conditions=source",
+        "benchmarks/runtime/pi.mjs",
+        "/home/capi/Documents/codes/pi-rustx-benchmark",
+        "stream",
+        "/tmp/rustx-480-evidence/pi-corrected/2-stream.json"
+      ],
+      "returncode": 0,
+      "elapsed_seconds": 1.606611322145909
+    }
+  ]
+}

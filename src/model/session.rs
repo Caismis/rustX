@@ -105,6 +105,18 @@ pub struct SessionModelConfig {
     pub summary_model: SummaryModelPolicy,
 }
 
+/// A native catalog choice at the exact resource generation the client read.
+/// Choosing defaults replaces the Session configuration; it never patches old overrides.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogModelSelection {
+    pub binding_revision: u64,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub model_position: u64,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub profile_position: Option<u64>,
+}
+
 impl SessionModelConfig {
     /// A configuration selecting one model with every default.
     #[must_use]
@@ -186,26 +198,29 @@ pub enum AttemptSummaryModel {
 /// whole attempt, including every compaction summary, reads only this value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttemptModelSnapshot {
-    primary: ResolvedModelInvocation,
-    summary: AttemptSummaryModel,
+    primary: std::sync::Arc<ResolvedModelInvocation>,
+    summary: std::sync::Arc<AttemptSummaryModel>,
 }
 
 impl AttemptModelSnapshot {
     /// Creates a snapshot from an already-resolved primary and summary.
     #[must_use]
-    pub const fn new(primary: ResolvedModelInvocation, summary: AttemptSummaryModel) -> Self {
-        Self { primary, summary }
+    pub fn new(primary: ResolvedModelInvocation, summary: AttemptSummaryModel) -> Self {
+        Self {
+            primary: std::sync::Arc::new(primary),
+            summary: std::sync::Arc::new(summary),
+        }
     }
 
     /// The attempt's primary model invocation.
     #[must_use]
-    pub const fn primary(&self) -> &ResolvedModelInvocation {
+    pub fn primary(&self) -> &ResolvedModelInvocation {
         &self.primary
     }
 
     /// The frozen summary policy.
     #[must_use]
-    pub const fn summary_policy(&self) -> &AttemptSummaryModel {
+    pub fn summary_policy(&self) -> &AttemptSummaryModel {
         &self.summary
     }
 
@@ -215,8 +230,8 @@ impl AttemptModelSnapshot {
     /// provider binding, model, protocol, Model Profile, and effective
     /// request parameters.
     #[must_use]
-    pub const fn summary_invocation(&self) -> &ResolvedModelInvocation {
-        match &self.summary {
+    pub fn summary_invocation(&self) -> &ResolvedModelInvocation {
+        match self.summary.as_ref() {
             AttemptSummaryModel::Session => &self.primary,
             AttemptSummaryModel::Explicit(invocation) => invocation,
         }
@@ -227,7 +242,7 @@ impl AttemptModelSnapshot {
     pub fn view(&self) -> AttemptModelView {
         AttemptModelView {
             primary: self.primary.view(),
-            summary: match &self.summary {
+            summary: match self.summary.as_ref() {
                 AttemptSummaryModel::Session => SummaryModelView::Session,
                 AttemptSummaryModel::Explicit(invocation) => {
                     SummaryModelView::Explicit(Box::new(invocation.view()))
@@ -249,7 +264,7 @@ enum ModelAuthority {
     /// The mutable catalog authority of an ordinary session.
     Catalog(ModelBindingRegistry),
     /// The immutable parent-frozen authority of an out-of-process child.
-    Frozen(Box<FrozenModelSpec>),
+    Frozen(std::sync::Arc<FrozenModelSpec>),
 }
 
 /// The session's model authority plus the current desired configuration and
@@ -269,12 +284,12 @@ enum ModelAuthority {
 #[derive(Debug, Clone)]
 pub struct SessionModelState {
     authority: ModelAuthority,
-    config: SessionModelConfig,
+    config: std::sync::Arc<SessionModelConfig>,
     /// The invocation last resolved for `config`; absent only when this
     /// state was restored with an already unavailable selection.
-    resolved: Option<(ResolvedModelInvocation, AttemptSummaryModel)>,
+    resolved: Option<std::sync::Arc<(ResolvedModelInvocation, AttemptSummaryModel)>>,
     /// Why the authority's catalog does not admit `config`.
-    unavailable: Option<ModelInvocationError>,
+    unavailable: Option<std::sync::Arc<ModelInvocationError>>,
 }
 
 impl SessionModelState {
@@ -291,8 +306,8 @@ impl SessionModelState {
         let resolved = resolve(&registry, &config)?;
         Ok(Self {
             authority: ModelAuthority::Catalog(registry),
-            config,
-            resolved: Some(resolved),
+            config: std::sync::Arc::new(config),
+            resolved: Some(std::sync::Arc::new(resolved)),
             unavailable: None,
         })
     }
@@ -316,9 +331,9 @@ impl SessionModelState {
         if let Err(error) = analyze_session_model_config(registry.catalog().catalog(), &config) {
             return Ok(Self {
                 authority: ModelAuthority::Catalog(registry),
-                config,
+                config: std::sync::Arc::new(config),
                 resolved: None,
-                unavailable: Some(error),
+                unavailable: Some(std::sync::Arc::new(error)),
             });
         }
         Self::new(registry, config)
@@ -346,11 +361,11 @@ impl SessionModelState {
             Ok(_) => Self::new(registry, config),
             Err(error) => Ok(Self {
                 authority: ModelAuthority::Catalog(registry),
-                resolved: (config == self.config)
+                resolved: (config == *self.config)
                     .then(|| self.resolved.clone())
                     .flatten(),
-                config,
-                unavailable: Some(error),
+                config: std::sync::Arc::new(config),
+                unavailable: Some(std::sync::Arc::new(error)),
             }),
         }
     }
@@ -374,16 +389,16 @@ impl SessionModelState {
     ) -> Result<Self, ModelInvocationError> {
         let resolved = frozen.materialize(credentials)?;
         Ok(Self {
-            authority: ModelAuthority::Frozen(Box::new(frozen.clone())),
-            config: frozen.configured.clone(),
-            resolved: Some(resolved),
+            authority: ModelAuthority::Frozen(std::sync::Arc::new(frozen.clone())),
+            config: std::sync::Arc::new(frozen.configured.clone()),
+            resolved: Some(std::sync::Arc::new(resolved)),
             unavailable: None,
         })
     }
 
     /// The authoritative desired configuration.
     #[must_use]
-    pub const fn config(&self) -> &SessionModelConfig {
+    pub fn config(&self) -> &SessionModelConfig {
         &self.config
     }
 
@@ -414,8 +429,8 @@ impl SessionModelState {
     /// Why the authority's catalog does not admit the configured selection,
     /// when it does not.
     #[must_use]
-    pub const fn unavailable(&self) -> Option<&ModelInvocationError> {
-        self.unavailable.as_ref()
+    pub fn unavailable(&self) -> Option<&ModelInvocationError> {
+        self.unavailable.as_deref()
     }
 
     /// Freezes the current configuration into an attempt model snapshot.
@@ -430,7 +445,7 @@ impl SessionModelState {
     /// admitted with a selection the published catalog does not admit, and
     /// the invocation last resolved for it is never a substitute.
     pub fn snapshot(&self) -> Result<AttemptModelSnapshot, ModelInvocationError> {
-        match (&self.unavailable, &self.resolved) {
+        match (self.unavailable.as_deref(), self.resolved.as_deref()) {
             (None, Some((primary, summary))) => {
                 Ok(AttemptModelSnapshot::new(primary.clone(), summary.clone()))
             }
@@ -453,8 +468,8 @@ impl SessionModelState {
             });
         };
         let resolved = resolve(registry, &config)?;
-        self.config = config;
-        self.resolved = Some(resolved);
+        self.config = std::sync::Arc::new(config);
+        self.resolved = Some(std::sync::Arc::new(resolved));
         self.unavailable = None;
         Ok(())
     }
@@ -489,7 +504,7 @@ impl SessionModelState {
         let (old, new) = (current.catalog().catalog(), registry.catalog().catalog());
         if let Err(error) = analyze_session_model_config(new, &self.config) {
             self.authority = ModelAuthority::Catalog(registry);
-            self.unavailable = Some(error);
+            self.unavailable = Some(std::sync::Arc::new(error));
             return true;
         }
         let same = |selection: ModelSelection, layer| {
@@ -511,13 +526,22 @@ impl SessionModelState {
         true
     }
 
+    /// Capture immutable native read evidence without copying growing fields.
+    pub(crate) fn read_source(&self) -> SessionModelReadSource {
+        SessionModelReadSource {
+            state: self.clone(),
+            inline: std::sync::Arc::default(),
+            binding_revision: None,
+        }
+    }
+
     /// The redacted client-facing projection of the session model state.
     #[must_use]
     pub fn view(&self) -> SessionModelView {
         SessionModelView {
-            configured: self.config.clone(),
-            effective: self.resolved.as_ref().map(|(primary, _)| primary.view()),
-            summary: self.resolved.as_ref().map(|(_, summary)| match summary {
+            configured: (*self.config).clone(),
+            effective: self.resolved.as_deref().map(|(primary, _)| primary.view()),
+            summary: self.resolved.as_deref().map(|(_, summary)| match summary {
                 AttemptSummaryModel::Session => SummaryModelView::Session,
                 AttemptSummaryModel::Explicit(invocation) => {
                     SummaryModelView::Explicit(Box::new(invocation.view()))
@@ -525,6 +549,348 @@ impl SessionModelState {
             }),
             unavailable: self.unavailable.as_ref().map(ToString::to_string),
         }
+    }
+}
+
+/// Resolves one configuration into its primary invocation and summary
+/// policy without touching any existing state.
+#[derive(Debug, Clone)]
+pub(crate) struct SessionModelReadSource {
+    state: SessionModelState,
+    inline: std::sync::Arc<std::sync::OnceLock<Option<SessionModelView>>>,
+    // Only the native Runtime owns this revision. Standalone catalog/config
+    // sources have no Runtime binding and cannot authorize an ordinal mutation.
+    binding_revision: Option<u64>,
+}
+
+impl SessionModelReadSource {
+    pub(crate) fn at_binding_revision(mut self, revision: u64) -> Self {
+        self.binding_revision = Some(revision);
+        self
+    }
+    pub(crate) fn prepare(&self) {
+        self.inline.get_or_init(|| {
+            serde_json::from_slice(&crate::runtime_client::checkpoint::bounded_item_bytes(
+                self, 16_384,
+            )?)
+            .ok()
+        });
+    }
+    pub(crate) fn available(&self) -> bool {
+        self.state.unavailable.is_none() && self.state.resolved.is_some()
+    }
+    pub(crate) fn status(&self) -> crate::runtime_client::snapshot::RuntimeClientModelStatus {
+        crate::runtime_client::snapshot::RuntimeClientModelStatus {
+            available: self.available(),
+            body_deferred: self.inline().is_none(),
+            binding_revision: self.binding_revision,
+        }
+    }
+    pub(crate) fn inline(&self) -> Option<SessionModelView> {
+        self.inline.get().and_then(Clone::clone)
+    }
+    pub(crate) fn selected_text(&self, path: &[String]) -> Option<&str> {
+        match path.first()?.as_str() {
+            "configured" => match path.get(1)?.as_str() {
+                "model" if path.len() == 2 => Some(self.state.config.model.as_str()),
+                "profile" if path.len() == 2 => self
+                    .state
+                    .config
+                    .profile
+                    .as_ref()
+                    .map(super::catalog::ModelProfileId::as_str),
+                "requestParams" => parameter_text(&self.state.config.request_params, &path[2..]),
+                _ => None,
+            },
+            "effective" => {
+                let (primary, _) = self.state.resolved.as_deref()?;
+                invocation_text(primary, &path[1..])
+            }
+            "summary" => {
+                let (_, summary) = self.state.resolved.as_deref()?;
+                match summary {
+                    AttemptSummaryModel::Session => None,
+                    AttemptSummaryModel::Explicit(invocation) => {
+                        invocation_text(invocation, &path[1..])
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+    pub(crate) fn capabilities(&self) -> Option<&crate::model::catalog::ModelCapabilities> {
+        self.state
+            .resolved
+            .as_deref()
+            .map(|(primary, _)| primary.capabilities())
+    }
+    pub(crate) fn catalog_source(&self) -> ModelCatalogReadSource {
+        ModelCatalogReadSource(self.state.authority.clone())
+    }
+}
+
+impl Serialize for SessionModelReadSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut view = serializer.serialize_struct("SessionModelView", 4)?;
+        view.serialize_field("configured", self.state.config.as_ref())?;
+        if let Some((primary, summary)) = self.state.resolved.as_deref() {
+            view.serialize_field("effective", &primary.read_view())?;
+            view.serialize_field("summary", &SummaryReadView(summary))?;
+        }
+        if let Some(error) = self.state.unavailable.as_deref() {
+            view.serialize_field("unavailable", &DisplayReadView(error))?;
+        }
+        view.end()
+    }
+}
+
+impl schemars::JsonSchema for SessionModelReadSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SessionModelReadSource".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<SessionModelView>()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AttemptModelReadSource {
+    snapshot: AttemptModelSnapshot,
+    inline: std::sync::Arc<std::sync::OnceLock<Option<AttemptModelView>>>,
+}
+impl AttemptModelReadSource {
+    pub(crate) fn new(snapshot: AttemptModelSnapshot) -> Self {
+        Self {
+            snapshot,
+            inline: std::sync::Arc::default(),
+        }
+    }
+    pub(crate) fn selected_text(&self, path: &[String]) -> Option<&str> {
+        match path.first()?.as_str() {
+            "primary" => invocation_text(self.snapshot.primary(), &path[1..]),
+            "summary" => match self.snapshot.summary_policy() {
+                AttemptSummaryModel::Session => None,
+                AttemptSummaryModel::Explicit(invocation) => {
+                    invocation_text(invocation, &path[1..])
+                }
+            },
+            _ => None,
+        }
+    }
+    pub(crate) fn prepare(&self) {
+        self.inline.get_or_init(|| {
+            serde_json::from_slice(&crate::runtime_client::checkpoint::bounded_item_bytes(
+                self, 16_384,
+            )?)
+            .ok()
+        });
+    }
+    pub(crate) fn inline(&self) -> Option<AttemptModelView> {
+        self.inline.get().and_then(Clone::clone)
+    }
+}
+impl Serialize for AttemptModelReadSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut view = serializer.serialize_struct("AttemptModelView", 2)?;
+        view.serialize_field("primary", &self.snapshot.primary().read_view())?;
+        view.serialize_field("summary", &SummaryReadView(self.snapshot.summary_policy()))?;
+        view.end()
+    }
+}
+impl schemars::JsonSchema for AttemptModelReadSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AttemptModelReadSource".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<AttemptModelView>()
+    }
+}
+#[derive(Debug, Clone)]
+pub(crate) struct ModelCatalogReadSource(ModelAuthority);
+impl ModelCatalogReadSource {
+    pub(crate) fn selected_text(&self, path: &[String]) -> Option<&str> {
+        let [models, model, rest @ ..] = path else {
+            return None;
+        };
+        if models != "models" {
+            return None;
+        }
+        let ordinal = model.strip_prefix('@')?.parse::<u64>().ok()?;
+        let row = self.model_at(ordinal)?;
+        match rest {
+            [key] if key == "model" => Some(row.model.as_str()),
+            [key] if key == "defaultProfile" => row
+                .default_profile
+                .map(super::catalog::ModelProfileId::as_str),
+            [key, field] if key == "credentialSource" && field == "variable" => {
+                match row.credential_source {
+                    super::catalog::CredentialReadView::Environment { variable } => Some(variable),
+                    super::catalog::CredentialReadView::Literal => None,
+                }
+            }
+            [profiles, index, key] if profiles == "profiles" && key == "id" => self
+                .profile_at(ordinal, index.strip_prefix('@')?.parse::<u64>().ok()?)
+                .map(|profile| profile.id.as_str()),
+            _ => None,
+        }
+    }
+    pub(crate) fn model_header_at(
+        &self,
+        ordinal: u64,
+    ) -> Option<super::catalog::NativeCatalogModelHeader<'_>> {
+        let mut model = self.model_at(ordinal)?;
+        let total = self.profile_len(ordinal)?;
+        let mut profiles = Vec::with_capacity(total.min(32));
+        for offset in 0..total.min(32) {
+            let row = self.profile_at(ordinal, offset as u64)?;
+            if row.id.as_str().len() <= 256 {
+                profiles.push(row);
+            }
+        }
+        let profiles_deferred = profiles.len() != total;
+        model.profiles = super::catalog::ProfilesReadView::Header(profiles);
+        Some(super::catalog::NativeCatalogModelHeader {
+            model,
+            profile_count: total as u64,
+            profiles_deferred,
+        })
+    }
+    pub(crate) fn model_at(
+        &self,
+        ordinal: u64,
+    ) -> Option<super::catalog::CatalogModelReadView<'_>> {
+        let ordinal = usize::try_from(ordinal).ok()?;
+        match &self.0 {
+            ModelAuthority::Catalog(registry) => registry.catalog().catalog().model_at(ordinal),
+            ModelAuthority::Frozen(frozen) => frozen.catalog_model_at(ordinal),
+        }
+    }
+    pub(crate) fn profile_len(&self, model: u64) -> Option<usize> {
+        let model = usize::try_from(model).ok()?;
+        match &self.0 {
+            ModelAuthority::Catalog(registry) => registry.catalog().catalog().profile_count(model),
+            ModelAuthority::Frozen(frozen) => frozen
+                .catalog_model_at(model)
+                .map(|row| usize::from(row.default_profile.is_some())),
+        }
+    }
+    pub(crate) fn profile_at(
+        &self,
+        model: u64,
+        ordinal: u64,
+    ) -> Option<super::catalog::CatalogProfileReadView<'_>> {
+        let model = usize::try_from(model).ok()?;
+        match &self.0 {
+            ModelAuthority::Catalog(registry) => registry
+                .catalog()
+                .catalog()
+                .profile_at(model, usize::try_from(ordinal).ok()?),
+            ModelAuthority::Frozen(frozen) => {
+                if ordinal != 0 {
+                    return None;
+                }
+                let row = frozen.catalog_model_at(model)?;
+                let super::catalog::ProfilesReadView::Frozen(Some((id, reasoning_enabled))) =
+                    row.profiles
+                else {
+                    return None;
+                };
+                Some(super::catalog::CatalogProfileReadView {
+                    id,
+                    reasoning_enabled,
+                    max_output_tokens: None,
+                })
+            }
+        }
+    }
+    pub(crate) fn model_count(&self) -> usize {
+        match &self.0 {
+            ModelAuthority::Catalog(registry) => registry.catalog().catalog().model_count(),
+            ModelAuthority::Frozen(frozen) => {
+                1 + usize::from(
+                    matches!(&frozen.summary,crate::model::frozen::FrozenSummaryModel::Explicit(invocation) if invocation.model!=frozen.primary.model),
+                )
+            }
+        }
+    }
+}
+impl Serialize for ModelCatalogReadSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.0 {
+            ModelAuthority::Catalog(registry) => registry
+                .catalog()
+                .catalog()
+                .read_view()
+                .serialize(serializer),
+            ModelAuthority::Frozen(frozen) => frozen.read_catalog_view().serialize(serializer),
+        }
+    }
+}
+impl schemars::JsonSchema for ModelCatalogReadSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ModelCatalogReadSource".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<ModelCatalogView>()
+    }
+}
+
+fn invocation_text<'a>(
+    invocation: &'a ResolvedModelInvocation,
+    path: &[String],
+) -> Option<&'a str> {
+    match path.first()?.as_str() {
+        "modelRef" if path.len() == 1 => Some(invocation.model_ref().as_str()),
+        "profile" if path.len() == 1 => invocation
+            .profile()
+            .map(super::catalog::ModelProfileId::as_str),
+        "requestParams" => parameter_text(invocation.request_params(), &path[1..]),
+        _ => None,
+    }
+}
+fn parameter_text<'a>(params: &'a RequestParams, path: &[String]) -> Option<&'a str> {
+    // Ordinal object selection is handled by the immutable indexed source.
+    // Named paths borrow the native map in logarithmic work, then return exact bytes.
+    let first = path.first()?;
+    if first.starts_with('@') {
+        return None;
+    }
+    let mut value = params.get(first)?;
+    for key in &path[1..] {
+        value = match value {
+            serde_json::Value::Object(map) if !key.starts_with('@') => map.get(key)?,
+            serde_json::Value::Array(items) => {
+                items.get(key.strip_prefix('@').unwrap_or(key).parse::<usize>().ok()?)?
+            }
+            _ => return None,
+        };
+    }
+    value.as_str()
+}
+
+struct SummaryReadView<'a>(&'a AttemptSummaryModel);
+#[derive(Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum BorrowedSummary<'a> {
+    Session,
+    Explicit(super::invocation::ModelInvocationReadView<'a>),
+}
+impl Serialize for SummaryReadView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            AttemptSummaryModel::Session => BorrowedSummary::Session.serialize(serializer),
+            AttemptSummaryModel::Explicit(invocation) => {
+                BorrowedSummary::Explicit(invocation.read_view()).serialize(serializer)
+            }
+        }
+    }
+}
+struct DisplayReadView<'a>(&'a dyn std::fmt::Display);
+impl Serialize for DisplayReadView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self.0)
     }
 }
 
@@ -599,6 +965,129 @@ pub struct AttemptModelView {
 mod tests {
     use super::*;
     use crate::model::catalog::ModelCatalog;
+
+    #[test]
+    fn t08_t15_model_source_keeps_original_bytes_and_defers_large_native_values() {
+        let mut frozen = crate::model::frozen::test_frozen_model_spec(
+            ModelRef::parse("test/source-model").unwrap(),
+        );
+        let original = "🦀\nquoted \" bytes ".repeat(180_000);
+        frozen.primary.request_params.insert(
+            "native_payload".into(),
+            serde_json::Value::String(original.clone()),
+        );
+        frozen.configured.request_params.insert(
+            "native_payload".into(),
+            serde_json::Value::String(original.clone()),
+        );
+        let state = SessionModelState::frozen(
+            &frozen,
+            &crate::model::catalog::MapCredentialEnvironment::new([]),
+        )
+        .unwrap();
+        let source = state.read_source();
+        let cloned = source.clone();
+        assert!(std::sync::Arc::ptr_eq(&state.config, &cloned.state.config));
+        assert!(std::sync::Arc::ptr_eq(
+            state.resolved.as_ref().unwrap(),
+            cloned.state.resolved.as_ref().unwrap()
+        ));
+        source.prepare();
+        assert!(
+            source.inline().is_none(),
+            "large desired configuration has an explicit deferred model header"
+        );
+        assert_eq!(
+            source.status(),
+            crate::runtime_client::snapshot::RuntimeClientModelStatus {
+                available: true,
+                body_deferred: true,
+                binding_revision: None
+            }
+        );
+        let path = vec![
+            "configured".into(),
+            "requestParams".into(),
+            "native_payload".into(),
+        ];
+        let borrowed = source.selected_text(&path).unwrap();
+        assert_eq!(borrowed, original);
+        let first = crate::runtime::read_layout::text_chunk(borrowed, 1, 65_536).unwrap();
+        assert_eq!(first.bytes, &original.as_bytes()[1..65_537]);
+        assert_eq!(first.next_offset, Some(65_537));
+        assert_eq!(first.readable_end, original.len() as u64);
+        assert!(
+            crate::runtime::read_layout::text_chunk(borrowed, original.len() as u64 + 1, 1)
+                .is_err()
+        );
+        assert_eq!(source.catalog_source().model_count(), 1);
+    }
+
+    #[test]
+    fn t11_t19_model_source_defers_opaque_wide_parameters_without_rewriting_original_defaults() {
+        let mut frozen = crate::model::frozen::test_frozen_model_spec(
+            ModelRef::parse("test/source-model").unwrap(),
+        );
+        let original = serde_json::json!({"opaque_integer": u64::MAX});
+        frozen
+            .primary
+            .request_params
+            .insert("opaque".into(), original.clone());
+        frozen
+            .configured
+            .request_params
+            .insert("opaque".into(), original.clone());
+        let state = SessionModelState::frozen(
+            &frozen,
+            &crate::model::catalog::MapCredentialEnvironment::new([]),
+        )
+        .unwrap();
+        let source = state.read_source();
+        source.prepare();
+        assert!(source.available());
+        assert!(
+            source.inline().is_none(),
+            "opaque wide integers need an exact byte view, not a rounded editable object"
+        );
+        assert_eq!(state.config().request_params.get("opaque"), Some(&original));
+        assert_eq!(serde_json::to_value(&source).unwrap()["configured"]["requestParams"]["opaque"]["opaque_integer"].as_u64(), Some(u64::MAX));
+        let attempt = state.snapshot().unwrap();
+        let source = AttemptModelReadSource::new(attempt);
+        source.prepare();
+        assert!(source.inline().is_none());
+        assert_eq!(serde_json::to_value(source).unwrap()["primary"]["requestParams"]["opaque"]["opaque_integer"].as_u64(), Some(u64::MAX));
+    }
+
+    #[test]
+    fn t14_borrowed_model_and_catalog_encoding_matches_native_redacted_view() {
+        let frozen = crate::model::frozen::test_frozen_model_spec(
+            ModelRef::parse("test/source-model").unwrap(),
+        );
+        let state = SessionModelState::frozen(
+            &frozen,
+            &crate::model::catalog::MapCredentialEnvironment::new([]),
+        )
+        .unwrap();
+        let source = state.read_source();
+        source.prepare();
+        assert_eq!(source.inline(), Some(state.view()));
+        assert_eq!(
+            serde_json::to_value(&source).unwrap(),
+            serde_json::to_value(state.view()).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(source.catalog_source()).unwrap(),
+            serde_json::to_value(state.catalog_view()).unwrap()
+        );
+        let attempt = state.snapshot().unwrap();
+        let source = AttemptModelReadSource::new(attempt.clone());
+        source.prepare();
+        assert_eq!(source.inline(), Some(attempt.view()));
+        assert_eq!(
+            serde_json::to_value(source).unwrap(),
+            serde_json::to_value(attempt.view()).unwrap()
+        );
+    }
 
     #[test]
     fn analyze_session_model_config_validates_primary_and_explicit_summary() {

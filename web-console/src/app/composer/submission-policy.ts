@@ -20,7 +20,7 @@ export type ComposerAction = { disabled: boolean; title: TranslationKey } & (
   | { kind: 'message'; label: 'agent:submission.send' | 'agent:submission.queue' | 'agent:submission.steer'; delivery: 'send' | 'steer' }
 );
 export function composerSubmissionPolicy(facts: ComposerSubmissionFacts, gesture: SubmitGesture = 'enter'): ComposerAction {
-  if (facts.running && (!facts.actionable || facts.blocked)) {
+  if ((facts.running && (!facts.actionable || facts.blocked)) || (facts.blocked && facts.cancellationAvailable)) {
     return { kind: 'stop', label: 'agent:submission.stop', title: 'agent:submission.stop-double-escape', disabled: !facts.cancellationAvailable };
   }
   const disabled = facts.blocked || facts.acknowledging || facts.uploadsPending || !facts.actionable;

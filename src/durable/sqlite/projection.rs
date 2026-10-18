@@ -145,7 +145,7 @@ thread_local! {
     static ACTIVATION_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 #[cfg(test)]
-fn take_header_work() -> (usize, usize) {
+pub(super) fn take_header_work() -> (usize, usize) {
     (
         HEADER_READS.with(|n| n.replace(0)),
         ACTIVATION_DECODES.with(|n| n.replace(0)),
@@ -242,48 +242,99 @@ fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreErro
     }
     Ok(count)
 }
+// These exact guarded expressions are shared by the original-JSON covering
+// index and the reader; no observation layout becomes semantic authority.
+// Keep numeric values as guarded expressions too: a naked json_extract can
+// make SQLite fetch the original overflow body instead of its index value.
+const COMPLETION_FIELDS: &str = "CASE WHEN typeof(json_extract(event_json,'$.schema_version'))='integer' THEN json_extract(event_json,'$.schema_version') END,CASE WHEN typeof(json_extract(event_json,'$.conversation_id'))='text' AND octet_length(json_extract(event_json,'$.conversation_id'))<=128 THEN json_extract(event_json,'$.conversation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.activation_id'))='integer' THEN json_extract(event_json,'$.event.activation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.checkpoint_id'))='text' AND octet_length(json_extract(event_json,'$.event.checkpoint_id'))<=1024 THEN json_extract(event_json,'$.event.checkpoint_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.generation'))='integer' THEN json_extract(event_json,'$.event.generation') END";
+pub(super) fn completion_index_sql() -> String {
+    format!(
+        "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE json_extract(event_json,'$.event.type')='compaction_completed'"
+    )
+}
+pub(super) fn completion_query() -> String {
+    format!(
+        "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
+    )
+}
+struct CompletionEvidence {
+    sequence: u64,
+    schema_version: u16,
+    conversation_id: ConversationId,
+    activation_id: ProjectionActivationId,
+    checkpoint_id: CheckpointId,
+    generation: u64,
+}
+#[cfg(test)]
+thread_local! { static COMPLETION_WORK: std::cell::Cell<(usize,usize)> = const {std::cell::Cell::new((0,0))}; }
+#[cfg(test)]
+pub(super) fn take_completion_work() -> (usize, usize) {
+    COMPLETION_WORK.with(|work| work.replace((0, 0)))
+}
 fn completion_at(
     connection: &Connection,
     through: u64,
-) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
-    let json: Option<Option<String>> = connection.query_row(
-        "SELECT CASE WHEN octet_length(event_json)<=1048576 THEN event_json END FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1",
-        [seq_to_i64(through)?], |r|r.get(0),
-    ).optional().map_err(|e|storage(e.to_string()))?;
-    json.map(|body| {
-        let event: RuntimeEventEnvelope = decode(
-            &body.ok_or_else(|| invalid("oversized projection completion fact"))?,
-            "projection completion fact",
-        )?;
-        let local: bool = connection
-            .query_row(
-                "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
-                [event.conversation_id.as_str()],
-                |r| r.get(0),
-            )
-            .map_err(|e| storage(e.to_string()))?;
-        if !local || event.schema_version != EVENT_SCHEMA_VERSION {
-            return Err(invalid(
-                "foreign or incompatible projection completion fact",
-            ));
-        }
-        Ok(event)
-    })
+) -> Result<Option<CompletionEvidence>, ConversationStoreError> {
+    type Row = (u64, u16, Option<String>, u64, Option<String>, u64);
+    let row: Option<Row> = connection
+        .query_row(&completion_query(), [seq_to_i64(through)?], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .optional()
+        .map_err(|error| storage(error.to_string()))?;
+    row.map(
+        |(sequence, schema_version, scope, activation, checkpoint, generation)| {
+            let scope = scope.ok_or_else(|| invalid("invalid projection completion scope"))?;
+            let checkpoint =
+                checkpoint.ok_or_else(|| invalid("oversized projection completion identity"))?;
+            #[cfg(test)]
+            COMPLETION_WORK.with(|work| {
+                let (rows, bytes) = work.get();
+                work.set((rows + 1, bytes + scope.len() + checkpoint.len() + 32));
+            });
+            let local: bool = connection
+                .query_row(
+                    "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
+                    [scope.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(error.to_string()))?;
+            if !local
+                || schema_version != EVENT_SCHEMA_VERSION
+                || activation != generation
+                || activation == 0
+            {
+                return Err(invalid(
+                    "foreign or incompatible projection completion fact",
+                ));
+            }
+            Ok(CompletionEvidence {
+                sequence,
+                schema_version,
+                conversation_id: ConversationId::parse(scope).map_err(invalid)?,
+                activation_id: ProjectionActivationId(activation),
+                checkpoint_id: CheckpointId::new(checkpoint),
+                generation,
+            })
+        },
+    )
     .transpose()
 }
+
 /// The Journal and immutable installation count anchor visibility independently
 /// of selector columns. Neither query reads future activation payloads.
 fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, ConversationStoreError> {
     let inherited = inherited_count(connection)?;
     let id = if let Some(event) = completion_at(connection, through)? {
-        let RuntimeEvent::CompactionCompleted {
-            activation_id,
-            checkpoint_id,
-            ..
-        } = event.event
-        else {
-            return Err(invalid("invalid projection completion authority"));
-        };
+        let activation_id = event.activation_id;
+        let checkpoint_id = event.checkpoint_id;
         if activation_id.0 <= inherited || event.sequence > through {
             return Err(invalid("inconsistent local projection publication"));
         }
@@ -416,7 +467,9 @@ pub(super) fn activation_at(
         if event.sequence != journal
             || event.schema_version != EVENT_SCHEMA_VERSION
             || event.conversation_id != activation.origin.conversation_id
-            || !matches!(event.event,RuntimeEvent::CompactionCompleted {activation_id,checkpoint_id,..} if activation_id==id && checkpoint_id==activation.checkpoint_id)
+            || event.activation_id != id
+            || event.checkpoint_id != activation.checkpoint_id
+            || event.generation != id.0
         {
             return Err(invalid(
                 "activation disagrees with committed completion fact",
@@ -503,6 +556,32 @@ pub(super) fn head(
         ));
     }
     selected.map(|n| activated(connection, n)).transpose()
+}
+/// Finite selector used when the request needs only current head identity.
+/// Payload integrity is still checked by cold selection, or by the existing
+/// owner/epoch certificate before warm selection can avoid that materialization.
+pub(super) fn current_checkpoint_id(
+    connection: &Connection,
+) -> Result<Option<CheckpointId>, ConversationStoreError> {
+    let selected: Option<u64> = connection
+        .query_row(
+            "SELECT activation FROM projection_head WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| storage(e.to_string()))?;
+    let published = journal_frontier(connection, i64::MAX as u64)?;
+    if selected != (published > 0).then_some(published) {
+        return Err(invalid(
+            "Projection Head disagrees with latest durable publication",
+        ));
+    }
+    selected
+        .map(|id| {
+            eligibility_header(connection, id).map(|header| CheckpointId::new(header.checkpoint))
+        })
+        .transpose()
 }
 pub(super) fn checkpoint(
     connection: &Connection,
@@ -662,13 +741,19 @@ pub(super) fn receipt(
     if Some(digest(&json)) != integrity {
         return Err(invalid("corrupted compaction receipt"));
     }
-    let receipt: ProjectionCommitReceipt = decode(&json, "compaction receipt")?;
+    let mut receipt: ProjectionCommitReceipt = decode(&json, "compaction receipt")?;
     if receipt.operation_id != *id
         || receipt.candidate_fingerprint != fingerprint
         || receipt.checkpoint.candidate.fingerprint() != fingerprint
     {
         return Err(invalid("compaction receipt identity mismatch"));
     }
+    // Original native receipt validation remains mandatory. Optional display
+    // evidence may be unavailable, without changing this confirmed outcome.
+    receipt.completed.observation =
+        super::projection_publication::read(connection, id, &digest(&json), &receipt.completed)
+            .ok()
+            .flatten();
     Ok(Some(receipt))
 }
 
@@ -805,6 +890,27 @@ fn validate_summary_metadata(
     Ok(())
 }
 
+/// Read both original publication coordinates inside the commit transaction.
+fn activation_coordinates(
+    transaction: &Transaction<'_>,
+) -> Result<(u64, u64), ConversationStoreError> {
+    let sequence: i64 = transaction
+        .query_row(
+            "SELECT next_event_sequence FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    let ledger = transaction
+        .query_row(
+            "SELECT coalesce(max(position),0) FROM message_ledger",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    Ok((nonnegative(sequence, "completion sequence")? + 1, ledger))
+}
+
 pub(super) fn commit(
     transaction: &Transaction<'_>,
     scope: &ConversationId,
@@ -841,6 +947,8 @@ pub(super) fn commit(
         .map_err(|e| storage(e.to_string()))?;
     let activation_id = ProjectionActivationId(nonnegative(next, "projection activation")?);
     let event = RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(""),
         sequence: 0,
@@ -858,21 +966,7 @@ pub(super) fn commit(
             occupancy: input.occupancy.clone(),
         },
     };
-    // Allocate the actual Journal coordinate within this transaction. No inherited fact is emitted.
-    let sequence: i64 = transaction
-        .query_row(
-            "SELECT next_event_sequence FROM rustx_store WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|e| storage(e.to_string()))?;
-    let activated_ledger: u64 = transaction
-        .query_row(
-            "SELECT coalesce(max(position),0) FROM message_ledger",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| storage(e.to_string()))?;
+    let (completed_journal, activated_ledger) = activation_coordinates(transaction)?;
     let activation = ProjectionActivation {
         activation: activation_id,
         ledger: LedgerFrontier(activated_ledger),
@@ -880,7 +974,7 @@ pub(super) fn commit(
         origin: OriginActivation {
             conversation_id: scope.clone(),
             activation: activation_id,
-            completed_journal: JournalFrontier(nonnegative(sequence, "completion sequence")? + 1),
+            completed_journal: JournalFrontier(completed_journal),
         },
         destination_installation: None,
     };
@@ -889,12 +983,19 @@ pub(super) fn commit(
     transaction.execute("INSERT INTO projection_head(id,activation) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET activation=excluded.activation",[next]).map_err(|e|storage(e.to_string()))?;
     stage(super::CompactionFaultOperation::AfterHeadTransition)?;
     stage(super::CompactionFaultOperation::BeforeCompletionInsert)?;
+    super::observation_projection::index_activation(
+        transaction,
+        &input.candidate,
+        &fingerprint,
+        &activation,
+    );
     let completed = super::persist_event_tx(transaction, scope, event)?.event;
     if completed.sequence != activation.origin.completed_journal.0 {
         return Err(invalid("completion Journal coordinate mismatch"));
     }
     stage(super::CompactionFaultOperation::AfterCompletionInsert)?;
     let result = ProjectionCommitReceipt {
+        newly_committed: true,
         operation_id: input.operation_id,
         candidate_fingerprint: fingerprint.clone(),
         checkpoint: ProjectionCheckpoint {
@@ -908,7 +1009,205 @@ pub(super) fn commit(
     let json = encode(&result, "compaction receipt")?;
     transaction.execute("INSERT INTO compaction_operations(operation_id,candidate_fingerprint,receipt_json,receipt_digest) VALUES(?1,?2,?3,?4)",params![result.operation_id.as_str(),result.candidate_fingerprint,json,digest(&json)]).map_err(|e|storage(e.to_string()))?;
     stage(super::CompactionFaultOperation::AfterReceiptInsert)?;
+    super::observation_projection::index_provenance(transaction, &result.checkpoint);
+    super::projection_publication::index(
+        transaction,
+        &result.operation_id,
+        &digest(&json),
+        result.completed.observation.as_deref(),
+    );
     Ok(result)
+}
+
+/// Warm native selection is the same persistent root extended by committed C delta.
+/// External/same-connection mutation invalidates this owner before reuse.
+pub(super) fn selected_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    owner: &super::manifest::Owner,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    let epoch = owner.capture(connection)?;
+    let cut = super::compaction_resources::cut(connection, scope)?;
+    let published = journal_frontier(connection, i64::MAX as u64)?;
+    let selected: Option<u64> = connection
+        .query_row(
+            "SELECT activation FROM projection_head WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| storage(e.to_string()))?;
+    if selected != (published > 0).then_some(published) {
+        return Err(invalid(
+            "Projection Head disagrees with latest durable publication",
+        ));
+    }
+    let mut slot = owner
+        .history
+        .lock()
+        .map_err(|_| storage("native selected history owner"))?;
+    let cached = slot
+        .as_ref()
+        .filter(|(prior, h)| {
+            epoch != u64::MAX
+                && *prior == epoch
+                && h.cut.activation.0 == published
+                && h.cut.ledger <= cut.ledger
+        })
+        .map(|(_, h)| h.clone());
+    let mut result = if let Some(mut history) = cached {
+        append_history_delta(connection, scope, &cut, &mut history)?;
+        history
+    } else {
+        history(connection, scope)?
+    };
+    result
+        .input_manifest
+        .certify_selection(owner.id, epoch, result.cut.clone());
+    result.messages = result.input_manifest.messages();
+    owner
+        .frontier
+        .store(cut.ledger.0, std::sync::atomic::Ordering::Release);
+    owner
+        .journal_frontier
+        .store(cut.journal.0, std::sync::atomic::Ordering::Release);
+    *slot = Some((epoch, result.clone()));
+    Ok(result)
+}
+
+type PendingTailCalls = std::collections::BTreeMap<
+    crate::message::types::ToolCallOccurrenceRef,
+    (
+        u32,
+        u32,
+        crate::model::projected::CanonicalMessageRef,
+        crate::runtime::identity::ToolCallId,
+        crate::runtime::identity::ToolId,
+    ),
+>;
+fn append_history_message(
+    scope: &ConversationId,
+    history: &mut crate::durable::projection::HistoricalModelInput,
+    pending: &mut PendingTailCalls,
+    message: crate::message::types::MessageBlock,
+) -> Result<(), ConversationStoreError> {
+    use crate::model::projected::FrozenModelInput;
+    let index = u32::try_from(history.input_manifest.len())
+        .map_err(|_| invalid("request occurrence overflow"))?;
+    history.input_manifest = history
+        .input_manifest
+        .append(scope, &crate::model::ModelInputMessage::Canonical(message));
+    let FrozenModelInput::Original(reference) = history.input_manifest.get(index as usize).unwrap()
+    else {
+        unreachable!()
+    };
+    let reference = reference.clone();
+    let selected_messages = history.input_manifest.messages();
+    let value = &selected_messages[index as usize];
+    let crate::model::ModelInputMessage::Canonical(message) = value else {
+        unreachable!()
+    };
+    match message {
+        crate::message::types::MessageBlock::Assistant(assistant) => {
+            for (block, content) in assistant.content.iter().enumerate() {
+                if let crate::message::types::AssistantContentBlock::ToolCall(call) = content {
+                    let block = u32::try_from(block)
+                        .map_err(|_| invalid("canonical call block overflow"))?;
+                    let occurrence = crate::message::types::ToolCallOccurrenceRef::new(
+                        assistant.id.clone(),
+                        crate::message::types::ContentBlockIndex::new(block),
+                    );
+                    pending.insert(
+                        occurrence,
+                        (
+                            index,
+                            block,
+                            reference.clone(),
+                            call.id.clone(),
+                            call.tool_id.clone(),
+                        ),
+                    );
+                }
+            }
+        }
+        crate::message::types::MessageBlock::Tool(result) => {
+            let (call_message, call_block, assistant, wire_id, tool_id) = pending
+                .remove(&result.occurrence)
+                .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
+            if result.tool_call_id != wire_id || result.tool_id != tool_id {
+                return Err(invalid(
+                    "Tail ToolResult disagrees with physical call occurrence",
+                ));
+            }
+            history.tool_associations.push_back(
+                crate::model::occurrence::HistoricalToolAssociation {
+                    call_message,
+                    call_block,
+                    result_message: index,
+                    source: crate::model::occurrence::CanonicalCallSource {
+                        assistant,
+                        block: result.occurrence.block_index,
+                    },
+                    wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                        wire_id.to_string(),
+                    ),
+                },
+            );
+        }
+        crate::message::types::MessageBlock::User(_) => {}
+    }
+    history
+        .items
+        .push_back(crate::context::checkpoint::CheckpointItem {
+            message: CheckpointMessage::Original(reference),
+            call_sources: Vec::new(),
+            result_call: None,
+        });
+    Ok(())
+}
+
+fn append_history_delta(
+    connection: &Connection,
+    scope: &ConversationId,
+    cut: &crate::context::resources::ResourceReadCut,
+    history: &mut crate::durable::projection::HistoricalModelInput,
+) -> Result<(), ConversationStoreError> {
+    let mut after = history.cut.ledger;
+    let mut pending = std::collections::BTreeMap::new();
+    loop {
+        let page = super::compaction_resources::messages(
+            connection,
+            scope,
+            cut,
+            after,
+            None,
+            ResourceLimits::default(),
+        )?;
+        if page.rows.is_empty() {
+            break;
+        }
+        history.materialized_bytes = history
+            .materialized_bytes
+            .checked_add(page.bytes)
+            .ok_or_else(|| invalid("historical Tail byte overflow"))?;
+        if history.materialized_bytes > ResourceLimits::default().total_bytes
+            || history.messages.len() + page.rows.len() > ResourceLimits::default().total_items
+        {
+            return Err(invalid("historical Tail materialization exceeds bound"));
+        }
+        for (position, message) in page.rows {
+            append_history_message(scope, history, &mut pending, message)?;
+            after = LedgerFrontier(position);
+        }
+    }
+    if !pending.is_empty() {
+        return Err(invalid(
+            "canonical Tail ends inside an incomplete Tool batch",
+        ));
+    }
+    history.cut.ledger = cut.ledger;
+    history.messages = history.input_manifest.messages();
+    Ok(())
 }
 
 pub(super) fn history(
@@ -918,13 +1217,11 @@ pub(super) fn history(
     history_at(connection, scope, None)
 }
 
-#[allow(clippy::too_many_lines)] // One bounded checkpoint/Tail compilation under the native read transaction.
 pub(super) fn history_at(
     connection: &Connection,
     scope: &ConversationId,
     expected: Option<&crate::durable::projection::RequestHistoryCut>,
 ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
-    use crate::durable::projection::{HistoricalModelInput, RequestHistoryCut};
     let mut read_cut = super::compaction_resources::cut(connection, scope)?;
     let checkpoint = head(connection)?;
     if let Some(expected) = expected {
@@ -946,6 +1243,38 @@ pub(super) fn history_at(
         }
         read_cut.ledger = expected.ledger;
     }
+    compile_history(connection, scope, &read_cut, checkpoint.as_ref())
+}
+
+/// Validate a captured archive's exact historical input after writer exclusion
+/// ends. Later head activations must not change this finite selection.
+pub(super) fn archive_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    cut: &crate::context::resources::ResourceReadCut,
+    checkpoint_id: Option<&CheckpointId>,
+) -> Result<(), ConversationStoreError> {
+    let checkpoint = at_journal_cut(connection, cut.journal.0)?;
+    if checkpoint
+        .as_ref()
+        .map(|value| &value.candidate.checkpoint_id)
+        != checkpoint_id
+    {
+        return Err(invalid(
+            "archive projection head disagrees with captured Journal",
+        ));
+    }
+    compile_history(connection, scope, cut, checkpoint.as_ref()).map(|_| ())
+}
+
+#[allow(clippy::too_many_lines)] // One bounded checkpoint/Tail compilation under the native read transaction.
+fn compile_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    read_cut: &crate::context::resources::ResourceReadCut,
+    checkpoint: Option<&ProjectionCheckpoint>,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    use crate::durable::projection::{HistoricalModelInput, RequestHistoryCut};
     let mut messages = Vec::new();
     let mut tool_associations = Vec::new();
     let mut pending_tail = std::collections::BTreeMap::new();
@@ -1005,7 +1334,7 @@ pub(super) fn history_at(
         let page = super::compaction_resources::messages(
             connection,
             scope,
-            &read_cut,
+            read_cut,
             after,
             None,
             ResourceLimits::default(),
@@ -1091,8 +1420,9 @@ pub(super) fn history_at(
             "canonical Tail ends inside an incomplete Tool batch",
         ));
     }
+    let input_manifest = crate::model::SelectedInputManifest::from_messages(scope, &messages);
     Ok(HistoricalModelInput {
-        tool_associations,
+        tool_associations: tool_associations.into_iter().collect(),
         cut: RequestHistoryCut {
             ledger: read_cut.ledger,
             checkpoint_id: checkpoint
@@ -1103,8 +1433,10 @@ pub(super) fn history_at(
                 .map_or(ProjectionActivationId(0), |p| p.activation.activation),
             base_frontier: base,
         },
-        messages,
-        items,
+        messages: input_manifest.messages(),
+        input_manifest,
+        items: items.into_iter().collect(),
+        materialized_bytes: bytes,
     })
 }
 
@@ -1167,6 +1499,8 @@ pub(super) fn install_lineage(
                 ],
             )
             .map_err(|e| storage(e.to_string()))?;
+        super::observation_projection::index(transaction, checkpoint);
+        super::observation_projection::index_provenance(transaction, checkpoint);
         last = Some(activation.activation);
         previous_checkpoint = Some(candidate.checkpoint_id.clone());
         previous_ledger = activation.ledger;
@@ -1261,6 +1595,101 @@ fn activation_at_journal_cut(
     }
 }
 
+/// Certifies an unchanged native history plus explicit newly committed Context delta.
+/// Any unsupported edit or mutation evidence uses the full independent validator.
+pub(super) fn validate_warm_selection(
+    connection: &Connection,
+    scope: &ConversationId,
+    snapshot: &crate::model::RequestSnapshot,
+    owner: &super::manifest::Owner,
+    epoch: u64,
+) -> Result<bool, ConversationStoreError> {
+    use crate::model::projected::FrozenModelInput;
+    use crate::model::selected_input::{InputNodeKind, SelectionEdit};
+    let Some(origin) = &snapshot.input.origin else {
+        return Ok(false);
+    };
+    if owner.epoch.load(std::sync::atomic::Ordering::Acquire) != epoch
+        || origin.owner != owner.id
+        || origin.epoch != epoch
+        || origin.cut != snapshot.history_cut
+        || epoch == u64::MAX
+        || !snapshot.selected_fingerprint_matches()
+    {
+        return Ok(false);
+    }
+    let slot = owner
+        .history
+        .lock()
+        .map_err(|_| storage("native selected history owner"))?;
+    let Some((cached_epoch, history)) = slot.as_ref() else {
+        return Ok(false);
+    };
+    let same_root = match (&origin.baseline, &history.input_manifest.root) {
+        (None, None) => true,
+        (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+        _ => false,
+    };
+    if *cached_epoch != epoch
+        || history.cut != origin.cut
+        || !same_root
+        || snapshot.unresolved_output_carryover.is_some()
+    {
+        return Ok(false);
+    }
+    if (!history.tool_associations.is_empty() || !snapshot.tool_associations.is_empty())
+        && !snapshot.tool_associations.certifies(origin, snapshot)
+    {
+        return Ok(false);
+    }
+    let mut expected = history.input_manifest.len();
+    let mut seen = std::collections::BTreeSet::new();
+    for edit in &snapshot.input.edits {
+        let SelectionEdit::Append { index, node } = edit;
+        if *index != expected {
+            return Err(invalid("native selected append order"));
+        }
+        let InputNodeKind::Leaf(value) = &node.kind else {
+            return Ok(false);
+        };
+        let Some(FrozenModelInput::Original(reference)) = value.as_deref() else {
+            return Ok(false);
+        };
+        if !snapshot.request_context_ids.contains(&reference.message_id)
+            && !snapshot
+                .contributions
+                .iter()
+                .any(|c| c.message_id == reference.message_id)
+        {
+            return Err(invalid("native selected append is not admitted Context"));
+        }
+        if !seen.insert(reference.message_id.clone()) {
+            return Err(invalid("duplicate native selected Context"));
+        }
+        let message = super::load_message(connection, &reference.message_id)?;
+        if reference.conversation_id != *scope
+            || !reference.matches(&message)
+            || !matches!(message,crate::message::types::MessageBlock::User(user) if matches!(user.kind,crate::message::types::InboundKind::Context(_)))
+        {
+            return Err(invalid("native selected Context integrity"));
+        }
+        expected += 1;
+    }
+    if expected != snapshot.input.len() {
+        return Err(invalid("native selected append count"));
+    }
+    for id in snapshot
+        .request_context_ids
+        .iter()
+        .chain(snapshot.contributions.iter().map(|c| &c.message_id))
+    {
+        if !seen.contains(id) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Validate selection without repeating any dynamic semantic transformation.
 /// The frozen bodies remain Agent-owned; this checks their immutable history origins and order.
 pub(super) fn validate_request_selection(
@@ -1271,7 +1700,7 @@ pub(super) fn validate_request_selection(
     use crate::model::{ModelInputMessage, projected::FrozenModelInput};
     let history = history_at(connection, scope, Some(&snapshot.history_cut))?;
     let historical_len = history.messages.len();
-    let mut expected = history.messages;
+    let mut expected = history.messages.to_vec();
     let mut core_ids = Vec::new();
     for id in snapshot
         .contributions
@@ -1358,6 +1787,25 @@ pub(super) fn validate_request_selection(
                 "frozen request revives excluded history or changes historical ordering",
             ));
         }
+    }
+    Ok(())
+}
+
+/// Original completion or inherited installation selects the actual native head.
+pub(super) fn observation_head_id(
+    connection: &Connection,
+    through: u64,
+) -> Result<Option<u64>, ConversationStoreError> {
+    journal_frontier(connection, through).map(|id| (id > 0).then_some(id))
+}
+pub(super) fn verify_completion_index(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name='events_projection_completion_idx'",[],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    if sql.flatten().as_deref() != Some(completion_index_sql().as_str()) {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "invalid original projection completion index".into(),
+        ));
     }
     Ok(())
 }

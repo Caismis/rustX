@@ -1,3 +1,5 @@
+import { followAttachment } from './support/app-server-peer.ts';
+import { checkpoint } from "./support/fixtures.ts";
 /** Startup ownership, driven by explicit wire replies and user selections. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -27,7 +29,7 @@ async function connected() {
   const transport = new FakeTransport();
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 49, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: 'fixture-app-server-authority', protocol_version: 50, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
@@ -37,17 +39,18 @@ async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
 async function attachment(transport: FakeTransport, id: string, count = 1) {
   const request = (await transport.log.awaitMethod("session/attach", count)).at(-1)!;
   assert.equal(paramsOf(request, "session/attach").session_id, id);
-  transport.respond(request.id, { type: "attached", target: {
+  transport.respond(request.id, {type:'attached', target: {
     session_id: id, conversation_id: "conv_01900000-0000-7000-8000-000000000002", attachment_id: `att-${id}`, runtime_incarnation: "1",
-  }, snapshot: snapshot(), cursor: "0" });
+  }, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  await followAttachment(transport,{session_id:id,conversation_id:"conv_01900000-0000-7000-8000-000000000002",attachment_id:`att-${id}`,runtime_incarnation:'1'},snapshot(),"0");
   return request;
 }
 async function finishFocus(transport: FakeTransport) {
-  const read = (await transport.log.awaitMethod("session/read")).at(-1)!;
+  const read = await transport.nextPending("session/read");
   transport.respond(read.id, { type: "session", session: sessionView({ id: paramsOf(read, "session/read").session_id }) });
-  const repair = (await transport.log.awaitMethod("session/snapshot")).at(-1)!;
-  transport.respond(repair.id, { type: "snapshot", snapshot: snapshot(), cursor: "0" });
-  const subscribe = (await transport.log.awaitMethod("session/subscribe")).at(-1)!;
+  const repair = await transport.nextPending("session/checkpoint");
+  transport.respond(repair.id, {type:'checkpoint', checkpoint:checkpoint(snapshot(),"0")});
+  const subscribe = await transport.nextPending("session/subscribe");
   transport.respond(subscribe.id, { type: "subscribed", after_cursor: "0" });
   await tick();
 }
@@ -241,7 +244,7 @@ async function createFromEmpty(h: ReturnType<typeof appFor>, host: AppServerHost
   assert.equal(transport.log.count("session/create"), 1, "pending action is single-submit");
   assert.deepEqual(paramsOf(create!, "session/create").settings, parsedResume().sessionSettings);
   transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: SESSION_CREATED }),
-    editor_content: [{ type: "text", text: "transition draft" }], durability_diagnostic: "durability test notice" });
+    editor:transport.editor(sessionView({ id: SESSION_CREATED }),[{ type: "text", text: "transition draft" }]), durability_diagnostic: "durability test notice" });
   const attach = await attachment(transport, SESSION_CREATED);
   assert.equal(paramsOf(attach, "session/attach").node_id, sessionView().active_node);
   await finishFocus(transport);
@@ -392,7 +395,7 @@ for (const outcome of ["ready", "withdraw", "disconnect", "rejection"] as const)
     assert.equal(h.editor.disableSubmit, false);
     assert.doesNotMatch(h.render(), /Connecting/);
     const [history] = await transport.log.awaitMethod("session/history");
-    transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { cut: { conversation_id: 'conv_01900000-0000-7000-8000-000000000002', journal: '1000', transcript: '1000', mutation_revision: '0' }, page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
+    transport.respond(history!.id, { type: "session_history", conversation_id: "conv_01900000-0000-7000-8000-000000000002", window: { cut: { conversation_id: 'conv_01900000-0000-7000-8000-000000000002', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: [{ cursor: "1", item: { type: "message", message: { id: "saved", role: "user", source: "human", content: [{ type: "text", text: "Previously saved message" }] } } }] } } });
     await tick();
     assert.match(h.render(), /Previously saved message/);
     assert.doesNotMatch(h.render(), /Connecting/);

@@ -12,7 +12,7 @@ async function listen(server: Server) {
   const address = server.address(); if (!address || typeof address === 'string') throw Error('No listener');
   return `http://127.0.0.1:${address.port}`;
 }
-test('another loopback port cannot capture and replay browser authentication to the carrier', async ({ page }) => {
+test('another loopback port cannot capture and replay browser authentication to the carrier', { tag: '@smoke' }, async ({ page }) => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-origin-auth-'));
   const launch = randomBytes(32).toString('base64url'), token = randomBytes(32).toString('base64url');
   const transportTokenFile = join(directory, 'token'); writeFileSync(transportTokenFile, token, { mode: 0o600 });

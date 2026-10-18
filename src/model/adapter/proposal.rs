@@ -176,7 +176,7 @@ mod tests {
                 capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
                 compat: crate::model::catalog::ModelCompat::default(),
             },
-            messages: Vec::new(),
+            messages: crate::model::SelectedModelInput::default(),
             tools: vec![ModelToolDefinition {
                 id: ToolId::new("tool-write"),
                 name: "write_file".to_owned(),

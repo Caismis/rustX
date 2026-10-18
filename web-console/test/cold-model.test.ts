@@ -10,7 +10,7 @@ beforeEach(async () => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
     const snapshot = server.snapshots.get(request.params.target.session_id)!;
     snapshot.model = { ...snapshot.model!, configured: request.params.config, effective: { ...snapshot.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
-    return { type: 'model', model: snapshot.model };
+    return {type:'model_set',settings_revision:'1'};
   });
   server.held.add('session/attach');
 });
@@ -93,12 +93,12 @@ it('a failed confirmation can recover through reread without replaying the mutat
   const apply = server.handlers.get('session/setModel')!;
   server.handlers.set('session/setModel', request => {
     const result = apply(request);
-    server.handlers.set('session/snapshot', () => { throw new RpcFailure({ code: -32000, message: 'Read failed' }); });
+    server.handlers.set('session/checkpoint', () => { throw new RpcFailure({ code: -32000, message: 'Read failed' }); });
     return result;
   });
   const choice = expect(server.client.prepareAgentModel('A', { model: 'chosen' })).rejects.toThrow();
   server.reply(opening); await attach; await choice;
-  server.handlers.delete('session/snapshot');
+  server.handlers.delete('session/checkpoint');
   await server.client.refresh('A');
   await server.client.repairAgentModel('A');
   expect(server.client.getSnapshot().views.A.modelIntent).toBeUndefined();

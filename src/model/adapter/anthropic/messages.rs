@@ -91,6 +91,9 @@ impl ModelAdapter for AnthropicMessagesAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
+        #[cfg(feature = "issue-387-profile")]
+        let _profile =
+            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_stream_of_failure(error),
@@ -104,7 +107,7 @@ impl ModelAdapter for AnthropicMessagesAdapter {
             url: format!("{}/v1/messages", self.api_base),
             anthropic_version: self.anthropic_version.clone(),
             http_client: self.http_client.clone(),
-            wire_request,
+            wire_request: crate::model::adapter::provider_request(wire_request),
             normalizer: AnthropicStreamNormalizer::new(validated),
             cancellation,
         };
@@ -230,7 +233,7 @@ async fn open_stream(
     url: &str,
     anthropic_version: &str,
     http_client: &reqwest::Client,
-    wire_request: &serde_json::Value,
+    wire_request: &crate::model::adapter::ProviderRequest,
     cancellation: CancellationSignal,
 ) -> OpeningOutcome {
     let send = http_client
@@ -385,7 +388,7 @@ enum AnthropicPhase {
         url: String,
         anthropic_version: String,
         http_client: reqwest::Client,
-        wire_request: serde_json::Value,
+        wire_request: crate::model::adapter::ProviderRequest,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -394,7 +397,7 @@ enum AnthropicPhase {
         url: String,
         anthropic_version: String,
         http_client: reqwest::Client,
-        wire_request: serde_json::Value,
+        wire_request: crate::model::adapter::ProviderRequest,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },

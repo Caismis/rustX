@@ -42,6 +42,8 @@ impl std::io::Write for DigestWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         use sha2::Digest;
         self.0.update(bytes);
+        #[cfg(test)]
+        super::selected_input::record_hash_work(bytes.len(), 0);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {

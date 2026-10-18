@@ -23,7 +23,9 @@ for (const width of [1440, 390]) test(`saved conversation model menu keeps compo
   await expect(page.getByText(/Saved message 19:/)).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/models').length)).toBe(1);
   await page.evaluate(() => (window as any).startupFixture.release('session/models'));
-  expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'session/model' || request.method === 'session/snapshot').length)).toBe(0);
+  const nativeReads = await page.evaluate(() => (window as any).startupFixture.requests().map((request: any) => request.method));
+  expect(nativeReads.filter((method: string) => method === 'session/checkpoint')).toHaveLength(1);
+  expect(nativeReads.filter((method: string) => method === 'session/model')).toHaveLength(0);
   const geometry = () => page.locator('textarea').evaluate(element => {
     const rect = element.getBoundingClientRect();
     const scroll = document.querySelector('[data-conversation-scroll]')!;

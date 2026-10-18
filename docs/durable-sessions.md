@@ -10,7 +10,7 @@ Each started model request has an explicit owner in its durable Journal fact.
 Agent start atomically records the Snapshot-derived owner with request Context and
 Snapshot; keyed owner reads and terminal checks reject missing or contradictory
 evidence. Ownership is not inferred from an ID prefix or absent fields. SQLite
-schema 61 rejects obsolete ownerless stores without migration.
+schema 70 rejects obsolete ownerless stores without migration.
 
 The catalog owns identity, name, timestamps, graph, Session-local `active_node`
 (the default node inside that graph), explicit settings, settings revision,
@@ -198,37 +198,31 @@ preparation, not identity allocation.
 
 ### Persistence before durable success (B)
 
-The exclusive create alone is not a power-loss guarantee. Namespace and marker
-**visibility** are separate from their **durability**: observing an existing
-`conversation-reservations/` directory does not prove that initialization
-durability already completed. Before local storage reports the reservation
-layout initialized, and before it reports durable reservation success, it
-establishes every required parent-directory barrier itself:
+Issue #480 defines success against process death while the operating system and
+filesystem remain healthy. Power loss, kernel failure and storage failure are
+outside the newest-commit guarantee. Namespace visibility alone is not successful
+completion: a caller must perform the owned reservation barriers and propagate
+observed failures before reporting success.
 
 ```text
 exclusive ConversationId allocation (create-new marker)   linearization point
-marker file fsync                                         marker data durable
-reservation-namespace directory fsync                     marker entry durable
-product-root directory fsync                              namespace entry durable
-product-root ancestry fsync (ProductRoot::create)         root entry durable
+marker file sync                                          fallible completion
+reservation-namespace directory sync                      marker entry completion
+product-root directory sync                               namespace entry completion
+owned product-root sync (ProductRoot::create)               root completion
 ```
 
-The barrier list names logical durability operations (one marker `sync_all`
-request and one directory `sync_all` request per entry the barrier visits). It
-is not a syscall budget: `SQLite`/library-internal filesystem work and physical
-device I/O are separate evidence layers and are not claimed by these names.
+Recursive ancestor synchronization is removed. The retained operations surface
+reservation/publication errors and preserve existing failure classifications;
+they do not establish a product-wide machine-failure durability guarantee. The
+list names logical calls, not a syscall budget or physical device traffic.
 
 A later caller re-establishes the product-root barrier whenever it observes the
-namespace, so an initializer that created the directory and then failed or
-died before the barrier, a failed barrier that left visible residue, and a
-retry all complete the obligation instead of inferring it. The supported crash
-model is: a reservation observed as successful survives process death and an
-orderly restart of the same filesystem, and the parent-entry barriers are the
-best-effort local expression of power-loss durability. A power loss between the
-exclusive create and its fsync may lose the marker; that is the ordinary
-durability limit of the supported local platform, not a claim of universal
-atomic durability, and process-death tests prove process-death semantics rather
-than every physical power-loss interleaving.
+namespace. Initialization that failed or died before completion, visible residue,
+and retry do not permit inferring successful completion from directory existence.
+A successful reservation survives process death and ordinary restart on the same
+healthy filesystem. Tests exercise that fault model, not physical power loss.
+See the [finite synchronization audit](issue-480/durability.md).
 
 ### Result and retained state on persistence failure (C)
 

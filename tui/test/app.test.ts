@@ -39,6 +39,8 @@ import type {
   SourceTarget,
 } from "../src/protocol/app-server.ts";
 import {
+  checkpoint,
+  snapshot,
   attemptView,
   approvalInteraction,
   childApprovalInteraction,
@@ -47,11 +49,14 @@ import {
   catalogModel,
   sessionModel,
   sessionView,
-  snapshot,
   subagent,
 } from "./support/fixtures.ts";
 
 const SESSION_SETTINGS = { cwd: "/work/project" };
+function observedChild(child:ReturnType<typeof subagent>):import('../../protocol/app-server/v50.ts').AgentObservation {
+  return {type:'checkpoint',agent_id:child.agent_id,conversation_id:child.child_conversation_id,activation_id:child.activation_id,source:'durable_only',cursor:null,checkpoint:checkpoint(snapshot({conversation_id:child.child_conversation_id}))};
+}
+
 
 function targetFor(sessionId: string): AttachmentTarget {
   return {
@@ -88,6 +93,9 @@ function fakeSession(
     target: targetFor(sessionId),
     released: false,
     serverClosed: false,
+    observationPhase: 'following' as const,
+    get cancellationReady(): boolean { return !session.released && !session.serverClosed; },
+    get controlReady(): boolean { return session.cancellationReady && session.observationPhase === 'following'; },
     resyncCount: 0,
     onState: (listener: (nextState: unknown) => void) => {
       stateListeners.add(listener);
@@ -480,7 +488,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: "Final report", mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     for (const access of [false, true]) {
       const session = fakeSession() as unknown as Record<string, unknown>;
       const page = deferred<void>();
@@ -533,7 +541,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     const bytes = Buffer.from("# 报告\r\n\u0000\xff", "latin1");
     const selectorPrototype = DeliverySelector.prototype as unknown as {
       settle: (operation: number, level: "info" | "error", text: string) => void;
@@ -594,7 +602,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     const body = { file, data: Buffer.from("bytes\r\n").toString("base64") };
     for (const retirement of ["escape", "replacement", "snapshot", "disconnect", "quit"] as const) {
       const dir = mkdtempSync(join(tmpdir(), "rustx-files-retire-"));
@@ -676,7 +684,7 @@ describe("RustxTuiApp lifecycle", () => {
       scope: { conversation_id: "conv-original", device: "1", inode: "2" },
       path: "out/报告 final.md", name: "报告 final.md", description: null, mime_type: "text/markdown",
     };
-    const record = { messageId: "tool-msg", index: 0, count: 1, file };
+    const record = { conversationId: targetFor("ses_84097828-fc31-78c8-9292-10df48901a85").conversation_id, locator: {type:'by_message_id' as const,message_id:"tool-msg"}, index: 0, count: 1, file };
     const location = { file, path, device: leaf.dev.toString(), inode: leaf.ino.toString() };
     const transientPrototype = TransientFeedbackSurface.prototype as unknown as {
       replace: (feedback: { level: "info" | "error"; text: string }) => void;
@@ -830,32 +838,35 @@ describe("RustxTuiApp lifecycle", () => {
     );
     const running = app.run();
 
-    // Inspection overlay: Esc closes it and must not reach /cancel, even
-    // though the authoritative presentation says an attempt is unsettled.
-    process.stdin.emit("data", "/help\r");
-    await waitForApplicationContinuation();
-    process.stdin.emit("data", "\u001b");
-    await waitForPiEscapeDisambiguation();
-    assert.equal(cancelled, 0);
+    try {
+      // Inspection overlay: Esc closes it and must not reach /cancel, even
+      // though the authoritative presentation says an attempt is unsettled.
+      process.stdin.emit("data", "/help\r");
+      await waitForApplicationContinuation();
+      process.stdin.emit("data", "\u001b");
+      await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 0);
 
-    // Overlay open: Esc closes it and must not reach /cancel, even though
-    // the authoritative presentation says an attempt is unsettled.
-    process.stdin.emit("data", "/resume\r");
-    await sessionsListedObserved;
-    // The list response is observed above; this microtask lets the awaiting
-    // dispatcher install the overlay before the next input event.
-    await Promise.resolve();
-    process.stdin.emit("data", "\u001b");
-    await waitForPiEscapeDisambiguation();
-    assert.equal(cancelled, 0);
+      // Overlay open: Esc closes it and must not reach /cancel, even though
+      // the authoritative presentation says an attempt is unsettled.
+      process.stdin.emit("data", "/resume\r");
+      await sessionsListedObserved;
+      // The list response is observed above; this microtask lets the awaiting
+      // dispatcher install the overlay before the next input event.
+      await Promise.resolve();
+      process.stdin.emit("data", "\u001b");
+      await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 0);
 
-    // No overlay: the same Esc input reaches the existing /cancel route once.
-    process.stdin.emit("data", "\u001b");
-    await waitForPiEscapeDisambiguation();
-    assert.equal(cancelled, 1);
+      // No overlay: the same Esc input reaches the existing /cancel route once.
+      process.stdin.emit("data", "\u001b");
+      await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 1);
 
-    await app.quit();
-    await running;
+    } finally {
+      await app.quit();
+      await running;
+    }
   });
 
   it("Session deletion overlay preserves editor, attachment and active projection and owns Esc", async () => {
@@ -2910,10 +2921,10 @@ it("remote recovery reconstructs selected child from replacement authority witho
   const child = subagent("researcher", "sha256:child");
   const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
   const next = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
-  const late = deferred<{ entries: [] }>();
+  const late = deferred<import('../../protocol/app-server/v50.ts').AgentObservation>();
   const reads: string[] = [];
-  Object.assign(old, { agentTranscriptPage: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
-  Object.assign(next, { agentTranscriptPage: async (id: string) => { reads.push(`new:${id}`); return { entries: [] }; } });
+  Object.assign(old, { observeAgent: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
+  Object.assign(next, { observeAgent: async (id: string) => { reads.push(`new:${id}`); return observedChild(child); } });
   let attachments = 0;
   const first = fakeHost({ ownership: "external", onClose: listener => { close = listener; } });
   const second = fakeHost({ ownership: "external", attach: async id => { assert.equal(id, old.sessionId); attachments++; return next; } });
@@ -2928,7 +2939,7 @@ it("remote recovery reconstructs selected child from replacement authority witho
     await waitForApplicationContinuation();
     assert.deepEqual(reads, [`old:${child.agent_id}`, `new:${child.agent_id}`]);
     assert.equal(attachments, 1);
-    late.resolve({ entries: [] }); await waitForApplicationContinuation();
+    late.resolve(observedChild(child)); await waitForApplicationContinuation();
     assert.equal(next.state.agents[0], child);
   } finally { await app.quit(); await running; }
 });
@@ -2937,10 +2948,10 @@ it("switching parent Session fences a child page while the old parent remains at
   const child = subagent("researcher", "sha256:child");
   const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
   const next = fakeSession(emptyPresentationState(sessionModel("beta/model-b")), "ses_e8de016f-bd70-782f-ad23-25e81df82550");
-  const late = deferred<{ entries: [] }>();
+  const late = deferred<import('../../protocol/app-server/v50.ts').AgentObservation>();
   const read = deferred<void>(); const attached = deferred<void>();
   let detached = 0;
-  Object.assign(old, { agentTranscriptPage: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });
+  Object.assign(old, { observeAgent: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });
   const app = appOver(old, fakeHost({
     attach: async () => { attached.resolve(); return next; },
     catalog: { createSession: async () => ({ session: sessionView({ id: next.sessionId }) }) },
@@ -2951,7 +2962,7 @@ it("switching parent Session fences a child page while the old parent remains at
     process.stdin.emit("data", "\r"); await read.promise;
     process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
     process.stdin.emit("data", "/new\r"); await attached.promise; await waitForApplicationContinuation();
-    renders.start(); late.resolve({ entries: [] }); await waitForApplicationContinuation();
+    renders.start(); late.resolve(observedChild(child)); await waitForApplicationContinuation();
     assert.equal(renders.count(), 0, "the old child cannot repaint the new parent");
     assert.equal(detached, 0, "focus switching does not need to detach the old runtime to fence reads");
   } finally { renders.restore(); await app.quit(); await running; }

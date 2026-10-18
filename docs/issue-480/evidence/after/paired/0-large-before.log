@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'agent_loop::runtime_benchmark::measure_runtime' (973767) panicked at tests/conformance/agent_loop.rs:524:14:
+original attempt Journal frontier: Storage("presentation frontier failed")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test agent_loop::runtime_benchmark::measure_runtime ... FAILED
+
+failures:
+
+failures:
+    agent_loop::runtime_benchmark::measure_runtime
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 29 filtered out; finished in 5.43s
+

@@ -33,7 +33,8 @@ use rustx::durable::{ConversationStore, ConversationStoreError, SqliteConversati
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock, ToolMessageBlock,
+    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+    ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
@@ -153,6 +154,8 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
 
 fn envelope(event_id: &str, turn: &str, event: RuntimeEvent) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(event_id),
         sequence: 0,
@@ -2201,6 +2204,8 @@ fn recovery_repairs_a_canonical_proposal_without_audit_aliasing() {
     store.initialize(&[]).expect("initialize");
     store
         .append_event(RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new("attempt-start-repair"),
             sequence: 0,
@@ -2722,7 +2727,7 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
         matches!(
             &unknown,
             Err(ConversationStoreError::InvalidReference(detail))
-                if detail == "request snapshot request-never-started does not exist"
+                if detail.contains("never started")
         ),
         "P must name an actually started request, got {unknown:?}"
     );
@@ -2743,4 +2748,1620 @@ fn a_provider_outcome_names_one_started_request_exactly_once() {
         )),
         Err(ConversationStoreError::TerminalViolation(_))
     ));
+}
+
+// Issue #467 byte-observation contracts. Real file-backed SQLite and reopen
+// are the boundary; staging/C/audit transactions are the linearization points.
+fn live_content_source(
+    start: &PublicationStreamStart,
+    block: u32,
+) -> rustx::runtime_client::content::ContentSource {
+    rustx::runtime_client::content::ContentSource::LivePublicationPrefix {
+        component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+        stream_id: start.stream_id.clone(),
+        message_id: start.message_id.clone(),
+        attempt_id: start.attempt_id.clone(),
+        turn_id: start.turn_id.clone(),
+        publication_request_id: start.request_id.clone(),
+        block_index: ContentBlockIndex::new(block),
+    }
+}
+fn read_content_bytes(
+    store: &SqliteConversationStore,
+    reference: &rustx::runtime_client::content::ContentRef,
+) -> Vec<u8> {
+    use base64::Engine;
+    let mut offset = 0;
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = store
+            .content_read(reference, offset, 65_536)
+            .expect("bounded byte read");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(chunk.data_base64)
+            .expect("base64");
+        assert!(decoded.len() <= 65_536);
+        assert_eq!(chunk.end_offset, offset + decoded.len() as u64);
+        bytes.extend(decoded);
+        if chunk.complete {
+            assert_eq!(chunk.next_offset, None);
+            break;
+        }
+        assert!(chunk.end_offset > offset);
+        offset = chunk.next_offset.expect("advancing continuation");
+    }
+    bytes
+}
+#[test]
+fn t08_large_canonical_content_exact_byte_chunks_survive_restart() {
+    use rustx::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    let durable = Durable::new();
+    // Every chunk boundary crosses an actual multibyte character.
+    let original = format!("a{}", "水🙂".repeat(600_000));
+    let message_id = MessageId::new("large-canonical");
+    {
+        let store = durable.open();
+        store
+            .initialize(&[assistant(&message_id, &original)])
+            .expect("canonical commit");
+    }
+    let store = durable.open();
+    let reference = store
+        .content_descriptor(
+            &ContentSource::CanonicalMessageBlock {
+                component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
+                locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id,
+                },
+                block_index: ContentBlockIndex::new(0),
+            },
+            Rep::Utf8Text,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference.readable_end, original.len() as u64);
+    assert_eq!(read_content_bytes(&store, &reference), original.as_bytes());
+    assert!(store.content_read(&reference, 0, 65_537).is_err());
+    assert!(
+        store
+            .content_read(&reference, 9_007_199_254_740_992, 1)
+            .is_err()
+    );
+    assert!(
+        store
+            .content_read(&reference, reference.readable_end + 1, 1)
+            .is_err()
+    );
+    assert!(store.content_read(&reference, 0, 0).is_err());
+}
+#[test]
+fn t09_t12_t19_committed_live_prefix_fixed_identity_and_frontier() {
+    use rustx::runtime_client::content::ContentRepresentation as Rep;
+    let durable = Durable::new();
+    let (start, reference) = {
+        let store = durable.open();
+        store.initialize(&[]).unwrap();
+        let (_, start) = opened_test_stream(&store, "1");
+        store
+            .stage_publication_frames(&[text(0, &start, "α")])
+            .unwrap();
+        let reference = store
+            .content_descriptor(&live_content_source(&start, 0), Rep::Utf8Text)
+            .unwrap()
+            .unwrap();
+        // A refused transaction cannot create readable candidate bytes.
+        assert!(
+            store
+                .stage_publication_frames(&[text(2, &start, "secret")])
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .content_descriptor(&live_content_source(&start, 0), Rep::Utf8Text)
+                .unwrap()
+                .unwrap(),
+            reference
+        );
+        // Fail after the transaction has physically indexed the new bytes.
+        // The publication-frame insert is the deterministic failure boundary;
+        // rollback must remove both the byte tail and its frontier evidence.
+        let raw_db = rusqlite::Connection::open(&durable.path).unwrap();
+        raw_db.execute_batch("CREATE TRIGGER fail_frame BEFORE INSERT ON publication_frames BEGIN SELECT RAISE(ABORT,'staging failure'); END;").unwrap();
+        assert!(
+            store
+                .stage_publication_frames(&[text(1, &start, "hidden")])
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .content_descriptor(&live_content_source(&start, 0), Rep::Utf8Text)
+                .unwrap()
+                .unwrap(),
+            reference
+        );
+        assert_eq!(read_content_bytes(&store, &reference), "α".as_bytes());
+        raw_db.execute_batch("DROP TRIGGER fail_frame;").unwrap();
+        store
+            .stage_publication_frames(&[text(1, &start, "🙂")])
+            .unwrap();
+        assert_eq!(read_content_bytes(&store, &reference), "α".as_bytes());
+        (start, reference)
+    };
+    let store = durable.open();
+    assert_eq!(read_content_bytes(&store, &reference), "α".as_bytes());
+    let latest = store
+        .content_descriptor(&live_content_source(&start, 0), Rep::Utf8Text)
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_content_bytes(&store, &latest), "α🙂".as_bytes());
+    for mutate in 0..5 {
+        let mut forged = reference.clone();
+        match mutate {
+            0 => forged.readable_end = latest.readable_end,
+            1 => forged.content_revision = latest.content_revision,
+            2 => forged.representation = Rep::RawJsonUtf8,
+            3 => {
+                forged.conversation_id =
+                    ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8a3");
+            }
+            _ => {
+                if let rustx::runtime_client::content::ContentSource::LivePublicationPrefix {
+                    attempt_id,
+                    ..
+                } = &mut forged.source
+                {
+                    *attempt_id = AttemptId::new("foreign-attempt");
+                }
+            }
+        }
+        assert!(
+            store.content_read(&forged, 0, 1).is_err(),
+            "forged evidence {mutate}"
+        );
+    }
+    // Pure reads preserve all execution/publication facts.
+    let facts = event_count(&store);
+    let streams = store.load_unsettled_publication_streams().unwrap();
+    store.content_read(&latest, 1, 1).unwrap();
+    assert_eq!(event_count(&store), facts);
+    assert_eq!(store.load_unsettled_publication_streams().unwrap(), streams);
+    let (audit, _) = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .unwrap();
+    assert!(
+        store.content_read(&reference, 0, 1).is_err(),
+        "expired live ref must not redirect"
+    );
+    let source = rustx::runtime_client::content::ContentSource::DurableTranscriptAudit {
+        component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+        stream_id: audit.stream_id,
+        message_id: audit.message_id,
+        attempt_id: audit.attempt_id,
+        turn_id: audit.turn_id,
+        publication_request_id: audit.request_id,
+        block_index: ContentBlockIndex::new(0),
+    };
+    let retained = store
+        .content_descriptor(&source, Rep::Utf8Text)
+        .unwrap()
+        .unwrap();
+    drop(store);
+    assert_eq!(
+        read_content_bytes(&durable.open(), &retained),
+        "α🙂".as_bytes()
+    );
+}
+#[test]
+fn t19_raw_tool_json_retains_original_bytes_after_canonical_commit() {
+    use rustx::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    let durable = Durable::new();
+    let raw = "{ \n}\t";
+    let (message_id, live) = {
+        let store = durable.open();
+        store.initialize(&[]).unwrap();
+        let (request, start) = opened_test_stream(&store, "1");
+        let call = ToolCallId::new("raw-call");
+        store
+            .stage_publication_frames(&[proposal_start_frame(&start, 0, &call)])
+            .unwrap();
+        store
+            .stage_publication_frames(&[proposal_arguments_frame(
+                &start,
+                1,
+                ContentBlockIndex::new(0),
+                &call,
+                raw,
+            )])
+            .unwrap();
+        let live = store
+            .content_descriptor(&live_content_source(&start, 0), Rep::RawJsonUtf8)
+            .unwrap()
+            .unwrap();
+        assert_eq!(read_content_bytes(&store, &live), raw.as_bytes());
+        store
+            .stage_publication_frames(&[proposal_complete_frame_with(
+                &start,
+                2,
+                ContentBlockIndex::new(0),
+                &call,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            )])
+            .unwrap();
+        commit_provider_outcome(&store, "1", &request);
+        store
+            .commit_publication_terminal(
+                &start.stream_id,
+                &[frame(&start, 3, PublicationPayload::TerminalOnly)],
+            )
+            .unwrap();
+        let message = assistant_with_tool(&start.message_id, &call);
+        store
+            .commit_canonical_publication(
+                &start.stream_id,
+                &message,
+                committed_event(&start.message_id, "1"),
+            )
+            .unwrap();
+        (start.message_id, live)
+    };
+    let store = durable.open();
+    assert!(store.content_read(&live, 0, 1).is_err());
+    let source = ContentSource::CanonicalMessageBlock {
+        component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
+        locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            message_id,
+        },
+        block_index: ContentBlockIndex::new(0),
+    };
+    let raw_ref = store
+        .content_descriptor(&source, Rep::RawJsonUtf8)
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_content_bytes(&store, &raw_ref), raw.as_bytes());
+    let structural = store
+        .content_descriptor(&source, Rep::CanonicalJsonV1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_content_bytes(&store, &structural), b"{}");
+    assert!(
+        store
+            .content_descriptor(&source, Rep::BinaryBytes)
+            .unwrap()
+            .is_none(),
+        "artifact references do not grant transcript binary bytes"
+    );
+}
+
+#[test]
+fn t19_parsed_only_tool_value_never_invents_canonical_raw_json() {
+    use rustx::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (request, start) = opened_test_stream(&store, "1");
+    let call = ToolCallId::new("parsed-only-call");
+    store
+        .stage_publication_frames(&[
+            proposal_start_frame(&start, 0, &call),
+            proposal_complete_frame_with(
+                &start,
+                1,
+                ContentBlockIndex::new(0),
+                &call,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            ),
+        ])
+        .unwrap();
+    let provisional = store
+        .content_descriptor(&live_content_source(&start, 0), Rep::RawJsonUtf8)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        provisional.readable_end, 0,
+        "an opened raw stream has a real empty provisional prefix"
+    );
+    commit_provider_outcome(&store, "1", &request);
+    store
+        .commit_publication_terminal(
+            &start.stream_id,
+            &[frame(&start, 2, PublicationPayload::TerminalOnly)],
+        )
+        .unwrap();
+    store
+        .commit_canonical_publication(
+            &start.stream_id,
+            &assistant_with_tool(&start.message_id, &call),
+            committed_event(&start.message_id, "1"),
+        )
+        .unwrap();
+    let source = ContentSource::CanonicalMessageBlock {
+        component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
+        locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            message_id: start.message_id,
+        },
+        block_index: ContentBlockIndex::new(0),
+    };
+    assert!(
+        store
+            .content_descriptor(&source, Rep::RawJsonUtf8)
+            .unwrap()
+            .is_none(),
+        "a parsed Value cannot manufacture an original raw JSON representation"
+    );
+    let structural = store
+        .content_descriptor(&source, Rep::CanonicalJsonV1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_content_bytes(&store, &structural), b"{}");
+    assert!(store.content_read(&provisional, 0, 1).is_err());
+}
+
+#[test]
+fn t08_t09_t19_lineage_keeps_original_raw_bytes_after_parent_removal() {
+    use rustx::durable::inbox::LineageSeed;
+    use rustx::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
+    use rustx::runtime_client::content::{
+        CanonicalContentComponent as Component, ContentRepresentation as Rep, ContentSource,
+    };
+    let parent = Durable::new();
+    let original = "λ🙂".repeat(350_000);
+    let raw = format!(
+        "{{ \n \"text\" : {} \n}}\t",
+        serde_json::to_string(&original).unwrap()
+    );
+    let store = parent.open();
+    store.initialize(&[]).unwrap();
+    let (request, start) = opened_test_stream(&store, "1");
+    let call = ToolCall {
+        id: ToolCallId::new("lineage-raw-call"),
+        tool_id: ToolId::new("tool-alpha"),
+        name: "alpha".into(),
+        arguments: serde_json::from_str(&raw).unwrap(),
+    };
+    store
+        .stage_publication_frames(&[
+            proposal_start_frame(&start, 0, &call.id),
+            proposal_arguments_frame(&start, 1, ContentBlockIndex::new(0), &call.id, &raw),
+            frame(
+                &start,
+                2,
+                PublicationPayload::ProposedToolCallCompleted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: call.clone(),
+                },
+            ),
+        ])
+        .unwrap();
+    commit_provider_outcome(&store, "1", &request);
+    store
+        .commit_publication_terminal(
+            &start.stream_id,
+            &[frame(&start, 3, PublicationPayload::TerminalOnly)],
+        )
+        .unwrap();
+    store
+        .commit_canonical_publication(
+            &start.stream_id,
+            &MessageBlock::Assistant(AssistantMessageBlock {
+                id: start.message_id.clone(),
+                content: vec![AssistantContentBlock::ToolCall(call)],
+            }),
+            committed_event(&start.message_id, "1"),
+        )
+        .unwrap();
+    let inbound = MessageId::new("inherited-large-user");
+    store
+        .append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: inbound.clone(),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: original.clone(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        }))
+        .unwrap();
+    let parent_source = ContentSource::CanonicalMessageBlock {
+        component: Component::Payload,
+        locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            message_id: start.message_id.clone(),
+        },
+        block_index: ContentBlockIndex::new(0),
+    };
+    let parent_ref = store
+        .content_descriptor(&parent_source, Rep::RawJsonUtf8)
+        .unwrap()
+        .unwrap();
+    let captured = store
+        .read_lineage_cut(store.load_head().unwrap().revision)
+        .unwrap();
+    assert_eq!(captured.raw_tool_arguments.len(), 1);
+    assert_eq!(captured.raw_tool_arguments[0].bytes, raw.as_bytes());
+    let seed = LineageSeed::replayed(captured.canonical, captured.surface_history)
+        .unwrap()
+        .with_completed_responses(captured.completed_responses)
+        .unwrap()
+        .with_turns(captured.turns)
+        .unwrap()
+        .with_projections(captured.projections)
+        .unwrap()
+        .with_raw_tool_arguments(captured.raw_tool_arguments)
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("child.sqlite");
+    let child_id = ConversationId::generate();
+    let child = SqliteConversationStore::open(child_id.clone(), &path).unwrap();
+    child.initialize_lineage(&seed).unwrap();
+    drop(store);
+    drop(parent);
+    drop(child);
+    let child = SqliteConversationStore::open(child_id.clone(), &path).unwrap();
+    assert!(child.content_read(&parent_ref, 0, 1).is_err());
+    let child_ref = child
+        .content_descriptor(&parent_source, Rep::RawJsonUtf8)
+        .unwrap()
+        .unwrap();
+    assert_eq!(child_ref.conversation_id, child_id);
+    assert_eq!(read_content_bytes(&child, &child_ref), raw.as_bytes());
+    let user_ref = child
+        .content_descriptor(
+            &ContentSource::CanonicalMessageBlock {
+                component: Component::Payload,
+                locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: inbound,
+                },
+                block_index: ContentBlockIndex::new(0),
+            },
+            Rep::Utf8Text,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_content_bytes(&child, &user_ref), original.as_bytes());
+    let heads = child
+        .message_header_page(&child.observation_read_cut().unwrap(), None, 32)
+        .unwrap();
+    assert!(
+        heads
+            .headers
+            .iter()
+            .flat_map(|header| &header.content)
+            .all(|binding| binding.content_ref.conversation_id == child_id)
+    );
+    assert!(
+        heads
+            .headers
+            .iter()
+            .flat_map(|header| &header.content)
+            .any(|binding| binding.content_ref.representation == Rep::RawJsonUtf8)
+    );
+}
+
+#[test]
+fn t08_t12_t19_live_and_audit_tool_metadata_keep_exact_components_and_frame_frontiers() {
+    use rustx::runtime_client::content::{
+        ContentRepresentation as Rep, ContentSource, PublicationContentComponent as Component,
+    };
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (request, start) = opened_test_stream(&store, "1");
+    let before_audit = store.observation_read_cut().unwrap();
+    let name = "工具 name ".repeat(250_000);
+    let call_id = ToolCallId::new("large-name");
+    store
+        .stage_publication_frames(&[proposal_start_frame_with(
+            &start,
+            0,
+            ContentBlockIndex::new(0),
+            &call_id,
+            ToolId::new("tool-alpha"),
+            &name,
+        )])
+        .unwrap();
+    let mut source = live_content_source(&start, 0);
+    let ContentSource::LivePublicationPrefix { component, .. } = &mut source else {
+        unreachable!()
+    };
+    *component = Component::BlockMetadata;
+    let first = store
+        .content_descriptor_at(&source, Rep::CanonicalJsonV1, 1)
+        .unwrap()
+        .unwrap();
+    assert!(first.readable_end > 1_048_576);
+    assert!(
+        store
+            .content_descriptor_at(&source, Rep::CanonicalJsonV1, 2)
+            .unwrap()
+            .is_none()
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&read_content_bytes(&store, &first)).unwrap();
+    assert_eq!(metadata["name"], name);
+    assert_eq!(metadata["id"], call_id.as_str());
+    assert!(metadata.get("arguments").is_none());
+    let mut forged = first.clone();
+    let ContentSource::LivePublicationPrefix { component, .. } = &mut forged.source else {
+        unreachable!()
+    };
+    *component = Component::Payload;
+    assert!(store.content_read(&forged, 0, 1).is_err());
+    commit_provider_outcome(&store, "1", &request);
+    store
+        .commit_publication_terminal(
+            &start.stream_id,
+            &[frame(&start, 1, PublicationPayload::TerminalOnly)],
+        )
+        .unwrap();
+    store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .unwrap();
+    assert!(store.content_read(&first, 0, 1).is_err());
+    let source = ContentSource::DurableTranscriptAudit {
+        component: Component::BlockMetadata,
+        stream_id: start.stream_id,
+        message_id: start.message_id,
+        attempt_id: start.attempt_id,
+        turn_id: start.turn_id,
+        publication_request_id: start.request_id,
+        block_index: ContentBlockIndex::new(0),
+    };
+    let retained = store
+        .content_descriptor(&source, Rep::CanonicalJsonV1)
+        .unwrap()
+        .unwrap();
+    assert!(
+        store
+            .validate_content_source_cut(&retained, &before_audit)
+            .is_err()
+    );
+    store
+        .validate_content_source_cut(&retained, &store.observation_read_cut().unwrap())
+        .unwrap();
+    drop(store);
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&read_content_bytes(&durable.open(), &retained)).unwrap();
+    assert_eq!(metadata["name"], name);
+}
+
+/// T08/T15/T20: the original `RequestStart` transaction owns one typed,
+/// allowlisted inspection stream. Reopen and diagnostic corruption prove
+/// a small read never reconstructs its enormous Snapshot or Surface.
+#[test]
+fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bounded() {
+    let durable = Durable::new();
+    let prompt = "λ🙂".repeat(700_000);
+    // Keep the aggregate canonical input above nine MiB, while every
+    // original record satisfies the native model-input admission bound.
+    let body = "model context ".repeat(10_000);
+    let store = durable.open();
+    let messages: Vec<_> = (0..73)
+        .map(|index| {
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new(format!("frozen-context-{index}")),
+                content: vec![AssistantContentBlock::Text(TextBlock {
+                    text: body.clone(),
+                })],
+            })
+        })
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .all(|message| serde_json::to_vec(message).unwrap().len() < 1_048_576)
+    );
+    assert!(messages.len() * body.len() > 9 * 1_048_576);
+    store.initialize(&messages).unwrap();
+    let head = store.load_head().unwrap();
+    let mut configured = invocation();
+    configured
+        .request_params
+        .insert("top_p".into(), serde_json::json!(0.9));
+    configured.request_params.insert(
+        "api_key".into(),
+        serde_json::json!("secret-key".repeat(200_000)),
+    );
+    let mut snapshot = RequestSnapshot::new(
+        RequestIdentity {
+            attempt_id: attempt(),
+            turn: TurnId::new("trace-source"),
+            retry_number: 0,
+        },
+        rustx::context::resources::LedgerFrontier(head.revision.get()),
+        prompt.clone(),
+        Vec::new(),
+        rustx::runtime::RuntimeResourceRevision::new(1),
+        configured,
+        64_000,
+        None,
+        false,
+        Vec::new(),
+        CapabilityRevision::new(1),
+        ContextGeneration {
+            id: 1,
+            contributors: Vec::new(),
+        },
+        None,
+        Vec::new(),
+    );
+    crate::freeze_request(&store, &mut snapshot);
+    let started = store
+        .commit_model_turn_start(&[], &snapshot, fixed_time())
+        .unwrap()
+        .started;
+    let request = snapshot.request_id;
+    let header = store
+        .request_summary_header(&request, started.sequence)
+        .unwrap();
+    assert!(header.deferred);
+    assert!(serde_json::to_vec(&header).unwrap().len() < 16_384);
+    assert_eq!(
+        store
+            .request_identity_at(started.sequence, started.sequence)
+            .unwrap(),
+        Some(request.clone())
+    );
+    assert!(
+        store
+            .request_summary_header(&request, started.sequence - 1)
+            .is_err()
+    );
+    drop(store);
+    let connection = rusqlite::Connection::open(&durable.path).unwrap();
+    connection
+        .execute(
+            "UPDATE request_snapshots SET snapshot_json='invalid JSON'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
+        .unwrap();
+    connection
+        .execute("UPDATE message_ledger SET message_json='invalid JSON'", [])
+        .unwrap();
+    let indexed_bytes: u64 = connection
+        .query_row(
+            "SELECT COALESCE(SUM(length(bytes)),0) FROM content_segments WHERE source_kind='trace_request'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // Only the original Snapshot metadata plus finite C-owned descriptors
+    // is indexed. The nine-megabyte canonical input is never copied into a
+    // second request/display history.
+    assert!(indexed_bytes < prompt.len() as u64 + 1_000_000);
+    drop(connection);
+    let store = durable.open();
+    let prompt_path = vec!["effective_system_prompt".into(), "text".into()];
+    let mut offset = 0;
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = store
+            .request_value_read(&request, started.sequence, &prompt_path, offset, 65_536)
+            .unwrap();
+        assert!(chunk.bytes.len() <= 65_536);
+        bytes.extend_from_slice(&chunk.bytes);
+        if let Some(next) = chunk.next_offset {
+            assert!(next > offset);
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), prompt);
+    let mut offset = 0;
+    let mut count = 0;
+    loop {
+        let page = store
+            .request_field_page(&request, started.sequence, &["messages".into()], offset, 32)
+            .unwrap();
+        assert_eq!(page.total, 73);
+        assert!(page.fields.len() <= 32);
+        assert!(serde_json::to_vec(&page).unwrap().len() < 786_432);
+        count += page.fields.len();
+        if let Some(next) = page.next_offset {
+            assert!(next > offset);
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    assert_eq!(count, 73);
+    let option = store
+        .request_value_read(&request, started.sequence, &["options".into()], 0, 65_536)
+        .unwrap();
+    let decoded = String::from_utf8(option.bytes).unwrap();
+    assert!(decoded.contains("top_p"));
+    assert!(!decoded.contains("api_key") && !decoded.contains("secret-key"));
+    assert!(
+        store
+            .request_value_read(&request, started.sequence, &["api_key".into()], 0, 1)
+            .is_err()
+    );
+    assert!(
+        store
+            .request_value_read(
+                &request,
+                started.sequence,
+                &prompt_path,
+                bytes.len() as u64 + 1,
+                1
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .request_value_read(&request, started.sequence, &prompt_path, 0, 65_537)
+            .is_err()
+    );
+}
+
+#[test]
+fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_bytes() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let huge_key = "ζ🙂".repeat(400_000);
+    let mut schema = serde_json::Map::new();
+    for index in 0..80 {
+        schema.insert(format!("field-{index:03}"), serde_json::json!(index));
+    }
+    // Reserved-looking keys also use ordinal locators, preventing collision
+    // between a genuine native key and a generated bounded read locator.
+    schema.insert("@80".into(), serde_json::json!("reserved-looking-key"));
+    schema.insert(huge_key.clone(), serde_json::json!("large-key-value"));
+    let mut snapshot = RequestSnapshot::new(
+        RequestIdentity {
+            attempt_id: attempt(),
+            turn: TurnId::new("source-large-key"),
+            retry_number: 0,
+        },
+        rustx::context::resources::LedgerFrontier(store.load_head().unwrap().revision.get()),
+        "prompt".into(),
+        Vec::new(),
+        rustx::runtime::RuntimeResourceRevision::new(1),
+        invocation(),
+        64_000,
+        None,
+        false,
+        vec![rustx::tools::types::ModelToolDefinition {
+            id: ToolId::new("schema-tool"),
+            name: "schema_tool".into(),
+            description: "description".into(),
+            input_schema: serde_json::Value::Object(schema),
+        }],
+        CapabilityRevision::new(1),
+        ContextGeneration {
+            id: 1,
+            contributors: Vec::new(),
+        },
+        None,
+        Vec::new(),
+    );
+    crate::freeze_request(&store, &mut snapshot);
+    let sequence = store
+        .commit_model_turn_start(&[], &snapshot, fixed_time())
+        .unwrap()
+        .started
+        .sequence;
+    let request = snapshot.request_id;
+    drop(store);
+    let connection = rusqlite::Connection::open(&durable.path).unwrap();
+    connection
+        .execute(
+            "UPDATE request_snapshots SET snapshot_json='invalid JSON'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute("UPDATE surface_head SET active_json='invalid JSON'", [])
+        .unwrap();
+    drop(connection);
+    let store = durable.open();
+    let parent = vec![
+        "tools".into(),
+        "0".into(),
+        "input_schema".into(),
+        "value".into(),
+    ];
+    let mut offset = 0;
+    let mut count = 0;
+    let mut large = None;
+    let mut reserved = None;
+    loop {
+        let page = store
+            .request_field_page(&request, sequence, &parent, offset, 32)
+            .unwrap();
+        assert_eq!(page.total, 82);
+        assert!(page.fields.len() <= 32);
+        assert!(serde_json::to_vec(&page).unwrap().len() < 786_432);
+        for field in &page.fields {
+            assert!(serde_json::to_vec(&field.path).unwrap().len() < 4096);
+            if let Some(key) = &field.key {
+                if key.encoded_bytes > 65_536 {
+                    large = Some(key.clone());
+                    assert_eq!(field.value, serde_json::json!("large-key-value"));
+                } else {
+                    reserved = Some(key.clone());
+                }
+            }
+        }
+        count += page.fields.len();
+        if let Some(next) = page.next_offset {
+            assert!(next > offset);
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    assert_eq!(count, 82);
+    let large = large.unwrap();
+    let mut offset = 0;
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = store
+            .request_value_read(&request, sequence, &large.path, offset, 65_536)
+            .unwrap();
+        assert!(chunk.bytes.len() <= 65_536);
+        bytes.extend_from_slice(&chunk.bytes);
+        if let Some(next) = chunk.next_offset {
+            assert!(next > offset);
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), huge_key);
+    let reserved = reserved.unwrap();
+    let bytes = store
+        .request_value_read(&request, sequence, &reserved.path, 0, 65_536)
+        .unwrap()
+        .bytes;
+    assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), "@80");
+    assert!(
+        store
+            .request_value_read(
+                &request,
+                sequence,
+                &[
+                    "tools".into(),
+                    "0".into(),
+                    "input_schema".into(),
+                    "value".into(),
+                    huge_key
+                ],
+                0,
+                1
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn t19_staging_receipts_pin_each_committed_frame_without_later_source_reads() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (request, start) = opened_test_stream(&store, "1");
+    let receipts = store
+        .stage_publication_frames(&[text(0, &start, "α"), text(1, &start, "🙂")])
+        .unwrap();
+    assert_eq!(receipts.len(), 2);
+    for (index, receipt) in receipts.iter().enumerate() {
+        assert_eq!(receipt.stream_id, start.stream_id);
+        assert_eq!(receipt.sequence, index as u64);
+        assert_eq!(receipt.content.len(), 1);
+        assert_eq!(receipt.content[0].content_revision, index as u64 + 1);
+    }
+    assert_eq!(receipts[0].suffix_bytes, Some(2));
+    assert_eq!(receipts[1].suffix_bytes, Some(4));
+    assert_eq!(receipts[0].content[0].readable_end, 2);
+    assert_eq!(receipts[1].content[0].readable_end, 6);
+    assert_eq!(
+        read_content_bytes(&store, &receipts[0].content[0]),
+        "α".as_bytes()
+    );
+    // A refused P transaction cannot return a receipt or grant the proposed suffix.
+    assert!(
+        store
+            .commit_publication_terminal(&start.stream_id, &[text(2, &start, "secret")])
+            .is_err()
+    );
+    assert_eq!(
+        read_content_bytes(&store, &receipts[1].content[0]),
+        "α🙂".as_bytes()
+    );
+    commit_provider_outcome(&store, "1", &request);
+    let terminal = store
+        .commit_publication_terminal(&start.stream_id, &[text(2, &start, "!")])
+        .unwrap();
+    assert_eq!(terminal[0].content[0].readable_end, 7);
+    assert_eq!(terminal[0].content[0].content_revision, 3);
+    assert_eq!(terminal[0].suffix_bytes, Some(1));
+    assert_eq!(
+        read_content_bytes(&store, &receipts[0].content[0]),
+        "α".as_bytes()
+    );
+}
+
+#[test]
+fn t15_t19_t20_live_native_pages_seek_sparse_block_and_tool_ordinals_at_fixed_p_frontier() {
+    use rustx::runtime_client::content::{ContentSource, PublicationContentComponent};
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (_request, start) = opened_test_stream(&store, "1");
+    let mut frames = Vec::new();
+    for index in 0..73_u32 {
+        let block = ContentBlockIndex::new((72 - index) * 3);
+        let payload = if index % 3 == 0 {
+            PublicationPayload::ProposedToolCallStarted {
+                block_index: block,
+                call: rustx::tools::types::ToolCallStart {
+                    id: ToolCallId::new(format!("sparse-live-{index}")),
+                    tool_id: ToolId::new("sparse-tool"),
+                    name: "sparse".into(),
+                },
+            }
+        } else {
+            PublicationPayload::TextSuffix {
+                block_index: block,
+                suffix: format!("text-{index}"),
+            }
+        };
+        frames.push(PublicationFrame {
+            stream_id: start.stream_id.clone(),
+            message_id: start.message_id.clone(),
+            sequence: u64::from(index),
+            payload,
+        });
+    }
+    let receipts = store.stage_publication_frames(&frames).unwrap();
+    for (index, receipt) in receipts.iter().enumerate() {
+        assert_eq!(receipt.block_ordinal, Some(index as u64));
+        assert_eq!(receipt.block_total, index as u64 + 1);
+        assert_eq!(receipt.tool_total, (index as u64 + 3) / 3);
+        assert_eq!(
+            receipt.tool_ordinal,
+            if index % 3 == 0 {
+                Some(index as u64 / 3)
+            } else {
+                None
+            }
+        );
+    }
+    let source = ContentSource::LivePublicationPrefix {
+        component: PublicationContentComponent::Payload,
+        stream_id: start.stream_id.clone(),
+        message_id: start.message_id.clone(),
+        attempt_id: start.attempt_id.clone(),
+        turn_id: start.turn_id.clone(),
+        publication_request_id: start.request_id.clone(),
+        block_index: ContentBlockIndex::new(216),
+    };
+    // Stage farther ahead than the observed cut, then corrupt full Frame JSON:
+    // header/range selection must never deserialize those complete bodies.
+    rusqlite::Connection::open(&durable.path)
+        .unwrap()
+        .execute(
+            "UPDATE publication_frames SET frame_json='invalid JSON'",
+            [],
+        )
+        .unwrap();
+    let first = store.live_block_header_page(&source, 33, 0, 32).unwrap();
+    assert_eq!(first.total, 33);
+    assert_eq!(first.headers.len(), 32);
+    assert_eq!(first.next_offset, Some(32));
+    for (ordinal, header) in first.headers.iter().enumerate() {
+        assert_eq!(header.position, ordinal as u64);
+        assert_eq!(
+            header.block_index.get(),
+            (72 - u32::try_from(ordinal).unwrap()) * 3
+        );
+        assert!(
+            header
+                .content
+                .iter()
+                .all(|reference| reference.content_revision <= 33)
+        );
+    }
+    let second = store.live_block_header_page(&source, 33, 32, 32).unwrap();
+    assert_eq!(second.headers.len(), 1);
+    assert!(second.next_offset.is_none());
+    let tools = store.live_tool_header_page(&source, 33, 0, 32).unwrap();
+    assert_eq!(tools.total, 11);
+    assert_eq!(tools.headers.len(), 11);
+    assert!(tools.next_offset.is_none());
+    for (ordinal, header) in tools.headers.iter().enumerate() {
+        assert_eq!(header.position, ordinal as u64);
+        assert_eq!(header.kind, "tool_call");
+        assert!(!header.assembled);
+        assert_eq!(header.content.len(), 2);
+        assert!(
+            header
+                .content
+                .iter()
+                .all(|reference| reference.content_revision <= 33)
+        );
+    }
+    let mut forged = source;
+    let ContentSource::LivePublicationPrefix { attempt_id, .. } = &mut forged else {
+        unreachable!();
+    };
+    *attempt_id = AttemptId::new("different-owner");
+    assert!(store.live_block_header_page(&forged, 33, 0, 32).is_err());
+}
+
+#[test]
+fn t09_t19_live_metadata_revisions_keep_exact_frame_evidence() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (_request, start) = opened_test_stream(&store, "1");
+    let block = ContentBlockIndex::new(0);
+    let id = ToolCallId::new("metadata-revision");
+    let tool = ToolId::new("metadata-tool");
+    let first = store
+        .stage_publication_frames(&[PublicationFrame {
+            stream_id: start.stream_id.clone(),
+            message_id: start.message_id.clone(),
+            sequence: 0,
+            payload: PublicationPayload::ProposedToolCallStarted {
+                block_index: block,
+                call: rustx::tools::types::ToolCallStart {
+                    id: id.clone(),
+                    tool_id: tool.clone(),
+                    name: "alpha".into(),
+                },
+            },
+        }])
+        .unwrap();
+    let second = store
+        .stage_publication_frames(&[PublicationFrame {
+            stream_id: start.stream_id.clone(),
+            message_id: start.message_id.clone(),
+            sequence: 1,
+            payload: PublicationPayload::ProposedToolCallCompleted {
+                block_index: block,
+                call: rustx::tools::types::ToolCall {
+                    id,
+                    tool_id: tool,
+                    name: "alpha".into(),
+                    arguments: serde_json::json!({}),
+                },
+            },
+        }])
+        .unwrap();
+    let old = first[0].content.last().unwrap();
+    let new = second[0].content.last().unwrap();
+    assert_eq!(old.readable_end, new.readable_end);
+    assert_ne!(old.content_revision, new.content_revision);
+    let original: serde_json::Value =
+        serde_json::from_slice(&read_content_bytes(&store, old)).unwrap();
+    let replaced: serde_json::Value =
+        serde_json::from_slice(&read_content_bytes(&store, new)).unwrap();
+    assert_eq!(original["name"], "alpha");
+    assert_eq!(replaced["name"], "alpha");
+    assert_eq!(original, replaced);
+    drop(store);
+    let store = durable.open();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&read_content_bytes(&store, old)).unwrap()["name"],
+        "alpha"
+    );
+}
+
+#[test]
+fn t08_t12_canonical_locator_namespaces_preserve_literal_ids_and_full_inline_id_budget() {
+    use rustx::runtime_client::content::{
+        CanonicalContentComponent as Component, CanonicalContentLocator as Locator,
+        ContentRepresentation as Rep, ContentSource,
+    };
+    let durable = Durable::new();
+    let store = durable.open();
+    let exact = MessageId::new("x".repeat(256));
+    let message = |id: MessageId, text: &str| {
+        MessageBlock::User(UserMessageBlock {
+            id,
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+            content: vec![UserContentBlock::Text(TextBlock { text: text.into() })],
+        })
+    };
+    store
+        .initialize(&[
+            message(MessageId::new("ledger:2"), "first"),
+            message(exact.clone(), "other"),
+        ])
+        .unwrap();
+    let source = |locator| ContentSource::CanonicalMessageBlock {
+        component: Component::Payload,
+        locator,
+        block_index: ContentBlockIndex::new(0),
+    };
+    let literal = store
+        .content_descriptor(
+            &source(Locator::ByMessageId {
+                message_id: MessageId::new("ledger:2"),
+            }),
+            Rep::Utf8Text,
+        )
+        .unwrap()
+        .unwrap();
+    let ordinal = store
+        .content_descriptor(
+            &source(Locator::ByLedgerPosition { position: 2 }),
+            Rep::Utf8Text,
+        )
+        .unwrap()
+        .unwrap();
+    assert_ne!(literal.source, ordinal.source);
+    assert_eq!(read_content_bytes(&store, &literal), b"first");
+    assert_eq!(read_content_bytes(&store, &ordinal), b"other");
+    let exact = store
+        .content_descriptor(
+            &source(Locator::ByMessageId { message_id: exact }),
+            Rep::Utf8Text,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_content_bytes(&store, &exact), b"other");
+}
+
+/// The trigger rejects only derived display bytes. Native P/U/C remain the
+/// original publication authority, including exact retained raw Tool JSON.
+#[test]
+fn t10_t19_display_layout_failure_preserves_native_publication_and_original_raw_json() {
+    use rustx::runtime_client::content::{
+        CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
+    };
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (request, start) = opened_test_stream(&store, "layout-failure");
+    let call = ToolCallId::new("raw-layout-failure");
+    let connection = rusqlite::Connection::open(&durable.path).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_display_frontier BEFORE INSERT ON content_frontiers BEGIN SELECT RAISE(ABORT,'derived display layout unavailable'); END;").unwrap();
+    let first = store
+        .stage_publication_frames(&[proposal_start_frame(&start, 0, &call)])
+        .unwrap();
+    assert!(first[0].unavailable);
+    // Remove the failure before the next suffix. The missing earlier layout
+    // must still fence later display appends instead of creating a false base.
+    connection
+        .execute_batch("DROP TRIGGER reject_display_frontier")
+        .unwrap();
+    let raw = " { \n } ";
+    let rest = store
+        .stage_publication_frames(&[
+            proposal_arguments_frame(&start, 1, ContentBlockIndex::new(0), &call, raw),
+            proposal_complete_frame_with(
+                &start,
+                2,
+                ContentBlockIndex::new(0),
+                &call,
+                ToolId::new("tool-alpha"),
+                "alpha",
+            ),
+        ])
+        .unwrap();
+    assert!(rest.iter().all(|receipt| receipt.unavailable));
+    let (frames, unavailable): (u64, u64) = connection
+        .query_row(
+            "SELECT COUNT(*),SUM(observation_indexed=0) FROM publication_frames WHERE stream_id=?1",
+            [start.stream_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((frames, unavailable), (3, 3));
+    commit_provider_outcome(&store, "layout-failure", &request);
+    store
+        .commit_publication_terminal(
+            &start.stream_id,
+            &[frame(&start, 3, PublicationPayload::TerminalOnly)],
+        )
+        .unwrap();
+    let message = assistant_with_tool(&start.message_id, &call);
+    store
+        .commit_canonical_publication(
+            &start.stream_id,
+            &message,
+            committed_event(&start.message_id, "layout-failure"),
+        )
+        .unwrap();
+    assert_eq!(store.load_canonical().unwrap(), vec![message]);
+    let reference = store
+        .content_descriptor(
+            &ContentSource::CanonicalMessageBlock {
+                locator: CanonicalContentLocator::ByMessageId {
+                    message_id: start.message_id.clone(),
+                },
+                component: CanonicalContentComponent::Payload,
+                block_index: ContentBlockIndex::new(0),
+            },
+            ContentRepresentation::RawJsonUtf8,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_content_bytes(&store, &reference), raw.as_bytes());
+    drop(store);
+    let reopened = durable.open();
+    assert_eq!(read_content_bytes(&reopened, &reference), raw.as_bytes());
+}
+
+#[test]
+fn t10_t19_derived_journal_families_fence_observation_without_refusing_native_request() {
+    for trigger in [
+        "CREATE TRIGGER reject_read_family BEFORE INSERT ON observation_models BEGIN SELECT RAISE(ABORT,'derived models unavailable'); END;",
+        "CREATE TRIGGER reject_read_family BEFORE UPDATE OF observation_statistics ON events BEGIN SELECT RAISE(ABORT,'derived statistics unavailable'); END;",
+    ] {
+        let durable = Durable::new();
+        let store = durable.open();
+        store.initialize(&[]).unwrap();
+        let connection = rusqlite::Connection::open(&durable.path).unwrap();
+        connection.execute_batch(trigger).unwrap();
+        let (request, start) = opened_test_stream(&store, "source-family-failure");
+        let unavailable: bool = connection.query_row(
+            "SELECT observation_unavailable FROM events WHERE json_extract(event_json,'$.event.type')='model_request_started'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(unavailable);
+        let witness = store.observation_event_witness(1, 1).unwrap().unwrap();
+        assert!(witness.source_unavailable);
+        assert_eq!(witness.event_kind, "model_request_started");
+        // Observation rejection never rolls back the authoritative request
+        // snapshot, provider outcome, staging, release or canonical commit.
+        assert_eq!(
+            store.load_request_snapshot(&request).unwrap().request_id,
+            request
+        );
+        store
+            .stage_publication_frames(&[text(0, &start, "semantic execution continues")])
+            .unwrap();
+        commit_provider_outcome(&store, "source-family-failure", &request);
+        store
+            .commit_publication_terminal(
+                &start.stream_id,
+                &[frame(&start, 1, PublicationPayload::TerminalOnly)],
+            )
+            .unwrap();
+        let message = assistant(&start.message_id, "semantic execution continues");
+        store
+            .commit_canonical_publication(
+                &start.stream_id,
+                &message,
+                committed_event(&start.message_id, "source-family-failure"),
+            )
+            .unwrap();
+        assert_eq!(store.load_canonical().unwrap(), vec![message]);
+    }
+}
+
+#[test]
+fn t08_t19_native_usage_u64_frontier_and_opaque_canonical_bytes_remain_exact() {
+    use rustx::model::types::{ModelUsage, UsageDetails};
+    use rustx::runtime_client::content::{
+        CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
+    };
+    let store = SqliteConversationStore::in_memory(conversation_id()).unwrap();
+    store.initialize(&[]).unwrap();
+    let request = start_request(&store, "wide-usage");
+    let event = store
+        .append_event(envelope(
+            "wide-usage",
+            "wide-usage",
+            RuntimeEvent::ModelRequestCompleted {
+                request_id: request,
+                finish_reason: ModelFinishReason::Stop,
+                usage: Some(ModelUsage {
+                    input_tokens: u64::MAX,
+                    output_tokens: u64::MAX,
+                    total_tokens: u64::MAX,
+                    details: Some(UsageDetails {
+                        reasoning_tokens: Some(u64::MAX),
+                        cached_input_tokens: Some(u64::MAX),
+                    }),
+                }),
+                generation: None,
+            },
+        ))
+        .unwrap();
+    let witness = store
+        .observation_event_witness(event.sequence, event.sequence)
+        .unwrap()
+        .unwrap();
+    assert!(!witness.source_unavailable);
+    assert_eq!(
+        witness.value["usage"]["output_tokens"],
+        u64::MAX.to_string()
+    );
+    let chunk = store
+        .event_value_read(
+            event.sequence,
+            event.sequence,
+            &["event".into(), "usage".into(), "output_tokens".into()],
+            0,
+            65_536,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<String>(&chunk.bytes).unwrap(),
+        u64::MAX.to_string()
+    );
+    let message = assistant_with_tools(
+        &MessageId::new("wide-canonical"),
+        vec![ToolCall {
+            id: ToolCallId::new("wide-call"),
+            tool_id: ToolId::new("wide-tool"),
+            name: "wide".into(),
+            arguments: serde_json::json!({"reported":u64::MAX}),
+        }],
+    );
+    store.append_canonical(&message).unwrap();
+    let reference = store
+        .content_descriptor(
+            &ContentSource::CanonicalMessageBlock {
+                locator: CanonicalContentLocator::ByMessageId {
+                    message_id: message.id().clone(),
+                },
+                component: CanonicalContentComponent::Payload,
+                block_index: ContentBlockIndex::new(0),
+            },
+            ContentRepresentation::CanonicalJsonV1,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        read_content_bytes(&store, &reference),
+        format!("{{\"reported\":{}}}", u64::MAX).as_bytes()
+    );
+}
+
+/// Audit-only indexed seeking retains the same positive head even when the
+/// newest mixed transcript page contains no audits and original bodies are unreadable.
+#[test]
+fn t14_t19_t20_audit_settlement_head_uses_exact_native_positions_without_body_reads() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let mut receipts = Vec::new();
+    for index in 0..33 {
+        let (_, start) = opened_test_stream(&store, &format!("head-{index}"));
+        let suffix = if index == 32 {
+            "🙂水".repeat(200_000)
+        } else {
+            format!("body-{index}")
+        };
+        store
+            .stage_publication_frames(&[text(0, &start, &suffix)])
+            .unwrap();
+        let (_, receipt) = store
+            .terminalize_publication_audit(&start.stream_id, fixed_time())
+            .unwrap();
+        let record = receipt.header.publication_settlement.as_ref().unwrap();
+        assert_eq!(
+            record.transcript_cursor.get(),
+            receipt.transcript_cursor.get()
+        );
+        assert_eq!(record.read_cut, receipt.read_cut);
+        assert_eq!(record.settlement.block_count, 1);
+        assert_eq!(record.settlement.kind, PublicationAuditKind::Incomplete);
+        assert!(serde_json::to_vec(&receipt.header).unwrap().len() <= 16_384);
+        receipts.push(receipt);
+    }
+    let audit_cut = store.observation_read_cut().unwrap();
+    assert_eq!(
+        store
+            .observation_trace_total(audit_cut.read.journal)
+            .unwrap(),
+        33
+    );
+    let messages = (0..73)
+        .map(|index| {
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new(format!("after-audit-{index}")),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "later".into(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    store.append_canonical_batch(&messages).unwrap();
+    let cut = store.observation_read_cut().unwrap();
+    let generic = store.transcript_header_page(&cut, None, 8).unwrap();
+    assert!(
+        generic
+            .headers
+            .iter()
+            .all(|header| header.publication_settlement.is_none())
+    );
+    let expected = store.publication_settlement_head(&cut).unwrap();
+    drop(store);
+    let store = durable.open();
+    assert_eq!(store.publication_settlement_head(&cut).unwrap(), expected);
+    let connection = rusqlite::Connection::open(&durable.path).unwrap();
+    connection
+        .execute(
+            "UPDATE publication_audits SET audit_json='unreadable original body'",
+            [],
+        )
+        .unwrap();
+    let head = store.publication_settlement_head(&cut).unwrap();
+    assert_eq!(head.len(), 32);
+    assert_eq!(
+        head.first().unwrap(),
+        receipts[1].header.publication_settlement.as_ref().unwrap()
+    );
+    assert_eq!(
+        head.last().unwrap(),
+        receipts[32].header.publication_settlement.as_ref().unwrap()
+    );
+    assert_eq!(store.publication_settlement_head(&audit_cut).unwrap(), head);
+    connection.execute("DELETE FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",[receipts[32].summary.stream_id.as_ref().unwrap().as_str()]).unwrap();
+    assert!(
+        store.publication_settlement_head(&cut).is_err(),
+        "missing layout is unavailable, never a smaller authoritative head"
+    );
+}
+
+#[test]
+fn t10_t19_audit_layout_failure_retains_positive_native_settlement_receipt() {
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (_, start) = opened_test_stream(&store, "audit-layout-failure");
+    store
+        .stage_publication_frames(&[text(0, &start, "retained released bytes")])
+        .unwrap();
+    let connection = rusqlite::Connection::open(&durable.path).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_audit_header BEFORE INSERT ON observation_headers BEGIN SELECT RAISE(ABORT,'display header unavailable'); END;").unwrap();
+    let (audit, receipt) = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .unwrap();
+    assert_eq!(audit.kind, PublicationAuditKind::Incomplete);
+    assert_eq!(receipt.summary.kind, audit.kind);
+    assert_eq!(receipt.summary.block_count, 1);
+    assert!(receipt.header.deferred && receipt.header.display.is_none());
+    let record = receipt.header.publication_settlement.unwrap();
+    assert_eq!(
+        record.transcript_cursor.get(),
+        receipt.transcript_cursor.get()
+    );
+    assert_eq!(record.read_cut, receipt.read_cut);
+    assert_eq!(record.settlement.stream_id.as_ref(), Some(&start.stream_id));
+    assert_eq!(
+        store.load_publication_audit(&start.stream_id).unwrap(),
+        Some(audit)
+    );
+    assert!(
+        store
+            .publication_settlement_head(&receipt.read_cut)
+            .is_err(),
+        "absent derived source is unavailable, not absence of native settlement"
+    );
+}
+
+#[test]
+fn t08_t14_t15_t19_audit_blocks_advance_past_giant_proposal_metadata_and_exact_raw_json() {
+    use base64::Engine as _;
+    use rustx::runtime_client::content::{
+        ContentRepresentation, ContentSource, PublicationContentComponent,
+    };
+    let durable = Durable::new();
+    let store = durable.open();
+    store.initialize(&[]).unwrap();
+    let (_, start) = opened_test_stream(&store, "many-audit-blocks");
+    let raw = " { \"wide\": 9007199254740993, \"duplicate\":1,\"duplicate\":2 } ";
+    let call = ToolCallId::new("giant-audited-proposal");
+    let mut frames = vec![
+        frame(
+            &start,
+            0,
+            PublicationPayload::ProposedToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call.clone(),
+                    tool_id: ToolId::new("tool".repeat(70_000)),
+                    name: "name".repeat(70_000),
+                },
+            },
+        ),
+        frame(
+            &start,
+            1,
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call,
+                suffix: raw.into(),
+            },
+        ),
+    ];
+    for index in 1..73_u32 {
+        frames.push(frame(
+            &start,
+            u64::from(index) + 1,
+            PublicationPayload::TextSuffix {
+                block_index: ContentBlockIndex::new(index),
+                suffix: format!("block-{index}"),
+            },
+        ));
+    }
+    store.stage_publication_frames(&frames).unwrap();
+    let (_, receipt) = store
+        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .unwrap();
+    assert!(receipt.header.deferred);
+    assert_eq!(receipt.summary.block_count, 73);
+    let first = store
+        .audit_block_header_page(&receipt.read_cut, receipt.transcript_cursor.get(), 0, 32)
+        .unwrap();
+    assert_eq!(
+        (first.headers.len(), first.total, first.next_offset),
+        (32, 73, Some(32))
+    );
+    assert!(first.headers[0].deferred && first.headers[0].value.is_none());
+    assert!(
+        first.headers[1..]
+            .iter()
+            .all(|header| header.value.is_some())
+    );
+    assert!(
+        first
+            .headers
+            .iter()
+            .all(|header| serde_json::to_vec(header).unwrap().len() <= 16_384)
+    );
+    let payload = first.headers[0]
+        .content
+        .iter()
+        .find(|binding| binding.content_ref.representation == ContentRepresentation::RawJsonUtf8)
+        .unwrap();
+    assert_eq!(
+        read_content_bytes(&store, &payload.content_ref),
+        raw.as_bytes()
+    );
+    let metadata = first.headers[0]
+        .content
+        .iter()
+        .find(|binding| {
+            matches!(
+                binding.content_ref.source,
+                ContentSource::DurableTranscriptAudit {
+                    component: PublicationContentComponent::BlockMetadata,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(
+                store
+                    .content_read(&metadata.content_ref, 1, 65_536)
+                    .unwrap()
+                    .data_base64
+            )
+            .unwrap()
+            .len(),
+        65_536
+    );
+    let middle = store
+        .audit_block_header_page(&receipt.read_cut, receipt.transcript_cursor.get(), 32, 32)
+        .unwrap();
+    assert_eq!((middle.headers.len(), middle.next_offset), (32, Some(64)));
+    let last = store
+        .audit_block_header_page(&receipt.read_cut, receipt.transcript_cursor.get(), 64, 32)
+        .unwrap();
+    assert_eq!((last.headers.len(), last.next_offset), (9, None));
+    assert!(
+        store
+            .audit_block_header_page(&receipt.read_cut, receipt.transcript_cursor.get(), 74, 32)
+            .is_err()
+    );
 }

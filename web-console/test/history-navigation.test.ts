@@ -25,8 +25,8 @@ for (const source of ['A', 'B', 'C']) it(`View Source reads exact non-selected N
   const route = f.actor.getSnapshot().context.route;
   expect(route).toMatchObject({ kind: 'history', sessionId: source, nodeId: 'historical-node', messageId: 'source-150', conversationId: 'immutable-source' });
   if (route.kind !== 'history') throw new Error(f.actor.getSnapshot().context.error);
-  expect(route.window.target_cursor).toBe('151'); expect(route.window.page.entries).toHaveLength(64);
-  expect(f.server.requests.slice(f.before).filter(row => row.request.method === 'session/history').map(row => row.request.params)).toEqual([{ session_id: source, node_id: 'historical-node', at: { type: 'message', id: 'source-150' }, limit: 64 }]);
+  expect(route.window.target_cursor).toBe('151'); expect(route.window.page.entries).toHaveLength(32);
+  expect(f.server.requests.slice(f.before).filter(row => row.request.method === 'session/history').map(row => row.request.params)).toEqual([{ session_id: source, node_id: 'historical-node', at: { type: 'message', id: 'source-150' }, limit: 32 }]);
   expect(forbidden(f)).toEqual([]); expect(f.server.claims()).toEqual(f.claims); expect(f.server.client.target('A')).toBe(f.target);
   f.actor.send({ type: 'RETURN', route }); expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' }); expect(f.server.client.target('A')).toBe(f.target);
 });
@@ -131,5 +131,5 @@ for (const back of ['RETURN', 'sidebar'] as const) for (const cold of [false, tr
   // An obsolete Return callback cannot re-publish history's editor destination.
   f.actor.send({ type: 'RETURN', route: history });
   expect(f.actor.getSnapshot().context.route).toBe(committed); expect(current()).toBe(true);
-  expect(f.server.requests.slice(before).filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'session/snapshot', 'turn/start', 'turn/steer'].includes(row.request.method)).map(row => row.request.method)).toEqual(cold ? ['session/attach'] : []);
+  expect(f.server.requests.slice(before).filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'session/checkpoint', 'turn/start', 'turn/steer'].includes(row.request.method)).map(row => row.request.method)).toEqual(cold ? ['session/attach','session/checkpoint'] : []);
 });

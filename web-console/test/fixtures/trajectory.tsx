@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v49';
+import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v50';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -16,8 +16,8 @@ function request(n: number, prompt: TraceSystemPromptState, tools: TraceToolCata
   record.request!.tool_catalog = tools;
   record.request!.retry_number = n === 3 ? 0 : 1;
   if (n === 3) record.request!.context_additions = [
-    { message_id: 'context-workspace', context_kind: 'native_environment', producer: { Native: 'workspace_instructions' }, source: { type: 'runtime' }, preview: text('Workspace /project · use the checked-in Rust conventions.'), attachments: [], truncated: false },
-    { message_id: 'context-agent', context_kind: 'agent_status', producer: { Native: 'agent_status' }, source: { type: 'runtime' }, preview: text('Review the implementation and report failing checks.'), attachments: [], truncated: false },
+    {locator:{type:'by_message_id',message_id:'context-workspace'},fields:[], message_id: 'context-workspace', context_kind: 'native_environment', producer: { Native: 'workspace_instructions' }, source: { type: 'runtime' }, preview: text('Workspace /project · use the checked-in Rust conventions.'), attachments: [], truncated: false },
+    {locator:{type:'by_message_id',message_id:'context-agent'},fields:[], message_id: 'context-agent', context_kind: 'agent_status', producer: { Native: 'agent_status' }, source: { type: 'runtime' }, preview: text('Review the implementation and report failing checks.'), attachments: [], truncated: false },
   ];
   return record;
 }
@@ -27,8 +27,8 @@ const records = [
   traceRecord(14, { kind: 'user', request: null, location: { attempt_id: 'attempt-a' }, preview: text('Use the native Trace facts for this review.') }),
   traceRecord(2, { kind: 'step', request: null, preview: null }),
   request(3, 'initial', 'initial'),
-  traceRecord(4, { kind: 'assistant', request: null, message_id: 'assistant-4', preview: text('I’ll inspect the **working tree**.'), calls: [{ call_id: 'call-5', tool_id: 'tool-bash', name: 'bash' }, { call_id: 'proposed-only', tool_id: 'tool-read', name: 'read' }] }),
-  traceTool(5, { state: 'failed', preview: text('git diff --stat'), tool: { ...traceTool(5).tool!, outcome: 'failed', detail: text('Missing field `name`') } }),
+  traceRecord(4, { kind: 'assistant', request: null, message_id: 'assistant-4', preview: text('I’ll inspect the **working tree**.'), calls: [{occurrence:{locator:{type:'by_message_id',message_id:'assistant-4'},block_index:0},fields:[],call_id:'call-5',tool_id:'tool-bash',name:'bash'}, {occurrence:{locator:{type:'by_message_id',message_id:'assistant-4'},block_index:1},fields:[],call_id:'proposed-only',tool_id:'tool-read',name:'read'}] }),
+  traceTool(5, { state: 'failed', preview: text('git diff --stat'), tool: { ...traceTool(5).tool!,occurrence:{locator:{type:'by_message_id',message_id:'assistant-4'},block_index:0}, outcome: 'failed', detail: text('Missing field `name`') } }),
   traceRecord(6, { kind: 'background', request: null, native_id: 'background-6', preview: text('Indexing workspace'), state: 'running', timing: { started_at: '2026-09-15T00:00:02Z' } }),
   request(7, 'changed', 'unchanged'), request(8, 'unchanged', 'changed'), request(9, 'changed', 'changed', 'failed'),
   traceRecord(10, { kind: 'compaction', request: null, location: {}, state: 'running', preview: text('Summarizing earlier messages…') }),
@@ -78,7 +78,7 @@ function Fixture() {
       <button onClick={() => setCache(current => ({ ...current, page: { ...current.page, records: current.page.records.map(record => ({ ...record, preview: text('Lifecycle updated') })) } }))}>Update</button>
       {retainedInputs && <button onClick={() => setCache(current => refreshTrace(current, { records: [retainedRecords.at(-1)!] }, [0, 3].map((index, i) => {
         const record = retainedRecords[index]!;
-        return { id: record.id, location: { attempt_id: i ? 'attempt-b' : 'attempt-a', step_id: null }, state: record.state, timing: record.timing, attachments: [], truncated: false };
+        return { id: record.id, location: { attempt_id: i ? 'attempt-b' : 'attempt-a', step_id: null }, state: record.state, timing: record.timing, fields: [], collections: [], attachments: [], truncated: false };
       })))}>Refresh native ownership</button>}
       <span data-detail-reads={reads} data-history-reads={pages} data-native-count={cache.page.records.length} data-trace-epoch={cache.epoch}>Fixture</span>
     </header>
@@ -90,7 +90,7 @@ function Fixture() {
           const n = Number(id.split(':')[1]); const record = current.page.records.find(record => record.id === id)!;
           const detail = record.kind === 'tool' ? toolDetail(n) : record.kind === 'request' ? requestDetail(n) : requestDetail(n, { kind: record.kind, request: null, messages: [] });
           if (detail.request) {
-            detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => ({ role: 'user' as const, message_id: context.message_id, provenance: {type:'original' as const,source:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',message_id:context.message_id,content_digest:'fixture-digest'}}, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false })));
+            detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => { if (context.message_id == null) throw new Error('Finite fixture Context needs its original inline identity.'); return { role: 'user' as const, message_id: context.message_id, provenance_source:null, provenance: {type:'original' as const,conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',content_digest:'fixture-digest',locator:null,message_id_source:null,source:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',message_id:context.message_id,content_digest:'fixture-digest'}}, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false }; }));
             if (record.request?.system_prompt.state === 'previous_unavailable') { detail.request.predecessor = { availability: 'unavailable', request_id: 'previous-request' }; detail.request.previous_system_prompt = null; }
             if (n === 3) { detail.request.predecessor = { availability: 'not_applicable' }; detail.request.previous_system_prompt = null; }
             if (n === 11) { detail.request.effective_system_prompt.truncated = true; detail.request.previous_system_prompt!.truncated = true; }

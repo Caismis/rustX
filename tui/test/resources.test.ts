@@ -86,7 +86,7 @@ describe("loaded resources", () => {
     const after = reduce(before, {
       cursor: nextCursor(before.cursor),
       event: {
-        type: "resource_generation_updated",
+        type: "resource_generation_updated", model_status: { available: true, body_deferred: false },
         model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null },
         capabilities: {
           ...before.capabilities,
@@ -128,7 +128,7 @@ describe("loaded resources", () => {
     const after = reduce(before, {
       cursor: nextCursor(before.cursor),
       event: {
-        type: "resource_generation_updated",
+        type: "resource_generation_updated", model_status: { available: true, body_deferred: false },
         model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null },
         // A reload that only rewrote project instructions repeats the
         // capability view it composed against, unchanged revision and all.
@@ -162,8 +162,17 @@ it("CFG275 reload replaces diagnostics with the resource generation and preserve
   const before = stateOf({ resources: { revision: "1", inspection: { main: null, agents: {}, workflows: {}, sources: { optional: { status: "unprepared" } }, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] } } });
   const frozen = JSON.stringify(before.resources);
   const next = { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] };
-  const after = reduce(before, { cursor: nextCursor(before.cursor), event: { type: "resource_generation_updated", model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null }, capabilities: before.capabilities, resources: { revision: "2", inspection: next } } });
+  const after = reduce(before, { cursor: nextCursor(before.cursor), event: { type: "resource_generation_updated", model_status: { available: true, body_deferred: false }, model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null }, capabilities: before.capabilities, resources: { revision: "2", inspection: next } } });
   assert.equal(after.resources.revision, "2");
   assert.deepEqual(after.resources.inspection, next);
   assert.equal(JSON.stringify(before.resources), frozen);
+});
+
+
+it('T15 a deferred resource inspection remains visible without inventing an empty effective catalog', () => {
+  const state=stateOf();
+  state.resources={...state.resources,inspection:null};
+  assert.match(banner(state,'/work/project'),/Inspection deferred/);
+  assert.match(banner(state,'/work/project'),/observation resources/);
+  assert.equal(state.resources.inspection,null);
 });

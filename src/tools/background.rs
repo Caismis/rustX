@@ -312,10 +312,21 @@ pub enum BackgroundLifecycle {
 /// under its own synchronization boundary.
 pub trait BackgroundObserver: Send + Sync {
     /// Observes one authoritative registry transition snapshot.
-    fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot);
+    fn on_snapshot(
+        &self,
+        snapshot: &BackgroundExecutionSnapshot,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
+    );
     /// Publishes installed native state together with its exact durable receipt.
-    fn on_committed(&self, snapshot: &BackgroundExecutionSnapshot, _sequence: u64) {
-        self.on_snapshot(snapshot);
+    fn on_committed(
+        &self,
+        snapshot: &BackgroundExecutionSnapshot,
+        _committed: &crate::events::types::RuntimeEventEnvelope,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: Option<u64>,
+    ) {
+        self.on_snapshot(snapshot, cut, ordinal);
     }
 }
 
@@ -402,13 +413,13 @@ impl BackgroundLifecycle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackgroundExecutionSnapshot {
     /// Native Bash presentation, derived from the canonical invocation.
-    pub bash: Option<crate::tools::types::BashPresentation>,
+    pub bash: Option<Arc<crate::tools::types::BashPresentation>>,
     /// The detached runtime execution identity.
     pub execution_id: ToolExecutionId,
     /// The canonical tool identity.
-    pub tool_id: ToolId,
+    pub tool_id: Arc<ToolId>,
     /// The model-facing tool name.
-    pub tool_name: String,
+    pub tool_name: Arc<str>,
     /// The authoritative lifecycle state.
     pub state: BackgroundLifecycle,
     /// The latest bounded progress snapshot, when any was reported.
@@ -416,9 +427,126 @@ pub struct BackgroundExecutionSnapshot {
     pub progress: Option<ToolProgress>,
     /// The bounded terminal result, when terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<ToolExecutionResult>,
+    pub result: Option<Arc<ToolExecutionResult>>,
 }
 
+/// Borrowed read evidence from the native Job owner, with no copied result body.
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct BackgroundObservationValue<'a> {
+    pub bash: Option<&'a crate::tools::types::BashPresentation>,
+    pub job_id: &'a ToolExecutionId,
+    pub tool_id: &'a ToolId,
+    pub tool_name: &'a str,
+    pub state: BackgroundLifecycle,
+    pub progress: Option<&'a ToolProgress>,
+    pub result: Option<&'a ToolExecutionResult>,
+}
+#[derive(Clone)]
+pub(crate) struct BackgroundObservationSource {
+    layout: crate::runtime::read_layout::ObservationLayoutCache,
+    bash: Option<Arc<crate::tools::types::BashPresentation>>,
+    job_id: ToolExecutionId,
+    tool_id: Arc<ToolId>,
+    tool_name: Arc<str>,
+    state: BackgroundLifecycle,
+    progress: Option<ToolProgress>,
+    result: Option<Arc<ToolExecutionResult>>,
+}
+impl BackgroundObservationSource {
+    pub(crate) fn direct_text(&self, path: &[String]) -> Option<&str> {
+        match path {
+            [field] if field == "tool_name" => Some(&self.tool_name),
+            [field] if field == "tool_id" => Some(self.tool_id.as_str()),
+            [field] if field == "job_id" => Some(self.job_id.as_str()),
+            [field, key] if field == "bash" && key == "command" => {
+                self.bash.as_ref().map(|bash| bash.command.as_str())
+            }
+            [field, key] if field == "bash" && key == "description" => {
+                self.bash.as_ref()?.description.as_deref()
+            }
+            [field, key] if field == "progress" && key == "message" => {
+                self.progress.as_ref()?.message.as_deref()
+            }
+            [field, kind, key] if field == "result" && kind == "status" => {
+                match (&self.result.as_ref()?.status, key.as_str()) {
+                    (crate::tools::types::ToolExecutionStatus::Failed { error }, "error") => {
+                        Some(error)
+                    }
+                    (crate::tools::types::ToolExecutionStatus::Denied { reason }, "reason") => {
+                        Some(reason)
+                    }
+                    (
+                        crate::tools::types::ToolExecutionStatus::OutcomeUnknown { detail },
+                        "detail",
+                    ) => Some(detail),
+                    _ => None,
+                }
+            }
+            [field, content, ordinal, key]
+                if field == "result" && content == "content" && key == "text" =>
+            {
+                let ordinal = ordinal
+                    .strip_prefix('@')
+                    .unwrap_or(ordinal)
+                    .parse::<usize>()
+                    .ok()?;
+                if let crate::tools::types::ToolResultContent::Text(text) =
+                    self.result.as_ref()?.content.get(ordinal)?
+                {
+                    Some(&text.text)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn indexed(
+        &self,
+    ) -> Result<&crate::runtime::read_layout::SeekableObservationSource, &'static str> {
+        self.layout
+            .get_or_init(|| {
+                self.with_value(|value| {
+                    crate::runtime::read_layout::SeekableObservationSource::new(value)
+                })
+            })
+            .as_ref()
+            .map_err(|error| *error)
+    }
+
+    pub(crate) fn with_value<R>(
+        &self,
+        read: impl FnOnce(&BackgroundObservationValue<'_>) -> R,
+    ) -> R {
+        read(&BackgroundObservationValue {
+            bash: self.bash.as_deref(),
+            job_id: &self.job_id,
+            tool_id: &self.tool_id,
+            tool_name: &self.tool_name,
+            state: self.state,
+            progress: self.progress.as_ref(),
+            result: self.result.as_deref(),
+        })
+    }
+}
+fn observation_source_of(record: &BackgroundRecord) -> BackgroundObservationSource {
+    BackgroundObservationSource {
+        layout: record.observation_layout.clone(),
+        bash: record.bash.clone(),
+        job_id: record.execution_id.clone(),
+        tool_id: record.tool_id.clone(),
+        tool_name: record.tool_name.clone(),
+        state: record.lifecycle,
+        progress: record.progress.clone(),
+        result: record.result.clone().or_else(|| {
+            record
+                .pending_terminal
+                .as_ref()
+                .map(|value| value.result.clone())
+        }),
+    }
+}
 /// Maximum number of Jobs returned by a discovery operation.
 pub const MAX_JOB_LIST_LIMIT: usize = 64;
 
@@ -645,13 +773,14 @@ enum NotificationState {
 
 /// One published background record.
 struct BackgroundRecord {
-    bash: Option<crate::tools::types::BashPresentation>,
+    observation_layout: crate::runtime::read_layout::ObservationLayoutCache,
+    bash: Option<Arc<crate::tools::types::BashPresentation>>,
     /// Absorbing logical start frontier, owned by `mark_running`.
     executor_started: bool,
     execution_id: ToolExecutionId,
     tool_call_id: ToolCallId,
-    tool_id: ToolId,
-    tool_name: String,
+    tool_id: Arc<ToolId>,
+    tool_name: Arc<str>,
     lifecycle: BackgroundLifecycle,
     cancellation: CancellationSignal,
     /// The retained cancellation reason when cancellation intent committed
@@ -661,7 +790,7 @@ struct BackgroundRecord {
     /// a cancellation settlement on its own.
     cancel_reason: Option<CancellationReason>,
     progress: Option<ToolProgress>,
-    result: Option<ToolExecutionResult>,
+    result: Option<Arc<ToolExecutionResult>>,
     /// The retained terminal candidate while durable terminal publication is
     /// pending (`PublishingTerminal`). This is the settlement owner: after the
     /// executor returns, the registry retains the candidate until publication
@@ -689,7 +818,7 @@ struct TerminalCandidate {
     /// The terminal lifecycle the candidate settles to.
     settled: BackgroundLifecycle,
     /// The exact terminal result the candidate carries.
-    result: ToolExecutionResult,
+    result: Arc<ToolExecutionResult>,
 }
 
 /// One prepared (not yet committed) background dispatch.
@@ -705,6 +834,7 @@ struct BackgroundRegistryState {
     /// callback runs outside this mutex. Existing preparations preclude it.
     goal_idle_claimed: bool,
     prepared: HashMap<ToolExecutionId, PreparedRecord>,
+    observation_generation: u64,
     records: Vec<BackgroundRecord>,
     index: HashMap<ToolExecutionId, usize>,
     /// The read-only state observer, installed by the owning runtime client
@@ -784,6 +914,7 @@ impl ConversationBackgroundRegistry {
             inner: Arc::new(Mutex::new(BackgroundRegistryState {
                 goal_idle_claimed: false,
                 prepared: HashMap::new(),
+                observation_generation: 0,
                 records: Vec::new(),
                 index: HashMap::new(),
                 observer: None,
@@ -855,10 +986,22 @@ impl ConversationBackgroundRegistry {
     pub(crate) fn install_observer_and_snapshots(
         &self,
         observer: Arc<dyn BackgroundObserver>,
-    ) -> Vec<BackgroundExecutionSnapshot> {
+    ) -> (
+        Vec<BackgroundExecutionSnapshot>,
+        crate::runtime::identity::ObservationCollectionCut,
+    ) {
         let mut state = self.state();
         state.observer = Some(observer);
-        state.records.iter().map(snapshot_of).collect()
+        (
+            state
+                .records
+                .iter()
+                .rev()
+                .take(32)
+                .map(snapshot_of)
+                .collect(),
+            Self::observation_cut_locked(&state),
+        )
     }
 
     /// The one `ConversationToolRuntime -> ConversationRuntime` ownership
@@ -944,9 +1087,16 @@ impl ConversationBackgroundRegistry {
 
     /// Fires the installed observer for one record snapshot while the
     /// registry lock is held.
-    fn observe_record(state: &BackgroundRegistryState, index: usize) {
+    fn observe_record(state: &mut BackgroundRegistryState, index: usize) {
+        state.records[index].observation_layout = Arc::default();
+        state.observation_generation = state.observation_generation.saturating_add(1);
+        let cut = Self::observation_cut_locked(state);
         if let Some(observer) = &state.observer {
-            observer.on_snapshot(&snapshot_of(&state.records[index]));
+            observer.on_snapshot(
+                &snapshot_of(&state.records[index]),
+                cut,
+                Some((state.records.len() - 1 - index) as u64),
+            );
         }
     }
 
@@ -1062,10 +1212,12 @@ impl ConversationBackgroundRegistry {
         );
         let prepared = PreparedRecord {
             record: BackgroundRecord {
+                observation_layout: Arc::default(),
                 bash: crate::tools::types::BashPresentation::from_arguments(
                     &invocation.tool_id,
                     &invocation.arguments,
-                ),
+                )
+                .map(Arc::new),
                 executor_started: false,
                 execution_id: execution_id.clone(),
                 tool_call_id: invocation
@@ -1073,8 +1225,8 @@ impl ConversationBackgroundRegistry {
                     .canonical_call_id()
                     .expect("Agent-owned invocation")
                     .clone(),
-                tool_id: invocation.tool_id.clone(),
-                tool_name: invocation.tool_name.clone(),
+                tool_id: Arc::new(invocation.tool_id.clone()),
+                tool_name: Arc::from(invocation.tool_name.as_str()),
                 lifecycle: BackgroundLifecycle::Starting,
                 cancellation,
                 cancel_reason: None,
@@ -1287,8 +1439,16 @@ impl ConversationBackgroundRegistry {
             let next_index = state.records.len();
             state.index.insert(execution_id.clone(), next_index);
             state.records.push(prepared_record.record);
+            state.records[next_index].observation_layout = Arc::default();
+            state.observation_generation = state.observation_generation.saturating_add(1);
+            let cut = Self::observation_cut_locked(&state);
             if let Some(observer) = &state.observer {
-                observer.on_committed(&snapshot_of(&state.records[next_index]), committed.sequence);
+                observer.on_committed(
+                    &snapshot_of(&state.records[next_index]),
+                    &committed,
+                    cut,
+                    Some(0),
+                );
             }
             prepared.committed = true;
             gate.notify_one();
@@ -1350,15 +1510,34 @@ impl ConversationBackgroundRegistry {
         execution_id: &ToolExecutionId,
         reason: CancellationReason,
     ) -> Option<BackgroundExecutionSnapshot> {
+        self.cancel_at_cut(execution_id, reason, snapshot_of)
+            .unwrap_or_else(|_| self.snapshot(execution_id))
+    }
+
+    /// Commit cancellation intent at the native owner cut without awaiting physical settlement.
+    pub(crate) fn cancel_intent(
+        &self,
+        execution_id: &ToolExecutionId,
+        reason: CancellationReason,
+    ) -> Result<Option<ToolExecutionId>, crate::runtime::inbound::MailboxError> {
+        self.cancel_at_cut(execution_id, reason, |record| record.execution_id.clone())
+    }
+
+    fn cancel_at_cut<T>(
+        &self,
+        execution_id: &ToolExecutionId,
+        reason: CancellationReason,
+        project: impl FnOnce(&BackgroundRecord) -> T,
+    ) -> Result<Option<T>, crate::runtime::inbound::MailboxError> {
         // Cancellation of an already-owned execution is a settlement/control
         // mutation during drain, but a stale caller must not mutate the
         // registry or publish an observation after quiescence. Standalone
         // registries have no lifecycle and retain their existing behavior.
-        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
-            return self.snapshot(execution_id);
-        };
+        let _settlement = self.resources.mailbox.begin_settlement_admission()?;
         let mut state = self.state();
-        let index = *state.index.get(execution_id)?;
+        let Some(&index) = state.index.get(execution_id) else {
+            return Ok(None);
+        };
         {
             let record = &mut state.records[index];
             match record.lifecycle {
@@ -1377,13 +1556,177 @@ impl ConversationBackgroundRegistry {
                 | BackgroundLifecycle::OutcomeUnknown => {}
             }
         }
-        Self::observe_record(&state, index);
-        let snapshot = snapshot_of(&state.records[index]);
+        Self::observe_record(&mut state, index);
+        let receipt = project(&state.records[index]);
         drop(state);
         self.notify_state_change();
-        Some(snapshot)
+        Ok(Some(receipt))
     }
 
+    fn observation_cut_locked(
+        state: &BackgroundRegistryState,
+    ) -> crate::runtime::identity::ObservationCollectionCut {
+        crate::runtime::identity::ObservationCollectionCut {
+            generation: state.observation_generation,
+            total: state.records.len() as u64,
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn observation_cut(&self) -> crate::runtime::identity::ObservationCollectionCut {
+        Self::observation_cut_locked(&self.state())
+    }
+    #[cfg(test)]
+    pub(crate) fn observation_ordinal(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        id: &ToolExecutionId,
+    ) -> Result<u64, crate::runtime::identity::ObservationCollectionReadError> {
+        let state = self.state();
+        cut.validate_current(Self::observation_cut_locked(&state))?;
+        let index = *state.index.get(id).ok_or(
+            crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                "native Job source unavailable",
+            ),
+        )?;
+        Ok((state.records.len() - 1 - index) as u64)
+    }
+    pub(crate) fn contains_execution(&self, id: &ToolExecutionId) -> bool {
+        self.state().index.contains_key(id)
+    }
+
+    pub(crate) fn with_observation_value_by_id<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        id: &ToolExecutionId,
+        read: impl FnOnce(&BackgroundObservationValue<'_>) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state();
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            let index = *state.index.get(id).ok_or(
+                crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                    "native Job source unavailable",
+                ),
+            )?;
+            observation_source_of(&state.records[index])
+        };
+        Ok(source.with_value(read))
+    }
+    #[cfg(test)]
+    pub(crate) fn with_observation_value<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: u64,
+        read: impl FnOnce(&BackgroundObservationValue<'_>) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state();
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            let ordinal = usize::try_from(ordinal).map_err(|_| {
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid native collection ordinal",
+                )
+            })?;
+            let index = state
+                .records
+                .len()
+                .checked_sub(ordinal.saturating_add(1))
+                .ok_or(
+                    crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                        "native collection ordinal exceeds frontier",
+                    ),
+                )?;
+            observation_source_of(&state.records[index])
+        };
+        Ok(source.with_value(read))
+    }
+    pub(crate) fn with_observation_source_by_id<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        id: &ToolExecutionId,
+        read: impl FnOnce(&BackgroundObservationSource) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state();
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            let index = *state.index.get(id).ok_or(
+                crate::runtime::identity::ObservationCollectionReadError::Unavailable(
+                    "native Job source unavailable",
+                ),
+            )?;
+            observation_source_of(&state.records[index])
+        };
+        Ok(read(&source))
+    }
+    pub(crate) fn with_observation_source<R>(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        ordinal: u64,
+        read: impl FnOnce(&BackgroundObservationSource) -> R,
+    ) -> Result<R, crate::runtime::identity::ObservationCollectionReadError> {
+        let source = {
+            let state = self.state();
+            cut.validate_current(Self::observation_cut_locked(&state))?;
+            let ordinal = usize::try_from(ordinal).map_err(|_| {
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid native collection ordinal",
+                )
+            })?;
+            let index = state
+                .records
+                .len()
+                .checked_sub(ordinal.saturating_add(1))
+                .ok_or(
+                    crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                        "native collection ordinal exceeds frontier",
+                    ),
+                )?;
+            observation_source_of(&state.records[index])
+        };
+        Ok(read(&source))
+    }
+    pub(crate) fn observation_sources_page(
+        &self,
+        cut: crate::runtime::identity::ObservationCollectionCut,
+        offset: u64,
+        limit: usize,
+    ) -> Result<
+        crate::runtime::identity::ObservationCollectionPage<BackgroundObservationSource>,
+        crate::runtime::identity::ObservationCollectionReadError,
+    > {
+        if limit == 0 || limit > 32 {
+            return Err(
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "invalid native collection page bound",
+                ),
+            );
+        }
+        let state = self.state();
+        cut.validate_current(Self::observation_cut_locked(&state))?;
+        let start = usize::try_from(offset).map_err(|_| {
+            crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                "invalid native collection offset",
+            )
+        })?;
+        if start > state.records.len() {
+            return Err(
+                crate::runtime::identity::ObservationCollectionReadError::InvalidRequest(
+                    "native collection offset exceeds frontier",
+                ),
+            );
+        }
+        let end = start.saturating_add(limit).min(state.records.len());
+        Ok(crate::runtime::identity::ObservationCollectionPage {
+            cut,
+            offset,
+            items: (start..end)
+                .map(|ordinal| {
+                    observation_source_of(&state.records[state.records.len() - 1 - ordinal])
+                })
+                .collect(),
+            next_offset: (end < state.records.len()).then_some(end as u64),
+        })
+    }
     /// The canonical snapshot of one execution, active or terminal.
     #[must_use]
     pub fn snapshot(&self, execution_id: &ToolExecutionId) -> Option<BackgroundExecutionSnapshot> {
@@ -1537,6 +1880,7 @@ impl ConversationBackgroundRegistry {
             candidate
         };
         let (settled, stored) = candidate;
+        let stored = Arc::new(stored);
         // The registry retains the terminal candidate before publication, so
         // a durable acceptance failure cannot lose the executor result and
         // cannot leave a false `Running` state after the executor has
@@ -1574,7 +1918,7 @@ impl ConversationBackgroundRegistry {
                 if let Some(hook) = state.publication_hook.take() {
                     hook.enter();
                 }
-                committed_sequence = Some(committed.sequence);
+                committed_sequence = Some(committed);
                 let record = &mut state.records[index];
                 record.lifecycle = settled;
                 record.result = Some(stored);
@@ -1593,12 +1937,20 @@ impl ConversationBackgroundRegistry {
                 record.notification = NotificationState::Failed;
             }
         }
-        if let Some(sequence) = committed_sequence {
+        if let Some(committed) = committed_sequence {
+            state.records[index].observation_layout = Arc::default();
+            state.observation_generation = state.observation_generation.saturating_add(1);
+            let cut = Self::observation_cut_locked(&state);
             if let Some(observer) = &state.observer {
-                observer.on_committed(&snapshot_of(&state.records[index]), sequence);
+                observer.on_committed(
+                    &snapshot_of(&state.records[index]),
+                    &committed,
+                    cut,
+                    Some((state.records.len() - 1 - index) as u64),
+                );
             }
         } else {
-            Self::observe_record(&state, index);
+            Self::observe_record(&mut state, index);
         }
         drop(state);
         self.notify_state_change();
@@ -1746,7 +2098,7 @@ impl ConversationBackgroundRegistry {
                 if let Some(hook) = state.publication_hook.take() {
                     hook.enter();
                 }
-                committed_sequence = Some(committed.sequence);
+                committed_sequence = Some(committed);
                 let record = &mut state.records[index];
                 record.lifecycle = candidate.settled;
                 record.result = Some(candidate.result);
@@ -1757,12 +2109,20 @@ impl ConversationBackgroundRegistry {
                 state.records[index].notification = NotificationState::Failed;
             }
         }
-        if let Some(sequence) = committed_sequence {
+        if let Some(committed) = committed_sequence {
+            state.records[index].observation_layout = Arc::default();
+            state.observation_generation = state.observation_generation.saturating_add(1);
+            let cut = Self::observation_cut_locked(&state);
             if let Some(observer) = &state.observer {
-                observer.on_committed(&snapshot_of(&state.records[index]), sequence);
+                observer.on_committed(
+                    &snapshot_of(&state.records[index]),
+                    &committed,
+                    cut,
+                    Some((state.records.len() - 1 - index) as u64),
+                );
             }
         } else {
-            Self::observe_record(&state, index);
+            Self::observe_record(&mut state, index);
         }
         let snapshot = snapshot_of(&state.records[index]);
         drop(state);
@@ -1905,11 +2265,11 @@ impl ConversationBackgroundRegistry {
             }
             record.progress = Some(bounded.clone());
         }
-        Self::observe_record(&state, index);
+        Self::observe_record(&mut state, index);
         let record = &state.records[index];
         let event = RuntimeEvent::ToolExecutionProgress {
             tool_call_id: record.tool_call_id.clone(),
-            tool_id: record.tool_id.clone(),
+            tool_id: record.tool_id.as_ref().clone(),
             execution_id: Some(execution_id.clone()),
             progress: bounded,
         };
@@ -1949,7 +2309,7 @@ impl ConversationBackgroundRegistry {
                 return;
             }
         }
-        Self::observe_record(&state, index);
+        Self::observe_record(&mut state, index);
         drop(state);
         self.notify_state_change();
     }
@@ -2423,6 +2783,8 @@ fn background_publication_event(
     state: BackgroundTerminalState,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: event_id.clone(),
         sequence: 0,
@@ -2458,6 +2820,8 @@ fn background_ownership_event(
     timestamp: chrono::DateTime<chrono::Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(format!("background-committed-event:{execution_id}")),
         sequence: 0,
@@ -2468,8 +2832,8 @@ fn background_ownership_event(
         event: RuntimeEvent::BackgroundExecutionCommitted {
             execution_id: execution_id.clone(),
             tool_call_id: record.tool_call_id.clone(),
-            tool_id: record.tool_id.clone(),
-            tool_name: record.tool_name.clone(),
+            tool_id: record.tool_id.as_ref().clone(),
+            tool_name: record.tool_name.to_string(),
         },
     }
 }
@@ -2654,12 +3018,13 @@ mod tests {
         let mut state = registry.state();
         let index = state.records.len();
         state.records.push(BackgroundRecord {
+            observation_layout: Arc::default(),
             bash: None,
             executor_started: lifecycle != BackgroundLifecycle::Starting,
             execution_id: execution_id.clone(),
             tool_call_id: ToolCallId::new(format!("call-{id}")),
-            tool_id: ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_id: std::sync::Arc::new(ToolId::new("tool-bash")),
+            tool_name: "bash".into(),
             lifecycle,
             cancellation: crate::runtime::cancellation::CancellationSignal::new(),
             cancel_reason: None,
@@ -2678,6 +3043,174 @@ mod tests {
             .iter()
             .map(|snapshot| snapshot.execution_id.to_string())
             .collect()
+    }
+
+    #[test]
+    fn t15_t20_native_job_pages_share_immutable_bodies_and_release_semantic_lock_before_read() {
+        let plane = registry("conv_3b3799ec-ed96-703a-86e9-da36ce2518b9");
+        for index in 0..73 {
+            seed_record(
+                &plane.registry,
+                &format!("exec_00000000-0000-7000-8000-{index:012x}"),
+                BackgroundLifecycle::Running,
+            );
+        }
+        let mut result = success();
+        result.content.push(ToolResultContent::Text(
+            crate::message::content::TextBlock {
+                text: "x".repeat(4 * 1024 * 1024),
+            },
+        ));
+        let result = Arc::new(result);
+        {
+            let mut state = plane.registry.state();
+            state.records[72].lifecycle = BackgroundLifecycle::PublishingTerminal;
+            state.records[72].pending_terminal = Some(super::TerminalCandidate {
+                settled: BackgroundLifecycle::Succeeded,
+                result: result.clone(),
+            });
+        }
+        let cut = plane.registry.observation_cut();
+        assert_eq!(cut.total, 73);
+        let page = plane.registry.observation_sources_page(cut, 0, 32).unwrap();
+        assert_eq!(page.items.len(), 32);
+        assert_eq!(page.next_offset, Some(32));
+        assert!(
+            Arc::ptr_eq(page.items[0].result.as_ref().unwrap(), &result),
+            "native page must share the original result allocation"
+        );
+        let next = plane
+            .registry
+            .observation_sources_page(cut, 32, 32)
+            .unwrap();
+        assert_eq!(next.next_offset, Some(64));
+        let last = plane
+            .registry
+            .observation_sources_page(cut, 64, 32)
+            .unwrap();
+        assert_eq!(last.items.len(), 9);
+        assert!(last.next_offset.is_none());
+        let head = ToolExecutionId::new("exec_00000000-0000-7000-8000-000000000048");
+        assert_eq!(plane.registry.observation_ordinal(cut, &head).unwrap(), 0);
+        plane
+            .registry
+            .with_observation_value_by_id(cut, &head, |view| {
+                assert_eq!(view.result.unwrap().content, result.content);
+                assert!(plane.registry.inner.try_lock().is_ok());
+            })
+            .unwrap();
+        let id = ToolExecutionId::new("exec_00000000-0000-7000-8000-000000000047");
+        assert_eq!(plane.registry.observation_ordinal(cut, &id).unwrap(), 1);
+        plane
+            .registry
+            .with_observation_value(cut, 0, |view| {
+                assert!(
+                    plane.registry.inner.try_lock().is_ok(),
+                    "field encoding cannot hold the execution owner mutex"
+                );
+                assert_eq!(view.state, BackgroundLifecycle::PublishingTerminal);
+                assert_eq!(view.result.unwrap().content, result.content);
+                plane.registry.cancel(&id).unwrap();
+                assert_eq!(
+                    view.state,
+                    BackgroundLifecycle::PublishingTerminal,
+                    "captured original value stays stable across later mutation"
+                );
+            })
+            .unwrap();
+        assert!(plane.registry.observation_sources_page(cut, 0, 1).is_err());
+        assert_eq!(
+            plane.registry.observation_cut().generation,
+            cut.generation + 1
+        );
+        assert_eq!(
+            plane.registry.snapshot(&id).unwrap().state,
+            BackgroundLifecycle::Cancelling
+        );
+    }
+
+    #[test]
+    fn t08_t15_t20_large_job_tool_identity_uses_original_shared_source_and_fenced_cut() {
+        let plane = registry("conv_f4f26572-4f0f-7cad-9acf-52279157c354");
+        let id = "exec_31b5b0a3-9794-736a-bb81-95ea970c46bc";
+        seed_record(&plane.registry, id, BackgroundLifecycle::Running);
+        let original = Arc::new(ToolId::new(format!("\u{feff}{}", "水🙂".repeat(400_000))));
+        {
+            let mut state = plane.registry.state();
+            state.records[0].tool_id = original.clone();
+        }
+        let cut = plane.registry.observation_cut();
+        let page = plane.registry.observation_sources_page(cut, 0, 1).unwrap();
+        let captured = page.items[0].clone();
+        assert!(Arc::ptr_eq(&captured.tool_id, &original));
+        captured.with_value(|value| {
+            let header = crate::runtime_client::projection::background_source_view(value);
+            assert!(header.tool_id.is_none());
+            assert!(header.deferred_fields.contains(&vec!["tool_id".into()]));
+            assert!(serde_json::to_vec(&header).unwrap().len() < 1024);
+        });
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let registry = &plane.registry;
+            let captured = &captured;
+            let original = &original;
+            let reader = scope.spawn(move || {
+                assert!(registry.inner.try_lock().is_ok());
+                captured_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+                let text = captured.direct_text(&["tool_id".into()]).unwrap();
+                let offset = u64::try_from(text.len() - 65_536).unwrap();
+                let chunk = crate::runtime::read_layout::text_chunk(text, offset, 65_536).unwrap();
+                assert_eq!(
+                    chunk.bytes,
+                    original.as_str().as_bytes()[text.len() - 65_536..]
+                );
+                assert_eq!(chunk.readable_end, u64::try_from(text.len()).unwrap());
+                assert!(chunk.next_offset.is_none());
+            });
+            captured_rx.recv().unwrap();
+            plane.registry.cancel(&ToolExecutionId::new(id)).unwrap();
+            assert!(plane.registry.observation_sources_page(cut, 0, 1).is_err());
+            resume_tx.send(()).unwrap();
+            reader.join().unwrap();
+        });
+        assert!(Arc::ptr_eq(&captured.tool_id, &original));
+    }
+
+    #[test]
+    fn t14_t18_job_native_read_errors_preserve_source_cut_and_range() {
+        use crate::runtime::identity::{ObservationCollectionCut, ObservationCollectionReadError};
+        let plane = registry("conv_3b3799ec-ed96-703a-86e9-da36ce2518b9");
+        let id = ToolExecutionId::new("exec_00000000-0000-7000-8000-000000000048");
+        let cut = plane.registry.observation_cut();
+        assert!(matches!(
+            plane.registry.observation_sources_page(cut, 1, 1),
+            Err(ObservationCollectionReadError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            plane
+                .registry
+                .with_observation_value_by_id(cut, &id, |_| ()),
+            Err(ObservationCollectionReadError::Unavailable(_))
+        ));
+        assert!(matches!(
+            plane.registry.observation_sources_page(
+                ObservationCollectionCut {
+                    generation: cut.generation + 1,
+                    ..cut
+                },
+                0,
+                1
+            ),
+            Err(ObservationCollectionReadError::CutExpired)
+        ));
+        plane.registry.state().observation_generation = u64::MAX;
+        let exhausted = plane.registry.observation_cut();
+        assert!(matches!(
+            plane.registry.observation_sources_page(exhausted, 0, 1),
+            Err(ObservationCollectionReadError::Unavailable(_))
+        ));
     }
 
     /// The registry's authoritative order is its own allocation order,
@@ -3765,7 +4298,12 @@ mod tests {
     }
 
     impl super::BackgroundObserver for CollectingObserver {
-        fn on_snapshot(&self, snapshot: &super::BackgroundExecutionSnapshot) {
+        fn on_snapshot(
+            &self,
+            snapshot: &super::BackgroundExecutionSnapshot,
+            _cut: crate::runtime::identity::ObservationCollectionCut,
+            _ordinal: Option<u64>,
+        ) {
             self.snapshots
                 .lock()
                 .expect("observer lock")
@@ -4651,7 +5189,7 @@ mod tests {
         };
         assert!(content.get("full_output").is_none(), "{content}");
         assert_eq!(
-            result.managed_output.map(|value| *value),
+            result.managed_output.as_deref().cloned(),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&output_path),
             }),
@@ -4742,7 +5280,7 @@ mod tests {
         // the same one the dispatch advertised.
         assert!(result.truncation.is_none());
         assert_eq!(
-            result.managed_output.map(|value| *value),
+            result.managed_output.as_deref().cloned(),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(output_path),
             }),
@@ -5060,7 +5598,7 @@ mod tests {
         // exists, so no subprocess output could have existed: the empty
         // advertised file is the complete textual output.
         assert_eq!(
-            result.managed_output.map(|value| *value),
+            result.managed_output.as_deref().cloned(),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&advertised),
             }),
@@ -5162,7 +5700,7 @@ mod tests {
             result.status
         );
         assert_eq!(
-            result.managed_output.map(|value| *value),
+            result.managed_output.as_deref().cloned(),
             Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&advertised),
             }),

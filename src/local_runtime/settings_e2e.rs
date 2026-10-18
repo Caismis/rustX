@@ -31,8 +31,12 @@ model = "a"
 "#,
     )
     .unwrap();
+    let request = LaunchRequest {
+        workspace: Some(workspace.clone()),
+        ..LaunchRequest::default()
+    };
     let host = HostEnvironment::from_paths(workspace, home).unwrap();
-    (root, host, LaunchRequest::default())
+    (root, host, request)
 }
 
 #[test]
@@ -54,6 +58,11 @@ fn root_identity_and_description_are_independent_cas_units() {
             identity.clone(),
         )
         .unwrap();
+    let saved_projection = manager
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
+    assert_eq!(saved, saved_projection.workspace.as_ref().unwrap().revision);
+    let saved = saved_projection;
     assert_ne!(
         saved.workspace.as_ref().unwrap().revision,
         source.workspace.as_ref().unwrap().revision
@@ -77,6 +86,11 @@ fn root_identity_and_description_are_independent_cas_units() {
             },
         )
         .unwrap();
+    let saved_projection = manager
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
+    assert_eq!(saved, saved_projection.workspace.as_ref().unwrap().revision);
+    let saved = saved_projection;
     let document = saved.workspace.as_ref().unwrap().authored.clone().unwrap();
     assert_eq!(document.agent_id.unwrap().as_str(), "reviewer");
     assert_eq!(
@@ -92,6 +106,14 @@ fn root_identity_and_description_are_independent_cas_units() {
             },
         )
         .unwrap();
+    let removed_projection = manager
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
+    assert_eq!(
+        removed,
+        removed_projection.workspace.as_ref().unwrap().revision
+    );
+    let removed = removed_projection;
     assert!(
         removed
             .workspace
@@ -163,6 +185,9 @@ fn s1_environment_literals_never_leave_native_authority() {
             },
         )
         .unwrap();
+    let saved_projection = manager.read_source_settings(&user).unwrap();
+    assert_eq!(saved, saved_projection.user.revision);
+    let saved = saved_projection;
     // Native authority really holds the literal: the authored document on disk
     // is unredacted, which is what the running Tool environment resolves from.
     let document = std::fs::read_to_string(&saved.user.path).unwrap();
@@ -270,6 +295,9 @@ fn s1_mcp_literal_environment_and_headers_stay_redacted() {
             },
         )
         .unwrap();
+    let saved_projection = manager.read_source_settings(&user).unwrap();
+    assert_eq!(saved, saved_projection.user_mcp.revision);
+    let saved = saved_projection;
     let wire = serde_json::to_string(&saved).unwrap();
     assert!(
         !wire.contains(SENTINEL),
@@ -404,5 +432,65 @@ fn application_capture_preserves_non_unicode_source_identity() {
     assert_eq!(
         captured.revision,
         manager.capture_application(&input).unwrap().revision
+    );
+}
+
+#[test]
+fn t13_source_receipt_preserves_its_commit_revision_after_a_later_writer() {
+    let (_root, host, request) = fixture();
+    let (manager, input) = request.session_input(&host).unwrap();
+    let target = rustx_target(&input.cwd);
+    let before = manager.read_source_settings(&target).unwrap();
+    let later_writer = manager.clone();
+    let later_target = target.clone();
+    let later_receipt = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let captured_receipt = std::sync::Arc::clone(&later_receipt);
+    // The native file publication and fsync have completed and released their
+    // lock. A second writer commits before the first receipt is constructed.
+    manager.test_hooks.insert("after_source_commit", move || {
+        let committed = later_writer.read_source_settings(&later_target).unwrap();
+        let revision = later_writer
+            .write_source_settings(
+                &later_target,
+                &committed.workspace.unwrap().revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Description {
+                        authored: Some("second".into()),
+                    },
+                },
+            )
+            .unwrap();
+        *captured_receipt.lock().unwrap() = Some(revision);
+    });
+    let receipt = manager
+        .write_source_settings(
+            &target,
+            &before.workspace.unwrap().revision,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Description {
+                    authored: Some("first".into()),
+                },
+            },
+        )
+        .unwrap();
+    let latest = manager
+        .read_source_settings(&target)
+        .unwrap()
+        .workspace
+        .unwrap();
+    assert_ne!(receipt, latest.revision);
+    assert_eq!(
+        later_receipt.lock().unwrap().as_ref().unwrap(),
+        &latest.revision
+    );
+    assert_eq!(
+        latest
+            .authored
+            .unwrap()
+            .agent
+            .unwrap()
+            .description
+            .as_deref(),
+        Some("second")
     );
 }

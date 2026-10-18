@@ -734,12 +734,15 @@ impl ApplicationState {
         view
     }
 
-    pub(crate) fn views(&self) -> Vec<ConfigurationApplication> {
+    pub(crate) fn next_view(
+        &self,
+        versions: &BTreeMap<String, u64>,
+    ) -> Option<ConfigurationApplication> {
         self.scopes
             .values()
+            .find(|view| view.version > versions.get(&view.scope).copied().unwrap_or(0))
             .cloned()
             .map(|view| self.owned(view))
-            .collect()
     }
 
     pub(crate) fn view(&self, scope: &str) -> Option<ConfigurationApplication> {
@@ -816,7 +819,12 @@ mod tests {
 
         // Every projection carries the owners, and retiring a scope forgets them
         // rather than leaving one Session's directory attached to another key.
-        assert!(state.views().iter().all(|view| !view.sources.is_empty()));
+        assert!(
+            state
+                .scopes
+                .keys()
+                .all(|scope| !state.view(scope).unwrap().sources.is_empty())
+        );
         let owner = ConfigurationApplications::default();
         *owner.lock() = state;
         owner.forget(session);

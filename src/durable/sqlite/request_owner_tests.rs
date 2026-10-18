@@ -118,7 +118,7 @@ fn request_owner_lookup_uses_exact_request_index_without_hydrating_unrelated_fac
         .unwrap();
     let connection = store.conn.lock().unwrap();
     let plans = connection
-        .prepare(&format!("EXPLAIN QUERY PLAN {REQUEST_START_LOOKUP_SQL}"))
+        .prepare(&format!("EXPLAIN QUERY PLAN {REQUEST_START_PROBE_SQL}"))
         .unwrap()
         .query_map([snapshot.request_id.as_str()], |row| {
             row.get::<_, String>(3)
@@ -135,7 +135,7 @@ fn request_owner_lookup_uses_exact_request_index_without_hydrating_unrelated_fac
     assert!(!plans.contains("TEMP B-TREE"), "{plans}");
     // An unrelated, undecodable envelope would fail a full-Journal scan.
     connection.execute(
-        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_json) VALUES(2,'unrelated',1,?1,'{}')",
+        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_json,event_timestamp) VALUES(2,'unrelated',1,?1,'{}','2026-10-18T00:00:00Z')",
         [store.conversation_id().as_str()],
     ).unwrap();
     drop(connection);
@@ -173,7 +173,9 @@ fn request_owner_missing_conflicting_or_mismatched_facts_fail_closed() {
             .conn
             .lock()
             .unwrap()
-            .execute_batch(corruption)
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys=OFF; {corruption}; PRAGMA foreign_keys=ON;"
+            ))
             .unwrap();
         assert!(
             store.load_request_owner(&snapshot.request_id).is_err(),
@@ -259,7 +261,7 @@ fn request_owner_orphaned_success_or_failure_is_an_integrity_error() {
             .append_event(outcome_envelope(&store, &snapshot, outcome))
             .unwrap();
         store.conn.lock().unwrap().execute_batch(
-            "DELETE FROM events WHERE json_extract(event_json,'$.event.type')='model_request_started'; DELETE FROM request_snapshots;",
+            "PRAGMA foreign_keys=OFF; DELETE FROM events WHERE json_extract(event_json,'$.event.type')='model_request_started'; DELETE FROM request_snapshots; PRAGMA foreign_keys=ON;",
         ).unwrap();
         assert!(
             matches!(store.load_request_owner(&snapshot.request_id), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("without its request-start owner"))
@@ -289,8 +291,8 @@ fn request_owner_rejects_duplicate_start_in_transaction_and_corrupt_duplicate_fa
     duplicate.sequence = 2;
     duplicate.event_id = EventId::new("duplicate");
     store.conn.lock().unwrap().execute(
-        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(2,'duplicate',1,?1,?2,?3,?4)",
-        params![store.conversation_id().as_str(), snapshot.identity.attempt_id.as_str(), snapshot.identity.turn.as_str(), serde_json::to_string(&duplicate).unwrap()],
+        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp) VALUES(2,'duplicate',1,?1,?2,?3,?4,?5)",
+        params![store.conversation_id().as_str(), snapshot.identity.attempt_id.as_str(), snapshot.identity.turn.as_str(), serde_json::to_string(&duplicate).unwrap(), duplicate.timestamp.to_rfc3339()],
     ).unwrap();
     assert!(
         matches!(store.load_request_owner(&snapshot.request_id), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("duplicate request-start facts"))
@@ -346,7 +348,9 @@ fn falsely_current_ownerless_or_malformed_start_schema_is_rejected_without_rewri
             .conn
             .lock()
             .unwrap()
-            .execute_batch(corruption)
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys=OFF; {corruption}; PRAGMA foreign_keys=ON;"
+            ))
             .unwrap();
         drop(store);
         let path = directory.path().join("owner.sqlite");

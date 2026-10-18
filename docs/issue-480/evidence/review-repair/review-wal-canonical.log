@@ -1,0 +1,18 @@
+   Compiling rustx v0.1.0 (/home/capi/Documents/codes/rustX-issue-480)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 03s
+     Running unittests src/lib.rs (target/debug/deps/rustx-020f8f968f05fb14)
+
+running 10 tests
+test durable::sqlite::manifest::tests::wal_external_invalidation_tracks_the_pinned_snapshot ... ok
+test durable::sqlite::tests::wal_management_head_is_one_snapshot_while_another_writer_commits ... ok
+test durable::sqlite::tests::new_schema_birth_rolls_back_late_ddl_and_commits_once_with_wal_normal ... ok
+test local_runtime::session::tests::deletion_tests::deletion_wal_management_reads_preserve_application_state ... ok
+test boundary_suites::durable::wal_archive::wal_existing_management_does_not_convert_and_writer_transition_validates_identity ... ok
+test boundary_suites::durable::wal_archive::wal_archive_preflight_validates_captured_head_after_later_activation ... ok
+test boundary_suites::durable::wal_archive::wal_fork_installs_frozen_uncheckpointed_source_and_survives_source_removal ... ok
+test boundary_suites::durable::wal_archive::wal_archive_cancel_after_first_frontier_releases_barriers_and_pins ... ok
+test boundary_suites::durable::wal_archive::wal_archive_partial_failure_releases_prior_barriers_and_pins ... ok
+test boundary_suites::durable::wal_archive::wal_archive_excludes_ordered_writes_across_conversations ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 4207 filtered out; finished in 0.27s
+

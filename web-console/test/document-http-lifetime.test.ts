@@ -96,7 +96,7 @@ it('two original reads keep their physical slots after abort; queued Download st
   const authority = new WorkspaceAuthority(host); await authority.observe();
   const client = { target: () => request.target, getSnapshot: () => ({ generation: 1, authorityRevision: 1, views: { s: { target: request.target } } }) } as unknown as AppServerClient;
   const coordinator = new FilePreviewCoordinator(client, 's', host, authority);
-  const source = { kind: 'session_file' as const, messageId: 'm', index: 0, file };
+  const source = { kind: 'session_file' as const, conversationId: 'c', locator: {type:'by_message_id' as const,message_id:'m'}, index: 0, file };
   const a = coordinator.acquire(1, source), b = coordinator.acquire(2, source);
   const clicked = vi.fn(), revoked = vi.fn(); let urls = 0;
   vi.stubGlobal('document', { createElement: () => ({ click: clicked }) });

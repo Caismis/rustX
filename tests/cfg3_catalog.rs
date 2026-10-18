@@ -150,7 +150,7 @@ async fn python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_a
     .await
     .unwrap();
     inert.runtime().activate();
-    inert.runtime().shutdown().await.unwrap();
+    inert.shutdown().await.unwrap();
     drop(inert);
     std::fs::write(
         host.launch_directory.join("rustx.toml"),
@@ -267,7 +267,7 @@ async fn unused_invalid_resource_collections_warn_without_blocking_unrelated_sta
                 .definitions()
                 .is_empty()
         );
-        product.runtime().shutdown().await.unwrap();
+        product.shutdown().await.unwrap();
     }
 }
 #[test]
@@ -807,7 +807,7 @@ async fn headless_composition_allocates_session_owned_uuid_conversation_database
             .is_file()
     );
     core.runtime().activate();
-    core.runtime().shutdown().await.unwrap();
+    core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -859,7 +859,7 @@ async fn malformed_workspace_mcp_reserves_shadow_and_unused_definition_warns() {
                 .resource_diagnostics
                 .is_empty()
         );
-        core.runtime().shutdown().await.unwrap();
+        core.shutdown().await.unwrap();
         std::fs::write(
             request.workspace.as_ref().unwrap().join("rustx.toml"),
             "[agent.tools.sources]\nservice = 'all'\n",
@@ -912,6 +912,10 @@ fn named_agent_save_validates_complete_definition_before_committing() {
             mutation(profile),
         )
         .unwrap();
+    assert!(!saved.is_empty(), "bounded committed revision receipt");
+    let saved = owner
+        .read_source_settings(&rustx_target(&input.cwd))
+        .unwrap();
     let inventory = saved.prospective_resources.unwrap();
     assert!(
         inventory
@@ -943,15 +947,19 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
             authored: Some(ApprovalMode::FullAccess),
         },
     };
-    let after = owner
+    let committed_revision = owner
         .write_source_settings(
             &rustx_target(&input.cwd),
             &before.workspace.as_ref().unwrap().revision,
             mutation.clone(),
         )
         .unwrap();
+    assert!(!committed_revision.is_empty());
     assert_eq!(
-        after.prospective_approval_mode,
+        owner
+            .read_source_settings(&rustx_target(&input.cwd))
+            .unwrap()
+            .prospective_approval_mode,
         Some(ApprovalMode::FullAccess)
     );
     assert!(matches!(
@@ -963,7 +971,13 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
         Err(SettingsError::Conflict { .. })
     ));
     std::fs::write(
-        &after.workspace.as_ref().unwrap().path,
+        &owner
+            .read_source_settings(&rustx_target(&input.cwd))
+            .unwrap()
+            .workspace
+            .as_ref()
+            .unwrap()
+            .path,
         "approval_mode = 'unsupported'",
     )
     .unwrap();
@@ -1028,6 +1042,10 @@ fn named_agent_optional_text_survives_independent_complete_profile_edits() {
                     authored: Some(profile),
                 },
             )
+            .unwrap();
+        assert!(!saved.is_empty(), "bounded committed receipt");
+        let saved = owner
+            .read_source_settings(&rustx_target(&input.cwd))
             .unwrap();
         assert!(definition_is_valid(&saved));
         let saved_source = &saved

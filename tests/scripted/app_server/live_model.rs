@@ -15,7 +15,7 @@ async fn select(
     target: &AttachmentTarget,
     config: &SessionModelConfig,
 ) -> Box<crate::model::session::SessionModelView> {
-    let MethodResult::Model { model } = call(
+    let MethodResult::ModelSet { .. } = call(
         connection,
         468,
         Method::ModelSet {
@@ -27,6 +27,19 @@ async fn select(
     else {
         panic!("committed model selection")
     };
+    let model = super::read_model_result(
+        connection,
+        target,
+        call(
+            connection,
+            470,
+            Method::ModelGet {
+                target: target.clone(),
+            },
+        )
+        .await,
+    )
+    .await;
     assert_eq!(&model.configured, config);
     model
 }
@@ -38,9 +51,7 @@ async fn reattach(
     AttachmentTarget,
     Box<crate::runtime_client::RuntimeClientSnapshot>,
 ) {
-    let MethodResult::Attached {
-        target, snapshot, ..
-    } = call(
+    let MethodResult::Attached { target, .. } = call(
         connection,
         469,
         Method::SessionAttach {
@@ -52,7 +63,19 @@ async fn reattach(
     else {
         panic!("reattached")
     };
-    (target, snapshot)
+    let MethodResult::Checkpoint { checkpoint } = call(
+        connection,
+        470,
+        Method::SessionCheckpoint {
+            target: target.clone(),
+            trace_records: Vec::new(),
+        },
+    )
+    .await
+    else {
+        panic!("bounded reattachment checkpoint")
+    };
+    (target, Box::new(checkpoint.snapshot))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -145,6 +168,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             ..selection("local/a")
         };
         select(&connection, &target, &high).await;
+        let completion = AttemptCompletion::capture(&f, &target);
         call(
             &connection,
             102,
@@ -156,7 +180,13 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
         .await;
         f.gates[0].wait_entered().await;
         let managed = f.manager.load(&target.session_id, None).await.unwrap();
-        let admitted = managed.client().snapshot().unwrap().0.attempt.unwrap();
+        let admitted = managed
+            .client()
+            .checkpoint()
+            .unwrap()
+            .snapshot
+            .attempt
+            .unwrap();
         let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
         let resources = runtime.runtime_resources();
         let low = SessionModelConfig {
@@ -183,7 +213,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
                 .model,
             Some(low.clone())
         );
-        let during = managed.client().snapshot().unwrap().0;
+        let during = managed.client().checkpoint().unwrap().snapshot;
         assert_eq!(during.model.as_ref().unwrap().configured, low);
         assert_eq!(during.attempt.as_ref().unwrap().model, admitted.model);
 
@@ -218,9 +248,9 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             assert_eq!(
                 managed
                     .client()
-                    .snapshot()
+                    .checkpoint()
                     .unwrap()
-                    .0
+                    .snapshot
                     .model
                     .as_ref()
                     .unwrap()
@@ -259,7 +289,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
         assert_eq!(snapshot.attempt.as_ref().unwrap().model, admitted.model);
 
         f.gates[0].release();
-        await_attempt_settled(&recovered, &target.session_id).await;
+        completion.observed(&recovered, &target).await;
         let bodies = f.provider.request_bodies();
         assert_eq!(bodies.len(), 2, "first turn and Tool continuation");
         for body in bodies {
@@ -286,10 +316,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             .collect();
         assert_eq!(historical.len(), 2);
         for record in historical {
-            let MethodResult::TraceDetail {
-                detail: Some(detail),
-                ..
-            } = call(
+            let MethodResult::DomainPage { page } = call(
                 &reloaded,
                 106,
                 Method::TraceDetail {
@@ -301,12 +328,18 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             else {
                 panic!("historical request detail")
             };
-            let request = detail.request.unwrap();
-            assert_eq!(request.attempt_id, admitted.attempt_id);
-            assert_eq!(request.model, "a");
-            assert_eq!(request.profile.as_deref(), Some("high"));
-            assert_eq!(request.max_output_tokens, 777);
+            assert_eq!(page.items.len(), 1);
+            let detail = page.items[0]
+                .value
+                .as_ref()
+                .expect("finite native request header");
+            let request = &detail["request"];
+            assert_eq!(request["attempt_id"], json!(admitted.attempt_id));
+            assert_eq!(request["model"], json!("a"));
+            assert_eq!(request["profile"], json!("high"));
+            assert_eq!(request["max_output_tokens"], json!(777));
         }
+        let next_completion = AttemptCompletion::capture(&f, &target);
         call(
             &reloaded,
             105,
@@ -316,7 +349,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             },
         )
         .await;
-        await_attempt_settled(&reloaded, &target.session_id).await;
+        next_completion.observed(&reloaded, &target).await;
         let bodies = f.provider.request_bodies();
         assert_eq!(bodies.len(), 3);
         let next: serde_json::Value = serde_json::from_str(&bodies[2]).unwrap();
@@ -357,6 +390,7 @@ pub(crate) async fn live_model_child_inheritance_boundary_scenario() {
         select(&connection, &target, &original).await;
         let runtime = f.manager.configuration_runtime(&target.session_id).unwrap();
         let parent_resources = runtime.runtime_resources();
+        let completion = AttemptCompletion::capture(&f, &target);
         call(
             &connection,
             110,
@@ -381,7 +415,7 @@ pub(crate) async fn live_model_child_inheritance_boundary_scenario() {
         ));
         f.gates[0].release();
         f.gates[1].wait_entered().await;
-        await_attempt_settled(&connection, &target.session_id).await;
+        completion.observed(&connection, &target).await;
         let registry = runtime.subagent_registry().unwrap();
         assert!(
             registry.configuration_busy(),
@@ -412,6 +446,7 @@ pub(crate) async fn live_model_child_inheritance_boundary_scenario() {
             registry.all_snapshots()[0].subagent_id,
             children[0].subagent_id
         );
+        let next_completion = AttemptCompletion::capture(&f, &target);
         call(
             &connection,
             111,
@@ -421,7 +456,7 @@ pub(crate) async fn live_model_child_inheritance_boundary_scenario() {
             },
         )
         .await;
-        await_attempt_settled(&connection, &target.session_id).await;
+        next_completion.observed(&connection, &target).await;
         let bodies = f.provider.request_bodies();
         assert_eq!(bodies.len(), 4);
         let next: serde_json::Value = serde_json::from_str(&bodies[3]).unwrap();

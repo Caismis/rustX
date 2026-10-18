@@ -14,8 +14,17 @@ use std::path::Path;
 async fn compose_admitted(
     launch: &AdmittedSessionConfig,
 ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
-    use super::session::SessionPersistentState;
     let controller = super::session_controller::SessionController::open(&launch.runtime_root)?;
+    compose_admitted_with_controller(launch, &controller).await
+}
+
+/// Reuses the one catalog owner for independent admitted Session captures,
+/// as the App Server does even while an earlier runtime is shutting down.
+async fn compose_admitted_with_controller(
+    launch: &AdmittedSessionConfig,
+    controller: &super::session_controller::SessionController,
+) -> Result<LocalConversationRuntime, LocalRuntimeError> {
+    use super::session::SessionPersistentState;
     let session = controller
         .create_session(SessionPersistentState::from_input(&launch.input))
         .await?
@@ -57,6 +66,20 @@ struct Fixture {
     host: HostEnvironment,
     credentials: crate::credentials::CredentialSnapshot,
     request: LaunchRequest,
+}
+
+pub(super) fn git(root: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -1390,7 +1413,12 @@ impl Fixture {
             root,
             host,
             credentials: crate::credentials::CredentialSnapshot::default(),
-            request: LaunchRequest::default(),
+            request: LaunchRequest {
+                // Configuration tests own this workspace. Discovery tests
+                // explicitly clear the override at an owned marker boundary.
+                workspace: Some(workspace),
+                ..Default::default()
+            },
         };
         fixture.user(json!({"agent": {"model": {"model":"host/one"}}}));
         fixture
@@ -1535,12 +1563,16 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
     )]);
     let launch = f.resolve();
     f.credentials = crate::credentials::CredentialSnapshot::default();
-    let product = compose_admitted(&launch).await.unwrap();
+    let controller = super::session_controller::SessionController::open(&launch.runtime_root)
+        .expect("one native catalog owner");
+    let product = compose_admitted_with_controller(&launch, &controller)
+        .await
+        .unwrap();
     assert!(!format!("{launch:?}").contains("CFG233_PROVIDER_SENTINEL"));
-    product.runtime().shutdown().await.unwrap();
-    drop(product); // Release native catalog ownership before the next launch.
+    product.shutdown().await.unwrap();
+    drop(product);
     assert!(
-        compose_admitted(&f.resolve())
+        compose_admitted_with_controller(&f.resolve(), &controller)
             .await
             .unwrap_err()
             .to_string()
@@ -1594,7 +1626,7 @@ async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
                 .filter(|(id, _)| matches!(id, ToolSourceId::ManagedPython(_)))
                 .all(|(_, state)| *state == CapabilitySourceState::Unprepared)
         );
-        product.runtime().shutdown().await.unwrap();
+        product.shutdown().await.unwrap();
     }
 }
 
@@ -1624,7 +1656,7 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
             .any(|entry| entry.unwrap().path().join("python-tools").exists())
     );
     assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 
     assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
 }
@@ -1808,6 +1840,7 @@ fn workspace_boundaries_subdirectories_non_git_nested_and_explicit() {
     let mut f = Fixture::new();
     let original = f.resolve();
     f.project(json!({}));
+    f.request.workspace = None;
     let sub = f.host.launch_directory.join("a/b");
     std::fs::create_dir_all(&sub).unwrap();
     f.host.launch_directory = sub.clone();
@@ -1826,10 +1859,11 @@ fn workspace_boundaries_subdirectories_non_git_nested_and_explicit() {
 
 #[cfg(unix)]
 #[test]
-#[allow(clippy::items_after_statements)] // test-local Git assertion helper
 fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() {
-    let f = Fixture::new();
+    let mut f = Fixture::new();
     let original = f.resolve();
+    git(&original.workspace, &["init", "--quiet"]);
+    f.request.workspace = None;
     let alias = f.root.path().join("alias");
     std::os::unix::fs::symlink(&original.workspace, &alias).unwrap();
     let mut host = f.host.clone();
@@ -1838,20 +1872,6 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
         resolve(&f.request, &host).unwrap().identity,
         original.identity
     );
-    fn git(root: &Path, args: &[&str]) {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    git(&original.workspace, &["init", "--quiet"]);
     git(
         &original.workspace,
         &[
@@ -1923,7 +1943,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     assert_eq!(launch.config.agent_id.as_str(), "rustx");
     assert!(launch.config.mcp_servers.is_empty());
     assert_eq!(launch.config.agent.skills, None);
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
     assert!(
         resolve(&f.request, &f.host).is_err(),
         "a new launch sees the edit"
@@ -1935,7 +1955,7 @@ async fn resolution_and_composition_failures_preserve_published_session_selectio
     let f = Fixture::new();
     let launch = f.resolve();
     let product = compose_admitted(&launch).await.unwrap();
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
     drop(product);
     let catalog = launch.runtime_root.join("sessions/catalog.json");
     let before = std::fs::read(&catalog).unwrap();
@@ -2161,7 +2181,7 @@ async fn selected_workspace_guidance_cannot_escape_its_resource_root() {
             .instructions(),
         "User instructions"
     );
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 /// CFG3 binds exactly the captured User home and Workspace Skill roots;
@@ -2210,7 +2230,7 @@ async fn cfg3_launch_freezes_two_skill_roots_with_whole_workspace_shadowing() {
         resources.root_profile().unwrap().skills,
         ["shared", "user-only"]
     );
-    product.runtime().shutdown().await.unwrap();
+    product.shutdown().await.unwrap();
 }
 
 #[cfg(unix)]
@@ -2290,10 +2310,12 @@ fn cfg270_only_toml_names_are_discovered_and_old_documents_are_inert() {
     std::fs::remove_file(f.host.config_directory.join("rustx.toml")).unwrap();
     let missing = analyze(&f.request, &f.host).unwrap_err();
     assert!(missing.incomplete);
+    git(&f.host.launch_directory, &["init", "--quiet"]);
     let nested = f.host.launch_directory.join("nested");
     std::fs::create_dir(&nested).unwrap();
     std::fs::write(nested.join("rustx.jsonc"), b"{}").unwrap();
-    // An obsolete ancestor marker cannot claim a workspace either.
+    // Discovery walks past the obsolete ancestor marker to our real Git
+    // boundary, without depending on unrelated markers above the fixture.
     let child = nested.join("child");
     std::fs::create_dir(&child).unwrap();
     let mut host = f.host.clone();
@@ -2303,7 +2325,7 @@ fn cfg270_only_toml_names_are_discovered_and_old_documents_are_inert() {
             .unwrap()
             .0
             .workspace,
-        child
+        f.host.launch_directory
     );
 }
 
@@ -2497,6 +2519,7 @@ fn cfg275_committed_end_to_end_example_uses_final_authoring_and_offline_admissio
     let mut f = Fixture::new();
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
     f.host.launch_directory = example.clone();
+    f.request.workspace = Some(example.clone());
     f.request.config = Some(example.join("rustx.toml"));
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
@@ -2836,7 +2859,12 @@ mod session_resolution {
         // Removal cannot cause a semantic reread failure at initial composition.
         std::fs::remove_file(&file).unwrap();
         let admitted_a = a.admit(|| f.credentials.clone()).unwrap();
-        let product_a = compose_admitted(&admitted_a).await.unwrap();
+        let controller =
+            super::super::session_controller::SessionController::open(&admitted_a.runtime_root)
+                .expect("one native catalog owner");
+        let product_a = compose_admitted_with_controller(&admitted_a, &controller)
+            .await
+            .unwrap();
         let resources_a = product_a.runtime().runtime_resources();
         assert_eq!(
             resources_a
@@ -2855,10 +2883,13 @@ mod session_resolution {
             .files
             .clone();
         drop(resources_a);
+        product_a.shutdown().await.unwrap();
         drop(product_a);
         let inspection_b = b.inspection.clone();
         let admitted_b = b.admit(|| f.credentials.clone()).unwrap();
-        let product_b = compose_admitted(&admitted_b).await.unwrap();
+        let product_b = compose_admitted_with_controller(&admitted_b, &controller)
+            .await
+            .unwrap();
         let resources_b = product_b.runtime().runtime_resources();
         assert_eq!(
             resources_b
@@ -2979,4 +3010,64 @@ fn offline_inspection_of_missing_and_valid_sources_is_read_only() {
         assert_eq!(tree(f.root.path()), before, "valid={valid}");
         assert_eq!(f.host.config_directory.exists(), valid);
     }
+}
+
+/// The cancellation point is the actual blocking Store read; the release gate
+/// proves that semantic settlement and logical read cancellation cannot stand
+/// in for joining the composition's physical worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn composition_shutdown_retry_joins_physical_read_before_immediate_recomposition() {
+    let fixture = Fixture::new();
+    let launch = fixture.resolve();
+    let dependencies = LocalRuntimeDependencies::default();
+    let product = LocalConversationRuntime::compose(&launch, &dependencies)
+        .await
+        .expect("original composition");
+    product.host().projection_settled().await;
+    let weak_host = product.host().weak_inner();
+    let weak_runtime = product.host().weak_runtime_inner();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    product
+        .host()
+        .gate_projection_read_for_test(entered_tx, cancelled_tx, release_rx);
+    entered_rx.await.expect("physical source read entered");
+
+    let mut first_shutdown = Box::pin(product.shutdown());
+    tokio::select! {
+        result = &mut first_shutdown => panic!("shutdown escaped a retained physical read: {result:?}"),
+        result = cancelled_rx => result.expect("shutdown logically cancels the read"),
+    }
+    assert!(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root).is_err()
+    );
+    drop(first_shutdown);
+    // Dropping this waiter does not consume/detach the original JoinHandle.
+    let mut retry = Box::pin(product.shutdown());
+    assert!(matches!(
+        futures_util::poll!(&mut retry),
+        std::task::Poll::Pending
+    ));
+    release_tx
+        .send(())
+        .expect("release the original physical read");
+    retry.await.expect("retry joins the original worker");
+    drop(product);
+    assert!(
+        weak_host.upgrade().is_none(),
+        "no surviving presentation owner"
+    );
+    assert!(
+        weak_runtime.upgrade().is_none(),
+        "no surviving runtime lease"
+    );
+
+    let replacement = LocalConversationRuntime::compose(&launch, &dependencies)
+        .await
+        .expect("immediate recomposition after physical shutdown and release");
+    replacement.shutdown().await.expect("replacement shutdown");
+    drop(replacement);
+    crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+        .expect("final owner released the physical filesystem lock");
 }

@@ -14,19 +14,25 @@ pub(super) fn cut(
     connection: &Connection,
     conversation: &ConversationId,
 ) -> Result<ConversationReadCut, ConversationStoreError> {
-    let (journal, transcript, mutation_revision): (i64, i64, i64) = connection.query_row(
-        "SELECT next_event_sequence,next_transcript_position,reading_mutation_revision FROM rustx_store WHERE id=1",
-        [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
-    ).map_err(|error| storage(error.to_string()))?;
+    let (journal,transcript,mutation_revision,ledger_through,surface_revision,transcript_total,pending_through,pending_total):(i64,i64,i64,i64,i64,i64,i64,i64)=connection.prepare_cached("SELECT next_event_sequence,next_transcript_position,reading_mutation_revision,COALESCE((SELECT MAX(position) FROM message_ledger),0),COALESCE((SELECT revision FROM surface_head WHERE id=1),0),retained_transcript_count,next_inbound_sequence,pending_observation_count FROM rustx_store WHERE id=1").map_err(|error|storage(error.to_string()))?.query_row([],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?)),
+    ).map_err(|error|storage(error.to_string()))?;
     Ok(ConversationReadCut {
         conversation_id: conversation.clone(),
         journal: nonnegative(journal, "read journal")?,
         transcript: nonnegative(transcript, "read transcript")?,
         mutation_revision: nonnegative(mutation_revision, "read mutation")?,
+        ledger_through: nonnegative(ledger_through, "read canonical ledger")?,
+        surface_revision: crate::conversation::SurfaceRevision::new(nonnegative(
+            surface_revision,
+            "read surface revision",
+        )?),
+        transcript_total: nonnegative(transcript_total, "read transcript count")?,
+        pending_through: nonnegative(pending_through, "read pending frontier")?,
+        pending_total: nonnegative(pending_total, "read pending count")?,
     })
 }
 
-fn window_cut(
+pub(super) fn window_cut(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ConversationWindowAt,
@@ -34,12 +40,12 @@ fn window_cut(
     let actual = cut(connection, conversation)?;
     let expected = match at {
         ConversationWindowAt::Latest => None,
-        ConversationWindowAt::Older { cut, .. } | ConversationWindowAt::Message { cut, .. } => {
-            cut.as_ref()
-        }
-        ConversationWindowAt::Newer { cut, .. } | ConversationWindowAt::Turn { cut, .. } => {
-            Some(cut)
-        }
+        ConversationWindowAt::Older { cut, .. }
+        | ConversationWindowAt::Message { cut, .. }
+        | ConversationWindowAt::Canonical { cut, .. } => cut.as_ref(),
+        ConversationWindowAt::Newer { cut, .. }
+        | ConversationWindowAt::Turn { cut, .. }
+        | ConversationWindowAt::TurnOrdinal { cut, .. } => Some(cut),
     };
 
     if expected.is_some_and(|expected| !expected.reconstructible_from(&actual)) {
@@ -68,20 +74,38 @@ fn location(
     cut: &ConversationReadCut,
 ) -> Result<Option<u64>, ConversationStoreError> {
     let position: Option<i64> = if let Some(turn) = inherited {
+        // Used only while the immutable seed transaction prepares its native
+        // finite reading header, never by a later observation request.
         if turn.process_message_ids.is_empty() {
-            connection.query_row("SELECT t.position FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx JOIN transcript_order t ON t.reference_kind='inherited_turn' AND t.reference_id=CAST(p.ordinal AS TEXT) WHERE json_extract(p.payload,'$.id.conversation_id')=?1 AND json_extract(p.payload,'$.id.attempt_id')=?2 AND t.position<=?3", params![id.conversation_id.as_str(),id.attempt_id.as_str(),seq_to_i64(cut.transcript)?], |row| row.get(0)).optional()
+            connection.query_row("SELECT t.position FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx JOIN transcript_order t ON t.reference_kind='inherited_turn' AND t.reference_id=CAST(p.ordinal AS TEXT) WHERE json_extract(p.payload,'$.id.conversation_id')=?1 AND json_extract(p.payload,'$.id.attempt_id')=?2 AND t.position<=?3",params![id.conversation_id.as_str(),id.attempt_id.as_str(),cut.transcript],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?
         } else {
-            connection.query_row("SELECT MIN(t.position) FROM json_each(?1) m JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.value WHERE t.position<=?2", params![super::encode(&turn.process_message_ids,"turn members")?,seq_to_i64(cut.transcript)?], |row| row.get(0))
+            connection.query_row("SELECT MIN(t.position) FROM json_each(?1) m JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.value WHERE t.position<=?2",params![super::encode(&turn.process_message_ids,"turn members")?,cut.transcript],|row|row.get(0)).map_err(|error|storage(error.to_string()))?
         }
     } else {
-        connection.query_row(
-            "SELECT MIN(t.position) FROM events e INDEXED BY events_attempt_idx JOIN transcript_order t
-             ON (t.reference_kind='message' AND t.reference_id=json_extract(e.event_json,'$.event.message_id') AND json_extract(e.event_json,'$.event.type')='assistant_message_committed')
-             OR (t.reference_kind='attempt_terminal' AND t.reference_id=e.event_id)
-             WHERE e.attempt_id=?1 AND e.sequence<=?2 AND t.position<=?3",
-            params![id.attempt_id.as_str(),seq_to_i64(cut.journal)?,seq_to_i64(cut.transcript)?], |row| row.get(0),
-        )
-    }.map_err(|error| storage(format!("turn location: {error}")))?;
+        let mut earliest = None;
+        for kind in [
+            "assistant_message_committed",
+            "attempt_completed",
+            "attempt_cancelled",
+            "attempt_failed",
+            "attempt_timed_out",
+            "attempt_limit_exceeded",
+        ] {
+            let fact:Option<(String,Option<String>)>=connection.query_row("SELECT event_id,json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 ORDER BY sequence LIMIT 1",params![id.attempt_id.as_str(),kind,cut.journal],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+            if let Some((event_id, message_id)) = fact {
+                let (reference_kind, reference_id) = message_id
+                    .as_deref()
+                    .map_or(("attempt_terminal", event_id.as_str()), |id| {
+                        ("message", id)
+                    });
+                let cursor:Option<i64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind=?1 AND reference_id=?2 AND position<=?3",params![reference_kind,reference_id,cut.transcript],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+                if let Some(cursor) = cursor {
+                    earliest = Some(earliest.map_or(cursor, |previous: i64| previous.min(cursor)));
+                }
+            }
+        }
+        earliest
+    };
     position
         .map(|position| nonnegative(position, "turn position"))
         .transpose()
@@ -95,55 +119,25 @@ fn message_preview(
     message_id: &MessageId,
     limit: usize,
 ) -> Result<String, ConversationStoreError> {
-    // Each block is read bounded: a multi-megabyte body never enters a preview.
-    let mut statement = connection
-        .prepare_cached(
-            "SELECT substr(json_extract(block.value,'$.text'),1,?2),length(json_extract(block.value,'$.text'))>?2
-             FROM message_ledger m,json_each(m.message_json,'$.content') block
-             WHERE m.message_id=?1 AND json_extract(block.value,'$.type') IN ('text','refusal') ORDER BY block.key",
+    let position: u64 = connection
+        .query_row(
+            "SELECT position FROM message_ledger WHERE message_id=?1",
+            [message_id.as_str()],
+            |row| row.get(0),
         )
-        .map_err(|error| storage(format!("turn preview: {error}")))?;
-    let blocks = statement
-        .query_map(params![message_id.as_str(), limit * 2], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
-        })
-        .map_err(|error| storage(format!("turn preview: {error}")))?;
-    let mut text = String::new();
-    let mut unread = false;
-    for block in blocks {
-        let (chunk, clipped) = block.map_err(|error| storage(format!("turn preview: {error}")))?;
-        if text.chars().count() >= limit * 2 {
-            unread = true;
-            break;
-        }
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(&chunk);
-        if clipped {
-            unread = true;
-            break;
-        }
-    }
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() > limit - 1 {
-        let head: String = normalized.chars().take(limit - 1).collect();
-        return Ok(format!("{}…", head.trim_end()));
-    }
-    Ok(if unread {
-        format!("{normalized}…")
-    } else {
-        normalized
-    })
+        .map_err(|_| storage("native turn preview position unavailable"))?;
+    super::observation_turn::preview(connection, position, limit)
 }
 
 /// Only human messages and delegated Agent tasks can open a Turn. Context records
 /// and runtime/external notifications remain ineligible in every lineage.
-pub(super) const OPENING_PROMPT_FILTER: &str = "json_extract(l.message_json,'$.role')='user'
- AND (json_extract(l.message_json,'$.source')='human' OR json_type(l.message_json,'$.source.agent')='object')
- AND COALESCE(json_extract(l.message_json,'$.kind'),'message')='message'";
+pub(super) const OPENING_PROMPT_FILTER: &str = "EXISTS (SELECT 1 FROM observation_headers oh WHERE oh.reference_kind='message' AND oh.reference_id=l.message_id AND json_extract(oh.header_json,'$.opening_prompt')=1)";
 
 pub(super) fn local_prompt_sql() -> String {
+    adoption_prompt_sql(OPENING_PROMPT_FILTER)
+}
+
+fn adoption_prompt_sql(eligible: &str) -> String {
     format!(
         "WITH adoptions AS (
          SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
@@ -156,8 +150,8 @@ pub(super) fn local_prompt_sql() -> String {
         )
         SELECT m.value FROM adoptions e,json_each(e.event_json,'$.event.message_ids') m
         JOIN message_ledger l ON l.message_id=m.value
-        WHERE {OPENING_PROMPT_FILTER}
-        ORDER BY e.sequence,CAST(m.key AS INTEGER)"
+        WHERE {eligible}
+        ORDER BY e.sequence,CAST(m.key AS INTEGER) LIMIT 1"
     )
 }
 
@@ -167,10 +161,18 @@ pub(super) fn attempt_prompt(
     through: u64,
 ) -> Result<Option<MessageId>, ConversationStoreError> {
     let started:Option<i64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence LIMIT 1",params![attempt.as_str(),seq_to_i64(through)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
-    started
-        .map(|sequence| local_prompt(connection, attempt, sequence, through))
-        .transpose()
-        .map(|prompt| prompt.flatten().map(|(id, _)| id))
+    let Some(sequence) = started else {
+        return Ok(None);
+    };
+    // Native C captures ordinary_user and opening_preview outside optional
+    // presentation savepoints. Their exact Unicode-text eligibility plus the
+    // original source excludes notices, Context and text-free media. Retry and
+    // lineage must not depend on a generated display header or its preview.
+    connection.prepare_cached(&adoption_prompt_sql(
+        "l.ordinary_user=1 AND l.opening_preview IS NOT NULL AND (json_extract(l.message_json,'$.source')='human' OR json_type(l.message_json,'$.source.agent')='object')",
+    )).map_err(|error| storage(error.to_string()))?
+        .query_row(params![attempt.as_str(),sequence,seq_to_i64(through)?], |row| row.get::<_,String>(0))
+        .optional().map(|id|id.map(MessageId::new)).map_err(|error|storage(error.to_string()))
 }
 
 /// The earliest eligible input adopted by this Attempt or while idle between
@@ -239,9 +241,10 @@ fn local_previews(
     }
     let mut statement = connection
         .prepare_cached(
-            "SELECT json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_idx
+            "SELECT json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_kind_idx
              WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type')='assistant_message_committed'
-             ORDER BY sequence DESC",
+             AND EXISTS(SELECT 1 FROM observation_headers h WHERE h.reference_kind='message' AND h.reference_id=json_extract(event_json,'$.event.message_id') AND json_extract(h.header_json,'$.has_text_preview')=1)
+             ORDER BY sequence DESC LIMIT 1",
         )
         .map_err(|error| storage(format!("turn response: {error}")))?;
     let members = statement
@@ -311,6 +314,48 @@ fn inherited_previews(
     Ok((prompt, response))
 }
 
+pub(super) fn index_inherited_turn(
+    connection: &Connection,
+    ordinal: i64,
+    turn: &TurnReadingProvenance,
+) -> Result<(), ConversationStoreError> {
+    let conversation = turn.id.conversation_id.clone();
+    let mut native = cut(connection, &conversation)?;
+    // Location is destination ordering, while the historical identity remains source-owned.
+    native.conversation_id = conversation;
+    let cursor = location(connection, &turn.id, Some(turn), &native)?;
+    let (prompt, response) = inherited_previews(connection, turn)?;
+    let header = ConversationTurn {
+        id: turn.id.clone(),
+        ordinal: usize::try_from(ordinal).map_err(|error| storage(error.to_string()))? + 1,
+        cursor: cursor.map(crate::durable::TranscriptCursor::new),
+        prompt,
+        response,
+    };
+    super::provenance::write_turn_header(
+        connection,
+        ordinal,
+        super::provenance::TurnHeaderKind::Native,
+        &header,
+    )
+}
+fn inherited_turn_header(
+    connection: &Connection,
+    ordinal: i64,
+) -> Result<ConversationTurn, ConversationStoreError> {
+    let header: ConversationTurn = super::provenance::read_turn_header(
+        connection,
+        ordinal,
+        super::provenance::TurnHeaderKind::Native,
+    )?;
+    if header.ordinal
+        != usize::try_from(ordinal).map_err(|_| storage("turn ordinal exhausted"))? + 1
+    {
+        return Err(storage("inherited turn header ordinal differs"));
+    }
+    super::provenance::validate_turn_cursor(connection, header.cursor)?;
+    Ok(header)
+}
 pub(super) fn turns(
     connection: &Connection,
     conversation: &ConversationId,
@@ -346,9 +391,19 @@ pub(super) fn turns(
     let mut turns = Vec::with_capacity(limit);
     for (index, row) in rows.enumerate() {
         let (source, start) = row.map_err(|error| storage(error.to_string()))?;
-        let inherited = (source == 0)
-            .then(|| super::provenance::turn_at(connection, start))
-            .transpose()?;
+        if source == 0 {
+            let mut header = inherited_turn_header(connection, start)?;
+            header.ordinal = offset + index + 1;
+            if header
+                .cursor
+                .is_some_and(|cursor| cursor.get() > cut.transcript)
+            {
+                header.cursor = None;
+            }
+            turns.push(header);
+            continue;
+        }
+        let inherited: Option<TurnReadingProvenance> = None;
         let id = if let Some(turn) = &inherited {
             turn.id.clone()
         } else {
@@ -404,7 +459,7 @@ fn message_location(
 }
 
 /// Select forward from one authoritative position without reading its prefix.
-fn forward_window_before(
+pub(super) fn forward_window_before(
     connection: &Connection,
     cursor: u64,
     cut: &ConversationReadCut,
@@ -432,21 +487,42 @@ fn require_message_target(
         ))
     }
 }
-pub(super) fn window(
+pub(super) struct WindowSelection {
+    pub observed_target: Option<crate::runtime_client::turn::ObservedTurnIdentity>,
+    pub cut: ConversationReadCut,
+    pub before: Option<crate::durable::TranscriptCursor>,
+    pub target: Option<ConversationTurnId>,
+    pub target_cursor: Option<crate::durable::TranscriptCursor>,
+}
+pub(super) fn select_window(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ConversationWindowAt,
     limit: usize,
-) -> Result<DurableConversationWindow, ConversationStoreError> {
-    if limit == 0 || limit > TURN_PAGE_MAX {
-        return Err(storage("conversation window limit must be 1 to 64"));
-    }
+) -> Result<WindowSelection, ConversationStoreError> {
     let cut = window_cut(connection, conversation, at)?;
     let mut target = None;
+    let mut observed_target = None;
     let mut target_cursor = None;
     let before = match at {
         ConversationWindowAt::Latest => None,
         ConversationWindowAt::Older { before, .. } => Some(*before),
+        ConversationWindowAt::Canonical { locator, .. } => {
+            let ledger = super::content::canonical_position(connection, locator)?;
+            if ledger > cut.ledger_through {
+                return Err(ConversationStoreError::InvalidReference(
+                    "canonical locator is outside native cut".into(),
+                ));
+            }
+            let cursor:Option<u64>=connection.query_row("SELECT native_transcript FROM message_ledger WHERE position=?1 AND native_transcript<=?2",params![ledger,cut.transcript],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.flatten();
+            let cursor = cursor.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "canonical locator has no visible native position".into(),
+                )
+            })?;
+            target_cursor = Some(crate::durable::TranscriptCursor::new(cursor));
+            Some(forward_window_before(connection, cursor, &cut, limit)?)
+        }
         ConversationWindowAt::Message { id, .. } => {
             let cursor = message_location(connection, id, &cut)?;
             target_cursor = Some(crate::durable::TranscriptCursor::new(cursor));
@@ -464,31 +540,65 @@ pub(super) fn window(
             ))
         }
         ConversationWindowAt::Turn { id, .. } => {
-            let inherited: Option<Option<i64>> = connection.query_row(
-                "SELECT NULL FROM events INDEXED BY events_attempt_idx
-                 WHERE attempt_id=?3 AND conversation_id=?2 AND sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started'
-                 UNION ALL SELECT p.ordinal FROM inherited_turn_provenance p INDEXED BY inherited_turn_identity_idx
-                 WHERE json_extract(p.payload,'$.id.conversation_id')=?2 AND json_extract(p.payload,'$.id.attempt_id')=?3 LIMIT 1",
-                params![seq_to_i64(cut.journal)?,id.conversation_id.as_str(),id.attempt_id.as_str()], |row| row.get(0),
-            ).optional().map_err(|error| storage(error.to_string()))?;
-            let inherited = inherited.ok_or_else(|| {
-                ConversationStoreError::InvalidReference(
-                    "turn is absent from this Conversation".into(),
-                )
-            })?;
-            let inherited = inherited
-                .map(|ordinal| super::provenance::turn_at(connection, ordinal))
-                .transpose()?;
-            let cursor = location(connection, id, inherited.as_ref(), &cut)?.ok_or_else(|| {
+            let header = super::observation_turn::by_identity(connection, conversation, &cut, id)?;
+            let cursor = header.cursor.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
                     "turn has no published transcript location yet".into(),
                 )
             })?;
             target = Some(id.clone());
-            target_cursor = Some(crate::durable::TranscriptCursor::new(cursor));
-            Some(forward_window_before(connection, cursor, &cut, limit)?)
+            observed_target = Some(header.id);
+            target_cursor = Some(cursor);
+            Some(forward_window_before(
+                connection,
+                cursor.get(),
+                &cut,
+                limit,
+            )?)
+        }
+        ConversationWindowAt::TurnOrdinal { ordinal, .. } => {
+            let header =
+                super::observation_turn::selected(connection, conversation, &cut, *ordinal)?;
+            let cursor = header.cursor.ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "turn has no published transcript location yet".into(),
+                )
+            })?;
+            observed_target = Some(header.id);
+            target_cursor = Some(cursor);
+            Some(forward_window_before(
+                connection,
+                cursor.get(),
+                &cut,
+                limit,
+            )?)
         }
     };
+    Ok(WindowSelection {
+        observed_target,
+        cut,
+        before,
+        target,
+        target_cursor,
+    })
+}
+
+pub(super) fn window(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ConversationWindowAt,
+    limit: usize,
+) -> Result<DurableConversationWindow, ConversationStoreError> {
+    if limit == 0 || limit > TURN_PAGE_MAX {
+        return Err(storage("conversation window limit must be 1 to 64"));
+    }
+    let WindowSelection {
+        observed_target: _,
+        cut,
+        before,
+        target,
+        target_cursor,
+    } = select_window(connection, conversation, at, limit)?;
     let upper = crate::durable::TranscriptCursor::new(cut.transcript + 1);
     let mut page = load_transcript_page(
         connection,

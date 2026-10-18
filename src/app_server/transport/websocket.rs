@@ -30,7 +30,7 @@ pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Browser clients offer this protocol plus `rustx-token.<dedicated token>`.
-pub const SUBPROTOCOL: &str = "rustx.app-server.v49";
+pub const SUBPROTOCOL: &str = "rustx.app-server.v50";
 
 /// Dedicated transport credential. Deliberately has no Debug/Serialize.
 #[derive(Clone)]
@@ -128,18 +128,34 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Socket<S> {
         cx: &mut Context<'_>,
         outbound: &mut Outbound,
     ) -> Poll<io::Result<String>> {
+        if outbound.discarded(cx) {
+            return Poll::Ready(Ok(String::new()));
+        }
         let mut stream = self.lock();
         ready!(stream.poll_flush_unpin(cx)).map_err(io::Error::other)?;
         ready!(stream.poll_ready_unpin(cx)).map_err(io::Error::other)?;
-        outbound
-            .poll_hand_off(|record| {
-                Poll::Ready(
-                    stream
-                        .start_send_unpin(Message::Text(record.into()))
-                        .map_err(io::Error::other),
-                )
-            })
-            .map_ok(|(record, ())| record)
+        // Tungstenite buffers a Text Frame before attempting stream writes.
+        // An I/O error from start_send therefore follows semantic acceptance;
+        // only WriteBufferFull proves that the Frame was never handed over.
+        let mut physical_failure = None;
+        let accepted = outbound.poll_hand_off(|record| {
+            match stream.start_send_unpin(Message::Text(record.into())) {
+                Ok(()) => Poll::Ready(Ok(())),
+                Err(tokio_tungstenite::tungstenite::Error::Io(error)) => {
+                    physical_failure = Some(error);
+                    Poll::Ready(Ok(()))
+                }
+                Err(tokio_tungstenite::tungstenite::Error::WriteBufferFull(_)) => Poll::Pending,
+                Err(error) => Poll::Ready(Err(io::Error::other(error))),
+            }
+        });
+        accepted.map(|result| {
+            let (record, _accepted) = result?;
+            if let Some(error) = physical_failure {
+                return Err(error);
+            }
+            Ok(record)
+        })
     }
 
     pub(crate) async fn flush(&self) -> io::Result<()> {
@@ -150,7 +166,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Socket<S> {
 
     /// Hands one record over and flushes it.
     pub(crate) async fn send(&self, mut outbound: Outbound) -> io::Result<()> {
-        std::future::poll_fn(|cx| self.poll_hand_off(cx, &mut outbound)).await?;
+        let record = std::future::poll_fn(|cx| self.poll_hand_off(cx, &mut outbound)).await?;
+        if record.is_empty() {
+            return Ok(());
+        }
         self.flush().await
     }
 

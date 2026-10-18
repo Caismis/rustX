@@ -22,6 +22,8 @@ import {
   type DeliveryPage,
   type DeliveryRecord,
 } from "../../presentation/deliveries.ts";
+import type { SessionFileReference } from "../../protocol/app-server.ts";
+import { deliveryItemKey } from "../../../../protocol/app-server/delivery-observation.ts";
 import { isRenderableField, sanitizeField } from "../../sanitize.ts";
 import { role, style } from "../theme.ts";
 import { windowAroundSelected, type PopupContent } from "./popup-frame.ts";
@@ -37,7 +39,7 @@ export interface DeliveryAvailability {
   open?: string;
 }
 
-export type DeliveryAction = "open" | "save";
+export type DeliveryAction = "open" | "save" | "metadata";
 
 type Mode =
   | { kind: "list" }
@@ -71,6 +73,7 @@ export class DeliverySelector implements PopupContent, Focusable {
   onCancel?: () => void;
   onChange?: () => void;
   onLoadMore?: () => void;
+  onLoadCollection?: (collection: NonNullable<DeliveryPage["collections"]>[number]) => void;
   /** Starts one operation; the app reports back through {@link settle}. */
   onAction?: (operation: number, action: DeliveryAction, record: DeliveryRecord, destination?: string) => void;
   /** Requests cancellation of the operation in flight. */
@@ -79,6 +82,9 @@ export class DeliverySelector implements PopupContent, Focusable {
   readonly #availability: DeliveryAvailability;
   #records: DeliveryRecord[];
   #next: DeliveryPage["next"];
+  #collections: NonNullable<DeliveryPage["collections"]> = [];
+  #cut: DeliveryPage["cut"];
+  #metadata: {key:string;file:SessionFileReference}|undefined;
   #loading = false;
   #selected = 0;
   #mode: Mode = { kind: "list" };
@@ -91,6 +97,8 @@ export class DeliverySelector implements PopupContent, Focusable {
   constructor(page: DeliveryPage, availability: DeliveryAvailability) {
     this.#records = page.records;
     this.#next = page.next;
+    this.#collections = page.collections ?? [];
+    this.#cut = page.cut;
     this.#availability = availability;
     this.#destination.onSubmit = (value) => this.#submitDestination(value);
   }
@@ -100,12 +108,36 @@ export class DeliverySelector implements PopupContent, Focusable {
     return this.#next;
   }
 
-  /** Appends the next older bounded page. */
+  /** Replaces the bounded loaded page. */
   appendPage(page: DeliveryPage): void {
-    this.#records = [...this.#records, ...page.records];
+    this.#records = page.records;
+    this.#collections = page.collections ?? [];
+    this.#cut = page.cut;
+    this.#metadata = undefined;
+    this.#selected = 0;
+    this.#mode = {kind:"list"};
     this.#next = page.next;
     this.#loading = false;
     this.onChange?.();
+  }
+
+  get readCut(): DeliveryPage["cut"] { return this.#cut; }
+
+  installMetadata(operation:number,record:DeliveryRecord,file:SessionFileReference):void {
+    if(operation!==this.#operation||!this.#busy)return;
+    this.#metadata={key:deliveryItemKey(record),file};
+    this.#busy=false;
+    this.#mode={kind:"actions",record:this.#resolved(record),selected:0};
+    this.onChange?.();
+  }
+
+  #resolved(record:DeliveryRecord):DeliveryRecord {
+    return this.#metadata?.key===deliveryItemKey(record)?{...record,file:this.#metadata.file}:record;
+  }
+
+  replaceCollectionPage(page:DeliveryPage):void {
+    const older=this.#next;
+    this.appendPage({...page,next:older});
   }
 
   retryPage(): void {
@@ -159,8 +191,8 @@ export class DeliverySelector implements PopupContent, Focusable {
     if (mode.kind === "actions") {
       if (matchesKey(data, "escape")) this.#setMode({ kind: "list" });
       else if (matchesKey(data, "up") || matchesKey(data, "down")) {
-        this.#setMode({ ...mode, selected: mode.selected === 0 ? 1 : 0 });
-      } else if (matchesKey(data, "enter")) this.#request(mode.selected === 0 ? "open" : "save", mode.record);
+        this.#setMode({ ...mode, selected: mode.record.file == null ? 0 : mode.selected === 0 ? 1 : 0 });
+      } else if (matchesKey(data, "enter")) this.#request(mode.record.file == null ? "metadata" : mode.selected === 0 ? "open" : "save", mode.record);
       return;
     }
     const rows = this.#rowCount();
@@ -168,11 +200,13 @@ export class DeliverySelector implements PopupContent, Focusable {
     else if (matchesKey(data, "up")) this.#move(-1, rows);
     else if (matchesKey(data, "down")) this.#move(1, rows);
     else if (matchesKey(data, "enter")) {
-      const record = this.#records[this.#selected];
+      const raw = this.#records[this.#selected];
+      const record = raw == null ? undefined : this.#resolved(raw);
       if (record !== undefined) this.#setMode({ kind: "actions", record, selected: 0 });
-      else this.#loadMore();
+      else this.#loadSelected();
     } else if (data === "s" || data === "o") {
-      const record = this.#records[this.#selected];
+      const raw = this.#records[this.#selected];
+      const record = raw == null ? undefined : this.#resolved(raw);
       if (record !== undefined) this.#request(data === "s" ? "save" : "open", record);
     }
   }
@@ -191,6 +225,10 @@ export class DeliverySelector implements PopupContent, Focusable {
     if (mode.kind === "actions") {
       lines.push(...this.#entry(mode.record, true));
       lines.push("");
+      if(mode.record.file == null) {
+        lines.push(this.#actionLine(0,0,"Read original delivery metadata",undefined));
+        return lines.map(line=>truncateToWidth(line,width));
+      }
       lines.push(this.#actionLine(0, mode.selected, "Open in the system application", this.#availability.open));
       lines.push(this.#actionLine(1, mode.selected, "Save original bytes to a local path…", this.#availability.save));
       return lines.map((line) => truncateToWidth(line, width));
@@ -207,16 +245,18 @@ export class DeliverySelector implements PopupContent, Focusable {
     }
     const rows = this.#rowCount();
     if (this.#records.length === 0) {
-      lines.push(role.meta(this.#next === undefined
+      lines.push(role.meta(this.#next === undefined && this.#collections.length === 0
         ? "No committed deliveries in this Session."
         : "No committed deliveries in the loaded history."));
     }
     const budget = Math.max(ENTRY_ROWS, this.#bodyHeight - lines.length);
     const { start, end } = windowAroundSelected(rows, this.#selected, budget, () => ENTRY_ROWS);
     for (let index = start; index < end; index += 1) {
-      const record = this.#records[index];
+      const raw = this.#records[index];
+      const record = raw == null ? undefined : this.#resolved(raw);
       if (record === undefined) {
-        const label = this.#loading ? "loading older history…" : "Load older history";
+        const collection = this.#collections[index-this.#records.length];
+        const label = this.#loading ? "loading…" : collection ? `Load delivery items from ${collection.head.next_offset} of ${collection.head.total}` : "Load older history";
         lines.push(`${index === this.#selected ? role.accent("›") : " "} ${role.meta(label)}`, "");
         continue;
       }
@@ -227,6 +267,10 @@ export class DeliverySelector implements PopupContent, Focusable {
 
   #entry(record: DeliveryRecord, selected: boolean): string[] {
     const file = record.file;
+    if(file==null)return [
+      `${selected?role.accent("›"):" "} ${style.bold(sanitizeField(deliveryIdentity(record)))}`,
+      `   ${role.meta("Original delivery metadata deferred · Enter to read")}`
+    ];
     const name = sanitizeField(file.name);
     const description = file.description ? `  ${sanitizeField(file.description)}` : "";
     return [
@@ -249,6 +293,8 @@ export class DeliverySelector implements PopupContent, Focusable {
   }
 
   #request(action: DeliveryAction, record: DeliveryRecord): void {
+    record=this.#resolved(record);
+    if(action==="metadata" || record.file==null) { this.#start("metadata",record); return; }
     const unavailable = this.#availability[action];
     if (unavailable !== undefined) {
       this.#status = { level: "error", text: `${action === "open" ? "Open" : "Save"} unavailable: ${unavailable}` };
@@ -286,13 +332,23 @@ export class DeliverySelector implements PopupContent, Focusable {
   }
 
   #rowCount(): number {
-    return this.#records.length + (this.#next === undefined ? 0 : 1);
+    return this.#records.length + this.#collections.length + (this.#next === undefined ? 0 : 1);
   }
 
   #move(delta: number, rows: number): void {
     if (rows === 0) return;
+    this.#metadata = undefined;
     this.#selected = Math.min(rows - 1, Math.max(0, this.#selected + delta));
     this.onChange?.();
+  }
+
+  #loadSelected(): void {
+    const collection=this.#collections[this.#selected-this.#records.length];
+    if(collection) {
+      if(this.#loading)return;
+      this.#loading=true;this.onChange?.();this.onLoadCollection?.(collection);return;
+    }
+    this.#loadMore();
   }
 
   #loadMore(): void {

@@ -171,7 +171,7 @@ pub mod logical_operations {
         /// Directory-creation requests for the reservation namespace.
         pub reservation_namespace_mkdir: u64,
         /// Directory-sync requests for the product-root / reservation-namespace
-        /// durability barriers, one per ancestor the barrier visits.
+        /// completion barriers, one per owned directory visited.
         pub reservation_namespace_dir_sync: u64,
         /// Session allocation directory-creation requests.
         pub session_allocation_mkdir: u64,
@@ -190,7 +190,7 @@ pub mod logical_operations {
         pub catalog_file_sync: u64,
         /// Catalog visibility rename requests.
         pub catalog_rename: u64,
-        /// Catalog directory-sync requests, one per ancestor the commit visits.
+        /// Catalog directory-sync requests for the owned catalog directory.
         pub catalog_directory_sync: u64,
         /// Logical payload bytes supplied to the catalog write request. This is
         /// the bytes handed to the write, not physical device bytes and not a
@@ -371,15 +371,11 @@ fn reservation_namespace_root_barrier(root: &Path) -> io::Result<()> {
     File::open(root)?.sync_all()
 }
 
-/// Persist every directory entry created for the product root by
-/// `create_dir_all`: the root itself and any missing ancestors. Syncing only
-/// the root would not prove that a newly created parent survives a crash.
-fn sync_directory_ancestry(path: &Path) -> io::Result<()> {
-    for directory in path.ancestors() {
-        logical_operations::record_reservation_namespace_dir_sync();
-        File::open(directory)?.sync_all()?;
-    }
-    Ok(())
+/// Surface errors for the owned directory. Ancestor power-loss persistence
+/// is outside the process-crash contract; do not sync unrelated ancestors.
+fn sync_directory(path: &Path) -> io::Result<()> {
+    logical_operations::record_reservation_namespace_dir_sync();
+    File::open(path)?.sync_all()
 }
 
 /// Canonical product identity; this is not a live storage-access guard.
@@ -395,12 +391,10 @@ impl ProductRoot {
     pub fn create(root: &Path) -> io::Result<Self> {
         std::fs::create_dir_all(root)?;
         let product = Self::existing(root)?;
-        // `create_dir_all` may have created the product root and any missing
-        // ancestors in this process. Persist those directory entries before
-        // the reservation namespace (or any later durable success) can claim
-        // local-root durability. Exclusive directory creation alone is not a
-        // crash-durability guarantee.
-        sync_directory_ancestry(product.root())?;
+        // Detect owned-root completion errors before reservation admission.
+        // Persisting newly created ancestors across machine failure is outside
+        // the process-crash contract.
+        sync_directory(product.root())?;
         product.ensure_reservation_namespace()?;
         Ok(product)
     }
@@ -828,6 +822,7 @@ mod tests {
                 "--exact",
                 "runtime::local_storage::tests::lifecycle_process_gate",
                 "--nocapture",
+                "--format=terse",
             ])
             .env("RUSTX_260_LOCK_ROOT", root)
             .env("RUSTX_260_LOCK_MODE", mode)
@@ -925,6 +920,7 @@ mod tests {
                 "--exact",
                 "runtime::local_storage::tests::reservation_process_gate",
                 "--nocapture",
+                "--format=terse",
             ])
             .env("RUSTX_387_RESERVE_ROOT", directory.path())
             .env("RUSTX_387_RESERVE_ID", consumed.as_str())

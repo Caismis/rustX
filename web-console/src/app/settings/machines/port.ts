@@ -1,4 +1,5 @@
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v49';
+import { materializeSource } from '../../../../../protocol/app-server/source-observation';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v50';
 import type { AppServerClient, ClientView } from '../../../client/app-server';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../../../workspaces/host';
 import { applicationScope } from '../projection';
@@ -7,7 +8,7 @@ import { applicationScope } from '../projection';
  * authoritative reread it performed after the commit. The two stay separate
  * facts: a failed reread never turns a committed write into a failed one. */
 export interface WriteOutcome {
-  acknowledgement: SourceSettings;
+  acknowledgement: { revision: string };
   reread?: WorkspaceConfigurationReread;
 }
 
@@ -86,14 +87,21 @@ export function createConfigurationPort({ client, endpoint, workspaceId, host, i
   if (workspaceId === undefined) {
     const target = { kind: 'user' as const };
     const scope = applicationScope(target);
+    const readSource = async () => {
+      const generation = client.getSnapshot().generation;
+      const { projection } = await client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings');
+      return materializeSource(projection, async (reference, offset) => (await client.request({ method: 'configuration/sourceValueRead', params: { target, reference, offset, max_bytes: 65_536 } }, 'source_value_chunk')).chunk,
+        () => client.getSnapshot().generation === generation);
+    };
     return {
       ownsReread: false,
       publication: configuration => configuration?.[scope],
-      read: async () => (await client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection,
-      write: async (expected_revision, mutation) => ({
-        acknowledgement: (await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation } }, 'source_settings')).projection,
-      }),
-      reconcile: async () => { await client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_application'); },
+      read: readSource,
+      write: async (expected_revision, mutation) => {
+        const acknowledgement = await client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation } }, 'sources_written');
+        return { acknowledgement: { revision: acknowledgement.revision } };
+      },
+      reconcile: async () => { await client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_receipt'); },
     };
   }
   let scope: string | undefined;
@@ -104,7 +112,7 @@ export function createConfigurationPort({ client, endpoint, workspaceId, host, i
   };
   /** Name the scope native performed this exact Workspace configuration I/O
    * on. */
-  const performedOn = ({ target }: SourceSettings) => {
+  const performedOn = ({ target }: Pick<SourceSettings, 'target'>) => {
     if (target.kind === 'workspace') name(applicationScope(target));
   };
   const resolve = async () => {

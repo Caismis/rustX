@@ -124,9 +124,14 @@ async fn composition_owns_one_conversation_domain() {
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
-    let RuntimeClientResult::Initialized { snapshot, .. } = result else {
+    let RuntimeClientResult::Initialized { .. } = result else {
         panic!("initialize returns the snapshot");
     };
+    let snapshot = runtime
+        .host()
+        .checkpoint()
+        .expect("bounded native checkpoint")
+        .snapshot;
     assert_eq!(
         snapshot.capabilities.revision,
         capability.revision(),
@@ -373,9 +378,9 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     let response = endpoint.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
     });
-    let Some(RuntimeClientResult::ModelCatalog { catalog }) = response.result else {
-        panic!("model_catalog_get succeeds: {response:?}");
-    };
+    let catalog: rustx::model::catalog::ModelCatalogView = crate::common::native_domain_catalog(
+        response.result.expect("successful native domain read"),
+    );
     assert_eq!(catalog.models.len(), 1);
     assert_eq!(catalog.models[0].model.to_string(), "local/composed-model");
     assert_eq!(

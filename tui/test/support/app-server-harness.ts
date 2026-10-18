@@ -27,7 +27,7 @@ import type {
   SessionSettings,
 } from "../../src/protocol/app-server.ts";
 import { FakeTransport } from "./app-server-peer.ts";
-import { runtimeCursor, snapshot as defaultSnapshot } from "./fixtures.ts";
+import { checkpoint, runtimeCursor, snapshot as defaultSnapshot } from "./fixtures.ts";
 
 export const SERVER_CAPABILITIES = {
   upload_policy: nativeUploadPolicy, multi_session: true,
@@ -88,14 +88,14 @@ export async function harness(
   };
   const attaching = host.attach(sessionId);
   const attach = (await transport.log.awaitMethod("session/attach")).at(-1)!;
-  // Attach is one cut: snapshot, cursor and subscription together. There is no
-  // separate subscribe to answer here.
-  transport.respond(attach.id, {
-    type: "attached",
-    target,
-    snapshot: initial,
-    cursor: runtimeCursor(0),
-  });
+  // Identity admission precedes the independently bounded cut and registration.
+  transport.respond(attach.id, {type:'attached', target, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  const read=(await transport.log.awaitMethod('session/checkpoint')).at(-1)!;
+  transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint(initial,runtimeCursor(0))});
+  const subscribe=(await transport.log.awaitMethod('session/subscribe')).at(-1)!;
+  transport.respond(subscribe.id,{type:'subscribed',target,registration_id:'harness-registration-1',after_cursor:runtimeCursor(0)});
+  const configuration=(await transport.log.awaitMethod('session/configuration')).at(-1)!;
+  transport.respond(configuration.id,{type:'session_configuration',projection:(null)});
   const session = await attaching;
 
   const stopRouting = client.onNotification((message) =>
@@ -114,7 +114,12 @@ export async function harness(
 export async function nextRequest(
   harnessed: Pick<Harness, "transport">,
   method: string,
-  seen = harnessed.transport.transportCount(method),
+  seen = 0,
 ) {
-  return (await harnessed.transport.log.awaitMethod(method, seen + 1)).at(-1)!;
+  for (;;) {
+    const pending = harnessed.transport.log.matching(method).slice(seen)
+      .find(request => !harnessed.transport.answered.has(request.id));
+    if (pending) return pending;
+    await harnessed.transport.log.awaitMethod(method, harnessed.transport.transportCount(method) + 1);
+  }
 }

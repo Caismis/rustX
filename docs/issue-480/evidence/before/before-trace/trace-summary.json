@@ -1,0 +1,22 @@
+{
+  "raw_sha256": "f1de311a4ea1e6ea0fd836ec963dad8e242c1aa351df812a753e3ebc4a1cabc8",
+  "syscall_entry_counts": {
+    "write": 788,
+    "fcntl": 110858,
+    "fsync": 3450,
+    "rename": 40,
+    "pwrite64": 93008,
+    "unlink": 780
+  },
+  "sync_entries_by_path": {
+    "other": 1110,
+    "journal": 1560,
+    "database": 780
+  },
+  "completed_write_return_bytes_by_path": {
+    "other": 666090,
+    "journal": 89156580,
+    "database": 108756992
+  },
+  "limitation": "Entry counts include failures. Resumed split syscalls are not attributed to paths in byte totals; these are lower bounds, not physical IO."
+}

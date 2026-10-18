@@ -37,9 +37,9 @@ async fn assert_authority(f: &Fixture, expected: &SessionModelConfig) {
         f.manager
             .configuration_host(id)
             .unwrap()
-            .snapshot()
+            .checkpoint()
             .unwrap()
-            .0
+            .snapshot
             .model
             .unwrap()
             .configured,
@@ -76,7 +76,8 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         let view = runtime.model_view();
         let configuration = runtime.configuration_view().unwrap();
         let application = f.manager.configuration_application(id);
-        let (projection, cursor) = host.snapshot().unwrap();
+        let checkpoint = host.checkpoint().unwrap();
+        let (projection, cursor) = (checkpoint.snapshot, checkpoint.cursor);
 
         assert_eq!(
             runtime.model_set(selection("local/b")),
@@ -112,7 +113,11 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         assert_eq!(runtime.model_view(), view);
         assert_eq!(runtime.configuration_view().unwrap(), configuration);
         assert_eq!(f.manager.configuration_application(id), application);
-        assert_eq!(host.snapshot().unwrap(), (projection, cursor));
+        let checkpoint = host.checkpoint().unwrap();
+        assert_eq!(
+            (checkpoint.snapshot, checkpoint.cursor),
+            (projection, cursor)
+        );
         drop(attachment);
 
         let connection = crate::app_server::connection::AppServerConnection::new(f.host.clone());
@@ -129,7 +134,7 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         .await;
         assert!(matches!(
             selected,
-            crate::app_server::protocol::MethodResult::Model { .. }
+            crate::app_server::protocol::MethodResult::ModelSet { .. }
         ));
         super::configuration::settled(&f, 0).await;
         assert_authority(&f, &selection("local/b")).await;

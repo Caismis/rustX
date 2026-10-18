@@ -1,9 +1,10 @@
+import { compactReceipt } from './fixture';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v49';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v50';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -15,7 +16,7 @@ function compact() { act(() => { expect(server.client.compact('A')).toBe(true); 
 const count = () => server.requests.filter(item => item.request.method === 'context/compact').length;
 it.each([null, 'Exact pre-commit failure'])('exact native release frees only A while its RPC remains held: %s', async error => {
   server.held.add('context/compact');
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   compact(); expect(server.client.compact('A')).toBe(false);
   const a = await server.waitFor('context/compact', 1);
@@ -72,7 +73,7 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   expect(screen.getByRole('status').textContent).toContain('Summary provider rejected model fixture/exact');
   expect(count()).toBe(0);
 });
-it.each([undefined, { estimated: false, input_tokens: 25, context_window_tokens: 100, model: 'frozen/model', breakdown: { system_tokens: 5, tool_tokens: 10, message_tokens: 10 } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
+it.each([undefined, { estimated: false, model_deferred:false, model_source:null, input_tokens: '25', context_window_tokens: '100', model: 'frozen/model', breakdown: { system_tokens: '5', tool_tokens: '10', message_tokens: '10' } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
   await observe({ ...base, occupancy: occupancy });
   expect(view.container.innerHTML).toBe('');
@@ -86,7 +87,7 @@ it.each([undefined, { estimated: false, input_tokens: 25, context_window_tokens:
 
 it('a replacement attachment rejects the held old response', async () => {
   server.held.add('context/compact');
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
   compact(); const pending = await server.waitFor('context/compact', 1);
   const old = server.client.target('A');
   await server.client.release('A'); await server.client.attach('A');
@@ -105,7 +106,7 @@ it('a replacement attachment rejects the held old response', async () => {
 });
 it.each(['conversation', 'incarnation', 'authority'] as const)('reconnect retires obsolete %s evidence and rejects the old socket', async replacement => {
   server.held.add('context/compact');
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
   compact(); const pending = await server.waitFor('context/compact', 1);
   const response = server.commit(pending), oldSocket = server.socket;
   await server.client.disconnect();
@@ -127,21 +128,37 @@ it.each(['conversation', 'incarnation', 'authority'] as const)('reconnect retire
   oldSocket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: pending.method === 'context/compact' ? pending.params.target : server.client.target('A'), cursor: String(server.cursor + 1n), event: { type: 'context_compaction_failed', error: 'obsolete poison', context: { ...base, compaction_error: 'obsolete poison' } } } });
   expect(server.client.getSnapshot()).toBe(current);
 });
-it('confirmed commit survives a failed refresh', async () => {
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
-  server.held.add('session/snapshot');
-  compact(); await server.waitFor('session/snapshot', 1);
+it('confirmed commit survives a failed explicit refresh', async () => {
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
+  server.held.add('context/compact');
+  server.held.add('session/checkpoint');
+  compact(); const pending = await server.waitFor('context/compact', 1);
+  await act(async () => server.reply(pending));
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
+  const repairing = server.client.refresh('A').catch(() => {});
+  await server.waitFor('session/checkpoint', 2);
   await server.client.disconnect();
+  await repairing;
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
 });
 
-it('real acknowledgement frees the gesture guard before its held read repair', async () => {
-  server.handlers.set('context/compact', () => ({ type: 'context', context: base }));
-  server.held.add('session/snapshot');
-  compact(); await server.waitFor('session/snapshot', 1);
+it('real acknowledgement releases its gesture while explicit checkpoint repair fences observation-dependent controls', async () => {
+  server.handlers.set('context/compact', () => (compactReceipt(base)));
+  server.held.add('context/compact');
+  server.held.add('session/checkpoint');
+  compact(); const pending = await server.waitFor('context/compact', 1);
+  await act(async () => server.reply(pending));
   const a = server.client.getSnapshot().views.A.compactionRequest!;
   expect(a.status).toBe('succeeded');
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
+  const repairing = server.client.refresh('A');
+  const repair = await server.waitFor('session/checkpoint', 2);
+  expect(server.client.getSnapshot().views.A.observationState).toBe('checkpointLoading');
+  expect(() => server.client.target('A')).toThrow('not authoritatively attached');
+  expect(count()).toBe(1);
+  await act(async () => { server.reply(repair); await repairing; });
+  expect(server.client.getSnapshot().views.A.observationState).toBe('following');
   server.held.add('context/compact');
   compact(); await server.waitFor('context/compact', 2);
   const b = server.client.getSnapshot().views.A.compactionRequest!;
@@ -160,7 +177,7 @@ it('a committed checkpoint owns the completed notice even outside the loaded his
     manual_compaction: { request_id: requestId, released: true, error: null },
     projection_head: { ...projectionHead(), checkpoint_id: 'checkpoint-outside-window', activation_id: '4' },
     latest_compaction: { generation: '1', checkpoint_id: 'checkpoint-outside-window', activation_id: '4',
-      tokens_before: { input_tokens: 100, source: 'provider_reported' }, estimated_tokens_after: 20 },
+      tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' },
   });
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');
   expect(view.container.querySelector('[data-projection-checkpoint="checkpoint-outside-window"]')).not.toBeNull();

@@ -1,8 +1,9 @@
+import {readCut} from './fixture';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v49';
+import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v50';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -13,12 +14,13 @@ import { AppServerClient, type GoalControlOutcome } from '../src/client/app-serv
 import { Server, snapshot } from './fixture';
 
 const task = (id: string, status: TodoTask['status'], extra: Partial<TodoTask> = {}): TodoTask => ({ id, subject: `Task ${id}`, status, ...extra });
-const goal = (extra: Partial<GoalSnapshot> = {}): GoalSnapshot => ({
+const goal = (extra: Partial<RuntimeClientGoalSnapshot> = {}): RuntimeClientGoalSnapshot => ({
+  objective_deferred: false, blocked_reason_deferred: false, last_round_message_id_deferred: false, fields: [],
   reference: { id: 'goal-1', revision: '3' }, objective: 'Ship the docks', phase: 'active',
   autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, ...extra,
 });
 const withTodos = (tasks: TodoTask[] | undefined, base = snapshot()): RuntimeClientSnapshot => ({ ...base, todos: tasks && { tasks, next_id: String(tasks.length + 1) } });
-const withGoal = (current: GoalSnapshot | null, base = snapshot()): RuntimeClientSnapshot => ({ ...base, goal: { current } });
+const withGoal = (current: RuntimeClientGoalSnapshot | null, base = snapshot()): RuntimeClientSnapshot => ({ ...base, goal: { current } });
 const running = (base = snapshot()): RuntimeClientSnapshot => ({ ...base, attempt: { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1 } });
 const inbound = (sequence: string, text: string, message: { id?: string; source?: 'human' | 'runtime'; kind?: { goal_continuation: { id: string; revision: string } } } = {}) =>
   ({ revision: "0", sequence, message: { id: `message-${sequence}`, source: 'human' as const, content: [{ type: 'text' as const, text }], ...message } });
@@ -43,7 +45,7 @@ const withStatusHistory = (base = snapshot()): RuntimeClientSnapshot => {
 /** Historical execution facts only: a `todo` call and its committed result. */
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
   const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { action: 'create', subject: 'Historical task' } }] };
-  const result = { role: 'tool' as const, occurrence: { assistant_message_id: 'history-call', block_index: 0 }, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: 1 } };
+  const result = { role: 'tool' as const, occurrence: { assistant_message_id: 'history-call', block_index: 0 }, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: '1' } };
   return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } };
 };
 
@@ -60,7 +62,7 @@ const region = (name: 'To-dos' | 'Goal' | 'Queue') => screen.queryByRole('region
 const dock = (name: 'To-dos' | 'Goal' | 'Queue') => screen.getByRole('region', { name });
 const methods = () => server.requests.map(item => item.request.method);
 const goalControls = () => server.requests.flatMap(item => item.request.method === 'goal/control' ? [item.request.params.control] : []);
-const snapshotReads = () => methods().filter(method => method === 'session/snapshot').length;
+const snapshotReads = () => methods().filter(method => method === 'session/checkpoint').length;
 const goalButton = (name: string) => within(dock('Goal')).getByRole('button', { name });
 const CONFIGURATION_WRITES = ['settings/replace', 'configuration/sourceWrite', 'configuration/reconcile', 'session/adoptConfiguration', 'session/setModel', 'session/create'];
 const update = (next: RuntimeClientSnapshot) => act(() => server.update('A', next));
@@ -69,13 +71,23 @@ const failRead = (request: { id: string | number }) => act(async () => {
   server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Snapshot unavailable' } });
 });
 /** A later native event whose successful snapshot read is the next authoritative observation. */
-const recoverAuthority = async () => { server.held.delete('session/snapshot'); await update(server.snapshots.get('A')!); };
+const recoverAuthority = async () => { server.held.delete('session/checkpoint'); await act(async () => server.client.refresh('A')); };
 const sendQueued = async (text: string) => {
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Queue' })); });
 };
 
 describe('Todo dock binds only the composed native Todo projection', () => {
+  it('T15: an unloaded native task head stays visible and distinct from an empty list', () => {
+    const state = todoDock(withTodos([]), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' });
+    expect(state).toEqual({ kind: 'current', tasks: [], deferred: true });
+    render(<TodoDock state={state}/>);
+    expect(dock('To-dos').textContent).toContain('Content deferred');
+    fireEvent.click(within(dock('To-dos')).getByRole('button'));
+    expect(within(dock('To-dos')).getByRole('status').textContent).toBe('Content deferred');
+    expect(within(dock('To-dos')).queryAllByRole('listitem')).toHaveLength(0);
+    expect(todoDock(snapshot(), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' })).toEqual({ kind: 'absent' });
+  });
   it('R08/R09: absent, composed-empty and deleted-only render no dock; a mixed list is collapsed with non-zero counts', async () => {
     // The two native facts stay distinct in the binding and share one visual result.
     expect(todoDock(snapshot())).toEqual({ kind: 'absent' });
@@ -267,9 +279,9 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
   it('an applied control whose reread fails stays locked on the old GoalRef until a later authoritative read', async () => {
     await mount(withGoal(goal()));
     const reads = snapshotReads();
-    server.held.add('session/snapshot');
+    server.held.add('session/checkpoint');
     fireEvent.click(goalButton('Pause goal'));
-    await failRead(await server.waitFor('session/snapshot', reads + 1));
+    await failRead(await server.waitFor('session/checkpoint', reads + 1));
     expect((await within(dock('Goal')).findByRole('status')).textContent).toContain('applied');
     // GoalDomain is at r4; the browser still renders its last authoritative observation.
     expect(dock('Goal').textContent).toContain('Active Goal');
@@ -377,9 +389,9 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     await mount(withGoal(goal()));
     server.snapshots.set('A', withGoal(goal({ reference: { id: 'goal-1', revision: '4' }, objective: 'Changed elsewhere' })));
     const reads = snapshotReads();
-    server.held.add('session/snapshot');
+    server.held.add('session/checkpoint');
     fireEvent.click(goalButton('Pause goal'));
-    await failRead(await server.waitFor('session/snapshot', reads + 1));
+    await failRead(await server.waitFor('session/checkpoint', reads + 1));
     expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Stale GoalRef; observe current state before trying again');
     expect(within(dock('Goal')).getByRole('status').textContent).toContain('locked');
     expect(dock('Goal').textContent).toContain('Ship the docks');
@@ -394,7 +406,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'pause' } }]);
   });
   it('the dock itself locks after a known outcome without a reread until a newer observation arrives', async () => {
-    const outcomes: GoalControlOutcome[] = [{ status: 'applied', observed: false }, { status: 'rejected', reason: 'Refused by GoalDomain', observed: false }];
+    const outcomes: GoalControlOutcome[] = [{ status: 'applied', observed: false}, { status: 'rejected', reason: 'Refused by GoalDomain', observed: false }];
     for (const outcome of outcomes) {
       const mutate = vi.fn(async () => outcome);
       const first = {};
@@ -418,7 +430,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
   // offer Resume. "Inactive Goal" no longer exists, and no snapshot can spell
   // an Active Goal that is not actually running.
   it('status and the single lifecycle control derive from durable phase alone', () => {
-    const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true }));
+    const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true}));
     for (const [phase, status, control, other] of [
       ['active', 'Active Goal', 'Pause goal', 'Resume goal'],
       ['paused', 'Paused Goal', 'Resume goal', 'Pause goal'],
@@ -436,7 +448,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect(mutate).not.toHaveBeenCalled();
   });
   it('an autonomous round advances the revision without disturbing an open draft', () => {
-    const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true }));
+    const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true}));
     const current = goal();
     const ui = render(<GoalDock state={{ goal: current }} observation={{}} disabled={false} mutate={mutate} />);
     fireEvent.click(ui.getByRole('button', { name: 'Edit goal objective' }));
@@ -461,7 +473,9 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     act(() => server.socket.close());
     expect((await within(dock('Goal')).findByRole('status')).textContent).toContain('uncertain');
     expect(goalButton('Pause goal')).toHaveProperty('disabled', true);
-    await act(() => server.connect());
+    await act(()=>server.connect());
+    expect(within(dock('Goal')).getByRole('status').textContent).toContain('uncertain');
+    await act(()=>server.client.refresh('A'));
     await waitFor(() => expect(within(dock('Goal')).queryByRole('status')).toBeNull());
     expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
     expect(dock('Goal').textContent).toContain('Active Goal');
@@ -691,6 +705,15 @@ describe('Composer context stack lifecycle', () => {
 });
 
 describe('exact pending QueueDock mutations', () => {
+  it('T11/T15 a deferred pending preview cannot replace original text, while removal remains exact', async () => {
+    const edit=vi.fn(),remove=vi.fn(async()=>({status:'known' as const,outcome:{status:'applied' as const,read_cut:readCut()},observed:true}));
+    render(<QueueDock rows={[{...inbound('7','partial preview'),deferred:true}]} submissions={[]} running edit={edit} remove={remove}/>);
+    expect(screen.getByRole('button',{name:'Edit'})).toHaveProperty('disabled',true);
+    fireEvent.click(screen.getByRole('button',{name:'Edit'})); expect(edit).not.toHaveBeenCalled();
+    await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Remove'})));
+    expect(remove).toHaveBeenCalledWith({sequence:'7',revision:'0'});
+  });
+
   const row = () => inbound('7', 'before');
   it('edits an authoritative occurrence with its original revision and waits for readback', async () => {
     let finish!: (value: import('../src/client/app-server').InboundControlOutcome) => void;
@@ -699,9 +722,9 @@ describe('exact pending QueueDock mutations', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'after' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(edit).toHaveBeenCalledWith({ sequence: '7', message_id: 'message-7', revision: '0' }, 'after');
+    expect(edit).toHaveBeenCalledWith({ sequence: '7', revision: '0' }, 'after');
     expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true);
-    await act(async () => finish({ status: 'known', outcome: { status: 'applied' }, observed: false }));
+    await act(async () => finish({ status: 'known', outcome: { status: 'applied' ,read_cut:readCut()}, observed: false }));
     expect(screen.getByText('before')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
     ui.rerender(<QueueDock rows={[{ ...row(), revision: '1', message: { ...row().message, content: [{ type: 'text', text: 'after' }] } }]} observation={snapshot()} submissions={[]} running edit={edit} remove={vi.fn()} />);
@@ -744,4 +767,46 @@ describe('exact pending QueueDock mutations', () => {
     expect(screen.getByRole('button', { name: 'Edit' })).toHaveProperty('disabled', true);
     expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', false);
   });
+});
+
+it('T08/T11 deferred Goal editing loads the original field and never submits its preview', async () => {
+  const original = 'objective beyond the finite header '.repeat(100).trim(), preview = original.slice(0, 512);
+  const current = goal({ objective: preview, objective_deferred: true, fields: [{ reference: goal().reference, path: ['current', 'objective'] }] });
+  let release!: (value: string) => void;
+  const loadObjective = vi.fn(() => new Promise<string>(resolve => { release = resolve; }));
+  const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true }));
+  render(<GoalDock state={{ goal: current }} observation={{}} disabled={false} mutate={mutate} loadObjective={loadObjective}/>);
+  fireEvent.click(goalButton('Edit goal objective'));
+  expect(loadObjective).toHaveBeenCalledExactlyOnceWith(current.reference);
+  expect(within(dock('Goal')).queryByRole('textbox')).toBeNull();
+  expect(mutate).not.toHaveBeenCalled();
+  await act(async () => { release(original); });
+  expect(within(dock('Goal')).getByRole('textbox')).toHaveProperty('value', original);
+  fireEvent.click(goalButton('Save goal objective'));
+  expect(mutate).toHaveBeenCalledExactlyOnceWith(current.reference, { action: 'edit', objective: original });
+});
+
+it('T11 a late Goal field read cannot open an editor for a newer revision', async () => {
+  const current = goal({ objective: 'preview', objective_deferred: true });
+  let release!: (value: string) => void;
+  const loadObjective = vi.fn(() => new Promise<string>(resolve => { release = resolve; }));
+  const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true }));
+  const ui = render(<GoalDock state={{ goal: current }} observation={{}} disabled={false} mutate={mutate} loadObjective={loadObjective}/>);
+  fireEvent.click(goalButton('Edit goal objective'));
+  ui.rerender(<GoalDock state={{ goal: { ...current, reference: { ...current.reference, revision: '4' } } }} observation={{}} disabled={false} mutate={mutate} loadObjective={loadObjective}/>);
+  await act(async () => { release('obsolete original'); });
+  expect(within(dock('Goal')).queryByRole('textbox')).toBeNull();
+  expect(mutate).not.toHaveBeenCalled();
+});
+
+it('T07/T11 losing Goal Show delivery is an observation failure without an uncertain mutation', async () => {
+  server.snapshots.set('A', withGoal(goal()));
+  await server.attached('A');
+  server.held.add('goal/control');
+  const work = server.client.request({ method: 'goal/control', params: { target: server.client.target('A'), control: { action: 'show' } } }, 'domain_page').catch(error => error);
+  await server.waitFor('goal/control', 1);
+  act(() => server.socket.close());
+  expect(await work).toBeInstanceOf(Error);
+  expect(server.client.getSnapshot().uncertain.some(value => value.method === 'goal/control')).toBe(false);
+  expect(goalControls()).toEqual([{ action: 'show' }]);
 });

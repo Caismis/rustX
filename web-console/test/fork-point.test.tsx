@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { AttachmentTarget, RuntimeClientTranscriptEntry, SessionNode } from '../../protocol/app-server/v49';
+import type { AttachmentTarget, RuntimeClientTranscriptEntry, SessionNodeObservation } from '../../protocol/app-server/v50';
 import { turnPresentation } from '../src/bindings/turn-presentation';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
@@ -25,7 +25,7 @@ it('seats the fork at the native message boundary, including a cut inside a turn
 
 it('keeps inherited completion controls above the fork and starts an empty prefix before new content', () => {
   const inherited = entry(1);
-  inherited.completed_response = { closing_message_id: 'm1', origin: { conversation_id: 'source', attempt_id: 'turn', closing_message_id: 'source-m1' }, surface_revision: '1', completed_at: '2026-10-07T00:00:00Z', models: [] };
+  inherited.completed_response = {closing_locator:{type:'by_message_id',message_id:'m1'},deferred_fields:[], closing_message_id: 'm1', origin: {attempt_id_source:null, conversation_id: 'source', attempt_id: 'turn', closing_message_id: 'source-m1' }, surface_revision: '1', completed_at: '2026-10-07T00:00:00Z', models: [] };
   expect(turnPresentation([inherited, entry(2)], { inherited_through: '1' }).map(node => node.kind)).toEqual(['entry', 'tail', 'fork-point', 'entry']);
   expect(kinds([1, 2], '0')).toEqual(['fork-point', '1', '2']);
 });
@@ -49,7 +49,7 @@ it.each([33, 129, 4096])('reads the exact attached node at ordinal %s in one req
   server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'attached-node', active_conversation_id: 'conversation-A', node_count: 33, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
   const s = snapshot(); s.transcript = { inherited_through: '1', entries: [entry(1), entry(2)] };
   server.snapshots.set('A', s);
-  const node: SessionNode = { ordinal: '33', id: 'attached-node', conversation_id: 'conversation-A', origin };
+  const node: SessionNodeObservation = { ordinal: '33', id: 'attached-node', conversation_id: 'conversation-A', origin };
   server.handlers.set('session/node', request => {
     expect(request).toMatchObject({ params: { session_id: 'A', node_id: 'attached-node' } });
     return { type: 'node', node: { ...node, ordinal: String(ordinal) } };
@@ -107,7 +107,7 @@ for (const pendingInput of [false, true]) it.each(['B', 'A'])(`the source action
   expect(ui.queryByRole('button', { name: 'local.ts' })).toBeNull();
   const requests = server.requests.slice(before).map(row => row.request);
   expect(requests.filter(request => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start'].includes(request.method))).toEqual([]);
-  expect(requests.filter(request => request.method === 'session/history' && request.params.at.type === 'message').map(request => request.params)).toEqual([{ session_id: sourceSession, node_id: origin.source_node, at: { type: 'message', id: origin.source_message }, limit: 64 }]);
+  expect(requests.filter(request => request.method === 'session/history' && request.params.at.type === 'message').map(request => request.params)).toEqual([{ session_id: sourceSession, node_id: origin.source_node, at: { type: 'message', id: origin.source_message }, limit: 32 }]);
   expect(server.client.target('A')).toBe(target); expect(ui.queryByRole('textbox', { name: 'Message' })).toBeNull();
   await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Return to conversation' })));
   expect(server.client.target('A')).toBe(target);

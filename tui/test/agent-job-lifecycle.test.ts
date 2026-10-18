@@ -1,3 +1,4 @@
+import { domainReceipt } from './support/fixtures.ts';
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { describeRpcError } from "../src/protocol/app-server.ts";
@@ -20,7 +21,7 @@ test("one selected Agent survives active, stopping, inactive, resume and reconne
     { ...first, activation_id: "activation-b", current_activation: "activation-b" },
   ];
   for (const [index, agent] of stages.entries()) {
-    state = reduce(state, { cursor: runtimeCursor(index + 2), event: { type: "agent_updated", agent } });
+    state = reduce(state, { cursor: runtimeCursor(index + 2), event: { type: "agent_updated", position:0, agent } });
     assert.equal(state.agents.length, 1);
     assert.equal(hasSubagentSelection(state.agents, selected), true);
     assert.equal(state.agents[0]?.child_conversation_id, first.child_conversation_id);
@@ -36,7 +37,7 @@ test("one finite Job projects active to terminal and reconstructs terminal on re
   const job = backgroundExecution("exec_c8536561-1a50-7edc-a396-b3a459465efb", "running");
   let state = replaceFromSnapshot(snapshot({ jobs: [job] }), runtimeCursor(1));
   const terminal = { ...job, state: "succeeded" as const };
-  state = reduce(state, { cursor: runtimeCursor(2), event: { type: "job_updated", job: terminal } });
+  state = reduce(state, { cursor: runtimeCursor(2), event: { type: "job_updated", position:0, job: terminal } });
   assert.deepEqual(state.jobs, [terminal]);
   assert.deepEqual(replaceFromSnapshot(snapshot({ jobs: [terminal] }), runtimeCursor(2)).jobs, state.jobs);
 });
@@ -61,7 +62,7 @@ test("wait-agent retains the returned captured activation while an Agent has res
   const request = await nextRequest(h, "agent/wait");
   const resumed = subagent("worker", "frozen", "active", { activation_id: "activation-b", current_activation: "activation-b" });
   h.session.updateState(state => ({ ...state, agents: [resumed] }));
-  h.transport.respond(request.id, { type: "agent_wait", agent_id: "agent-child", activation_id: "activation-a", outcome: "succeeded", agent: resumed });
+  h.transport.respond(request.id, { type: "agent_wait", agent_id: "agent-child", activation_id: "activation-a", outcome: "succeeded" });
   const settled = await waiting;
   assert.equal(settled.activation_id, "activation-a");
   assert.equal(h.session.state.agents[0]?.current_activation, "activation-b");
@@ -69,8 +70,8 @@ test("wait-agent retains the returned captured activation while an Agent has res
   h.client.close();
 });
 
-test("response loss cannot silently retarget an Agent wait", () => {
-  assert.equal(METHOD_RESPONSE_LOSS_CLASS["agent/wait"], "side_effecting");
+test("T10 T13 response loss is read failure and cannot silently retarget an Agent wait", () => {
+  assert.equal(METHOD_RESPONSE_LOSS_CLASS["agent/wait"], "read");
   assert.equal(METHOD_RESPONSE_LOSS_CLASS["job/wait"], "read");
 });
 
@@ -80,7 +81,7 @@ test("interrupt forwards stable identity and never removes the resumable Agent r
   const interrupting = h.dispatcher.submit("/interrupt-agent agent-child");
   const request = await nextRequest(h, "agent/interrupt");
   assert.deepEqual(request.params, { target: h.target, agent_id: "agent-child" });
-  h.transport.respond(request.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: agent.activation_id, outcome: "cancelled", agent: { ...agent, state: "inactive", current_activation: null, activation_state: "cancelled" } });
+  h.transport.respond(request.id, { type: "agent_interruption_accepted", agent_id: agent.agent_id, activation_id: agent.activation_id });
   await interrupting;
   assert.deepEqual(h.session.state.agents, [agent], "control responses do not invent lifecycle events");
   h.client.close();
@@ -94,7 +95,7 @@ for (const [command, method] of [["/job-status", "job/status"], ["/job-wait", "j
     const request = await nextRequest(h, method);
     assert.deepEqual(request.params, { target: h.target, job_id: job.job_id });
     assert.deepEqual(h.session.state.jobs, [job]);
-    h.transport.respond(request.id, { type: "job", job: { ...job, state: "cancelled" } });
+    h.transport.respond(request.id, method === "job/cancel" ? { type: "job_cancellation_accepted", job_id: job.job_id } : domainReceipt('jobs.'+({ ...job, state: "cancelled" }).job_id,[{ ...job, state: "cancelled" }]));
     await controlling;
     assert.deepEqual(h.session.state.jobs, [job], "only owner notifications or snapshots update lifecycle projection");
     h.client.close();
@@ -110,14 +111,18 @@ for (const outcome of ["cancelled", "succeeded"] as const) {
   test(`interrupt captures ${outcome} on A without overwriting resumed B`, async () => {
     const first = subagent("worker", "frozen", "active", { activation_id: "activation-a", current_activation: "activation-a" });
     const h = await harness(snapshot({ agents: [first] }));
+    const settling = h.session.waitAgent(first.agent_id);
+    const wait = await nextRequest(h, "agent/wait");
     const interrupting = h.session.interruptAgent(first.agent_id);
     const request = await nextRequest(h, "agent/interrupt");
     const resumed = { ...first, activation_id: "activation-b", current_activation: "activation-b" };
     h.session.updateState(state => ({ ...state, agents: [resumed] }));
-    h.transport.respond(request.id, { type: "agent_wait", agent_id: first.agent_id, activation_id: "activation-a", outcome, agent: resumed });
+    h.transport.respond(request.id, { type: "agent_interruption_accepted", agent_id: first.agent_id, activation_id: "activation-a" });
+    h.transport.respond(wait.id, { type: "agent_wait", agent_id: first.agent_id, activation_id: "activation-a", outcome });
     const result = await interrupting;
     assert.equal(result.activation_id, "activation-a");
-    assert.equal(result.outcome, outcome);
+    assert.equal('outcome' in result, false, "intent is independent from physical settlement");
+    assert.equal((await settling).outcome, outcome);
     assert.equal(h.session.state.agents[0]?.current_activation, "activation-b");
     h.client.close();
   });
@@ -129,8 +134,17 @@ for (const command of ["/wait-agent", "/interrupt-agent"] as const) {
     const h = await harness(snapshot({ agents: [agent] }));
     const controlling = h.dispatcher.submit(`${command} agent-child`);
     const request = await nextRequest(h, command === "/wait-agent" ? "agent/wait" : "agent/interrupt");
-    h.transport.respond(request.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: "reserved-b", outcome: null, agent: { ...agent, state: "inactive", current_activation: null } });
-    assert.match(JSON.stringify(await controlling), /ended before an activation committed/);
+    if (command === "/interrupt-agent") {
+      h.transport.respond(request.id, { type: "agent_interruption_accepted", agent_id: agent.agent_id, activation_id: "reserved-b" });
+      assert.match(JSON.stringify(await controlling), /interruption intent accepted for reserved-b/);
+      const settling = h.session.waitAgent(agent.agent_id);
+      const wait = await nextRequest(h, "agent/wait");
+      h.transport.respond(wait.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: "reserved-b", outcome: null });
+      assert.equal((await settling).outcome, null, "only the wait proves admission rollback");
+    } else {
+      h.transport.respond(request.id, { type: "agent_wait", agent_id: agent.agent_id, activation_id: "reserved-b", outcome: null });
+      assert.match(JSON.stringify(await controlling), /ended before an activation committed/);
+    }
     assert.deepEqual(h.session.state.agents, [agent]);
     h.client.close();
   });
@@ -139,7 +153,7 @@ for (const command of ["/wait-agent", "/interrupt-agent"] as const) {
 for (const [ownerState, activationState] of [["admitting", "stopping"], ["unavailable", "interrupted"]] as const) {
   test(`live ${ownerState} Agent state agrees with a fresh snapshot despite ${activationState} activation`, () => {
     const owner = subagent("worker", "frozen", ownerState, { activation_state: activationState });
-    const live = reduce(replaceFromSnapshot(snapshot(), runtimeCursor(0)), { cursor: runtimeCursor(1), event: { type: "agent_updated", agent: owner } });
+    const live = reduce(replaceFromSnapshot(snapshot(), runtimeCursor(0)), { cursor: runtimeCursor(1), event: { type: "agent_updated", position:0, agent: owner } });
     const fresh = replaceFromSnapshot(snapshot({ agents: [owner] }), runtimeCursor(1));
     assert.deepEqual(live.agents, fresh.agents);
     assert.equal(live.agents[0]?.state, ownerState);
@@ -157,9 +171,17 @@ for (const [command, method] of [["/job-wait", "job/wait"], ["/job-cancel", "job
     const job = backgroundExecution("exec_c8536561-1a50-7edc-a396-b3a459465efb", "publishing_terminal");
     const h = await harness(snapshot({ jobs: [job] }));
     const controlling = h.dispatcher.submit(`${command} ${job.job_id}`);
-    const request = await nextRequest(h, method);
+    let request = await nextRequest(h, method);
+    let settling = controlling;
+    if (method === "job/cancel") {
+      h.transport.respond(request.id, { type: "job_cancellation_accepted", job_id: job.job_id });
+      await controlling;
+      assert.deepEqual(h.session.state.jobs, [job], "intent never invents a terminal publication");
+      settling = h.dispatcher.submit(`/job-wait ${job.job_id}`);
+      request = await nextRequest(h, "job/wait");
+    }
     h.transport.respondError(request.id, { code: -32000, message: "Publication failed", data: { kind: "job_publication_abandoned", job_id: job.job_id } });
-    const result = await controlling;
+    const result = await settling;
     assert.match(JSON.stringify(result), /terminal publication was abandoned/);
     assert.deepEqual(h.session.state.jobs, [job]);
     assert.equal(h.transport.transportCount(method), 1);
@@ -171,10 +193,10 @@ test("/jobs renders the owner's omission counts without inferring totals", async
   const h = await harness();
   const listing = h.dispatcher.submit("/jobs");
   const request = await nextRequest(h, "job/list");
-  const jobs = Array.from({ length: 64 }, (_, index) => backgroundExecution(`exec_00000000-0000-7000-8000-${(66 - index).toString(16).padStart(12, "0")}`, "succeeded"));
-  h.transport.respond(request.id, { type: "jobs", jobs, returned: 64, matched: 67, limit: 64, truncated: true });
+  const jobs = Array.from({ length: 32 }, (_, index) => backgroundExecution(`exec_00000000-0000-7000-8000-${(66 - index).toString(16).padStart(12, "0")}`, "succeeded"));
+  h.transport.respond(request.id, domainReceipt('jobs',jobs,{total:67,next:(jobs).length}));
   const result = await listing;
-  assert.match(JSON.stringify(result), /Returned 64 of 67 Jobs \(limit 64\); older Jobs omitted/);
+  assert.match(JSON.stringify(result), /Returned 32 of 67 Jobs \(limit 32\); older Jobs omitted/);
   assert.equal(h.transport.transportCount("job/list"), 1);
   h.client.close();
 });

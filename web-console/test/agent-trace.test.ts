@@ -1,7 +1,10 @@
+import{traceReceipt}from'./fixture';
 import { afterEach, expect, it } from 'vitest';
 import { Server } from './fixture';
 import { AgentTraceReader } from '../src/client/agent-trace';
 import { traceRecord, requestDetail } from './trace-fixture';
+const scope=(agent_id='child')=>({agent_id,child_conversation_id:`conversation-${agent_id}`,activation_id:`activation-${agent_id}`,state:'active' as const});
+const childCut=(agent_id='child')=>({conversation_id:`conversation-${agent_id}`,activation_id:`activation-${agent_id}`,revision:'1',through:'1',domain_revisions:{},collection_cuts:{}});
 let server: Server;
 afterEach(() => server?.client.disconnect());
 async function setup() {
@@ -12,13 +15,13 @@ it('child identities own independent trace rows and details even when record ids
   const proof = await setup();
   server.handlers.set('agent/trace', request => {
     if (request.method !== 'agent/trace') throw Error('Wrong method');
-    return { type: 'trace', page: { records: [traceRecord(1, { preview: { text: request.params.agent_id, truncated: false } })], next_cursor: null } };
+    return { type: 'trace', page: { read_cut:childCut(request.params.agent_id),records: [traceRecord(1, { preview: { text: request.params.agent_id, truncated: false } })], next_cursor: null } };
   });
   server.handlers.set('agent/traceDetail', request => {
     if (request.method !== 'agent/traceDetail') throw Error('Wrong method');
-    return { type: 'trace_detail', detail: requestDetail(1, { messages: [{ message_id: request.params.agent_id, role: 'assistant', blocks: [], truncated: false }] }) };
+    return traceReceipt(requestDetail(1, { messages: [{ message_id: request.params.agent_id, role: 'assistant', blocks: [], truncated: false }] }));
   });
-  const a = new AgentTraceReader(server.client, 'A', proof, 'child-a'), b = new AgentTraceReader(server.client, 'A', proof, 'child-b');
+  const a = new AgentTraceReader(server.client, 'A', proof, scope('child-a')), b = new AgentTraceReader(server.client, 'A', proof, scope('child-b'));
   await Promise.all([a.refresh(), b.refresh()]);
   await Promise.all([a.detail('trace:1'), b.detail('trace:1')]);
   expect(a.snapshot().page.records[0].preview?.text).toBe('child-a');
@@ -31,9 +34,9 @@ it('older child records survive live refresh and use only the child cursor', asy
   const proof = await setup();
   server.handlers.set('agent/trace', request => {
     if (request.method !== 'agent/trace') throw Error('Wrong method');
-    return { type: 'trace', page: { records: request.params.before ? [traceRecord(1)] : [traceRecord(2)], next_cursor: request.params.before ? null : 'trace:2' } };
+    return { type: 'trace', page: { read_cut:childCut(),records: request.params.before ? [traceRecord(1)] : [traceRecord(2)], next_cursor: request.params.before ? null : 'trace:2' } };
   });
-  const reader = new AgentTraceReader(server.client, 'A', proof, 'child');
+  const reader = new AgentTraceReader(server.client, 'A', proof, scope('child'));
   await reader.refresh(); await reader.earlier();
   expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:1', 'trace:2']);
   expect(reader.snapshot().page.next_cursor).toBeNull();
@@ -44,8 +47,8 @@ it('older child records survive live refresh and use only the child cursor', asy
 it('refresh coalesces child activity and retired domains reject late replies', async () => {
   const proof = await setup();
   server.held.add('agent/trace');
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { records: [traceRecord(1)], next_cursor: null } }));
-  const reader = new AgentTraceReader(server.client, 'A', proof, 'child');
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(1)], next_cursor: null } }));
+  const reader = new AgentTraceReader(server.client, 'A', proof, scope('child'));
   const first = reader.refresh(); await server.waitFor('agent/trace', 1);
   await Promise.all([reader.refresh(), reader.refresh(), reader.refresh()]);
   server.reply(server.requests.find(row => row.request.method === 'agent/trace')!.request);
@@ -56,9 +59,9 @@ it('refresh coalesces child activity and retired domains reject late replies', a
 });
 it('attachment replacement cannot adopt a late child detail', async () => {
   const proof = await setup();
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { records: [traceRecord(1)], next_cursor: null } }));
-  server.handlers.set('agent/traceDetail', () => ({ type: 'trace_detail', detail: requestDetail(1) }));
-  const reader = new AgentTraceReader(server.client, 'A', proof, 'child'); await reader.refresh();
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(1)], next_cursor: null } }));
+  server.handlers.set('agent/traceDetail', () => (traceReceipt(requestDetail(1))));
+  const reader = new AgentTraceReader(server.client, 'A', proof, scope('child')); await reader.refresh();
   server.held.add('agent/traceDetail'); const work = reader.detail('trace:1');
   const request = await server.waitFor('agent/traceDetail', 1), old = server.socket;
   server.client.disconnect(); server.reply(request, old); await work;
@@ -66,16 +69,16 @@ it('attachment replacement cannot adopt a late child detail', async () => {
 });
 it('a live rebase retires old paging without stranding or clearing the new page owner', async () => {
   const proof = await setup();
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { records: [traceRecord(10)], next_cursor: 'trace:10' } }));
-  const reader = new AgentTraceReader(server.client, 'A', proof, 'child'); await reader.refresh();
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(10)], next_cursor: 'trace:10' } }));
+  const reader = new AgentTraceReader(server.client, 'A', proof, scope('child')); await reader.refresh();
   server.held.add('agent/trace'); const older = reader.earlier();
   const oldRequest = await server.waitFor('agent/trace', 2);
   const live = reader.refresh(); const liveRequest = await server.waitFor('agent/trace', 3);
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { records: [traceRecord(20)], next_cursor: 'trace:20' } }));
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(20)], next_cursor: 'trace:20' } }));
   server.reply(liveRequest); await live;
   expect(reader.snapshot().loading).toBe(false);
   const newOlder = reader.earlier(); const newRequest = await server.waitFor('agent/trace', 4);
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { records: [traceRecord(9)], next_cursor: 'trace:9' } }));
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(9)], next_cursor: 'trace:9' } }));
   server.reply(oldRequest); await older;
   expect(reader.snapshot().loading).toBe(true);
   expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:20']);
@@ -83,8 +86,8 @@ it('a live rebase retires old paging without stranding or clearing the new page 
 });
 it('returning to latest still refreshes when the superseded request fails', async () => {
   const proof = await setup();
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { records: [traceRecord(10)], next_cursor: null } }));
-  const reader = new AgentTraceReader(server.client, 'A', proof, 'child');
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(10)], next_cursor: null } }));
+  const reader = new AgentTraceReader(server.client, 'A', proof, scope('child'));
   await reader.refresh();
   server.held.add('agent/trace');
   const refreshing = reader.refresh();
@@ -95,4 +98,40 @@ it('returning to latest still refreshes when the superseded request fails', asyn
   await refreshing;
   expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:10']);
   expect(reader.snapshot().error).toBeUndefined();
+});
+
+it.each(['inactive', 'unavailable'] as const)('cold %s Child Trace retains the captured Registry Activation for original selected reads', async state => {
+  const proof = await setup();
+  const cut = { ...childCut(), revision: '0' };
+  const field = { type: 'value' as const, field: 'model' as const, domain: 'trace.records.1.detail.request.model', item_offset: 0, path: [], encoded_bytes: '8' };
+  const record = traceRecord(1);
+  record.request!.model = null;
+  record.request!.model_source = field;
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut: cut, records: [record], next_cursor: null } }));
+  server.handlers.set('conversation/checkpointValueRead', request => {
+    if (request.method !== 'conversation/checkpointValueRead') throw Error('method');
+    expect(request.params.target).toEqual(proof.target);
+    expect(request.params.agent_id).toBe('child');
+    expect(request.params.cut).toEqual(cut);
+    expect(request.params.domain).toBe(field.domain);
+    return { type: 'checkpoint_value_chunk', chunk: { cut, domain: field.domain, item_offset: 0, path: [], offset: 0, readable_end: 8, next_offset: null, representation: 'utf8_text', bytes_base64: btoa('original') } };
+  });
+  const reader = new AgentTraceReader(server.client, 'A', proof, { ...scope(), state });
+  await reader.refresh();
+  const cache = reader.snapshot();
+  expect(cache.error).toBeUndefined();
+  expect(cache.readCuts?.[record.id]).toEqual(cut);
+  const original = await cache.fields!.value(cut, field, 0, () => true);
+  expect(atob(original.bytes_base64)).toBe('original');
+  expect(original.cut).toEqual(cut);
+  const requests = () => server.requests.filter(row => row.request.method === 'conversation/checkpointValueRead');
+  expect(requests()).toHaveLength(1);
+  await expect(cache.fields!.value({ ...cut, activation_id: 'old-activation' }, field, 0, () => true)).rejects.toThrow('scope was replaced');
+  await expect(cache.fields!.value({ ...cut, activation_id: null }, field, 0, () => true)).rejects.toThrow('scope was replaced');
+  expect(requests()).toHaveLength(1);
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut: { ...cut, activation_id: 'foreign-activation' }, records: [traceRecord(2)], next_cursor: null } }));
+  await reader.refresh();
+  expect(reader.snapshot().page).toBe(cache.page);
+  expect(reader.snapshot().error).toContain('Original Trace page cut is unavailable');
+  reader.retire();
 });

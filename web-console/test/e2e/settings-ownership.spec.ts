@@ -1,3 +1,4 @@
+import { readApplication, readSource } from './source-reading';
 import { openEmptySession } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
@@ -24,9 +25,9 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
    await expect(settings.getByText('App Server policy saved.')).toBeVisible();
    await expect(settings.getByText('Saved process policy is active.')).toBeVisible();
-   const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
-   expect(source.projection.process_bindings?.max_connections).toBe(19);
-   expect(source.projection.workspace).toBeNull();
+   const source = await readSource(remote,{kind:'user'});
+   expect(source.process_bindings?.max_connections).toBe(19);
+   expect(source.workspace).toBeNull();
    await closeSettings(page);
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
@@ -96,18 +97,18 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    const id = (await remote.client.call('session/list', { offset: 0, limit: 32 }, 'sessions')).sessions[0].id;
    const selection = await remote.client.call('session/settings', { session_id: id }, 'settings');
    await message.fill('Long action in A'); await message.press('Enter'); await f.gate('finish-a');
-   const source = await remote.client.call('configuration/sourcesRead', { target: { kind: 'user' } }, 'source_settings');
-   await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.projection.user.revision,
-     mutation: { kind: 'config', mutation: { unit: 'instructions', authored: 'New instructions require explicit Session adoption.' } } }, 'source_settings');
+   const source = await readSource(remote,{kind:'user'});
+   await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.user.revision,
+     mutation: { kind: 'config', mutation: { unit: 'instructions', authored: 'New instructions require explicit Session adoption.' } } }, 'sources_written');
    const adopt = page.getByRole('button', { name: 'Adopt configuration', exact: true });
    await expect(adopt).toBeVisible(); await expect(adopt).toBeDisabled();
    await expect(page.getByText('Session work must settle before adoption.')).toBeVisible();
    // The disabled banner above is the runtime's own published Busy eligibility;
    // configuration authority carries the candidate only.
-   const app = (await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).application!;
+   const app = await readApplication(remote, id);
    const candidate = app.candidate!;
-   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: candidate.identity, expected_binding: candidate.expected_binding }, 'configuration_application')).rejects.toThrow();
-   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: { ...candidate.identity, attempt: String(BigInt(candidate.identity.attempt) + 1n) }, expected_binding: candidate.expected_binding }, 'configuration_application')).rejects.toThrow();
+   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: candidate.identity, expected_binding: candidate.expected_binding }, 'configuration_receipt')).rejects.toThrow();
+   await expect(remote.client.call('session/adoptConfiguration', { session_id: id, candidate: { ...candidate.identity, attempt: String(BigInt(candidate.identity.attempt) + 1n) }, expected_binding: candidate.expected_binding }, 'configuration_receipt')).rejects.toThrow();
    await f.release('finish-a'); await expect(adopt).toBeEnabled();
    const history = await remote.readSession(id);
    // X07: hold the exact settled historical Request across a lost adoption reply.
@@ -115,21 +116,28 @@ test('C13 C14 C15 C16 C17 real native Busy gate, candidate fence, live eligibili
    const requestBoundary = page.locator('[data-request-owner]').first();
    const recordId = await requestBoundary.getAttribute('data-request-owner');
    await requestBoundary.click();
-   await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail' && row.result?.detail?.id === recordId).length).toBe(1);
-   const oldTrace = wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail;
+   const traceDomain = `trace.records.${recordId!.slice('trace:'.length)}.detail`;
+   const traceResponses = () => wire.responses.filter(row => row.method === 'session/traceDetail' && row.result?.type === 'domain_page' && row.result.page.domain === traceDomain);
+   const readTrace = () => {
+     const request = wire.requests.filter(row => row.method === 'session/traceDetail' && row.params.record_id === recordId).at(-1)!;
+     return wire.traceDetail(request.params.target, traceResponses().at(-1)!.result.page);
+   };
+   await expect.poll(() => traceResponses().length).toBe(1);
+   const oldTrace = await readTrace();
+   expect(oldTrace?.id).toBe(recordId);
 
    wire.loseNext('session/adoptConfiguration'); await adopt.click();
    await expect.poll(wire.lost).toBe(1);
    await connectionAction(page, 'Reconnect');
    await expect(adopt).toHaveCount(0);
    expect(wire.lost()).toBe(1); expect(wire.requests.filter(row => row.method === 'session/adoptConfiguration')).toHaveLength(1);
-   expect((await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).application?.candidate).toBeNull();
+   expect((await remote.client.call('session/configuration', { session_id: id }, 'session_configuration')).projection!.inline?.candidate).toBeNull();
    expect(await remote.client.call('session/settings', { session_id: id }, 'settings')).toEqual(selection);
    expect(await remote.readSession(id)).toEqual(history);
    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
    await page.locator(`[data-request-owner="${recordId}"]`).click();
-   await expect.poll(() => wire.responses.filter(row => row.method === 'session/traceDetail' && row.result?.detail?.id === recordId).length).toBe(2);
-   expect(wire.responses.filter(row => row.method === 'session/traceDetail').at(-1)!.result.detail).toEqual(oldTrace);
+   await expect.poll(() => traceResponses().length).toBe(2);
+   expect(await readTrace()).toEqual(oldTrace);
    expect((await f.control('requests')).requests).toHaveLength(1);
  } finally { await remote.shutdown(); await page.close(); await f.stop(false); }
 });

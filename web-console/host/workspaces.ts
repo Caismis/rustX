@@ -1,3 +1,4 @@
+import { materializeSource } from '../../protocol/app-server/source-observation.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { deriveWorkspaceOffice } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
@@ -126,10 +127,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
    * locations alone authorize neither an initial nor a historical file read. */
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     this.mutationScope(scope);
-    if (!read || !Number.isInteger(read.delivery_index) || read.delivery_index < 0 || read.delivery_index > 7
-      || typeof read.message_id !== 'string' || !read.message_id || read.message_id.length > 256
+    if (!read || !Number.isSafeInteger(read.delivery_index) || read.delivery_index < 0
+      || !validDeliveryLocator(read.locator)
       || !read.target || typeof read.target.session_id !== 'string' || typeof read.target.conversation_id !== 'string'
-      || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'message_id', 'delivery_index', 'agent_id'].includes(key))) throw new Error('Invalid delivery coordinates');
+      || typeof read.target.attachment_id !== 'string' || Object.keys(read).some(key => !['target', 'locator', 'delivery_index', 'agent_id'].includes(key))) throw new Error('Invalid delivery coordinates');
     if (read.agent_id !== undefined && (typeof read.agent_id !== 'string' || !read.agent_id || read.agent_id.length > 256)) throw new Error('Invalid Agent coordinates');
     if (!this.config.productHostToken) throw new Error('Product Host native file mapping unavailable');
     if (this.fileReads.size >= 2) throw new Error('Session file read capacity reached');
@@ -164,9 +165,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (source.kind === 'artifact') {
       if (typeof source.artifact_id !== 'string' || source.artifact_id.length > 256
         || Object.keys(source).some(key => !['kind', 'artifact_id', 'agent_id'].includes(key))) throw new Error('Invalid document coordinates');
-    } else if (typeof source.message_id !== 'string' || source.message_id.length > 256 || !Number.isInteger(source.delivery_index)
-      || source.delivery_index < 0 || source.delivery_index > 7
-      || Object.keys(source).some(key => !['kind', 'message_id', 'delivery_index', 'agent_id'].includes(key))) throw new Error('Invalid document coordinates');
+    } else if (!validDeliveryLocator(source.locator) || !Number.isSafeInteger(source.delivery_index)
+      || source.delivery_index < 0
+      || Object.keys(source).some(key => !['kind', 'locator', 'delivery_index', 'agent_id'].includes(key))) throw new Error('Invalid document coordinates');
     if (!this.config.productHostToken) throw new Error('preview_unavailable');
     if (this.documentReads.size) throw new Error('capacity');
     const operation = new AbortController(); this.documentReads.add(operation);
@@ -176,7 +177,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       signal?.throwIfAborted();
       return await deriveDocument(request, async () => {
         this.mutationScope(scope); operation.signal.throwIfAborted();
-        if (source.kind === 'session_file') return this.readDelivery(scope, { target: request.target, message_id: source.message_id, delivery_index: source.delivery_index, agent_id: source.agent_id }, operation.signal);
+        if (source.kind === 'session_file') return this.readDelivery(scope, { target: request.target, locator: source.locator, delivery_index: source.delivery_index, agent_id: source.agent_id }, operation.signal);
         const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal);
         this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
       }, operation.signal);
@@ -336,6 +337,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         // Resolve again after asynchronous admission, immediately before submission.
         if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
         const target = { kind: 'workspace' as const, directory: cwd };
+        const readSource = async () => {
+          const result = await client.call('configuration/sourcesRead', {target}, 'source_settings');
+          return materializeSource(result.projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
+        };
         if (operation.kind === 'mcp_probe') {
           const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');
           if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
@@ -345,21 +350,21 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           // The native write is the linearization point. Once it acknowledges,
           // the mutation is committed and nothing below may turn it into a
           // rejection; the authoritative reread is a separate, independent fact.
-          const acknowledgement = await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'source_settings');
+          const acknowledgement = await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'sources_written');
           let reread: WorkspaceConfigurationReread;
           try {
-            const result = await client.call('configuration/sourcesRead', { target }, 'source_settings');
+            const projection = await readSource();
             reread = (await this.resolveWorkspace(id, endpoint)).cwd === cwd
-              ? { status: 'observed', projection: result.projection }
+              ? { status: 'observed', projection }
               : { status: 'failed', error: 'Workspace authority changed during the authoritative reread' };
           } catch (error) { reread = { status: 'failed', error: error instanceof Error ? error.message : String(error) }; }
-          return { kind: 'write', commit: { acknowledgement: acknowledgement.projection, reread } };
+          return { kind: 'write', commit: { acknowledgement: {target, revision:acknowledgement.revision}, reread } };
         }
-        if (operation.kind === 'reconcile') await client.call('configuration/reconcile', { target }, 'configuration_application');
+        if (operation.kind === 'reconcile') await client.call('configuration/reconcile', { target }, 'configuration_receipt');
         else if (operation.kind !== 'read') throw new Error('Unknown configuration operation');
-        const result = await client.call('configuration/sourcesRead', { target }, 'source_settings');
+        const projection = await readSource();
         if ((await this.resolveWorkspace(id, endpoint)).cwd !== cwd) throw new Error('Workspace authority changed');
-        return { kind: operation.kind, projection: result.projection };
+        return { kind: operation.kind, projection };
       } finally { await client.close(); }
     };
     return this.lane(id, run);
@@ -382,4 +387,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
     } catch { return { authorized: false, reason: 'unavailable' }; }
   }
+}
+
+/** Coordinates select canonical evidence; authentication and native mapping grant access. */
+function validDeliveryLocator(value: unknown): boolean {
+ if(!value||typeof value!=='object'||Array.isArray(value))return false;
+ const locator=value as Record<string,unknown>,keys=Object.keys(locator);
+ return locator.type==='by_message_id'
+  ? typeof locator.message_id==='string'&&locator.message_id.length>0&&locator.message_id.length<=256&&new TextEncoder().encode(locator.message_id).length<=256&&keys.every(key=>['type','message_id'].includes(key))
+  : locator.type==='by_ledger_position'&&Number.isSafeInteger(locator.position)&&Number(locator.position)>0&&keys.every(key=>['type','position'].includes(key));
 }

@@ -1,0 +1,9 @@
+{
+  "binary": "/tmp/rustx-480-evidence/before-native-profile",
+  "sha256": "b27eb01900a5faed197824e700f66fb7f6cdfa4144bc83c77cb30be30c18fd73",
+  "build": "cargo test --release --locked --lib --no-run",
+  "run": "RUSTX_PUBLICATION_PROFILE_TURNS=25 /tmp/rustx-480-evidence/before-native-profile runtime_client::host::tests::t19_native_publication_encoding_profile --exact --ignored --nocapture",
+  "base": "029e50f45d6a24c1452b5d0768274fdd661cda6f",
+  "features": "default; cfg(test) attribution, not ordinary benchmark",
+  "returncode": 0
+}

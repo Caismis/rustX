@@ -124,7 +124,7 @@ fn missing_zero_and_no_output_are_distinct() {
 
 #[test]
 fn absent_or_reversed_attempt_endpoints_do_not_invent_runtime() {
-    let mut fold = super::super::timing::TimingFold::default();
+    let mut fold = crate::durable::response::timing::TimingFold::default();
     let id = RequestId::new("request");
     fold.start(id.clone());
     fold.terminal(&id, Some(sample_generation()), Some(&usage(None)));

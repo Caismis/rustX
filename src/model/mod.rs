@@ -22,7 +22,9 @@ pub mod generation_evidence;
 pub mod input;
 pub(crate) mod inspection;
 pub mod invocation;
+pub(crate) mod selected_input;
 pub mod session;
+pub use selected_input::{SelectedInputManifest, SelectedModelInput};
 pub mod snapshot;
 pub mod types;
 

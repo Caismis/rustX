@@ -344,7 +344,11 @@ pub struct CapabilityResourceInputs {
 pub trait CapabilityObserver: Send + Sync {
     /// Observes one activated immutable capability snapshot and its
     /// authoritative availability state.
-    fn on_snapshot(&self, snapshot: &CapabilitySnapshot, availability: &CapabilityAvailability);
+    fn on_snapshot(
+        &self,
+        snapshot: &Arc<CapabilitySnapshot>,
+        availability: &CapabilityAvailability,
+    );
 }
 
 /// One committed capability generation, returned to a caller that owns its
@@ -2262,7 +2266,7 @@ impl CapabilityCoordinator {
     /// lock).
     fn fire_observer(
         observer_slot: &Mutex<Option<Arc<dyn CapabilityObserver>>>,
-        snapshot: &CapabilitySnapshot,
+        snapshot: &Arc<CapabilitySnapshot>,
         availability: &CapabilityAvailability,
     ) {
         let observer = observer_slot

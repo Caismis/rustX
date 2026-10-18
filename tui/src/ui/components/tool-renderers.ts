@@ -130,7 +130,17 @@ export function parseArguments(argumentsText: string): unknown {
     return undefined;
   }
   try {
-    return JSON.parse(argumentsText);
+    const value: unknown = JSON.parse(argumentsText);
+    const pending = [value];
+    while (pending.length) {
+      const item = pending.pop();
+      // Opaque provider integers have no JavaScript numeric schema. Preserve
+      // their original published JSON text rather than formatting a rounded
+      // Number through a specialized or generic renderer.
+      if (typeof item === 'number' && (!Number.isFinite(item) || Number.isInteger(item) && !Number.isSafeInteger(item))) return undefined;
+      if (item != null && typeof item === 'object') pending.push(...Object.values(item));
+    }
+    return value;
   } catch {
     // A partially streamed argument fragment is not valid JSON yet. That is
     // an ordinary intermediate state, not an error.

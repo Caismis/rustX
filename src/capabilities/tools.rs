@@ -142,6 +142,15 @@ impl AvailableToolCatalog {
 
     /// Every available Tool definition, including inactive definitions.
     #[must_use]
+    /// Borrowed canonical definitions; observation never clones the whole registry.
+    pub(crate) fn definition_at(&self, ordinal: usize) -> Option<&ToolDefinition> {
+        self.tools.get(ordinal).map(|tool| &tool.definition)
+    }
+    pub(crate) fn definition_refs(&self) -> impl ExactSizeIterator<Item = &ToolDefinition> {
+        self.tools.iter().map(|tool| &tool.definition)
+    }
+
+    #[must_use]
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools
             .iter()

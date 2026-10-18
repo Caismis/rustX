@@ -218,7 +218,21 @@ async fn issue383_retry_and_corrective_requests_freeze_goal_and_native_receipts(
         );
         let store = runtime.durable_store();
         let snapshots = store.read_request_snapshots(None, 10).unwrap().snapshots;
-        assert_eq!(snapshots[0].contributions, snapshots[1].contributions);
+        assert_eq!(snapshots[0].contributions.len(), 2);
+        assert_eq!(
+            snapshots[0].contributions, snapshots[1].contributions,
+            "corrective={corrective}: recovery retains the original frozen receipts"
+        );
+        for contribution in &snapshots[1].contributions {
+            assert!(
+                snapshots[1].input.iter().any(|item| matches!(
+                    item,
+                    crate::model::projected::FrozenModelInput::Original(source)
+                        if source.message_id == contribution.message_id
+                )),
+                "corrective={corrective}: retained receipt must describe an actual frozen Original"
+            );
+        }
         assert_eq!(
             snapshots[0].context_generation,
             snapshots[1].context_generation

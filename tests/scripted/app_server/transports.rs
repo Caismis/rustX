@@ -11,9 +11,17 @@ use std::{io, sync::Arc};
 use tokio_util::sync::CancellationToken;
 #[path = "../../support/app_server_driver.rs"]
 mod driver;
+#[path = "driver_lifecycle.rs"]
+mod driver_lifecycle;
+#[path = "oversized_notification.rs"]
+mod oversized_notification;
 use app_server_conformance::AppServerConformanceDriver;
+#[path = "bounded_delivery.rs"]
+mod bounded_delivery;
+#[path = "outbound_backpressure.rs"]
+mod outbound_backpressure;
 
-async fn connected(
+pub(super) async fn connected(
     f: &Fixture,
     ws: bool,
 ) -> (driver::Driver, tokio::task::JoinHandle<io::Result<()>>) {
@@ -44,7 +52,11 @@ async fn connected(
         (driver::jsonl(reader, writer), server)
     }
 }
-async fn call(client: &impl AppServerConformanceDriver, id: i64, call: Method) -> MethodResult {
+pub(super) async fn call(
+    client: &impl AppServerConformanceDriver,
+    id: i64,
+    call: Method,
+) -> MethodResult {
     let Response::Success(response) = client
         .request(Request {
             jsonrpc: JsonRpcVersion::V2,
@@ -57,12 +69,12 @@ async fn call(client: &impl AppServerConformanceDriver, id: i64, call: Method) -
     };
     response.result
 }
-async fn initialize(client: &impl AppServerConformanceDriver) {
+pub(super) async fn initialize(client: &impl AppServerConformanceDriver) {
     call(
         client,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 49,
+            protocol_version: APP_SERVER_PROTOCOL_VERSION,
             client: ClientIdentity {
                 name: "transport".into(),
                 version: "1".into(),
@@ -85,7 +97,160 @@ async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> Attach
     else {
         panic!("attached");
     };
+    let MethodResult::Checkpoint { checkpoint } = call(
+        client,
+        10_000_001,
+        Method::SessionCheckpoint {
+            target: target.clone(),
+            trace_records: vec![],
+        },
+    )
+    .await
+    else {
+        panic!("checkpoint")
+    };
+    call(
+        client,
+        20_000_001,
+        Method::SessionSubscribe {
+            target: target.clone(),
+            after_cursor: checkpoint.cursor,
+        },
+    )
+    .await;
     target
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_following() {
+    use crate::runtime_client::content::{CanonicalContentComponent, ContentSource};
+    use base64::Engine as _;
+    bounded(async {
+        // TCP WebSocket and the production Stdio framing use the same read contract.
+        for ws in [false, true] {
+            let fixture = Fixture::new().await;
+            let (client, serving) = connected(&fixture, ws).await;
+            initialize(&client).await;
+            let target = attach(&client, &fixture).await;
+            let text = "水🙂 exact bytes ".repeat(4096);
+            let MethodResult::InboundAccepted { message_id, .. } = call(
+                &client,
+                46_780,
+                Method::TurnStart {
+                    target: target.clone(),
+                    content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                        text: text.clone(),
+                    })],
+                },
+            )
+            .await
+            else {
+                panic!("original inbound identity");
+            };
+            fixture.gates[0].wait_entered().await;
+            let MethodResult::Checkpoint { checkpoint } = call(
+                &client,
+                46_781,
+                Method::SessionCheckpoint {
+                    target: target.clone(),
+                    trace_records: vec![],
+                },
+            )
+            .await
+            else {
+                panic!("published request-start checkpoint");
+            };
+            let reference = checkpoint
+                .snapshot
+                .message_descriptors
+                .iter()
+                .find(|descriptor| descriptor.identity.as_ref() == Some(&message_id))
+                .expect("exact original canonical message")
+                .content
+                .iter()
+                .find(|binding| {
+                    matches!(
+                        binding.content_ref.source,
+                        ContentSource::CanonicalMessageBlock {
+                            component: CanonicalContentComponent::Payload,
+                            ..
+                        }
+                    )
+                })
+                .expect("original text source")
+                .content_ref
+                .clone();
+            assert_eq!(reference.readable_end, text.len() as u64);
+            let read = |offset| Method::ConversationContentRead {
+                target: target.clone(),
+                agent_id: None,
+                content_ref: reference.clone(),
+                offset,
+                max_bytes: 1,
+            };
+            let Response::Failure(failure) = client
+                .request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(46_782),
+                    call: read(reference.readable_end.checked_add(1).unwrap()),
+                })
+                .await
+            else {
+                panic!("out-of-frontier read refused");
+            };
+            assert_eq!(failure.id, Some(RequestId::Integer(46_782)));
+            assert_eq!(failure.error.data, Some(ErrorData::InvalidRange));
+            let MethodResult::ContentChunk { chunk } = call(&client, 46_783, read(0)).await else {
+                panic!("same connection remains readable");
+            };
+            assert_eq!(chunk.content_ref, reference);
+            assert_eq!(chunk.next_offset, Some(1));
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(chunk.data_base64)
+                    .unwrap(),
+                &text.as_bytes()[..1],
+                "a chunk may split UTF-8 without changing bytes"
+            );
+            let MethodResult::ContentChunk { chunk } =
+                call(&client, 46_784, read(reference.readable_end)).await
+            else {
+                panic!("authorized range EOF");
+            };
+            assert!(chunk.data_base64.is_empty());
+            assert!(chunk.complete);
+            assert_eq!(chunk.next_offset, None);
+            assert_eq!(fixture.provider.request_bodies().len(), 1);
+            client.close().await;
+            if let Err(error) = serving.await.unwrap() {
+                // Driver::close drops the socket without a WebSocket Close frame.
+                assert!(ws, "Stdio EOF must complete cleanly: {error}");
+                assert!(matches!(
+                    error
+                        .get_ref()
+                        .and_then(|source| source.downcast_ref::<
+                            tokio_tungstenite::tungstenite::Error,
+                        >()),
+                    Some(tokio_tungstenite::tungstenite::Error::Protocol(
+                        tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+                    ))
+                ), "unexpected WebSocket teardown failure: {error}");
+            }
+            assert!(
+                fixture
+                    .manager
+                    .load(&target.session_id, None)
+                    .await
+                    .unwrap()
+                    .inspect_runtime()
+                    .unwrap()
+                    .has_current_attempt(),
+                "read errors and carrier close cannot settle the held execution"
+            );
+            fixture.close().await;
+        }
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -137,10 +302,12 @@ async fn adapter_disconnect_preserves_active_execution_and_replacement_authority
             loop {
                 if let NotificationMethod::Event { event, .. } =
                     direct.next_notification().await.notification
-                    && matches!(
-                        *event,
-                        crate::runtime_client::event::RuntimeClientEvent::AttemptSettled { .. }
-                    )
+                    && event.facts().iter().any(|fact| {
+                        matches!(
+                            fact,
+                            crate::runtime_client::event::RuntimeClientEvent::AttemptSettled { .. }
+                        )
+                    })
                 {
                     break;
                 }
@@ -204,10 +371,12 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
                 let direct = app_server_conformance::DirectDriver(&replacement);
                 initialize(&direct).await;
                 let target = attach(&direct, &f).await;
-                let MethodResult::Snapshot { snapshot, .. } = call(
+                let MethodResult::Checkpoint {
+                    checkpoint: checkpoint_1,
+                } = call(
                     &direct,
                     3,
-                    Method::SessionSnapshot {
+                    Method::SessionCheckpoint {
                         trace_records: vec![],
                         target,
                     },
@@ -216,6 +385,7 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
                 else {
                     panic!("snapshot");
                 };
+                let snapshot = Box::new(checkpoint_1.snapshot);
                 assert_eq!(snapshot.pending_interactions.len(), 1);
                 replacement.close();
                 f.close().await;
@@ -265,7 +435,9 @@ async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
             .await
             .unwrap();
         let error = server.await.unwrap().unwrap_err();
-        assert!(error.to_string().contains("outbound capacity"));
+        // Queue retirement cannot retract the first accepted byte. With no
+        // reader, the retained remainder ends at the physical write deadline.
+        assert_eq!(error.to_string(), "JSONL write deadline exceeded");
         assert_eq!(connection.attachment_counts(), (0, 0));
         let native = f.manager.load(&target.session_id, None).await.unwrap();
         assert!(native.inspect_runtime().unwrap().has_current_attempt());
@@ -281,7 +453,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         let f = Fixture::new().await;
         // Real WebSocket HTTP handshake and framing over an exactly bounded byte pipe.
-        let (client, server) = tokio::io::duplex(1024);
+        let (client, server) = tokio::io::duplex(128);
         let manager = f.host.clone();
         let serving = tokio::spawn(websocket::connection(
             server,
@@ -292,7 +464,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v49, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v50, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -300,9 +472,13 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
             .await
             .unwrap();
         // Each response is > pipe capacity. Never poll the client reader.
-        let record =
-            serde_json::json!({"jsonrpc":"2.0", "id":"x".repeat(2048), "method":"unknown"})
-                .to_string();
+        let record = serde_json::json!({"jsonrpc":"2.0", "id":"x".repeat(254), "method":"unknown"})
+            .to_string();
+        let direct = AppServerConnection::new(f.host.clone());
+        let response = direct.handle_json(&record).await.unwrap();
+        let encoded = serde_json::to_vec(&response).unwrap();
+        assert!(encoded.len() > 128 && encoded.len() <= transport::MAX_MESSAGE_BYTES);
+        direct.close();
         let feed = async {
             for _ in 0..transport::OUTBOUND_MESSAGES + 2 {
                 if socket.send(record.clone().into()).await.is_err() {
@@ -311,12 +487,9 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
             }
         };
         let (result, ()) = tokio::join!(serving, feed);
-        assert!(
-            result
-                .unwrap()
-                .unwrap_err()
-                .to_string()
-                .contains("outbound capacity")
+        assert_eq!(
+            result.unwrap().unwrap_err().to_string(),
+            "WebSocket write deadline exceeded"
         );
         f.close().await;
     })
@@ -325,20 +498,20 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn adapters_share_direct_semantic_expectations() {
-    bounded(async {
+    Box::pin(bounded(async {
         for ws in [false, true] {
             let f = Fixture::new().await;
             let (client, server) = connected(&f, ws).await;
-            app_server_conformance::representative_scenario(
+            Box::pin(app_server_conformance::representative_scenario(
                 &client,
                 [f.sessions[0].id.clone(), f.sessions[1].id.clone()],
-            )
+            ))
             .await;
             client.close().await;
             let _ = server.await.unwrap();
             f.close().await;
         }
-    })
+    }))
     .await;
 }
 
@@ -372,10 +545,28 @@ async fn blocked_writer_deadline_is_cancellable_without_another_input_record() {
     f.close().await;
 }
 
+async fn next_pipe_response(
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+) -> Response {
+    loop {
+        let line = lines
+            .next_line()
+            .await
+            .unwrap()
+            .expect("live pipe response");
+        assert!(line.len() <= transport::MAX_MESSAGE_BYTES);
+        if let Ok(response) = serde_json::from_str::<Response>(&line) {
+            return response;
+        }
+        serde_json::from_str::<Notification>(&line).expect("native bounded notification");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn request_admission_overflow_releases_transport_but_not_server_operation_ownership() {
+async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_operation_ownership()
+ {
     bounded(async {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
         let f = Fixture::new().await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
@@ -384,18 +575,19 @@ async fn request_admission_overflow_releases_transport_but_not_server_operation_
         let probe = f.manager.probe(&target.conversation_id);
         probe.before_operation.arm();
         let (mut input, reader) = tokio::io::duplex(65536);
-        let (writer, _output) = tokio::io::duplex(65536);
+        let (writer, output) = tokio::io::duplex(65536);
         let serving = tokio::spawn(stdio::serve(
             connection.clone(),
             reader,
             writer,
             CancellationToken::new(),
         ));
+        assert_eq!(transport::IN_FLIGHT_REQUESTS, 16);
         for id in 0..=transport::IN_FLIGHT_REQUESTS {
             let request = Request {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(i64::try_from(id).unwrap()),
-                call: Method::SessionSnapshot {
+                call: Method::SessionCheckpoint {
                     trace_records: vec![],
                     target: target.clone(),
                 },
@@ -405,25 +597,67 @@ async fn request_admission_overflow_releases_transport_but_not_server_operation_
                 .await
                 .unwrap();
         }
-        probe.before_operation.entered().await;
+        let mut lines = tokio::io::BufReader::new(output).lines();
+        let mut refused = std::collections::BTreeSet::new();
+        for _ in 6..=transport::IN_FLIGHT_REQUESTS {
+            let Response::Failure(failure) = next_pipe_response(&mut lines).await else {
+                panic!("correlated capacity refusal");
+            };
+            assert_eq!(failure.error.data, Some(ErrorData::RequestCapacity));
+            let Some(RequestId::Integer(id)) = failure.id else {
+                panic!("exact request id");
+            };
+            assert!(refused.insert(id));
+        }
+        assert_eq!(refused, (6..=16).collect());
+        probe.before_operation.parked(6).await;
+        assert_eq!(connection.attachment_counts(), (1, 0));
         assert!(
-            serving
-                .await
-                .unwrap()
-                .unwrap_err()
-                .to_string()
-                .contains("request capacity")
+            !serving.is_finished(),
+            "capacity refusal keeps the carrier alive"
         );
+        let detach = Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(9000),
+            call: Method::SessionDetach {
+                target: target.clone(),
+            },
+        };
+        input
+            .write_all(format!("{}\n", serde_json::to_string(&detach).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        let Response::Success(detached) = next_pipe_response(&mut lines).await else {
+            panic!("reserved control lane");
+        };
+        assert_eq!(detached.id, RequestId::Integer(9000));
+        assert!(matches!(detached.result, MethodResult::Detached { .. }));
         assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(probe.before_operation.parked_now(), 6);
+        assert!(!serving.is_finished());
+        drop(input); // Actual input EOF retires transport waiters, never native operations.
+        serving.await.unwrap().unwrap();
+        assert_eq!(probe.before_operation.parked_now(), 6);
+        assert_eq!(
+            f.manager
+                .diagnostics()
+                .sessions
+                .iter()
+                .find(|row| row.conversation_id == target.conversation_id)
+                .unwrap()
+                .operations,
+            6
+        );
         probe.before_operation.release();
+        probe.before_operation.parked(0).await;
         f.close().await;
     })
     .await;
 }
 
-struct BackgroundGate {
-    gate: Arc<super::AsyncGate>,
-    cancellation:
+pub(super) struct BackgroundGate {
+    pub(super) gate: Arc<super::AsyncGate>,
+    pub(super) cancellation:
         Arc<std::sync::Mutex<Option<crate::runtime::cancellation::ExecutionCancellation>>>,
 }
 impl crate::tools::executor::ToolExecutor for BackgroundGate {
@@ -583,7 +817,7 @@ async fn one_pending_session_request_does_not_serialize_another_session() {
             let pending = call(
                 &client,
                 3,
-                Method::SessionSnapshot {
+                Method::SessionCheckpoint {
                     trace_records: vec![],
                     target: a,
                 },
@@ -594,18 +828,18 @@ async fn one_pending_session_request_does_not_serialize_another_session() {
                     call(
                         &client,
                         4,
-                        Method::SessionSnapshot {
+                        Method::SessionCheckpoint {
                             trace_records: vec![],
                             target: b
                         }
                     )
                     .await,
-                    MethodResult::Snapshot { .. }
+                    MethodResult::Checkpoint { .. }
                 ));
                 probe.before_operation.release();
             };
             let (result, ()) = tokio::join!(pending, independent);
-            assert!(matches!(result, MethodResult::Snapshot { .. }));
+            assert!(matches!(result, MethodResult::Checkpoint { .. }));
             client.close().await;
             let _ = server.await.unwrap();
             f.close().await;
@@ -641,7 +875,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v49, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v50, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -678,7 +912,8 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
 fn replenish_observation(native: &crate::runtime::ConversationRuntime) {
     native.installed_observation_bridge().unwrap().push(
         crate::runtime::observation::ConversationObservation::SessionModelChanged {
-            model: Box::new(native.model_view()),
+            model: native.model_read_source(),
+            capability: None,
         },
     );
 }
@@ -787,7 +1022,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
             client,
             0,
             Method::Initialize(InitializeParams {
-                protocol_version: 49,
+                protocol_version: APP_SERVER_PROTOCOL_VERSION,
                 client: ClientIdentity {
                     name: "rustx-product-host".into(),
                     version: "1".into(),
@@ -808,7 +1043,9 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
                 id: RequestId::Integer(9),
                 call: Method::DeliveryRead {
                     target,
-                    message_id: crate::runtime::identity::MessageId::new("invented"),
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: crate::runtime::identity::MessageId::new("invented"),
+                    },
                     delivery_index: 0,
                 },
             })
@@ -837,11 +1074,11 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ));
         let token = driver::TOKEN;
         for offered in [
-            format!("rustx.app-server.v49, rustx-delivery-access.{DELIVERY}"),
-            format!("rustx.app-server.v49, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
-            format!("rustx.app-server.v49, rustx-token.{token}, rustx-delivery-access.{token}"),
-            format!("rustx.app-server.v49, rustx-token.{token}, rustx-delivery-access.wrong"),
-            format!("rustx.app-server.v49, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
+            format!("rustx.app-server.v50, rustx-delivery-access.{DELIVERY}"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{token}"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.wrong"),
+            format!("rustx.app-server.v50, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
         ] {
             assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
         }
@@ -851,7 +1088,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         // A Product Host secret offered on the ordinary lane is not delivery access.
         let ordinary = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v49, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
+            &format!("rustx.app-server.v50, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
         )
         .await;
         assert!(!delivery_access(&ordinary).await);
@@ -861,7 +1098,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ordinary.close().await;
         let granted = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v49, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+            &format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
         )
         .await;
         assert!(delivery_access(&granted).await);
@@ -878,7 +1115,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v49, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+                &format!("rustx.app-server.v50, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
             )
             .await
             .is_err()
@@ -1061,6 +1298,106 @@ impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Valve<S> {
     }
 }
 
+/// A peer can consume a delimiter before the writer returns from its poll.
+/// Closing acceptance joins that poll before sampling its byte accounting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn valve_zero_budget_barrier_includes_physically_accepted_delimiter() {
+    use std::{pin::Pin, task::Poll};
+    use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+    struct AcceptedWrite {
+        inner: tokio::io::DuplexStream,
+        accepted: Arc<Hold>,
+    }
+    struct Release(Arc<Hold>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    impl AsyncWrite for AcceptedWrite {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let count = std::task::ready!(Pin::new(&mut self.inner).poll_write(cx, bytes))?;
+            if count > 0 {
+                self.accepted.enter(&bytes[..count]);
+            }
+            Poll::Ready(Ok(count))
+        }
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    bounded(async {
+        let control = ValveControl::new();
+        let accepted = Arc::new(Hold::new());
+        let _release = Release(accepted.clone());
+        accepted.arm_for(|offered| offered == b"\n");
+        let (inner, mut peer) = tokio::io::duplex(64);
+        let mut writer = Valve {
+            inner: AcceptedWrite {
+                inner,
+                accepted: accepted.clone(),
+            },
+            control: control.clone(),
+        };
+        let writing = tokio::spawn(async move {
+            writer.write_all(b"warmup").await.unwrap();
+            writer.write_all(b"\n").await.unwrap();
+            writer
+        });
+        assert_eq!(accepted.entered().await, b"\n");
+        let mut record = [0; 7];
+        peer.read_exact(&mut record).await.unwrap();
+        assert_eq!(&record, b"warmup\n");
+        assert_eq!(
+            control.written(),
+            record.len() - 1,
+            "peer consumption precedes delimiter accounting"
+        );
+        assert!(matches!(
+            control.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        let closing = {
+            let control = control.clone();
+            tokio::task::spawn_blocking(move || {
+                control.grant(0);
+                control.written()
+            })
+        };
+        accepted.release();
+        let accepted_before = closing.await.unwrap();
+        assert_eq!(accepted_before, record.len());
+        let mut writer = writing.await.unwrap();
+        std::future::poll_fn(|cx| {
+            assert!(Pin::new(&mut writer).poll_write(cx, b"next\n").is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(control.refused(|_| true).await, b"next\n");
+        assert_eq!(
+            control.written(),
+            accepted_before,
+            "no next-record bytes accepted"
+        );
+    })
+    .await;
+}
+
 fn server_info(id: i64) -> Request {
     Request {
         jsonrpc: JsonRpcVersion::V2,
@@ -1087,14 +1424,20 @@ fn frame_payload(frame: &[u8]) -> &[u8] {
 /// A driver whose every received record carrying an id is also kept, in
 /// order, so a test can count terminal responses per id.
 type Received = Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
-fn recording<S>(incoming: S) -> (impl futures_util::Stream<Item = String>, Received)
+fn recording<S>(
+    incoming: S,
+) -> (
+    impl futures_util::Stream<Item = Result<String, String>>,
+    Received,
+)
 where
-    S: futures_util::Stream<Item = String>,
+    S: futures_util::Stream<Item = Result<String, String>>,
 {
     use futures_util::StreamExt;
     let received = Received::default();
     let kept = received.clone();
     let incoming = incoming.inspect(move |record| {
+        let Ok(record) = record else { return };
         let value: serde_json::Value = serde_json::from_str(record).unwrap();
         if value.get("id").is_some() {
             kept.lock().unwrap().push(value);
@@ -1139,7 +1482,6 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
@@ -1175,17 +1517,10 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
                 },
                 shutdown.clone(),
             ));
-            let (reader, mut writer) = tokio::io::split(client);
-            let lines = futures_util::stream::unfold(
-                tokio::io::BufReader::new(reader).lines(),
-                |mut lines| async move { lines.next_line().await.unwrap().map(|line| (line, lines)) },
-            );
+            let (reader, writer) = tokio::io::split(client);
+            let lines = driver::lines(tokio::io::BufReader::new(reader));
             let (incoming, received) = recording(lines);
-            let client = driver::Driver::new(incoming, |mut outgoing| async move {
-                while let Some(record) = outgoing.recv().await {
-                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
-                }
-            });
+            let client = driver::Driver::new(incoming, driver::jsonl_sink(writer));
             initialize(&client).await;
             let target = attach(&client, &f).await;
             probe.completed.send_replace(None);
@@ -1194,17 +1529,20 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
             if case == "shutdown" {
                 valve.grant(0);
                 {
-                    let request = client.request(read());
+                    let request = client.try_request(read());
                     tokio::pin!(request);
                     tokio::select! {
                         biased;
-                        _ = &mut request => panic!("no response after shutdown"),
-                        () = async {
-                            valve.refused(success_30).await;
-                            shutdown.cancel();
-                            serving.await.unwrap().unwrap();
-                        } => {}
+                        outcome = &mut request => panic!("no outcome before shutdown: {outcome:?}"),
+                        _ = valve.refused(success_30) => {}
                     }
+                    shutdown.cancel();
+                    serving.await.unwrap().unwrap();
+                    // The carrier's end fails the waiter instead of answering it.
+                    assert_eq!(
+                        request.await,
+                        Err(driver::TransportEnded("end of input".into()))
+                    );
                 }
                 answered_once(&received, 30, 0);
                 // The transport's end closed the connection; its undecided
@@ -1233,9 +1571,16 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
                     // The writer is stuck offering an earlier record.
                     valve.grant(0);
                     let (earlier, outcome) = tokio::join!(client.request(server_info(29)), async {
-                        valve.refused(|offer| response(offer, 29) == Some(true)).await;
+                        valve
+                            .refused(|offer| response(offer, 29) == Some(true))
+                            .await;
                         let (outcome, ()) = tokio::join!(client.request(read()), async {
-                            probe.completed.subscribe().wait_for(Option::is_some).await.unwrap();
+                            probe
+                                .completed
+                                .subscribe()
+                                .wait_for(Option::is_some)
+                                .await
+                                .unwrap();
                             assert_eq!(*probe.completed.borrow(), Some(true), "produced");
                             assert!(
                                 !valve.offered(|offer| response(offer, 30).is_some()),
@@ -1348,7 +1693,6 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     bounded(Box::pin(async {
         let f = Fixture::with_tool(Some("present")).await;
         let tool = committed_delivery(&f).await;
@@ -1374,17 +1718,10 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                 },
                 CancellationToken::new(),
             ));
-            let (reader, mut writer) = tokio::io::split(client);
-            let lines = futures_util::stream::unfold(
-                tokio::io::BufReader::new(reader).lines(),
-                |mut lines| async move { lines.next_line().await.unwrap().map(|line| (line, lines)) },
-            );
+            let (reader, writer) = tokio::io::split(client);
+            let lines = driver::lines(tokio::io::BufReader::new(reader));
             let (incoming, received) = recording(lines);
-            let client = driver::Driver::new(incoming, |mut outgoing| async move {
-                while let Some(record) = outgoing.recv().await {
-                    writer.write_all(format!("{record}\n").as_bytes()).await.unwrap();
-                }
-            });
+            let client = driver::Driver::new(incoming, driver::jsonl_sink(writer));
             initialize(&client).await;
             let target = attach(&client, &f).await;
             revocations.waited.send_replace(0);
@@ -1399,7 +1736,10 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                     // is held inside the pipe.
                     valve.writes.arm();
                     valve.grant(usize::MAX);
-                    assert!(success_30(&valve.writes.entered().await), "decided as produced");
+                    assert!(
+                        success_30(&valve.writes.entered().await),
+                        "decided as produced"
+                    );
                     let handle = tokio::runtime::Handle::current();
                     let revoking = tokio::task::spawn_blocking({
                         let (connection, target) = (connection.clone(), target.clone());
@@ -1426,9 +1766,17 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
                     tokio::pin!(revoking);
                     let waited = async {
                         if case == "cancel" {
-                            let _ = probe.cancel_waited.subscribe().wait_for(|waited| *waited).await;
+                            let _ = probe
+                                .cancel_waited
+                                .subscribe()
+                                .wait_for(|waited| *waited)
+                                .await;
                         } else {
-                            let _ = revocations.waited.subscribe().wait_for(|waited| *waited > 0).await;
+                            let _ = revocations
+                                .waited
+                                .subscribe()
+                                .wait_for(|waited| *waited > 0)
+                                .await;
                         }
                     };
                     tokio::select! {
@@ -1609,7 +1957,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     bounded(Box::pin(async {
         const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
         let f = Fixture::with_tool(Some("present")).await;
@@ -1637,7 +1985,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             request.headers_mut().insert(
                 "sec-websocket-protocol",
                 format!(
-                    "rustx.app-server.v49, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
+                    "rustx.app-server.v50, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
                     driver::TOKEN
                 )
                 .parse()
@@ -1646,19 +1994,10 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             let (socket, _) = tokio_tungstenite::client_async(request, client)
                 .await
                 .unwrap();
-            let (mut sink, stream) = socket.split();
-            let texts = stream.filter_map(|message| async move {
-                match message {
-                    Ok(Message::Text(text)) => Some(text.to_string()),
-                    _ => None,
-                }
-            });
+            let (sink, stream) = socket.split();
+            let texts = driver::frames(stream);
             let (incoming, received) = recording(texts);
-            let client = driver::Driver::new(incoming, |mut outgoing| async move {
-                while let Some(record) = outgoing.recv().await {
-                    sink.send(Message::Text(record.into())).await.unwrap();
-                }
-            });
+            let client = driver::Driver::new(incoming, driver::text_sink(sink));
             initialize(&client).await;
             let target = attach(&client, &f).await;
             probe.completed.send_replace(None);
@@ -1771,7 +2110,7 @@ async fn delivery_websocket(
     AttachmentTarget,
 ) {
     use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let (client, server) = tokio::io::duplex(1 << 20);
     let serving = tokio::spawn(websocket::connection(
         Valve {
@@ -1786,7 +2125,7 @@ async fn delivery_websocket(
     request.headers_mut().insert(
         "sec-websocket-protocol",
         format!(
-            "rustx.app-server.v49, rustx-token.{}, rustx-delivery-access.{credential}",
+            "rustx.app-server.v50, rustx-token.{}, rustx-delivery-access.{credential}",
             driver::TOKEN
         )
         .parse()
@@ -1795,19 +2134,10 @@ async fn delivery_websocket(
     let (socket, _) = tokio_tungstenite::client_async(request, client)
         .await
         .unwrap();
-    let (mut sink, stream) = socket.split();
-    let texts = stream.filter_map(|message| async move {
-        match message {
-            Ok(Message::Text(text)) => Some(text.to_string()),
-            _ => None,
-        }
-    });
+    let (sink, stream) = socket.split();
+    let texts = driver::frames(stream);
     let (incoming, received) = recording(texts);
-    let client = driver::Driver::new(incoming, |mut outgoing| async move {
-        while let Some(record) = outgoing.recv().await {
-            sink.send(Message::Text(record.into())).await.unwrap();
-        }
-    });
+    let client = driver::Driver::new(incoming, driver::text_sink(sink));
     initialize(&client).await;
     let target = attach(&client, f).await;
     (client, received, serving, target)
@@ -1952,7 +2282,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             .unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v3, rustx-product-host.{ROTATION_A}")
+            format!("rustx.product-host.file-read.v4, rustx-product-host.{ROTATION_A}")
                 .parse()
                 .unwrap(),
         );
@@ -1969,7 +2299,10 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
                     target: target.clone(),
                     source: crate::app_server::product_host::ReadSource::SessionFile {
                         agent_id: None,
-                        message_id: tool,
+                        locator:
+                            crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                                message_id: tool,
+                            },
                         delivery_index: 0,
                     },
                     roots: vec![f.workspaces[0].clone()],
@@ -2181,5 +2514,1309 @@ async fn authentication_racing_a_rotation_sees_one_side_of_it() {
         assert!(!delivery_token(&f, ROTATION_B).unwrap().is_cancelled());
         f.close().await;
     })
+    .await;
+}
+
+/// The final tungstenite handoff decides cancellation and the substituted error
+/// together. A real TCP WebSocket carries the selected correlated terminal reply.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t07_oversized_controlled_response_keeps_publication_owner_at_websocket_handoff() {
+    use super::protocol::{cancel_delivery, committed_delivery, delivery_request};
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+    bounded(Box::pin(async {
+        let f = Fixture::with_tool(Some("present")).await;
+        let message = committed_delivery(&f).await;
+        for cancel_first in [true, false] {
+            let connection =
+                AppServerConnection::with_delivery_access(f.host.clone(), CancellationToken::new());
+            super::protocol::initialize(&connection).await;
+            let MethodResult::Attached { target, .. } = super::protocol::call(
+                &connection,
+                1,
+                Method::SessionAttach {
+                    session_id: f.sessions[0].id.clone(),
+                    node_id: None,
+                },
+            )
+            .await
+            else {
+                panic!("attached")
+            };
+            let mut reply = connection
+                .reply(delivery_request(30, &target, &message, false))
+                .await;
+            reply.force_encoding_overflow_for_test();
+            let outbound = transport::Outbound::reply(reply).unwrap();
+            if cancel_first {
+                assert!(cancel_delivery(&connection, 30).await);
+            } else {
+                connection.revoke_delivery_access();
+            } // a nonsensitive error keeps its reason
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (client, accepted) = tokio::join!(
+                tokio::net::TcpStream::connect(listener.local_addr().unwrap()),
+                listener.accept()
+            );
+            let socket = websocket::Socket::new(
+                tokio_tungstenite::WebSocketStream::from_raw_socket(
+                    accepted.unwrap().0,
+                    Role::Server,
+                    Some(WebSocketConfig::default().write_buffer_size(0)),
+                )
+                .await,
+            );
+            let mut client = tokio_tungstenite::WebSocketStream::from_raw_socket(
+                client.unwrap(),
+                Role::Client,
+                None,
+            )
+            .await;
+            socket.send(outbound).await.unwrap();
+            let bytes = client.next().await.unwrap().unwrap().into_text().unwrap();
+            let Response::Failure(failure) = serde_json::from_str(&bytes).unwrap() else {
+                panic!("bounded terminal failure")
+            };
+            assert_eq!(failure.id, Some(RequestId::Integer(30)));
+            assert_eq!(
+                failure.error.data,
+                Some(if cancel_first {
+                    ErrorData::DeliveryCancelled
+                } else {
+                    ErrorData::ResponseTooLarge
+                })
+            );
+            assert!(
+                !cancel_delivery(&connection, 30).await,
+                "one terminal disposition at actual handoff"
+            );
+            connection.close();
+        }
+        f.close().await;
+    }))
+    .await;
+}
+
+/// T16: slot -> native replacement is the same boundary as final writer
+/// acceptance. Pending takes zero bytes; replacement fences its next attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t16_pending_receipt_supersession_and_stale_queue_progression() {
+    use crate::app_server::registration::Acceptance;
+    use futures_util::StreamExt;
+    use std::task::Poll;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let MethodResult::Checkpoint { checkpoint } = super::protocol::call(
+            &connection,
+            80,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint")
+        };
+        let request = |id| Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call: Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: checkpoint.cursor,
+            },
+        };
+        let mut r1 = transport::Outbound::reply(connection.reply(request(81)).await).unwrap();
+        assert!(matches!(
+            r1.poll_hand_off::<()>(|_| Poll::Pending),
+            Poll::Pending
+        ));
+        // No event is consumed while its receipt remains unaccepted.
+        let slot = connection.registration_for_test(&target);
+        assert!(slot.following().is_none());
+        let r2 = transport::Outbound::reply(connection.reply(request(82)).await).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, accepted) = tokio::join!(
+            tokio::net::TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept()
+        );
+        let socket = websocket::Socket::new(
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                accepted.unwrap().0,
+                Role::Server,
+                None,
+            )
+            .await,
+        );
+        let mut peer = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            client.unwrap(),
+            Role::Client,
+            None,
+        )
+        .await;
+        socket.send(r1).await.unwrap();
+        let Response::Failure(failure) =
+            serde_json::from_str(&peer.next().await.unwrap().unwrap().into_text().unwrap())
+                .unwrap()
+        else {
+            panic!("superseded")
+        };
+        assert_eq!(failure.id, Some(RequestId::Integer(81)));
+        assert_eq!(failure.error.data, Some(ErrorData::SubscriptionSuperseded));
+        socket.send(r2).await.unwrap();
+        let Response::Success(_) = serde_json::from_str::<Response>(
+            &peer.next().await.unwrap().unwrap().into_text().unwrap(),
+        )
+        .unwrap() else {
+            panic!("new receipt")
+        };
+        let (registration, _) = slot.following().unwrap();
+        let cursor = checkpoint.cursor;
+        let queued = registration.clone().event(cursor);
+        let (resync, _) = registration.clone().recovery();
+        assert!(matches!(
+            queued.hand_off("ordinary", |_| panic!(
+                "RecoveryRequired fenced queued record"
+            )),
+            Acceptance::<()>::Discarded
+        ));
+        assert!(matches!(
+            resync.hand_off("resync", |_| Poll::Ready(Ok(()))),
+            Acceptance::Accepted(_, ())
+        ));
+        // A successor cannot be invalidated by its predecessor's Resync.
+        let r3 = transport::Outbound::reply(connection.reply(request(83)).await).unwrap();
+        assert!(matches!(
+            resync.hand_off("resync", |_| panic!("old resync")),
+            Acceptance::<()>::Discarded
+        ));
+        assert!(matches!(
+            queued.hand_off("ordinary", |_| panic!("retired queue head")),
+            Acceptance::<()>::Discarded
+        ));
+        let stale = transport::Outbound::notification((
+            Notification {
+                jsonrpc: JsonRpcVersion::V2,
+                notification: NotificationMethod::Event {
+                    registration_id: registration.id.clone(),
+                    target: target.clone(),
+                    cursor,
+                    event: Box::new(crate::runtime_client::RuntimeClientEvent::TraceChanged),
+                },
+            },
+            Some(registration.event(cursor)),
+        ))
+        .unwrap();
+        socket.send(stale).await.unwrap(); // discarded final handoff, no Frame
+        socket.send(r3).await.unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Response>(
+                &peer.next().await.unwrap().unwrap().into_text().unwrap()
+            )
+            .unwrap(),
+            Response::Success(_)
+        ));
+        assert!(slot.following().is_some());
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t16_physical_acceptance_wins_before_replacement_no_lock_cycle() {
+    use crate::app_server::registration::Acceptance;
+    use std::{io::Write, task::Poll};
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let MethodResult::Checkpoint { checkpoint } = super::protocol::call(
+            &connection,
+            180,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint")
+        };
+        super::protocol::call(
+            &connection,
+            181,
+            Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: checkpoint.cursor,
+            },
+        )
+        .await;
+        let slot = connection.registration_for_test(&target);
+        let (registration, _) = slot.following().unwrap();
+        let guard = registration.event(checkpoint.cursor);
+        let mut blocked = slot.install_wait_probe();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let accepting = tokio::task::spawn_blocking(move || {
+            let mut write = std::fs::File::from(write);
+            guard.hand_off("{}", |record| {
+                let written = write.write(record.as_bytes()).unwrap();
+                assert!(written > 0); // actual first positive OS pipe write
+                entered.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Poll::Ready(Ok(written))
+            })
+        });
+        entered_rx.await.unwrap();
+        let replacing = connection.clone();
+        let replacement = tokio::spawn(async move {
+            replacing
+                .reply(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(182),
+                    call: Method::SessionSubscribe {
+                        target,
+                        after_cursor: checkpoint.cursor,
+                    },
+                })
+                .await
+        });
+        while !*blocked.borrow_and_update() {
+            blocked.changed().await.unwrap();
+        }
+        // Replacement has reached the real slot and is blocked there; we do
+        // not wait for an interleaving the synchronization boundary forbids.
+        release.send(()).unwrap();
+        assert!(matches!(
+            accepting.await.unwrap(),
+            Acceptance::Accepted(_, 2)
+        ));
+        let successor = replacement.await.unwrap().commit();
+        assert!(matches!(successor, Response::Success(_)));
+        let bytes = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::from(read).read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+        .await
+        .unwrap();
+        assert_eq!(bytes, b"{}");
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+struct FirstByteGate<W> {
+    writer: W,
+    entered: Option<tokio::sync::oneshot::Sender<()>>,
+    release: tokio::sync::oneshot::Receiver<()>,
+    accepted: bool,
+    released: bool,
+}
+impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for FirstByteGate<W> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        use std::task::{Poll, ready};
+        if self.accepted && !self.released {
+            ready!(std::pin::Pin::new(&mut self.release).poll(cx)).map_err(io::Error::other)?;
+            self.released = true;
+        }
+        let offered = if self.accepted {
+            bytes
+        } else {
+            &bytes[..bytes.len().min(1)]
+        };
+        let count = ready!(std::pin::Pin::new(&mut self.writer).poll_write(cx, offered))?;
+        if count > 0 && !self.accepted {
+            self.accepted = true;
+            self.entered.take().unwrap().send(()).unwrap();
+        }
+        Poll::Ready(Ok(count))
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.writer).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.writer).poll_shutdown(cx)
+    }
+}
+
+/// T17: the actual JSONL writer completes its accepted record after native
+/// replacement. A prefix is never complete JSON and cannot be Applied.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t17_partial_os_pipe_record_finishes_after_registration_replacement() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let MethodResult::Checkpoint { checkpoint } = super::protocol::call(
+            &connection,
+            280,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint")
+        };
+        let r1 = connection
+            .reply(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(281),
+                call: Method::SessionSubscribe {
+                    target: target.clone(),
+                    after_cursor: checkpoint.cursor,
+                },
+            })
+            .await;
+        let mut outbound = transport::Outbound::reply(r1).unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        let mut writer = FirstByteGate {
+            writer: tokio::net::unix::pipe::Sender::from_owned_fd(write).unwrap(),
+            entered: Some(entered),
+            release: release_rx,
+            accepted: false,
+            released: false,
+        };
+        let writing = tokio::spawn(async move {
+            stdio::write_outbound(&mut writer, &mut outbound)
+                .await
+                .unwrap();
+        });
+        entered_rx.await.unwrap();
+        let mut read = std::fs::File::from(read);
+        let (read, prefix) = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut prefix = [0; 1];
+            read.read_exact(&mut prefix).unwrap();
+            (read, prefix)
+        })
+        .await
+        .unwrap();
+        assert!(serde_json::from_slice::<Response>(&prefix).is_err());
+        assert!(
+            connection
+                .registration_for_test(&target)
+                .following()
+                .is_some()
+        );
+        super::protocol::call(
+            &connection,
+            282,
+            Method::SessionSubscribe {
+                target,
+                after_cursor: checkpoint.cursor,
+            },
+        )
+        .await;
+        release.send(()).unwrap();
+        writing.await.unwrap();
+        let remainder = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut read = read;
+            let mut remaining = vec![];
+            read.read_to_end(&mut remaining).unwrap();
+            remaining
+        })
+        .await
+        .unwrap();
+        let bytes = [prefix.to_vec(), remainder].concat();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let Response::Success(response) = serde_json::from_slice::<Response>(&bytes).unwrap()
+        else {
+            panic!("accepted record must not be replaced mid-record")
+        };
+        assert_eq!(response.id, RequestId::Integer(281));
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+/// A sustained saturation deadline retires queued records, but the real OS
+/// pipe still owns its accepted prefix and must finish that exact record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_record() {
+    use tokio::io::AsyncWriteExt;
+    bounded(async {
+        eprintln!("T17 saturation deadline: fixture");
+        let fixture = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        super::protocol::initialize(&connection).await;
+        eprintln!("T17 saturation deadline: initialized");
+        let (reader, mut input) = tokio::io::duplex(65_536);
+        // The malformed record produces a bounded native error immediately,
+        // before the initial source notification can become the writer head.
+        input.write_all(b"{\n").await.unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        let writer = FirstByteGate {
+            writer: tokio::net::unix::pipe::Sender::from_owned_fd(write).unwrap(),
+            entered: Some(entered),
+            release: release_rx,
+            accepted: false,
+            released: false,
+        };
+        let incoming = futures_util::stream::try_unfold(
+            tokio::io::BufReader::new(reader),
+            |mut reader| async move {
+                use tokio::io::AsyncBufReadExt;
+                let mut line = String::new();
+                Ok((reader.read_line(&mut line).await? != 0)
+                    .then(|| (line.trim_end_matches('\n').to_owned(), reader)))
+            },
+        );
+        // Hold the physical writer by a channel, independently of its normal
+        // deadline, to prove that the queue deadline still joins this record.
+        let (closed, close_watch) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(transport::serve_for_test(
+            connection.clone(),
+            incoming,
+            move |mut outgoing| async move {
+                assert!(closed.send(outgoing.retirement_watch()).is_ok());
+                let mut writer = writer;
+                while let Some(mut outbound) = outgoing.next().await {
+                    stdio::write_outbound(&mut writer, &mut outbound).await?;
+                }
+                Ok(())
+            },
+            CancellationToken::new(),
+        ));
+        let mut retirement = close_watch.await.unwrap();
+        entered_rx.await.unwrap();
+        eprintln!("T17 saturation deadline: positive prefix accepted");
+        let reader = std::fs::File::from(read);
+        let (reader, prefix) = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut reader = reader;
+            let mut prefix = [0; 1];
+            reader.read_exact(&mut prefix).unwrap();
+            (reader, prefix)
+        })
+        .await
+        .unwrap();
+        assert!(serde_json::from_slice::<Response>(&prefix).is_err());
+        eprintln!("T17 saturation deadline: incomplete prefix read");
+        // All 32 queue slots fill while the real accepted remainder is gated.
+        // One further reply waits on the same fixed queue deadline, without
+        // any EOF or shutdown. It never adds an encoded buffer.
+        input
+            .write_all("{\n".repeat(transport::OUTBOUND_MESSAGES + 1).as_bytes())
+            .await
+            .unwrap();
+        eprintln!("T17 saturation deadline: 33 replies fed");
+        retirement.retired().await;
+        assert!(connection.closed_for_test());
+        assert!(
+            !serving.is_finished(),
+            "overflow must retain the accepted writer"
+        );
+        eprintln!("T17 saturation deadline: retired before writer completion");
+        release.send(()).unwrap();
+        let error = serving.await.unwrap().unwrap_err();
+        eprintln!("T17 saturation deadline: writer joined: {error}");
+        assert_eq!(error.to_string(), "outbound capacity deadline exceeded");
+        let remainder = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut reader = reader;
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+        .await
+        .unwrap();
+        eprintln!("T17 saturation deadline: physical pipe EOF");
+        let bytes = [prefix.to_vec(), remainder].concat();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert!(!bytes[..bytes.len() - 1].contains(&b'\n'));
+        let Response::Failure(response) = serde_json::from_slice::<Response>(&bytes).unwrap()
+        else {
+            panic!("the exact original parse failure must finish")
+        };
+        assert_eq!(response.id, None);
+        assert_eq!(response.error.code, -32700);
+        assert!(fixture.provider.request_bodies().is_empty());
+        fixture.close().await;
+        eprintln!("T17 saturation deadline: cleanup complete");
+    })
+    .await;
+}
+
+/// A real JSONL carrier retires an offered but unaccepted reply without
+/// waiting for the blocked pipe to become writable, on EOF or shutdown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t17_stdio_teardown_retires_unaccepted_record_without_write_readiness() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    bounded(async {
+        for eof in [true, false] {
+            eprintln!("T17 teardown eof={eof}: fixture");
+            let fixture = Fixture::new().await;
+            let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+            super::protocol::initialize(&connection).await;
+            let valve = ValveControl::new();
+            let stop = CancellationToken::new();
+            let (mut input, reader) = tokio::io::duplex(65_536);
+            let (writer, output) = tokio::io::duplex(65_536);
+            let serving = tokio::spawn(stdio::serve(
+                connection.clone(),
+                reader,
+                Valve {
+                    inner: writer,
+                    control: valve.clone(),
+                },
+                stop.clone(),
+            ));
+            // Drive the real carrier with its writer open, then parse the
+            // warmup reply and initial source notice before closing the valve.
+            // Neither may become an unrelated blocked queue head.
+            input
+                .write_all(
+                    format!("{}\n", serde_json::to_string(&server_info(290)).unwrap()).as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut output = tokio::io::BufReader::new(output);
+            let (mut replied, mut noticed) = (false, false);
+            while !replied || !noticed {
+                let mut initial = String::new();
+                assert!(output.read_line(&mut initial).await.unwrap() > 0);
+                if response(initial.as_bytes(), 290) == Some(true) {
+                    assert!(!replied);
+                    replied = true;
+                } else {
+                    let notice: serde_json::Value = serde_json::from_str(&initial).unwrap();
+                    assert_eq!(notice["jsonrpc"], "2.0");
+                    assert_eq!(notice["method"], "configuration/sourceRepairChanged");
+                    assert_eq!(
+                        notice["params"]["target"],
+                        serde_json::json!({ "kind": "user" })
+                    );
+                    assert_eq!(notice["params"]["receipt"], serde_json::Value::Null);
+                    assert_eq!(notice["params"]["sequence"], "0");
+                    assert!(!noticed);
+                    noticed = true;
+                }
+            }
+            // The peer can read the preceding delimiter before poll_write
+            // updates its counter. Joining its state lock closes acceptance
+            // and includes that completed write in the baseline.
+            valve.grant(0);
+            let accepted_before = valve.written();
+            assert!(accepted_before > 0);
+            input
+                .write_all(
+                    format!("{}\n", serde_json::to_string(&server_info(291)).unwrap()).as_bytes(),
+                )
+                .await
+                .unwrap();
+            eprintln!("T17 teardown eof={eof}: request sent; waiting for zero-byte offer");
+            let offered = valve.refused(|_| true).await;
+            assert_eq!(
+                response(&offered, 291),
+                Some(true),
+                "the first zero-byte offer must be the exact correlated reply: {}",
+                String::from_utf8_lossy(&offered[..offered.len().min(4096)])
+            );
+            eprintln!("T17 teardown eof={eof}: zero-byte offer witnessed");
+            assert_eq!(valve.written(), accepted_before, "no reply bytes accepted");
+            if eof {
+                input.shutdown().await.unwrap();
+            } else {
+                stop.cancel();
+            }
+            eprintln!("T17 teardown eof={eof}: carrier retirement signalled; waiting for serve");
+            serving.await.unwrap().unwrap();
+            eprintln!("T17 teardown eof={eof}: serve complete");
+            assert!(connection.closed_for_test());
+            let mut bytes = Vec::new();
+            output.read_to_end(&mut bytes).await.unwrap();
+            eprintln!("T17 teardown eof={eof}: output EOF");
+            assert!(
+                bytes.is_empty(),
+                "teardown cannot accept a new terminal record"
+            );
+            assert_eq!(valve.written(), accepted_before);
+            assert!(fixture.provider.request_bodies().is_empty());
+            fixture.close().await;
+            eprintln!("T17 teardown eof={eof}: fixture closed");
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t17_stdio_input_eof_finishes_the_physically_accepted_output_record() {
+    use tokio::io::AsyncWriteExt;
+    bounded(async {
+        let fixture = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &fixture, 0).await;
+        let MethodResult::Checkpoint { checkpoint } = super::protocol::call(
+            &connection,
+            290,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint");
+        };
+        let (input, mut incoming) = tokio::io::duplex(65_536);
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        let writer = FirstByteGate {
+            writer: tokio::net::unix::pipe::Sender::from_owned_fd(write).unwrap(),
+            entered: Some(entered),
+            release: release_rx,
+            accepted: false,
+            released: false,
+        };
+        let serving = tokio::spawn(stdio::serve(
+            connection.clone(),
+            input,
+            writer,
+            CancellationToken::new(),
+        ));
+        let request = Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(291),
+            call: Method::SessionSubscribe {
+                target,
+                after_cursor: checkpoint.cursor,
+            },
+        };
+        let mut record = serde_json::to_vec(&request).unwrap();
+        record.push(b'\n');
+        incoming.write_all(&record).await.unwrap();
+        entered_rx.await.unwrap();
+        let reader = std::fs::File::from(read);
+        let (reader, prefix) = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut reader = reader;
+            let mut prefix = [0; 1];
+            reader.read_exact(&mut prefix).unwrap();
+            (reader, prefix)
+        })
+        .await
+        .unwrap();
+        assert!(serde_json::from_slice::<serde_json::Value>(&prefix).is_err());
+        incoming.shutdown().await.unwrap();
+        while !connection.closed_for_test() {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !serving.is_finished(),
+            "input EOF must preserve accepted output ownership"
+        );
+        release.send(()).unwrap();
+        serving.await.unwrap().unwrap();
+        let remainder = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut reader = reader;
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+        .await
+        .unwrap();
+        let bytes = [prefix.to_vec(), remainder].concat();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let first = bytes.split(|byte| *byte == b'\n').next().unwrap();
+        serde_json::from_slice::<serde_json::Value>(first).unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
+struct PendingWriteProbe<W> {
+    writer: W,
+    entered: Option<tokio::sync::oneshot::Sender<()>>,
+}
+impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PendingWriteProbe<W> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let result = std::pin::Pin::new(&mut self.writer).poll_write(cx, bytes);
+        if result.is_pending()
+            && let Some(entered) = self.entered.take()
+        {
+            let _ = entered.send(());
+        }
+        result
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.writer).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.writer).poll_shutdown(cx)
+    }
+}
+
+/// T16: an actual full OS pipe proves Pending accepted zero bytes. Native
+/// replacement wakes and discards the stale head without pipe readiness.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
+    Box::pin(bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let slot = connection.registration_for_test(&target);
+        let (registration, _) = slot.following().unwrap();
+        let cursor = crate::runtime_client::types::RuntimeClientCursor::new(0);
+        let mut outbound = transport::Outbound::notification((
+            Notification {
+                jsonrpc: JsonRpcVersion::V2,
+                notification: NotificationMethod::Event {
+                    registration_id: registration.id.clone(),
+                    target: target.clone(),
+                    cursor,
+                    event: Box::new(crate::runtime_client::RuntimeClientEvent::TraceChanged),
+                },
+            },
+            Some(registration.event(cursor)),
+        ))
+        .unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
+        let sender = tokio::net::unix::pipe::Sender::from_owned_fd(write).unwrap();
+        sender.writable().await.unwrap();
+        let fill = [b'x'; 8192];
+        let mut filled = 0;
+        for bytes in [&fill[..], b"x".as_slice()] {
+            loop {
+                match nix::unistd::write(&sender, bytes) {
+                    Ok(count) => {
+                        assert!(count > 0);
+                        filled += count;
+                    }
+                    Err(nix::errno::Errno::EAGAIN) => break,
+                    Err(error) => panic!("fill pipe: {error}"),
+                }
+            }
+        }
+        assert!(filled > 0);
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let mut writer = PendingWriteProbe {
+            writer: sender,
+            entered: Some(entered),
+        };
+        let writing = tokio::spawn(async move {
+            stdio::write_outbound(&mut writer, &mut outbound)
+                .await
+                .unwrap();
+        });
+        entered_rx.await.unwrap();
+        let MethodResult::Checkpoint { checkpoint } = super::protocol::call(
+            &connection,
+            382,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint");
+        };
+        super::protocol::call(
+            &connection,
+            383,
+            Method::SessionSubscribe {
+                target,
+                after_cursor: checkpoint.cursor,
+            },
+        )
+        .await;
+        // The reader remains untouched. Completion is possible only because
+        // replacement woke the writer and fenced its unaccepted notification.
+        writing.await.unwrap();
+        let bytes = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::from(read).read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+        .await
+        .unwrap();
+        assert_eq!(bytes.len(), filled);
+        assert!(bytes.iter().all(|byte| *byte == b'x'));
+        connection.close();
+        f.close().await;
+    }))
+    .await;
+}
+
+/// T17: positive physical acceptance is not client application. Disconnecting
+/// with a partial Event replays that exact native cursor from the local cut.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t17_partial_event_disconnect_replays_from_locally_applied_cursor() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let MethodResult::Checkpoint { checkpoint } = super::protocol::call(
+            &connection,
+            701,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint");
+        };
+        super::protocol::call(
+            &connection,
+            702,
+            Method::SessionSubscribe {
+                target: target.clone(),
+                after_cursor: checkpoint.cursor,
+            },
+        )
+        .await;
+        let mut applied = checkpoint.cursor;
+        super::protocol::call(
+            &connection,
+            703,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "partial event recovery".into(),
+                })],
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        let candidate = loop {
+            let candidate = connection.next_notification_candidate().await;
+            if matches!(&candidate.0.notification, NotificationMethod::Event { .. }) {
+                break candidate;
+            }
+        };
+        let NotificationMethod::Event { cursor, event, .. } = &candidate.0.notification else {
+            unreachable!()
+        };
+        let delivered_cursor = *cursor;
+        let delivered_event = event.clone();
+        assert_eq!(delivered_cursor.get(), applied.get() + 1);
+        let mut outbound = transport::Outbound::notification(candidate).unwrap();
+        // Parallel process fixtures must not inherit this pipe and postpone EOF.
+        let (read, write) = std::io::pipe().unwrap();
+        let read: std::os::fd::OwnedFd = read.into();
+        let write: std::os::fd::OwnedFd = write.into();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (_release, release_rx) = tokio::sync::oneshot::channel();
+        let mut writer = FirstByteGate {
+            writer: tokio::net::unix::pipe::Sender::from_owned_fd(write).unwrap(),
+            entered: Some(entered),
+            release: release_rx,
+            accepted: false,
+            released: false,
+        };
+        let writing =
+            tokio::spawn(async move { stdio::write_outbound(&mut writer, &mut outbound).await });
+        entered_rx.await.unwrap();
+        let mut read = std::fs::File::from(read);
+        let prefix = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut prefix = [0; 1];
+            read.read_exact(&mut prefix).unwrap();
+            prefix
+        })
+        .await
+        .unwrap(); // reader closes physically after the one accepted byte
+        assert!(serde_json::from_slice::<Notification>(&prefix).is_err());
+        assert_eq!(
+            connection.registration_for_test(&target).accepted_cursor(),
+            Some(delivered_cursor)
+        );
+        assert_eq!(applied, checkpoint.cursor);
+        writing.abort();
+        assert!(writing.await.unwrap_err().is_cancelled()); // no residual pipe write survives
+        connection.close();
+        let runtime = f.manager.load(&target.session_id, None).await.unwrap();
+        assert!(runtime.inspect_runtime().unwrap().has_current_attempt());
+        assert_eq!(runtime.incarnation_id(), target.runtime_incarnation);
+        let replacement = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&replacement).await;
+        let MethodResult::Attached {
+            target: successor, ..
+        } = super::protocol::call(
+            &replacement,
+            704,
+            Method::SessionAttach {
+                session_id: target.session_id,
+                node_id: None,
+            },
+        )
+        .await
+        else {
+            panic!("identity receipt");
+        };
+        assert_eq!(successor.runtime_incarnation, target.runtime_incarnation);
+        super::protocol::call(
+            &replacement,
+            705,
+            Method::SessionSubscribe {
+                target: successor,
+                after_cursor: applied,
+            },
+        )
+        .await;
+        let recovered = loop {
+            let notification = replacement.next_notification().await;
+            if matches!(&notification.notification, NotificationMethod::Event { .. }) {
+                break notification;
+            }
+        };
+        let record = serde_json::to_string(&recovered).unwrap();
+        let parsed: Notification = serde_json::from_str(&record).unwrap();
+        let NotificationMethod::Event { cursor, event, .. } = parsed.notification else {
+            unreachable!()
+        };
+        assert_eq!(cursor.get(), applied.get() + 1);
+        assert_eq!(cursor, delivered_cursor);
+        assert_eq!(event, delivered_event);
+        let crate::runtime_client::RuntimeClientEvent::ProjectionTransition { metadata, .. } =
+            &*event
+        else {
+            panic!("complete native fold transition");
+        };
+        assert_eq!(metadata.read_cut.revision, cursor.get());
+        applied = cursor; // only the complete parsed contiguous native transition advances it
+        assert_eq!(applied, delivered_cursor);
+        f.gates[0].release();
+        replacement.close();
+        f.close().await;
+    })
+    .await;
+}
+
+/// T16/T17: tungstenite owns the Frame even when its immediate stream write
+/// fails. That acceptance commits once; it is not evidence of client application.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t16_t17_websocket_frame_handoff_precedes_physical_write_failure() {
+    use tokio::io::AsyncWriteExt;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        super::protocol::initialize(&connection).await;
+        let target = super::protocol::attach(&connection, &f, 0).await;
+        let MethodResult::Checkpoint { checkpoint } = super::protocol::call(
+            &connection,
+            710,
+            Method::SessionCheckpoint {
+                target: target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("checkpoint");
+        };
+        let receipt = transport::Outbound::reply(
+            connection
+                .reply(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(711),
+                    call: Method::SessionSubscribe {
+                        target: target.clone(),
+                        after_cursor: checkpoint.cursor,
+                    },
+                })
+                .await,
+        )
+        .unwrap();
+        assert!(
+            connection
+                .registration_for_test(&target)
+                .following()
+                .is_none()
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, server) = tokio::join!(
+            tokio::net::TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept()
+        );
+        let mut stream = server.unwrap().0;
+        stream.shutdown().await.unwrap(); // subsequent actual kernel write is refused
+        let socket = websocket::Socket::new(
+            tokio_tungstenite::WebSocketStream::from_raw_socket(stream, Role::Server, None).await,
+        );
+        assert!(socket.send(receipt).await.is_err());
+        assert!(
+            connection
+                .registration_for_test(&target)
+                .following()
+                .is_some(),
+            "the Frame handoff precedes its I/O failure"
+        );
+        let mut client = client.unwrap();
+        let mut bytes = vec![];
+        tokio::io::AsyncReadExt::read_to_end(&mut client, &mut bytes)
+            .await
+            .unwrap();
+        assert!(
+            bytes.is_empty(),
+            "the client cannot apply an unreceived Frame"
+        );
+        drop(socket);
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+async fn read_effective_configuration_bytes(
+    client: &impl AppServerConformanceDriver,
+    target: &AttachmentTarget,
+    reference: &crate::local_runtime::configuration::effective_observation::EffectiveFieldRef,
+) -> Vec<u8> {
+    use base64::Engine as _;
+    let mut bytes = Vec::new();
+    let mut offset = 0;
+    loop {
+        let MethodResult::ConfigurationValueChunk { chunk } = call(
+            client,
+            102,
+            Method::ConfigurationValueRead {
+                target: target.clone(),
+                reference: reference.clone(),
+                offset,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("correlated native field range");
+        };
+        assert_eq!(&chunk.reference, reference);
+        assert_eq!(chunk.offset, offset);
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&chunk.data_base64)
+            .unwrap();
+        assert!(!decoded.is_empty());
+        assert!(decoded.len() <= 65_536);
+        bytes.extend(decoded);
+        let Some(next) = chunk.next_offset else { break };
+        assert!(next > offset);
+        offset = next;
+    }
+    assert_eq!(u64::try_from(bytes.len()).unwrap(), reference.byte_length);
+    bytes
+}
+
+async fn await_effective_read_execution(
+    client: &impl AppServerConformanceDriver,
+    target: &AttachmentTarget,
+) {
+    loop {
+        if let NotificationMethod::Event {
+            target: delivered,
+            event,
+            ..
+        } = client.next_notification().await.notification
+            && &delivered == target
+            && event.facts().iter().any(|fact| {
+                matches!(
+                    fact,
+                    crate::runtime_client::RuntimeClientEvent::AttemptSettled { .. }
+                )
+            })
+        {
+            break;
+        }
+    }
+}
+
+async fn start_effective_read_secondary(
+    client: &impl AppServerConformanceDriver,
+    f: &Fixture,
+) -> AttachmentTarget {
+    let MethodResult::Attached { target, .. } = call(
+        client,
+        106,
+        Method::SessionAttach {
+            session_id: f.sessions[1].id.clone(),
+            node_id: None,
+        },
+    )
+    .await
+    else {
+        panic!("secondary identity");
+    };
+    let MethodResult::Checkpoint { checkpoint } = call(
+        client,
+        107,
+        Method::SessionCheckpoint {
+            target: target.clone(),
+            trace_records: vec![],
+        },
+    )
+    .await
+    else {
+        panic!("secondary native checkpoint");
+    };
+    call(
+        client,
+        108,
+        Method::SessionSubscribe {
+            target: target.clone(),
+            after_cursor: checkpoint.cursor,
+        },
+    )
+    .await;
+    call(
+        client,
+        109,
+        Method::TurnStart {
+            target: target.clone(),
+            content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                text: "request-B: unrelated execution across configuration reads".into(),
+            })],
+        },
+    )
+    .await;
+    f.gates[1].wait_entered().await;
+    target
+}
+
+/// Every target-scoped read must reach its runtime route, including the
+/// continuation methods whose public getter has already returned a descriptor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t11_t15_effective_configuration_ranges_survive_model_commit_on_real_websocket() {
+    use crate::local_runtime::configuration::effective_observation::EffectiveFieldName;
+    use crate::model::{catalog::ModelRef, session::SessionModelConfig};
+    bounded(Box::pin(async {
+        let f = Fixture::new().await;
+        let (client, serving) = connected(&f, true).await;
+        initialize(&client).await;
+        let target = attach(&client, &f).await;
+        let secondary = start_effective_read_secondary(&client, &f).await;
+        let mut config = SessionModelConfig::of(ModelRef::parse("local/a").unwrap());
+        config
+            .request_params
+            .insert("range".into(), serde_json::json!("é\\\"".repeat(40_000)));
+        assert!(matches!(
+            call(
+                &client,
+                100,
+                Method::ModelSet {
+                    target: target.clone(),
+                    config: Box::new(config),
+                }
+            )
+            .await,
+            MethodResult::ModelSet { .. }
+        ));
+        let MethodResult::EffectiveConfiguration { projection } = call(
+            &client,
+            101,
+            Method::ConfigurationGet {
+                target: target.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("bounded configuration");
+        };
+        let reference = projection
+            .fields
+            .iter()
+            .filter_map(|field| field.reference.as_ref())
+            .find(|reference| reference.field == EffectiveFieldName::EffectiveModel)
+            .unwrap()
+            .clone();
+        assert!(reference.byte_length > 65_536);
+        let bytes = read_effective_configuration_bytes(&client, &target, &reference).await;
+        let original: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            original["configured"]["requestParams"]["range"],
+            "é\\\"".repeat(40_000)
+        );
+        let MethodResult::ConfigurationPage { page } = call(
+            &client,
+            103,
+            Method::ConfigurationPage {
+                target: target.clone(),
+                revision: projection.revision.clone(),
+                field: EffectiveFieldName::Provenance,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("correlated configuration continuation");
+        };
+        assert_eq!(page.revision, projection.revision);
+        assert!(page.items.len() <= 32);
+        assert!(matches!(
+            call(&client, 104, Method::ServerInfo {}).await,
+            MethodResult::ServerInfo { .. }
+        ));
+        f.gates[1].release();
+        await_effective_read_execution(&client, &secondary).await;
+        assert!(!serving.is_finished(), "field reads keep the carrier alive");
+        client.close().await;
+        // Driver::close deliberately aborts its socket pumps; the resulting
+        // reset is fixture teardown, after every correlated progress assertion.
+        let _ = serving.await.unwrap();
+        f.close().await;
+    }))
     .await;
 }

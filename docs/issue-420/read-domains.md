@@ -117,9 +117,10 @@ Actual storage errors remain typed RuntimeFailure, but ordinary progress is not
 an error and no diagnostic string controls retry behavior. No protocol change is
 needed.
 
-SnapshotGet, App Server snapshots and attachment initialization share this native
-candidate. Attachment allocation/control fencing remains under its original mutex,
-and registration uses the candidate's exact C. The background read owner separately
+Runtime Client CheckpointGet and public session/checkpoint share this native
+candidate and bounded descriptor materialization. Root attachment returns an
+identity receipt; checkpoint loading is independent. Attachment allocation/control
+fencing remains under its original mutex, and registration uses the candidate's exact C. The background read owner separately
 validates revision/frontier before live installation: stale for installation does
 not mean invalid for an already captured request.
 
@@ -218,17 +219,19 @@ fallback Trace signals were removed. The real queue/batch regression coalesces
 Attempt start, Turn start and Tool start while proving all Session events survive.
 
 Web `trace_changed` performs its own coalesced `session/trace` read, never a
-`session/snapshot` read. `read_domains_updated` updates Session only. During a
+checkpoint read. `read_domains_updated` updates Session only. During a
 snapshot acquisition, both overlapping events and resync retain the subscribe
 requirement. Resync additionally marks the old continuation untrusted. The acquired
 snapshot installs N, then registers after exactly N, with existing target/generation
-fencing. Native transport can emit registered replay before the subscribe ACK.
-The existing refresh owner consumes contiguous events above the acquired N while
-controls remain resynchronizing: the old exhausted registration cannot emit N+1,
-and any in-flight old event at/below N is a duplicate. This needs no browser event
-buffer or extra recovery machine. Only the ACK enables attached controls.
-A rejected bounded replay retries authoritative acquisition at most three
-times; failure leaves the attachment stale. Mutations are never replayed.
+fencing. The new registration remains PendingReceipt until its bounded receipt is
+physically accepted; only then may ordinary replay events be accepted. The client
+installs the receipt before folding its buffered contiguous events. The old
+RecoveryRequired registration fences all unaccepted ordinary events,
+and any completely parsed event at/below N is a duplicate. The client
+SubscribePending buffer is bounded to 32 records and advances Applied Cursor
+only after successful contiguous fold. Authoritative checkpoint acquisition
+shares two attempts and one five-second materialization budget. A failed repair
+remains explicit; mutations are never automatically replayed.
 
 The fixed long rendering measurement lives in
 `test/incremental-performance.measurement.tsx`, selected only by

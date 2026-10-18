@@ -38,7 +38,13 @@ async fn unproven_control_or_cleanup_terminal_blocks_live_and_recovered_agent() 
     #[derive(Default)]
     struct OwnerObserver(Mutex<Vec<(Option<AgentSnapshot>, SubagentSnapshot)>>);
     impl SubagentObserver for OwnerObserver {
-        fn on_snapshot(&self, agent: Option<&AgentSnapshot>, activation: &SubagentSnapshot) {
+        fn on_snapshot(
+            &self,
+            agent: Option<&AgentSnapshot>,
+            activation: &SubagentSnapshot,
+            _cut: crate::runtime::identity::ObservationCollectionCut,
+            _ordinal: Option<u64>,
+        ) {
             self.0
                 .lock()
                 .unwrap()
@@ -125,8 +131,14 @@ async fn parked_recovery_probe_does_not_hold_registry_mutex() {
     let plane = plane(4);
     let child = stage_with_unresolved_anchor(&plane);
     let accepted = start(&plane, &spec("unproven recovery probe")).await;
-    child.complete(ChildResultStatus::Succeeded, Some("unproven")).await;
-    plane.registry.wait_until_settled(&accepted.subagent_id).await.unwrap();
+    child
+        .complete(ChildResultStatus::Succeeded, Some("unproven"))
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .unwrap();
     // Restore without a Tokio executor: this fixture explicitly owns the probe
     // and competing pass below. Otherwise restore starts an independent periodic
     // reconciler whose brief claim lock can race try_lock even while our hook is
@@ -137,7 +149,9 @@ async fn parked_recovery_probe_does_not_hold_registry_mutex() {
         let recovered = SubagentRegistry::new(config);
         recovered.restore_agents(store.as_ref()).unwrap();
         recovered
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
     let (entered, entry) = tokio::sync::oneshot::channel();
     let (release, released) = std::sync::mpsc::sync_channel(0);
     recovered.state.lock().unwrap().recovery_probe_hook = Some(Box::new(move || {
@@ -147,10 +161,22 @@ async fn parked_recovery_probe_does_not_hold_registry_mutex() {
     let probing = recovered.clone();
     let task = std::thread::spawn(move || probing.reconcile_recovered_settlements());
     entry.await.unwrap();
-    assert!(recovered.state.try_lock().is_ok(), "probe holds its exact claim, not the registry mutex");
+    assert!(
+        recovered.state.try_lock().is_ok(),
+        "probe holds its exact claim, not the registry mutex"
+    );
     assert_eq!(recovered.list_agents(MAX_AGENT_LIST_LIMIT).matched, 1);
-    assert_eq!(recovered.agent_snapshot(&accepted.child_agent_id).unwrap().state, AgentState::Unavailable);
-    assert!(matches!(recovered.interrupt_agent(&accepted.child_agent_id).await, Err(AgentControlError::Settlement)));
+    assert_eq!(
+        recovered
+            .agent_snapshot(&accepted.child_agent_id)
+            .unwrap()
+            .state,
+        AgentState::Unavailable
+    );
+    assert!(matches!(
+        recovered.interrupt_agent(&accepted.child_agent_id).await,
+        Err(AgentControlError::Settlement)
+    ));
     // A concurrent pass sees the claim and returns without probing/committing
     // the same activation. No elapsed delay determines either ordering.
     recovered.reconcile_recovered_settlements();
@@ -175,19 +201,30 @@ fn recovered_activation_constructors_preserve_domain_defaults() {
         started_at: Utc::now(),
         workspace: plane.dir.path().join("workspace"),
     };
-    for ownership in [SubagentOwnershipKind::Normal, SubagentOwnershipKind::Workflow] {
+    for ownership in [
+        SubagentOwnershipKind::Normal,
+        SubagentOwnershipKind::Workflow,
+    ] {
         evidence.ownership = ownership;
         let record = SubagentRecord::recovered(AgentId::new("parent"), &evidence).unwrap();
         assert_eq!(record.ownership, ownership);
-        assert_eq!(record.delegate_delivery, DelegateDelivery::Started,
-            "replay proves neither non-delivery nor canonical input acceptance");
+        assert_eq!(
+            record.delegate_delivery,
+            DelegateDelivery::Started,
+            "replay proves neither non-delivery nor canonical input acceptance"
+        );
         assert!(!record.physical_settlement_proven);
         assert!(record.terminal.is_none() && record.control.is_none() && record.profile.is_none());
         assert!(record.steer_tickets.is_empty());
         assert_eq!(record.lifecycle, SubagentLifecycle::Interrupted);
-        assert_eq!(record.notification, if ownership == SubagentOwnershipKind::Normal {
-            NotificationState::Delivered
-        } else { NotificationState::None });
+        assert_eq!(
+            record.notification,
+            if ownership == SubagentOwnershipKind::Normal {
+                NotificationState::Delivered
+            } else {
+                NotificationState::None
+            }
+        );
     }
 }
 

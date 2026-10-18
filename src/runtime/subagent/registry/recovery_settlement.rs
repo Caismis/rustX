@@ -425,7 +425,7 @@ impl SubagentRegistry {
             }
             state.recovery_pending.remove(&activation);
             state.recovery_inflight.remove(&activation);
-            publish_committed_snapshot(&mut state, &self.state_version, index, committed.sequence);
+            publish_committed_snapshot(&mut state, &self.state_version, index, &committed);
             // A physical proof creates no new inbound message. Explicitly wake
             // the existing idle coordinator so an active Goal can re-evaluate.
             self.config.mailbox.wake().notify_one();

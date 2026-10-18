@@ -125,16 +125,8 @@ impl ContributionStart {
         observer: &dyn crate::agent::AgentExecutionObserver,
         attempt: &crate::runtime::identity::AttemptId,
         turn: u32,
+        source: Option<&crate::durable::inbox::StatusObservationSource>,
     ) {
-        if let Some(ContributionPresentation::AgentStatus(status)) = &self.presentation {
-            observer.observe_status(&crate::agent::AgentStatusObservation {
-                attempt_id: attempt.clone(),
-                turn,
-                status_message_id: self.message_id.clone(),
-                opportunities: self.opportunities.clone(),
-                post_tool_batch_anchor: self.post_tool_batch_anchor,
-                status: status.clone(),
-            });
-        }
+        observer.observe_contribution_status(self, attempt, turn, source);
     }
 }

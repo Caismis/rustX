@@ -13,6 +13,20 @@ fn run(root: &Path, arguments: &[impl AsRef<std::ffi::OsStr>]) -> Output {
         .expect("Rust configuration command")
 }
 
+// A real owned repository boundary preserves default workspace discovery
+// without letting unrelated ancestor markers select the host's /tmp workspace.
+fn isolate_workspace(root: &Path) {
+    let workspace = root.join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let git = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(&workspace)
+        .env("HOME", root.join("home"))
+        .output()
+        .expect("initialize the fixture's Git workspace");
+    assert!(git.status.success(), "fixture Git workspace initializes");
+}
+
 fn report(output: &Output, exit: i32) -> serde_json::Value {
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     assert_eq!(
@@ -120,7 +134,7 @@ workflows = ['human_plan']
 #[test]
 fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    isolate_workspace(root.path());
     let incomplete = report(
         &run(root.path(), &["config", "show", "--sources", "--json"]),
         3,
@@ -220,7 +234,7 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
 #[test]
 fn cfg235_binary_doctor_discloses_plan_and_preserves_mixed_results() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    isolate_workspace(root.path());
     let user = root.path().join("home/rustx");
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
@@ -279,7 +293,7 @@ fn cfg235_binary_doctor_discloses_plan_and_preserves_mixed_results() {
 #[test]
 fn cfg275_agent_inspection_and_removed_flags_are_offline() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    isolate_workspace(root.path());
     let user = root.path().join("home/rustx");
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
@@ -444,7 +458,7 @@ fn cli09_internal_child_rejects_all_extra_arguments() {
 fn exact_values_reach_native_process_owners() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
-    std::fs::create_dir(&workspace).unwrap();
+    isolate_workspace(root.path());
     // The trimmed path names an invalid document; only the exact path is valid.
     let exact = workspace.join("settings.toml ");
     std::fs::write(workspace.join("settings.toml"), "unknown_field = true").unwrap();
@@ -632,7 +646,7 @@ fn os_argv_non_unicode_config_selects_exact_file() {
 
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
-    std::fs::create_dir(&workspace).unwrap();
+    isolate_workspace(root.path());
     let exact = workspace.join(OsString::from_vec(b"settings-\xff.toml".to_vec()));
     let lossy = std::path::PathBuf::from(exact.to_string_lossy().into_owned());
     assert_ne!(exact, lossy);

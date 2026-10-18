@@ -431,6 +431,8 @@ mod tests {
         event: RuntimeEvent,
     ) -> RuntimeEventEnvelope {
         RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(id),
             sequence: 0,
@@ -537,6 +539,7 @@ mod tests {
         {
             let mut writer = artifacts.open_writer(&id).unwrap();
             writer.write_all(&vec![b'x'; 1024]).unwrap();
+            writer.finish().unwrap();
         }
         let message = MessageBlock::User(UserMessageBlock {
             id: MessageId::new("image-source"),
@@ -584,5 +587,13 @@ mod tests {
         user.id = MessageId::new("after-cut");
         store.append_canonical(&later).unwrap();
         assert!(frozen.artifact(&artifacts, later.id(), &id).is_err());
+        let mut external = std::fs::OpenOptions::new()
+            .write(true)
+            .open(directory.path().join(format!("{}.bin", id.as_str())))
+            .unwrap();
+        external.write_all(&[b'y'; 1024]).unwrap();
+        assert_eq!(external.metadata().unwrap().len(), 1024);
+        let mut tampered = CompactionResources::capture(&store, ResourceLimits::default()).unwrap();
+        assert!(tampered.artifact(&artifacts, message.id(), &id).is_err());
     }
 }

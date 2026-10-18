@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v49.js';
+import type {ProtocolMessage} from './v50.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -140,7 +140,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 49,
+      "protocol_version": 50,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -158,7 +158,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 49,
+      "protocol_version": 50,
       "capabilities": {
         "upload_policy": {
           "max_file_bytes": 2097152,
@@ -242,6 +242,7 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "method": "session/event",
     "params": {
+      "registration_id": "registration_fixture",
       "target": {
         "session_id": "ses_00000000-0000-7000-8000-000000000001",
         "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
@@ -307,13 +308,18 @@ export const fixtures = [
     "result": {
       "type": "trace",
       "page": {
+        "read_cut": null,
         "records": [
           {
+            "fields": [],
+            "collections": [],
             "id": "trace:7",
             "position": "trace:7",
             "location": {
               "attempt_id": "attempt-a",
-              "step_id": "1"
+              "attempt_id_source": null,
+              "step_id": "1",
+              "step_id_source": null
             },
             "kind": "tool",
             "state": "completed",
@@ -330,6 +336,8 @@ export const fixtures = [
             "tool": {
               "call_id": "reused-call",
               "tool_id": "tool-bash",
+              "occurrence": null,
+              "fields": [],
               "name": "bash",
               "arguments": {
                 "text": "{\"command\":\"bounded input",
@@ -446,7 +454,10 @@ export const fixtures = [
       },
       "locator": {
         "occurrence": {
-          "assistant_message_id": "assistant-fixture",
+          "locator": {
+            "type": "by_message_id",
+            "message_id": "assistant-fixture"
+          },
           "block_index": 2
         },
         "call_id": "call-fixture",
@@ -468,7 +479,10 @@ export const fixtures = [
       "agent_id": "agent-fixture",
       "locator": {
         "occurrence": {
-          "assistant_message_id": "assistant-fixture",
+          "locator": {
+            "type": "by_message_id",
+            "message_id": "assistant-fixture"
+          },
           "block_index": 2
         },
         "call_id": "call-fixture",
@@ -511,7 +525,25 @@ export const fixtures = [
         "id": "source-message-fixture",
         "cut": null
       },
-      "limit": 64
+      "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/selectModel",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "choice": {
+        "binding_revision": "9007199254740993",
+        "model_position": 0,
+        "profile_position": null
+      }
     }
   },
   {
@@ -526,7 +558,7 @@ export const fixtures = [
         "attachment_id": "attachment-fixture"
       },
       "offset": 64,
-      "limit": 64
+      "limit": 32
     }
   },
   {
@@ -554,7 +586,6 @@ export const fixtures = [
       },
       "expected": {
         "sequence": "9007199254740993",
-        "message_id": "message-fixture",
         "revision": "9007199254740993"
       },
       "text": "edited pending input"
@@ -573,7 +604,6 @@ export const fixtures = [
       },
       "expected": {
         "sequence": "9007199254740993",
-        "message_id": "message-fixture",
         "revision": "9007199254740993"
       }
     }
@@ -759,12 +789,25 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "id": "exact-u64",
     "result": {
-      "type": "jobs",
-      "jobs": [],
-      "returned": 0,
-      "matched": 0,
-      "limit": 64,
-      "truncated": false
+      "type": "domain_page",
+      "page": {
+        "cursor": "9007199254740993",
+        "read_cut": {
+          "canonical_foreground": null,
+          "live_publication": null,
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "activation_id": null,
+          "revision": "9007199254740993",
+          "through": "9007199254740993",
+          "source_cut": null,
+          "domain_revisions": {},
+          "collection_cuts": {}
+        },
+        "domain": "jobs",
+        "total": "0",
+        "items": [],
+        "next_offset": null
+      }
     }
   },
   {
@@ -802,26 +845,9 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "id": "exact-u64",
     "result": {
-      "type": "configuration_application",
-      "application": {
-        "scope": "session-fixture",
-        "sources": [
-          {
-            "kind": "user"
-          },
-          {
-            "kind": "workspace",
-            "directory": "/workspace/fixture"
-          }
-        ],
-        "version": "9007199254740993",
-        "desired": {
-          "input_revision": "input",
-          "attempt": "9007199254740993"
-        },
-        "units": {},
-        "candidate": null
-      }
+      "type": "configuration_receipt",
+      "scope": "session-fixture",
+      "version": "9007199254740993"
     }
   },
   {
@@ -834,15 +860,21 @@ export const fixtures = [
           "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
           "journal": "9007199254740993",
           "transcript": "9007199254740993",
-          "mutation_revision": "9007199254740993"
+          "mutation_revision": "9007199254740993",
+          "ledger_through": "0",
+          "surface_revision": "0",
+          "transcript_total": "0",
+          "pending_through": "0",
+          "pending_total": "0"
         },
-        "total": 1,
+        "total": "1",
         "offset": 0,
         "turns": [
           {
             "id": {
               "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-              "attempt_id": "attempt-fixture"
+              "attempt_id": "attempt-fixture",
+              "attempt_id_source": null
             },
             "ordinal": 1,
             "cursor": "9007199254740993",
@@ -863,7 +895,12 @@ export const fixtures = [
           "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
           "journal": "0",
           "transcript": "0",
-          "mutation_revision": "0"
+          "mutation_revision": "0",
+          "ledger_through": "0",
+          "surface_revision": "0",
+          "transcript_total": "0",
+          "pending_through": "0",
+          "pending_total": "0"
         },
         "page": {
           "inherited_through": "0",
@@ -913,6 +950,7 @@ export const fixtures = [
     "jsonrpc": "2.0",
     "method": "session/event",
     "params": {
+      "registration_id": "registration_fixture",
       "target": {
         "session_id": "ses_00000000-0000-7000-8000-000000000001",
         "conversation_id": "conv_00000000-0000-7000-8000-000000000001",

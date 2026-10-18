@@ -15,7 +15,7 @@ import present from './PresentRow.module.css';
 
 /** One present call's native phase, declared paths and recorded result text. */
 export interface PresentRowView {
-  readonly id: string;
+  readonly id?: string;
   readonly phase: 'preparing' | 'running' | 'ok' | 'error' | 'stopped';
   /** Paths from the published arguments: intent, never a delivery. */
   readonly paths: string;

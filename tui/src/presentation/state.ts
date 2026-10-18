@@ -1,3 +1,4 @@
+import type { DisplayInteraction } from './interaction-display.ts';
 /**
  * The one TypeScript state model of the runtime projection.
  *
@@ -37,7 +38,6 @@ import type {
   RuntimeClientResourcesView,
   RuntimeClientAgent,
   RuntimeClientTranscriptCursor,
-  RoutedInteraction,
   InteractionSettlement,
   InteractionSubject,
   PublicationAudit,
@@ -51,7 +51,10 @@ import type {
 export interface TranscriptCommitted {
   /** Native entry still has facts that can change outside the current window. */
   nativeFactsPending?: boolean;
+  /** Loaded bounded native occurrence slots; independent C content and J lifecycle. */
+  toolCalls?: ForegroundToolExecution[];
   completedResponse?: import("../protocol/app-server.ts").RuntimeClientTranscriptEntry["completed_response"];
+  turnProcess?: import("../protocol/app-server.ts").RuntimeClientTranscriptEntry["turn_process"];
   kind: "committed";
   /** Stable identity for rendering. Never derived from list position. */
   key: string;
@@ -71,8 +74,8 @@ export type StreamingBlock =
   | {
       kind: "tool_call";
       blockIndex: ContentBlockIndex;
-      callId: ToolCallId;
-      toolId: ToolId;
+      callId?: ToolCallId;
+      toolId?: ToolId;
       name: string;
       /** Accumulated JSON argument fragments. Carried, never parsed. */
       argumentsText: string;
@@ -82,7 +85,8 @@ export type StreamingBlock =
 export interface StreamingMessage {
   kind: "streaming";
   key: string;
-  attemptId: AttemptId;
+  attemptId?: AttemptId;
+  attemptSource?: import("../protocol/app-server.ts").AttemptIdentitySource;
   messageId: MessageId;
   blocks: StreamingBlock[];
 }
@@ -132,7 +136,8 @@ export type TranscriptEntry =
 
 /** The client-visible view of the current or latest attempt. */
 export interface AttemptPresentation {
-  attemptId: AttemptId;
+  attemptId?: AttemptId;
+  attemptSource?: import("../protocol/app-server.ts").AttemptIdentitySource;
   phase: RuntimeClientAttemptPhase;
   turn: number;
   lastUsage?: ModelUsage;
@@ -150,7 +155,7 @@ export interface AttemptPresentation {
 
 export interface PresentationState {
   statistics?: import("../protocol/app-server.ts").RuntimeClientTranscriptPage["statistics"];
-  goal: import("../protocol/app-server.ts").GoalView | null;
+  goal: import("../protocol/app-server.ts").RuntimeClientGoalView | null;
   settingsEvidence: import("../protocol/app-server.ts").SettingsEvidence;
   workflows: import("../protocol/app-server.ts").WorkflowSnapshot;
   conversationId: ConversationId;
@@ -163,7 +168,10 @@ export interface PresentationState {
   attempt?: AttemptPresentation;
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
-  pendingInteractions: RoutedInteraction[];
+  pendingInteractions: DisplayInteraction[];
+  publicationSettlements: import("../../../protocol/app-server/v50.ts").RuntimeClientPublicationSettlementRecord[];
+  deferredTranscriptEntries: import("../../../protocol/app-server/v50.ts").CheckpointPageItem[];
+  messageDescriptors: import("../../../protocol/app-server/v50.ts").RuntimeClientMessageDescriptor[];
   jobs: RuntimeClientJob[];
   agents: RuntimeClientAgent[];
   /**
@@ -184,6 +192,8 @@ export interface PresentationState {
   resources: RuntimeClientResourcesView;
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
+  /** Availability and deferral published by the native Session model owner. */
+  modelStatus: import("../../../protocol/app-server/v50.ts").RuntimeClientModelStatus | null;
   /**
    * The attached Agent runtime's frozen native Agent Extension composition.
    *

@@ -1009,7 +1009,6 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
 fn pending_ref(item: &AcceptedInbound) -> rustx::durable::inbox::PendingInboundRef {
     rustx::durable::inbox::PendingInboundRef {
         sequence: item.sequence,
-        message_id: item.message_id.clone(),
         revision: 0,
     }
 }
@@ -1020,10 +1019,10 @@ fn mutation_edit_before_claim_uses_committed_content_and_exact_obligation() {
     let (store, _) = file_store();
     let accepted = store.accept_inbound(human("old")).unwrap();
     let selection = store.select_pending_batch().unwrap().unwrap();
-    assert_eq!(
+    assert!(matches!(
         store.edit_pending(&pending_ref(&accepted), "edited"),
-        Ok(Outcome::Applied)
-    );
+        Ok(Outcome::Applied { .. })
+    ));
     let receipt = store
         .adopt_pending_batch(selection.watermark, None)
         .unwrap();
@@ -1062,10 +1061,10 @@ fn mutation_remove_after_selection_excludes_obligation_and_transcript() {
     let removed = store.accept_inbound(human("remove")).unwrap();
     let retained = store.accept_inbound(human("retain")).unwrap();
     let selection = store.select_pending_batch().unwrap().unwrap();
-    assert_eq!(
+    assert!(matches!(
         store.remove_pending(&pending_ref(&removed)),
-        Ok(Outcome::Applied)
-    );
+        Ok(Outcome::Applied { .. })
+    ));
     let receipt = store
         .adopt_pending_batch(selection.watermark, None)
         .unwrap();
@@ -1132,7 +1131,7 @@ fn mutation_competing_edits_have_one_cas_winner_across_connections() {
     assert_eq!(
         outcomes
             .iter()
-            .filter(|result| **result == Outcome::Applied)
+            .filter(|result| matches!(result, Outcome::Applied { .. }))
             .count(),
         1
     );
@@ -1154,18 +1153,24 @@ fn mutation_edit_remove_and_duplicate_remove_obey_cas_order() {
         let accepted = store.accept_inbound(human("old")).unwrap();
         let expected = pending_ref(&accepted);
         if edit_first {
-            assert_eq!(
+            assert!(matches!(
                 store.edit_pending(&expected, "edited"),
-                Ok(Outcome::Applied)
-            );
+                Ok(Outcome::Applied { .. })
+            ));
             assert_eq!(store.remove_pending(&expected), Ok(Outcome::Conflict));
             let updated = rustx::durable::inbox::PendingInboundRef {
                 revision: 1,
                 ..expected.clone()
             };
-            assert_eq!(store.remove_pending(&updated), Ok(Outcome::Applied));
+            assert!(matches!(
+                store.remove_pending(&updated),
+                Ok(Outcome::Applied { .. })
+            ));
         } else {
-            assert_eq!(store.remove_pending(&expected), Ok(Outcome::Applied));
+            assert!(matches!(
+                store.remove_pending(&expected),
+                Ok(Outcome::Applied { .. })
+            ));
             assert_eq!(
                 store.edit_pending(&expected, "edited"),
                 Ok(Outcome::NotPending)
@@ -1174,7 +1179,7 @@ fn mutation_edit_remove_and_duplicate_remove_obey_cas_order() {
         assert_eq!(store.remove_pending(&expected), Ok(Outcome::NotPending));
         let later = store
             .accept_inbound(InboundDraft {
-                message_id: Some(expected.message_id.clone()),
+                message_id: Some(accepted.message_id.clone()),
                 ..human("later")
             })
             .unwrap();
@@ -1242,8 +1247,17 @@ fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
         "conv_d9298a10-d1b0-7358-87dc-4bd85dac641b",
     ))
     .unwrap();
+    // The reference is an occurrence inside the Store's authority, not a
+    // cross-conversation bearer token. Advance A with a genuine removed
+    // occurrence so its selected sequence is absent from B's native inbox.
+    let prior = store.accept_inbound(human("prior A occurrence")).unwrap();
+    assert!(matches!(
+        store.remove_pending(&pending_ref(&prior)),
+        Ok(Outcome::Applied { .. })
+    ));
     let accepted = store.accept_inbound(human("A")).unwrap();
     let other_accepted = other.accept_inbound(human("B")).unwrap();
+    assert_ne!(accepted.sequence, other_accepted.sequence);
     assert_eq!(
         other.remove_pending(&pending_ref(&accepted)),
         Ok(Outcome::NotPending)
@@ -1252,6 +1266,7 @@ fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
         other.load_pending().unwrap()[0].message,
         other_accepted.message
     );
+    assert_eq!(store.load_pending().unwrap()[0].message, accepted.message);
     let mixed = store
         .accept_inbound(InboundDraft {
             content: [text_blocks("first"), text_blocks("second")].concat(),
@@ -1270,6 +1285,12 @@ fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
         store.remove_pending(&pending_ref(&notification)),
         Ok(Outcome::InvalidItem)
     );
+    assert!(matches!(
+        other.remove_pending(&pending_ref(&other_accepted)),
+        Ok(Outcome::Applied { .. })
+    ));
+    assert!(other.load_pending().unwrap().is_empty());
+    assert_eq!(store.load_pending().unwrap()[0].message, accepted.message);
 }
 
 #[test]
@@ -1303,15 +1324,18 @@ fn mutation_concurrent_edit_remove_and_two_removes_have_one_winner() {
         assert_eq!(
             [&first, &second]
                 .into_iter()
-                .filter(|result| **result == Outcome::Applied)
+                .filter(|result| matches!(result, Outcome::Applied { .. }))
                 .count(),
             1
         );
         assert!(matches!(
             first,
-            Outcome::Applied | Outcome::Conflict | Outcome::NotPending
+            Outcome::Applied { .. } | Outcome::Conflict | Outcome::NotPending
         ));
-        assert!(matches!(second, Outcome::Applied | Outcome::NotPending));
+        assert!(matches!(
+            second,
+            Outcome::Applied { .. } | Outcome::NotPending
+        ));
     }
 }
 

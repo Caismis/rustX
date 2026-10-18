@@ -89,7 +89,14 @@ pub trait AgentExecutionObserver: Sync {
     /// callback observes the committed fact at the same publication
     /// linearization point, so live projections do not need an attempt-local
     /// duplicate journal.
-    fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64);
+    fn observe_event(
+        &self,
+        attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&crate::durable::observation::NativeObservationBatch>,
+    );
 
     /// Observes one canonical message commit at its commit point.
     ///
@@ -102,11 +109,41 @@ pub trait AgentExecutionObserver: Sync {
         &self,
         attempt_id: &AttemptId,
         block: &MessageBlock,
-        transcript_cursor: Option<TranscriptCursor>,
+        receipt: &crate::durable::inbox::TranscriptCommitReceipt,
     );
 
     /// Observes the one composed Agent Status of a request preparation.
-    fn observe_status(&self, observation: &AgentStatusObservation);
+    fn observe_status(
+        &self,
+        observation: &AgentStatusObservation,
+        source: Option<&crate::durable::inbox::StatusObservationSource>,
+    );
+
+    /// Borrows native contribution authority; the display owner can prepare a
+    /// finite header without cloning opaque native identities or presentation.
+    fn observe_contribution_status(
+        &self,
+        contribution: &crate::context::contribution::ContributionStart,
+        attempt: &AttemptId,
+        turn: u32,
+        source: Option<&crate::durable::inbox::StatusObservationSource>,
+    ) {
+        if let Some(crate::context::contribution::ContributionPresentation::AgentStatus(status)) =
+            &contribution.presentation
+        {
+            self.observe_status(
+                &AgentStatusObservation {
+                    attempt_id: attempt.clone(),
+                    turn,
+                    status_message_id: contribution.message_id.clone(),
+                    opportunities: contribution.opportunities.clone(),
+                    post_tool_batch_anchor: contribution.post_tool_batch_anchor,
+                    status: status.clone(),
+                },
+                source,
+            );
+        }
+    }
 
     /// Observes one publication stream opening (Issue #108).
     ///
@@ -121,7 +158,12 @@ pub trait AgentExecutionObserver: Sync {
     /// frame's staging transaction — or, for the final frames, the atomic
     /// terminal transaction — has committed, so no semantic output can reach
     /// a Runtime Client that rustX has not durably committed for release.
-    fn observe_publication(&self, attempt_id: &AttemptId, frame: &PublicationFrame);
+    fn observe_publication(
+        &self,
+        attempt_id: &AttemptId,
+        frame: &PublicationFrame,
+        receipt: &crate::publication::PublicationFrameReceipt,
+    );
 
     /// Observes one publication stream settling as an audit.
     ///
@@ -134,7 +176,7 @@ pub trait AgentExecutionObserver: Sync {
         &self,
         attempt_id: &AttemptId,
         audit: &PublicationAudit,
-        transcript_cursor: TranscriptCursor,
+        receipt: &crate::durable::inbox::PublicationAuditReceipt,
     );
 
     /// Observes one LIVE (not yet durable) foreground tool progress report

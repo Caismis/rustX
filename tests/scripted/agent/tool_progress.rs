@@ -85,21 +85,92 @@ async fn run(
     cancellation: &AgentCancellation,
 ) -> common::DurableExecutionAudit {
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    run_with_runtime(model, tools, cancellation, &tool_runtime).await
+}
+
+async fn run_with_runtime(
+    model: &Arc<FakeModel>,
+    tools: ToolRegistry,
+    cancellation: &AgentCancellation,
+    tool_runtime: &common::ToolRuntimeFixture,
+) -> common::DurableExecutionAudit {
     let store = tool_runtime.durable_store();
-    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let capability = common::capability_lease(tools, tool_runtime).await;
     let result = AgentExecution::new(
         request(model),
         capability.into_lease(),
         cancellation,
         support::default_execution_policy(),
         runtime(model),
-        &tool_runtime,
+        tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     common::durable_agent_result(result, store.as_ref())
+}
+
+/// Failure-only original J probes: one frontier, at most three facts per kind
+/// and one final progress fact per call. No full-history/snapshot materialization.
+fn diagnose_parallel_progress(store: &dyn rustx::durable::ConversationStore) {
+    use rustx::durable::presentation::{FactQuery, FactScope};
+    let through = store.presentation_frontier().expect("diagnostic native J");
+    let query = |scope, kind, limit| {
+        store
+            .read_presentation_events(&FactQuery {
+                scope,
+                kinds: vec![kind],
+                before: None,
+                after: 0,
+                ascending: false,
+                through,
+                limit,
+            })
+            .expect("bounded original progress diagnostic")
+    };
+    let attempt = || FactScope::Attempt(AttemptId::new("attempt-1"));
+    let starts = query(attempt(), "model_request_started", 3).len();
+    let completions = query(attempt(), "tool_execution_completed", 3).len();
+    let canonical = query(attempt(), "tool_message_committed", 3).len();
+    let last = store
+        .read_events(Some(through.saturating_sub(1)), 1)
+        .unwrap();
+    let tail = last.events.first().map(|envelope| {
+        let label = match &envelope.event {
+            RuntimeEvent::ToolExecutionProgress { .. } => "tool_progress",
+            RuntimeEvent::ToolExecutionCompleted { .. } => "tool_completed",
+            RuntimeEvent::ToolMessageCommitted { .. } => "canonical_tool",
+            RuntimeEvent::TurnStarted => "turn_started",
+            RuntimeEvent::ModelRequestStarted { .. } => "request_started",
+            RuntimeEvent::ModelRequestCompleted { .. } => "request_completed",
+            RuntimeEvent::TurnCompleted => "turn_completed",
+            RuntimeEvent::AttemptCompleted { .. } => "attempt_completed",
+            _ => "other",
+        };
+        (envelope.sequence, label)
+    });
+    eprintln!(
+        "parallel progress native: J={through} tail={tail:?} request_starts={starts} tool_completions={completions} canonical_tools={canonical}"
+    );
+    for call_id in ["call-a", "call-b"] {
+        let progress = query(
+            FactScope::ToolCall {
+                call_id: call_id.into(),
+                attempt: Some(AttemptId::new("attempt-1")),
+                turn: Some(rustx::runtime::identity::TurnId::new("1")),
+            },
+            "tool_execution_progress",
+            1,
+        );
+        let retained_tail = progress.first().map(|envelope| {
+            let RuntimeEvent::ToolExecutionProgress { progress, .. } = &envelope.event else {
+                unreachable!("original indexed progress kind")
+            };
+            (envelope.sequence, progress.message.as_deref())
+        });
+        eprintln!("parallel progress native: {call_id} retained_tail={retained_tail:?}");
+    }
 }
 
 /// A tool-call turn scripted from calls; the following turn is a Stop.
@@ -382,6 +453,7 @@ async fn parallel_calls_bound_progress_per_call_and_keep_canonical_order() {
     let mut started_a = tool_a.started();
     let mut started_b = tool_b.started();
     let completed_b = tool_b.completed();
+    let diagnostic_watches = (started_a.clone(), started_b.clone(), tool_a.completed());
     let mut controller_completed_b = completed_b.clone();
     let mut tools = ToolRegistry::new();
     tool_a.register(&mut tools);
@@ -400,12 +472,43 @@ async fn parallel_calls_bound_progress_per_call_and_keep_canonical_order() {
             .expect("B completed physically first");
         release_a.send_replace(true);
     });
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        run(&model, tools, &cancellation),
-    )
-    .await
-    .expect("run terminates");
+    let mut retained_runtime = None;
+    let guarded_started = std::time::Instant::now();
+    let mut fixture_setup_elapsed = None;
+    let mut execution_started = None;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let setup_started = std::time::Instant::now();
+        // Construction remains inside the original guard. Retaining this
+        // owner only permits bounded original-J diagnostics after cancellation.
+        let tool_runtime = retained_runtime.insert(common::tool_runtime(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ));
+        fixture_setup_elapsed = Some(setup_started.elapsed());
+        execution_started = Some(std::time::Instant::now());
+        run_with_runtime(&model, tools, &cancellation, tool_runtime).await
+    })
+    .await;
+    if result.is_err() {
+        eprintln!(
+            "parallel progress elapsed: guarded_us={} fixture_setup_us={:?} execution_us={:?}",
+            guarded_started.elapsed().as_micros(),
+            fixture_setup_elapsed.map(|elapsed| elapsed.as_micros()),
+            execution_started.map(|started| started.elapsed().as_micros()),
+        );
+        eprintln!(
+            "parallel progress timeout: started_a={} started_b={} completed_a={} completed_b={} controller_finished={} model_requests={}",
+            *diagnostic_watches.0.borrow(),
+            *diagnostic_watches.1.borrow(),
+            diagnostic_watches.2.borrow().len(),
+            completed_b.borrow().len(),
+            controller.is_finished(),
+            model.requests().len(),
+        );
+        if let Some(tool_runtime) = &retained_runtime {
+            diagnose_parallel_progress(tool_runtime.durable_store().as_ref());
+        }
+    }
+    let result = result.expect("run terminates");
     controller.await.expect("controller task");
 
     assert!(matches!(

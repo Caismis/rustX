@@ -17,7 +17,8 @@ lifecycle repairs returned as `page.updates`, so older loaded records do not req
 a Session snapshot. `tool_call_assembled.arguments_json` preserves native JSON number
 spelling exactly instead of asking JavaScript to reserialize provider arguments.
 
-Initial attachment carries a snapshot plus cursor. Snapshot recovery discards unsafe
+Initial attachment carries a bounded identity receipt. An independent bounded
+checkpoint supplies its native cut and cursor. Checkpoint recovery discards unsafe
 incremental continuation; the native bounded replay owns events arriving during the
 read. After installing C, subscribe after C and consume C+1 onward. Events at/below C
 are no-ops. Acquisition-time resync retains the required subscribe and marks the old
@@ -59,14 +60,18 @@ No new state-store package or compatibility decoder was introduced.
 rustX owns canonical messages and history. The browser renders two authoritative
 read products and retains only replaceable read caches:
 
-- `session/attach`, `session/snapshot`, `session/subscribe`: current/live projection.
+- `session/attach` returns a bounded identity receipt; `session/checkpoint`
+  loads an independent bounded cut and `session/subscribe` follows consecutive
+  native display transitions after its receipt is accepted.
   Contiguous notifications advance the native read model through the deterministic
   client fold. Initialization, recovery and explicit reconciliation replace from
   authority; transient state never survives an authoritative replacement.
-- `session/transcript { before, limit }`: older durable transcript pages. The wire
-  field is `before`; it is the exclusive `RuntimeClientTranscriptCursor` returned
-  as `next_cursor`. This never updates `RuntimeClientCursor`, used for live reads
-  and subscription/resync only.
+- `conversation/contentRead` loads exact deferred bytes; bounded collection
+  pages preserve their captured read cut. Cache eviction leaves Applied Cursor
+  unchanged.
+- `session/transcript { at, limit }` returns one bounded durable window at its
+  exact `ConversationReadCut`; `at` selects latest, older, newer or an exact Turn.
+  Its transcript positions and continuation never update the live Applied Cursor.
 
 ## Composition
 
@@ -334,8 +339,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v49 (`rustx.app-server.v49` and generated
-`protocol/app-server/v49.ts` / `v49.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v50 (`rustx.app-server.v50` and generated
+`protocol/app-server/v50.ts` / `v50.schema.json`). v12 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -432,7 +437,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v49, Runtime Client v68, SQLite v57, and Session catalog v15, with no
+App Server v50, Runtime Client v71, SQLite v61, and Session catalog v16, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -493,7 +498,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v49 / Runtime Client v68 project one `turn_process` owner on exact
+App Server v50 / Runtime Client v71 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

@@ -297,3 +297,12 @@ def test_the_workspace_placeholder_is_substituted():
 def test_an_unknown_scenario_name_fails_loudly():
     with pytest.raises(SystemExit):
         build("no-such-scenario")
+
+
+def test_reading_scale_scenario_preserves_the_browser_workload():
+    browser = build("web_reading_surface")
+    measurement = build("web_reading_scale_1000")
+    assert len(browser.steps) == 301  # 300 Attempts plus the gated follow test.
+    assert len(measurement.steps) == 1000
+    assert measurement.steps[:300] == browser.steps[:300]
+    assert measurement.steps[-1].expect.body_contains == ("Reading 999",)

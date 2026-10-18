@@ -121,7 +121,7 @@ function LiveSessionNode({ client, node, children }: { client: AppServerClient; 
     const current = state.connection === 'connected' && view?.attachment === 'attached' && view.attachmentIntent === 'wanted';
     const pending = current ? view.snapshot?.pending_interactions?.[0] : undefined;
     return { running: !!current && activeAttempt(view.snapshot),
-      pendingInteraction: pending ? pending.request.kind.type === 'approval' ? 'approval' as const : pending.request.kind.type === 'review' ? 'plan-review' as const : 'question' as const : undefined,
+      pendingInteraction: pending ? pending.kind === 'approval' ? 'approval' as const : pending.kind === 'review' ? 'plan-review' as const : 'question' as const : undefined,
       observation: sessionObservation(tx, state, node.id) };
   }, sameValue);
   return children({ ...node, ...activity });

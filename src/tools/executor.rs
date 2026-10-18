@@ -1062,6 +1062,18 @@ impl ToolRegistry {
     /// The canonical definitions of every registered tool in registration
     /// order.
     #[must_use]
+    /// Borrowed canonical definitions; observation never clones the whole registry.
+    pub(crate) fn definition_at(&self, ordinal: usize) -> Option<&ToolDefinition> {
+        self.entries.get(ordinal).map(|entry| &entry.definition)
+    }
+    pub(crate) fn definition_ordinal(&self, id: &ToolId) -> Option<usize> {
+        self.by_id.get(id).copied()
+    }
+    pub(crate) fn definition_refs(&self) -> impl ExactSizeIterator<Item = &ToolDefinition> {
+        self.entries.iter().map(|entry| &entry.definition)
+    }
+
+    #[must_use]
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.entries
             .iter()

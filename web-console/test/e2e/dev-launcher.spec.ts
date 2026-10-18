@@ -10,7 +10,7 @@ import { spawnOwned } from '../../../dev/src/process.ts';
 import { BROWSER_SESSION_HEADER, BROWSER_SESSION_STORAGE } from '../../browser-session';
 
 /** Normal local composition: no dogfood helper, provider process, or Host proxy. */
-test('development launcher serves the real Web carrier, native App Server and exact-root Host', async ({ page }) => {
+test('development launcher serves the real Web carrier, native App Server and exact-root Host', { tag: '@smoke' }, async ({ page }) => {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-dev-browser-'));
   const root = fileURLToPath(new URL('../../../', import.meta.url));
   const workspace = join(directory, 'workspace with spaces'); mkdirSync(workspace);
@@ -46,7 +46,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(launchToken).not.toBe(token);
     // Real native admission: browser credentials cannot enter the v9 transport.
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v49', `rustx-token.${launchToken}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v50', `rustx-token.${launchToken}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser token admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
@@ -62,7 +62,7 @@ compat = { chat_reasoning_replay = "omit" }
     const proof = await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE);
     expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/); expect([token, launchToken]).not.toContain(proof);
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v49', `rustx-token.${proof}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v50', `rustx-token.${proof}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser session proof admitted by native App Server')); };
       socket.onerror = () => resolve();
     });

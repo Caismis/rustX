@@ -22,6 +22,7 @@
 
 import { PassThrough } from "node:stream";
 
+import { decodeProtocolMessage } from "../../src/protocol/decoder.ts";
 import { encodeRecord } from "../../src/protocol/jsonl.ts";
 import {
   BaseTransport,
@@ -35,12 +36,24 @@ import type {
   MethodResult,
   Notification,
   Request,
-  RequestId,
+  AppServerRequestId,
   RpcError,
   RuntimeClientCursor,
   RuntimeClientEvent,
 } from "../../src/protocol/app-server.ts";
 
+type SubscribedSeed=Omit<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'> & Partial<Pick<Extract<MethodResult,{type:'subscribed'}>,'target'|'registration_id'>>;
+const registrations=new Map<string,string>();
+let nextRegistration=0;
+export function registrationId(target:AttachmentTarget):string{return registrations.get(JSON.stringify(target))??"unregistered";}
+function receipt(id:AppServerRequestId,result:MethodResult|SubscribedSeed,log:RequestLog):MethodResult {
+ if(result.type!=='subscribed') return result;
+ const request=log.matching('session/subscribe').find(row=>row.id===id);
+ if(!request || request.method!=='session/subscribe') throw new Error('Subscription requires its exact request owner');
+ const registration_id=result.registration_id??`fixture-registration-${++nextRegistration}`;
+ registrations.set(JSON.stringify(request.params.target),registration_id);
+ return {...result,target:result.target??request.params.target,registration_id};
+}
 /** One request the client wrote, already decoded. */
 export type ObservedRequest = Request;
 
@@ -103,7 +116,17 @@ class RequestLog {
  */
 export class FakeTransport extends BaseTransport {
   readonly log = new RequestLog();
+  readonly answered = new Set<AppServerRequestId>();
+  async nextPending(method:MethodName):Promise<ObservedRequest>{
+    for(;;){const pending=this.log.matching(method).find(row=>!this.answered.has(row.id));if(pending)return pending;await this.log.awaitMethod(method,this.log.count(method)+1);}
+  }
   #disposed = false;
+  #editors=new Map<string,import('../../src/protocol/app-server.ts').UserInputBlock[]>();
+  editor(session:{id:string,active_node:string},content:import('../../src/protocol/app-server.ts').UserInputBlock[]|null|undefined) {
+    if(content==null)return null;
+    const locator={session_id:session.id,node_id:session.active_node,source_session:session.id,source_node:session.active_node,source_surface_revision:'1'};
+    this.#editors.set(JSON.stringify(locator),content);return locator;
+  }
 
   override describe(): string {
     return "fake";
@@ -120,7 +143,17 @@ export class FakeTransport extends BaseTransport {
   }
 
   protected override writeMessage(message: unknown): Promise<void> {
-    this.log.record(message as ObservedRequest);
+    const request=message as ObservedRequest;
+    this.log.record(request);
+    if(request.method==='session/editorRead')queueMicrotask(()=>{
+      const {locator,block_index,max_bytes}=request.params;const offset=Number(request.params.offset);
+      const content=this.#editors.get(JSON.stringify(locator))??[],block=content[block_index];
+      const next_block=block_index+1<content.length?block_index+1:null;
+      if(!block){this.respond(request.id,{type:'editor_page',page:{locator,block_index,next_block:null,upload:null,chunk:null}});return;}
+      if(block.type==='upload'){this.respond(request.id,{type:'editor_page',page:{locator,block_index,next_block,upload:{session_id:block.session_id,batch_id:block.batch_id,token:block.token},chunk:null}});return;}
+      const data=Buffer.from(block.text,'utf8'),end=Math.min(offset+max_bytes,data.length);
+      this.respond(request.id,{type:'editor_page',page:{locator,block_index,next_block,upload:null,chunk:{content_ref:{conversation_id:'conv_01900000-0000-7000-8000-000000000002',source:{type:'canonical_message_block',component:'payload',locator:{type:"by_message_id",message_id:'editor-fixture'},block_index},representation:'utf8_text',version:1,content_revision:1,readable_end:data.length},offset,data_base64:data.subarray(offset,end).toString('base64'),end_offset:end,readable_end:data.length,next_offset:end<data.length?end:null,complete:end===data.length}}});
+    });
     return Promise.resolve();
   }
 
@@ -134,12 +167,16 @@ export class FakeTransport extends BaseTransport {
   }
 
   /** Answers one request with a typed result. */
-  respond(id: RequestId, result: MethodResult): void {
-    this.deliver({ jsonrpc: "2.0", id, result });
+  respond(id: AppServerRequestId, result: MethodResult|SubscribedSeed): void {
+    this.answered.add(id);
+    const record={jsonrpc:"2.0",id,result:receipt(id,result,this.log)};
+    if(!decodeProtocolMessage(record))throw new Error(`Invalid scripted result ${JSON.stringify(record).slice(0,4096)}`);
+    this.deliver(record);
   }
 
   /** Answers one request with a typed protocol failure. */
-  respondError(id: RequestId, error: RpcError): void {
+  respondError(id: AppServerRequestId, error: RpcError): void {
+    this.answered.add(id);
     this.deliver({ jsonrpc: "2.0", id, error });
   }
 
@@ -183,8 +220,12 @@ export function paramsOf<M extends MethodName>(
 /** Builds one well-formed notification envelope. */
 export function notification<M extends Notification["method"]>(
   method: M,
-  params: Extract<Notification, { method: M }>["params"],
+  params: M extends 'session/event' ? Omit<Extract<Notification,{method:'session/event'}>['params'],'registration_id'> & {registration_id?:string} : M extends 'session/resyncRequired' ? Omit<Extract<Notification,{method:'session/resyncRequired'}>['params'],'registration_id'|'reason'|'checkpoint_required'> & {registration_id?:string,reason?:Extract<Notification,{method:'session/resyncRequired'}>['params']['reason'],checkpoint_required?:boolean} : Extract<Notification,{method:M}>['params'],
 ): Notification {
+  if(method==='session/event'||method==='session/resyncRequired') {
+    const value=params as Extract<Notification,{method:'session/resyncRequired'}>['params'];
+    return {jsonrpc:'2.0',method,params:{...(method==='session/resyncRequired'?{reason:'replay_unavailable',checkpoint_required:true}:{}),...value,registration_id:value.registration_id??registrations.get(JSON.stringify(value.target))??'unregistered'}} as Notification;
+  }
   return { jsonrpc: "2.0", method, params } as Notification;
 }
 
@@ -230,12 +271,12 @@ export class ScriptedAppServer {
   }
 
   /** Writes one correlated success response. */
-  respond(id: RequestId, result: MethodResult): void {
-    this.writeRecord({ jsonrpc: "2.0", id, result });
+  respond(id: AppServerRequestId, result: MethodResult|SubscribedSeed): void {
+    this.writeRecord({ jsonrpc: "2.0", id, result:receipt(id,result,this.log) });
   }
 
   /** Writes one correlated typed protocol error. */
-  respondError(id: RequestId, error: RpcError): void {
+  respondError(id: AppServerRequestId, error: RpcError): void {
     this.writeRecord({ jsonrpc: "2.0", id, error });
   }
 
@@ -293,4 +334,17 @@ export async function until(
 /** Yields once, so a microtask-scheduled continuation can run. */
 export function tick(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/** Answer one admitted attachment's separate read and registration boundaries. */
+export async function followAttachment(transport:FakeTransport, target:AttachmentTarget, initial:import('../../src/protocol/app-server.ts').RuntimeClientSnapshot, cursor:RuntimeClientCursor) {
+ const readCount=transport.log.count('session/checkpoint')+1;
+ const read=(await transport.log.awaitMethod('session/checkpoint',readCount)).at(-1)!;
+ const subscriptions=transport.log.count('session/subscribe')+1;
+ transport.respond(read.id,{type:'checkpoint',checkpoint:{snapshot:{...initial,conversation_id:target.conversation_id},cursor,read_cut:{conversation_id:target.conversation_id,revision:cursor,through:cursor,domain_revisions:{},collection_cuts:{}},content:[],collections:[]}});
+ const subscription=(await transport.log.awaitMethod('session/subscribe',subscriptions)).at(-1)!;
+ const configurations=transport.log.count('session/configuration')+1;
+ transport.respond(subscription.id,{type:'subscribed',target,after_cursor:cursor});
+ const configuration=(await transport.log.awaitMethod('session/configuration',configurations)).at(-1)!;
+ transport.respond(configuration.id,{type:'session_configuration',projection:(null)});
 }

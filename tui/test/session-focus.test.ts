@@ -1,3 +1,5 @@
+import { followAttachment } from './support/app-server-peer.ts';
+import { checkpoint } from "./support/fixtures.ts";
 import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
 const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
 const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
@@ -77,16 +79,8 @@ async function focus(
   const attaches = transport.log.count("session/attach") + 1;
   const pending = connected.host.attach(sessionId);
   const attach = (await transport.log.awaitMethod("session/attach", attaches)).at(-1)!;
-  transport.respond(attach.id, {
-    type: "attached",
-    target: targetFor(sessionId, index),
-    snapshot: snapshot(
-      options.running === true
-        ? { attempt: attemptView({ phase: { type: "running" } }) }
-        : {},
-    ),
-    cursor: runtimeCursor(options.cursor ?? 1),
-  });
+  transport.respond(attach.id, {type:'attached', target: targetFor(sessionId, index), configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  await followAttachment(transport,targetFor(sessionId,index),snapshot(options.running===true?{attempt:attemptView({phase:{type:'running'}})}:{}),runtimeCursor(options.cursor??1));
   return pending;
 }
 
@@ -125,10 +119,10 @@ describe("multi-Session focus on one connection", () => {
         `focus change must never send ${forbidden}`,
       );
     }
-    // What it *does* send is exactly two attaches — one cut each, snapshot
-    // and subscription together.
+    // Each of the two attachments independently captures a checkpoint and
+    // subscribes after that same cut.
     assert.equal(connected.transport.log.count("session/attach"), 2);
-    assert.equal(connected.transport.log.count("session/subscribe"), 0);
+    assert.equal(connected.transport.log.count("session/subscribe"), 2);
   });
 
   it("keeps Session A's events flowing while Session B holds the screen", async () => {
@@ -175,22 +169,19 @@ describe("multi-Session focus on one connection", () => {
     // reconstruct that from what it last believed; it asks.
     const repair = a.resync();
     const snapshotRequest = (
-      await connected.transport.log.awaitMethod("session/snapshot")
+      await connected.transport.log.awaitMethod("session/checkpoint",3)
     ).at(-1)!;
-    connected.transport.respond(snapshotRequest.id, {
-      type: "snapshot",
-      snapshot: snapshot({
+    connected.transport.respond(snapshotRequest.id, {type:'checkpoint', checkpoint:checkpoint(snapshot({
+        conversation_id: a.target.conversation_id,
         attempt: attemptView({
           phase: {
             type: "settled",
             outcome: { type: "completed", finish_reason: { type: "stop" } },
           },
         }),
-      }),
-      cursor: runtimeCursor(77),
-    });
+      }),runtimeCursor(77))});
     const resubscribe = (
-      await connected.transport.log.awaitMethod("session/subscribe")
+      await connected.transport.log.awaitMethod("session/subscribe",3)
     ).at(-1)!;
     connected.transport.respond(resubscribe.id, {
       type: "subscribed",

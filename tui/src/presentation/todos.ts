@@ -1,36 +1,8 @@
 /**
- * The task list, derived from canonical `todo` results.
- *
- * The runtime publishes the complete list as the structured content of every
- * settled `todo` result, so the panel is a *pure derivation* of canonical
- * conversation content — not a second copy of runtime state:
- *
- * ```text
- * canonical tool result (tool_id: tool-todo)  ->  TodoSnapshot  ->  panel
- * ```
- *
- * The derivation runs in two places over the same fact, and that is
- * deliberate:
- *
- * - the **runtime** derives it over the whole Ledger and carries the result
- *   in every snapshot. That is the list a fresh attach, a resume, or a
- *   post-compaction reload opens on;
- * - this client folds each newly committed `todo` result into the same
- *   value, so a live change lands without a snapshot round trip.
- *
- * Scanning the loaded transcript instead would be wrong, and was: a client
- * holds only a bounded newest page of it, so a conversation that committed a
- * page or more of messages after its last `todo` result would show no list
- * at all until the reader happened to page far enough back — while the
- * runtime, reading the whole Ledger, still had one.
- *
- * The client stores nothing of its own either way. A fresh authoritative
- * snapshot reproduces the panel exactly, and no local edit, expiry, or
- * replay of tool calls is involved.
- *
- * Selection is keyed by the runtime's own {@link ToolId}, never by a tool
- * name and never by the shape of the JSON. A differently identified tool that
- * happens to publish similar structure is not this list.
+ * The task list is supplied by the native Runtime Client observation owner.
+ * Checkpoints and read-domain events carry the loaded prefix; collection
+ * descriptors identify unloaded records. Canonical Tool results remain useful
+ * transcript content and never replace the current task projection.
  */
 
 import type {

@@ -165,7 +165,7 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
     clock.advance(100);
     let probe = f.manager.probe(a.conversation_id());
     probe.before_operation.arm();
-    let receiver = a.client().start_operation(|| async {}).unwrap();
+    let receiver = a.client().start_operation(|_| async {}).unwrap();
     probe.before_operation.entered().await;
     drop(receiver);
     f.manager.reap_idle();
@@ -174,10 +174,19 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
         ResidencyState::Loaded
     );
     let b = f.load(1).await.unwrap().unwrap();
-    let accepted = f.host.admit_request(std::convert::identity).unwrap();
+    let accepted = f
+        .host
+        .admit_request(
+            crate::app_server::RequestLane::Ordinary,
+            std::convert::identity,
+        )
+        .unwrap();
     f.host.begin_drain();
     assert!(matches!(
-        f.host.admit_request(std::convert::identity),
+        f.host.admit_request(
+            crate::app_server::RequestLane::Ordinary,
+            std::convert::identity
+        ),
         Err(HostAdmissionError::ServerDraining)
     ));
     let host = f.host.clone();
@@ -318,7 +327,7 @@ async fn active_turn_after_detach_starts_grace_only_after_settlement() {
         let (attached, external) = a.client().attach().unwrap();
         a.client().submit_inbound(input("request-A")).unwrap();
         f.gates[0].wait_entered().await;
-        attached.attachment.detach();
+        attached.detach();
         external.release();
         clock.advance(1000);
         f.manager.reap_idle();
@@ -748,13 +757,22 @@ async fn goal_resume_and_idle_claim_have_both_winner_orders() {
 async fn host_admission_commit_accounts_for_requests_connections_and_attachments() {
     bounded(async {
         let f = Fixture::new().await;
-        let request = f.host.admit_request(std::convert::identity).unwrap();
+        let request = f
+            .host
+            .admit_request(
+                crate::app_server::RequestLane::Ordinary,
+                std::convert::identity,
+            )
+            .unwrap();
         let connection = f.host.admit_connection(true).unwrap();
         let attachment = f.host.admit_attachment().unwrap();
         f.host.begin_drain();
         f.host.begin_drain();
         assert!(matches!(
-            f.host.admit_request(std::convert::identity),
+            f.host.admit_request(
+                crate::app_server::RequestLane::Ordinary,
+                std::convert::identity
+            ),
             Err(HostAdmissionError::ServerDraining)
         ));
         assert!(matches!(
@@ -816,11 +834,11 @@ async fn host_request_and_runtime_lease_commit_before_drain_as_one_admission() {
         let gate = gap.clone();
         let client = a.client();
         let admission = tokio::task::spawn_blocking(move || {
-            host.admit_request(|owner| {
+            host.admit_request(crate::app_server::RequestLane::Ordinary, |owner| {
                 // The actual synchronous callback used by protocol dispatch:
                 // host request counted, runtime operation not admitted yet.
                 gate.enter();
-                client.start_operation(move || async move {
+                client.start_operation(move |_| async move {
                     let _owner = owner;
                     291
                 })
@@ -848,7 +866,8 @@ async fn host_request_and_runtime_lease_commit_before_drain_as_one_admission() {
         let called = std::sync::atomic::AtomicBool::new(false);
         assert!(matches!(
             f.host
-                .admit_request(|_| called.store(true, Ordering::SeqCst)),
+                .admit_request(crate::app_server::RequestLane::Ordinary, |_| called
+                    .store(true, Ordering::SeqCst)),
             Err(HostAdmissionError::ServerDraining)
         ));
         assert!(!called.load(Ordering::SeqCst));

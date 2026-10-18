@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type {
   SessionNodeView,
-  SessionUserMessageBoundaryView,
+  SessionUserMessageBoundaryObservation,
   SessionView,
 } from "../../protocol/app-server.ts";
 import { role, style } from "../theme.ts";
@@ -25,13 +25,13 @@ const TREE_ENTRY_ROWS = 2;
 
 export type TreeSelection =
   | { kind: "node"; node: SessionNodeView }
-  | { kind: "branch"; boundary: SessionUserMessageBoundaryView };
+  | { kind: "branch"; boundary: SessionUserMessageBoundaryObservation };
 
 export interface TreeSelectorOptions {
   session: SessionView;
   nodes: SessionNodeView[];
   nextNodeOffset?: number;
-  boundaries: SessionUserMessageBoundaryView[];
+  boundaries: SessionUserMessageBoundaryObservation[];
   nextHistoryOffset?: number;
 }
 
@@ -58,7 +58,7 @@ export class TreeSelector implements PopupContent, Focusable {
   readonly #session: SessionView;
   #nodes: SessionNodeView[];
   #nodeCursor: PageCursor;
-  #boundaries: SessionUserMessageBoundaryView[];
+  #boundaries: SessionUserMessageBoundaryObservation[];
   #historyCursor: PageCursor;
   #query = "";
   #selected = 0;
@@ -99,7 +99,7 @@ export class TreeSelector implements PopupContent, Focusable {
   appendPage(options: {
     nodes: SessionNodeView[];
     nextNodeOffset?: number;
-    boundaries: SessionUserMessageBoundaryView[];
+    boundaries: SessionUserMessageBoundaryObservation[];
     nextHistoryOffset?: number;
   }): void {
     this.#nodes = [...this.#nodes, ...options.nodes];
@@ -249,10 +249,11 @@ export class TreeSelector implements PopupContent, Focusable {
 function searchText(item: TreeSelection): string {
   return item.kind === "node"
     ? `${item.node.id} ${item.node.conversation_id} ${item.node.origin.type}`
-    : `${item.boundary.message.id} ${item.boundary.surface_revision} ${preview(item.boundary)}`;
+    : `${JSON.stringify(item.boundary.locator)} ${item.boundary.surface_revision} ${preview(item.boundary)}`;
 }
 
-function preview(boundary: SessionUserMessageBoundaryView): string {
+function preview(boundary: SessionUserMessageBoundaryObservation): string {
+  if (!boundary.message) return `deferred user message (${boundary.block_count} blocks)`;
   return boundary.message.content
     .map((block) => block.type === "text" ? block.text : `[${block.type}]`)
     .join(" ")

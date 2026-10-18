@@ -13,11 +13,11 @@
 //! resumption data with no inspection value), and every value that is not
 //! reached by an explicit arm below.
 
-use super::bounds::{TRACE_DETAIL_BLOCKS, TraceJson, TracePreview, TraceText, identity_fits};
+use super::bounds::{TRACE_DETAIL_BLOCKS, TraceJson, TraceText, identity_fits};
 use super::types::{TraceArtifact, TraceContentBlock, TraceToolOutcome};
 use crate::message::content::{FileReference, ImageReference};
 use crate::message::types::{
-    AssistantContentBlock, MessageBlock, ToolMessageBlock, UserContentBlock, UserSource,
+    AssistantContentBlock, ToolMessageBlock, UserContentBlock, UserSource,
 };
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
@@ -96,32 +96,6 @@ pub(super) fn user_blocks(content: &[UserContentBlock]) -> (Vec<TraceContentBloc
     (blocks, truncated)
 }
 
-/// Canonical artifact references carried by one canonical User message.
-///
-/// `limit` is the caller's own bound, because a summary row and a detail
-/// response can afford very different numbers of references. An identity
-/// that does not fit is omitted whole and reported as partial.
-pub(super) fn user_artifacts(
-    content: &[UserContentBlock],
-    limit: usize,
-) -> (Vec<TraceArtifact>, bool) {
-    let mut truncated = false;
-    let mut artifacts = Vec::new();
-    for block in content {
-        let artifact = match block {
-            UserContentBlock::Image(image) => image_artifact(image),
-            UserContentBlock::File(file) => file_artifact(file),
-            UserContentBlock::Text(_) | UserContentBlock::UploadedFile(_) => continue,
-        };
-        if !identity_fits(artifact.artifact_id.as_str()) || artifacts.len() >= limit {
-            truncated = true;
-            continue;
-        }
-        artifacts.push(artifact);
-    }
-    (artifacts, truncated)
-}
-
 /// Projects canonical Assistant content blocks.
 pub(super) fn assistant_blocks(
     content: &[AssistantContentBlock],
@@ -194,6 +168,7 @@ pub(super) const fn tool_outcome(status: &ToolExecutionStatus) -> TraceToolOutco
 /// `Debug`-formatting a status, so an internal field added to one of these
 /// variants cannot start leaking through a formatter.
 #[must_use]
+#[cfg(test)]
 pub(super) fn tool_status_detail(status: &ToolExecutionStatus) -> Option<String> {
     match status {
         ToolExecutionStatus::Success | ToolExecutionStatus::TimedOut => None,
@@ -208,6 +183,7 @@ pub(super) fn tool_status_detail(status: &ToolExecutionStatus) -> Option<String>
     }
 }
 
+#[cfg(test)]
 const fn cancellation_label(reason: crate::runtime::types::CancellationReason) -> &'static str {
     use crate::runtime::types::CancellationReason as R;
     match reason {
@@ -218,6 +194,7 @@ const fn cancellation_label(reason: crate::runtime::types::CancellationReason) -
     }
 }
 
+#[cfg(test)]
 const fn cancellation_phase_label(
     phase: crate::tools::types::ToolCancellationPhase,
 ) -> &'static str {
@@ -295,6 +272,7 @@ pub(super) fn projected_tool_result_block(
 /// Content references precede the result's separately owned artifact list, so
 /// an identity that appears as both an Image content block and a generic
 /// artifact keeps its image typing. Filenames and paths never decide type.
+#[cfg(test)]
 pub(super) fn tool_result_artifacts(result: &ToolExecutionResult) -> (Vec<TraceArtifact>, bool) {
     let mut seen = std::collections::HashSet::new();
     let mut artifacts: Vec<TraceArtifact> = Vec::new();
@@ -331,50 +309,6 @@ pub(super) fn tool_result_artifacts(result: &ToolExecutionResult) -> (Vec<TraceA
         }
     }
     (artifacts, truncated)
-}
-
-/// A one-line ledger preview of one canonical message.
-///
-/// Prose wins over structure: a message with text is previewed by its text,
-/// because that is what a reader scanning the ledger is looking for.
-pub(super) fn message_preview(message: &MessageBlock) -> Option<TracePreview> {
-    let text = match message {
-        MessageBlock::User(user) => user.content.iter().find_map(|block| match block {
-            UserContentBlock::Text(text) => Some(text.text.clone()),
-            UserContentBlock::UploadedFile(upload) => Some(upload.name.clone()),
-            UserContentBlock::Image(_) | UserContentBlock::File(_) => None,
-        }),
-        MessageBlock::Assistant(assistant) => {
-            assistant
-                .content
-                .iter()
-                .find_map(|block| match block {
-                    AssistantContentBlock::Text(text) => Some(text.text.clone()),
-                    AssistantContentBlock::Refusal(refusal) => Some(refusal.text.clone()),
-                    _ => None,
-                })
-                // A tool-call-only generation has no prose. Fall back to its
-                // reasoning so the row still says what the model was doing.
-                .or_else(|| {
-                    assistant.content.iter().find_map(|block| match block {
-                        AssistantContentBlock::Reasoning(reasoning) => reasoning.text.clone(),
-                        _ => None,
-                    })
-                })
-        }
-        MessageBlock::Tool(tool) => tool
-            .result
-            .content
-            .iter()
-            .find_map(|content| match content {
-                ToolResultContent::Text(text) => Some(text.text.clone()),
-                ToolResultContent::Json { value } => Some(value.to_string()),
-                ToolResultContent::Image(_) | ToolResultContent::File(_) => None,
-            })
-            .or_else(|| tool_status_detail(&tool.result.status)),
-    }?;
-    let preview = TracePreview::of(&text);
-    (!preview.is_empty()).then_some(preview)
 }
 
 #[cfg(test)]

@@ -46,7 +46,7 @@ mod projection_covers_mcp_origins {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one complete MCP capability fixture
 async fn capability_projection_carries_mcp_origin_metadata() {
-    use rustx::runtime_client::{RuntimeClientRequest, RuntimeClientResult};
+    use rustx::runtime_client::RuntimeClientRequest;
     use rustx::tools::types::ToolOrigin;
 
     if rustx::tools::mcp::fixture::serve_if_fixture_mode(
@@ -90,9 +90,10 @@ async fn capability_projection_carries_mcp_origin_metadata() {
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),
     });
-    let Some(RuntimeClientResult::Capability { capabilities }) = response.result else {
-        panic!("capability result");
-    };
+    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+        super::super::common::native_domain_single(
+            response.result.expect("successful native domain read"),
+        );
     assert!(capabilities.revision.get() >= 1);
     let mcp_tools: Vec<_> = capabilities
         .tools

@@ -247,7 +247,7 @@ pub(crate) fn transition(current: Option<&GoalSnapshot>, write: GoalWrite) -> Go
 }
 
 /// Bounded audit vocabulary; no objective/history and no recovery authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GoalFact {
     Written {
@@ -264,7 +264,7 @@ pub enum GoalFact {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalChange {
     Create,
@@ -297,6 +297,8 @@ pub(crate) fn journal_envelope(
     fact: GoalFact,
 ) -> crate::events::types::RuntimeEventEnvelope {
     crate::events::types::RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
         event_id: crate::runtime::identity::EventId::new(""),
         sequence: 0,
@@ -319,7 +321,7 @@ pub(crate) struct GoalToolContext<'a> {
 /// Leaf observer called under the domain publication mutex; never acquires
 /// coordinator locks.
 pub(crate) trait GoalObserver: Send + Sync {
-    fn changed(&self, view: GoalView);
+    fn changed(&self, receipt: Option<&Arc<crate::durable::inbox::GoalObservationReceipt>>);
 }
 
 /// One durable state owner.
@@ -464,6 +466,12 @@ impl GoalDomain {
         })
     }
 
+    pub(crate) fn observation_view(
+        &self,
+    ) -> Result<crate::runtime_client::goal::RuntimeClientGoalView, ConversationStoreError> {
+        self.inner.store.goal_observation_view()
+    }
+
     /// Whether durable Goal state still authorizes future autonomous work.
     ///
     /// This is a projection of `GoalSnapshot` alone — `Active` with budget
@@ -550,15 +558,17 @@ impl GoalDomain {
     /// The one durable commit + authoritative observation, under the held
     /// publication boundary.
     fn commit(&self, write: GoalWrite) -> Result<GoalResult, ConversationStoreError> {
-        let result = self.inner.store.write_goal(write)?;
-        if let Ok(goal) = &result
+        let (result, receipt) = self.inner.store.write_goal(write)?;
+        if result.is_ok()
             && let Some(observer) = self.inner.observer.get()
         {
-            observer.changed(GoalView {
-                current: Some(goal.clone()),
-            });
+            observer.changed(receipt.as_ref());
         }
         Ok(result)
+    }
+
+    pub(crate) fn publishes_observation(&self) -> bool {
+        self.inner.observer.get().is_some()
     }
 
     /// The Goal-round durable frontier: Goal CAS/accounting and ordinary
@@ -577,7 +587,7 @@ impl GoalDomain {
             .publication
             .lock()
             .expect("Goal publication lock poisoned");
-        let Some(mut goal) = self.inner.store.load_goal()? else {
+        let Some(goal) = self.inner.store.load_goal()? else {
             return Ok(None);
         };
         if goal.phase != GoalPhase::Active
@@ -590,17 +600,10 @@ impl GoalDomain {
             .inner
             .store
             .accept_goal_round(&expected, draft(expected.clone()))?;
-        if let Some(accepted) = &accepted {
-            // Exact result of the atomic CAS under this publication boundary.
-            // No fallible post-commit read and no competing domain write.
-            goal.reference.revision += 1;
-            goal.autonomous_rounds_consumed += 1;
-            goal.last_round_message_id = Some(accepted.message_id.clone());
-            if let Some(observer) = self.inner.observer.get() {
-                observer.changed(GoalView {
-                    current: Some(goal),
-                });
-            }
+        if let Some(accepted) = &accepted
+            && let Some(observer) = self.inner.observer.get()
+        {
+            observer.changed(accepted.goal_observation.as_ref());
         }
         Ok(accepted)
     }
@@ -1151,7 +1154,7 @@ mod tests {
                             .unwrap()
                             .is_some()
                     } else {
-                        other.write_goal(operation).unwrap().is_ok()
+                        other.write_goal(operation).unwrap().0.is_ok()
                     }
                 });
                 if mutation_first {

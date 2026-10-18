@@ -2,15 +2,15 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ProjectionHistory } from '../src/app/agent/ProjectionHistory';
-import { Server, projectionHead } from './fixture';
-import type { ProjectionDetail } from '../../protocol/app-server/v49';
+import { Server, projectionHead, checkpoint, snapshot } from './fixture';
+import type { ProjectionDetail } from '../../protocol/app-server/v50';
 afterEach(cleanup);
 it('reads historical activations and typed occurrences on demand without manufacturing execution rows', async () => {
   const server = new Server(); await server.attached('A');
   const first = { ...projectionHead('Local summary'), checkpoint_id: 'P1' };
   const second = { ...projectionHead('Inherited summary', true), checkpoint_id: 'P2', activation_id: '2' };
   server.handlers.set('session/projections', () => ({ type: 'projections', page: { records: [first, second], next_activation: null } }));
-  const detail: ProjectionDetail = { checkpoint: second, next_item: null, items: [{ occurrence: { checkpoint_id: 'P2', item_index: 3 }, content: { request_occurrence: null, role: 'user', message_id: null, source: 'Runtime', provenance: { type: 'derived', sources: [], checkpoint_sources: [], transformations: ['summary'], truncated: false }, blocks: [{ type: 'text', text: { text: 'Typed projected detail', truncated: false } }], truncated: false } }] };
+  const detail: ProjectionDetail = { read_cut:checkpoint(snapshot()).read_cut, checkpoint: second, next_item: null, items: [{ occurrence: { checkpoint_id: 'P2', item_index: 3 }, content: { request_occurrence: null, provenance_source:null, role: 'user', message_id: null, source: 'Runtime', provenance: { type: 'derived', sources: [], checkpoint_sources: [], transformations: ['summary'], truncated: false }, blocks: [{ type: 'text', text: { text: 'Typed projected detail', truncated: false } }], truncated: false } }] };
   server.handlers.set('session/projectionDetail', () => ({ type: 'projection_detail', detail }));
   const view = render(<ProjectionHistory client={server.client} sessionId="A"/>);
   expect(server.requests.some(item => item.request.method === 'session/projections')).toBe(false);
@@ -33,9 +33,9 @@ function deferred<T>() {
 }
 function head(id: number) { return { ...projectionHead(`Summary ${id}`), checkpoint_id: `P${id}`, activation_id: String(id) }; }
 function detailPage(id: number, indexes: number[], next: number | null): ProjectionDetail {
-  return { checkpoint: head(id), next_item: next, items: indexes.map(item_index => ({
+  return { read_cut:checkpoint(snapshot()).read_cut, checkpoint: head(id), next_item: next, items: indexes.map(item_index => ({
     occurrence: { checkpoint_id: `P${id}`, item_index },
-    content: { request_occurrence: null, role: 'user', message_id: null, source: 'Runtime',
+    content: { request_occurrence: null, provenance_source:null, role: 'user', message_id: null, source: 'Runtime',
       provenance: { type: 'derived', sources: [], checkpoint_sources: [], transformations: ['summary'], truncated: false },
       blocks: [{ type: 'text', text: { text: `P${id} item ${item_index}`, truncated: false } }], truncated: false },
   })) };
@@ -145,4 +145,36 @@ it('switching selection rejects a pending later item page and keeps the new chec
   ]);
   expect(screen.queryByText('P1 item 0')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+});
+
+it('retains each original provenance page cut when newer detail pages are merged', async () => {
+  const server = new Server(); await server.attached('A');
+  server.handlers.set('session/projections', () => ({type:'projections',page:{records:[head(1)],next_activation:null}}));
+  const original = '{"type":"derived","sources":[],"checkpoint_sources":[],"transformations":["summary"]}';
+  const first = detailPage(1,[0],1), second = detailPage(1,[1],null);
+  first.read_cut = checkpoint(snapshot(),'7').read_cut;
+  second.read_cut = checkpoint(snapshot(),'9').read_cut;
+  for (const [page,index] of [[first,0],[second,1]] as const) page.items[0]!.content.provenance_source = {
+    type:'value',field:'provenance',domain:`context.projections.1.items.${index}.provenance`,item_offset:0,path:[],encoded_bytes:String(new TextEncoder().encode(original).length),
+  };
+  server.handlers.set('session/projectionDetail', request => {
+    if(request.method!=='session/projectionDetail')throw Error('unexpected detail method');
+    return {type:'projection_detail',detail:request.params.offset===0?first:second};
+  });
+  server.handlers.set('conversation/checkpointValueRead', request => {
+    if(request.method!=='conversation/checkpointValueRead')throw Error('unexpected field method');
+    expect(request.params.cut).toEqual(first.read_cut);
+    expect(request.params.domain).toBe('context.projections.1.items.0.provenance');
+    return {type:'checkpoint_value_chunk',chunk:{cut:request.params.cut,domain:request.params.domain,item_offset:0,path:[],offset:0,bytes_base64:btoa(original),readable_end:new TextEncoder().encode(original).length,next_offset:null,representation:'canonical_json_v1'}};
+  });
+  const view=render(<ProjectionHistory client={server.client} sessionId="A"/>);
+  await openHistory(view.container);
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Inspect projected messages'})));
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'Load more'})));
+  expect(screen.getAllByRole('button',{name:'Read original value'})).toHaveLength(2);
+  await act(async()=>fireEvent.click(screen.getAllByRole('button',{name:'Read original value'})[0]!));
+  expect(screen.getByText(original)).toBeTruthy();
+  expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1);
+  expect(server.client.getSnapshot().views.A?.cursor).toBe('0');
+  await server.client.disconnect();
 });

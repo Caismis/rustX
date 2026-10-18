@@ -136,6 +136,8 @@ fn invocation() -> ModelInvocationConfig {
 
 fn envelope(event_id: &str, event: RuntimeEvent) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: EventId::new(event_id),
         sequence: 0,

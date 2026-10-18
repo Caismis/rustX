@@ -65,6 +65,8 @@ fn store(id: &str) -> SqliteConversationStore {
 
 fn event(store: &dyn ConversationStore, kind: E, seconds: i64) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: 1,
         event_id: EventId::new(format!(
             "event-{}",
@@ -253,7 +255,7 @@ fn commit_request(
                 continuation_source: snapshot.continuation_source.clone(),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
-                messages,
+                messages: messages.into(),
                 tools: snapshot.tool_definitions.clone(),
                 effective_system_prompt: snapshot.effective_system_prompt.clone(),
                 continuation: snapshot.continuation.clone(),
@@ -325,7 +327,7 @@ fn request_with_private_continuation(store: &dyn ConversationStore) -> RequestSn
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             prior.request_id,
             store.conversation_id(),
-            &[],
+            &crate::model::SelectedModelInput::default(),
             &output,
         )
         .unwrap(),
@@ -407,7 +409,7 @@ fn request_record_of<'a>(page: &'a TracePage, snapshot: &RequestSnapshot) -> &'a
             record
                 .request
                 .as_ref()
-                .is_some_and(|request| request.request_id == snapshot.request_id)
+                .is_some_and(|request| request.request_id.as_ref() == Some(&snapshot.request_id))
         })
         .expect("the exact actual request record")
 }
@@ -771,8 +773,8 @@ fn a_proposed_tool_call_does_not_imply_started_execution() {
     );
     let assistant = record_of(&projected, TraceKind::Assistant);
     assert_eq!(assistant.calls.len(), 1);
-    assert_eq!(assistant.calls[0].call_id, call.id);
-    assert_eq!(assistant.calls[0].name, "bash");
+    assert_eq!(assistant.calls[0].call_id, Some(call.id));
+    assert_eq!(assistant.calls[0].name.as_deref(), Some("bash"));
     assert!(
         assistant.tool.is_none(),
         "an Assistant record carries proposals, never execution"
@@ -1110,12 +1112,7 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
     assert_eq!(first.records[0].timing.duration_ms, Some(1000));
 }
 
-/// Parallel physical completion never reorders calls, and outcome certainty
-/// survives exactly as the canonical status recorded it.
-#[test]
-fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
-    let store = store("conv_f9d35d43-770d-7909-8a66-3e665e82ae1d");
-    start(&store);
+fn commit_parallel_tool_owner(store: &dyn ConversationStore) {
     let owner = AssistantMessageBlock {
         id: MessageId::new("canonical-tool-owner"),
         content: ["call-a", "call-b", "call-c"]
@@ -1134,7 +1131,7 @@ fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
         .append_canonical_with_event(
             &MessageBlock::Assistant(owner),
             event(
-                &store,
+                store,
                 E::AssistantMessageCommitted {
                     message_id: MessageId::new("canonical-tool-owner"),
                 },
@@ -1142,6 +1139,15 @@ fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
             ),
         )
         .unwrap();
+}
+
+/// Parallel physical completion never reorders calls, and outcome certainty
+/// survives exactly as the canonical status recorded it.
+#[test]
+fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
+    let store = store("conv_f9d35d43-770d-7909-8a66-3e665e82ae1d");
+    start(&store);
+    commit_parallel_tool_owner(&store);
     for (call, tool, at) in [
         ("call-a", "tool-a", 2),
         ("call-b", "tool-b", 3),
@@ -1196,7 +1202,14 @@ fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
     assert_eq!(
         tools
             .iter()
-            .map(|record| record.tool.as_ref().unwrap().call_id.as_str())
+            .map(|record| record
+                .tool
+                .as_ref()
+                .unwrap()
+                .call_id
+                .as_ref()
+                .expect("exact small call ID")
+                .as_str())
             .collect::<Vec<_>>(),
         ["call-a", "call-b", "call-c"],
         "start order, never physical completion order"
@@ -1601,7 +1614,7 @@ fn paging_and_the_read_cut_are_finite_and_mutate_nothing() {
         record
             .request
             .as_ref()
-            .is_some_and(|request| request.request_id == later.request_id)
+            .is_some_and(|request| request.request_id.as_ref() == Some(&later.request_id))
     }));
 
     assert!(read.page(None, 0).is_err());
@@ -1722,9 +1735,17 @@ fn the_inspection_allowlist_exposes_session_facts_and_withholds_infrastructure()
     let record = request_record_of(&projected, &frozen);
     let request_detail = detail_of(&store, &record.id);
     let tool_detail = detail_of(&store, &record_of(&projected, TraceKind::Tool).id);
+    let mut payload = serde_json::to_value(&projected).unwrap();
+    assert!(
+        payload
+            .as_object_mut()
+            .unwrap()
+            .remove("read_cut")
+            .is_some()
+    );
     let exposed = format!(
         "{}{}{}",
-        serde_json::to_string(&projected).unwrap(),
+        serde_json::to_string(&payload).unwrap(),
         serde_json::to_string(&request_detail).unwrap(),
         serde_json::to_string(&tool_detail).unwrap()
     );
@@ -1829,15 +1850,22 @@ fn record_bounds_account_for_escaping_and_omit_oversized_identities() {
     record.message_id = Some(MessageId::new(escaped.clone()));
     record.calls = (0..8)
         .map(|_| TraceToolCall {
-            call_id: ToolCallId::new(escaped.clone()),
-            tool_id: ToolId::new(escaped.clone()),
-            name: "x".repeat(4096),
+            call_id: Some(ToolCallId::new(escaped.clone())),
+            tool_id: Some(ToolId::new(escaped.clone())),
+            name: Some("x".repeat(4096)),
+            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: MessageId::new("bounded-fixture"),
+                },
+                block_index: ContentBlockIndex::new(0),
+            },
+            fields: Vec::new(),
         })
         .collect();
     let request = record.request.as_mut().unwrap();
-    request.request_id = RequestId::new(escaped.clone());
-    request.assistant_message_id = MessageId::new(escaped);
-    request.model = "\0".repeat(4096);
+    request.request_id = Some(RequestId::new(escaped.clone()));
+    request.assistant_message_id = Some(MessageId::new(escaped));
+    request.model = Some("\0".repeat(4096));
     record.attachments.push(TraceArtifact {
         artifact_id: ArtifactId::new("oversized".repeat(1000)),
         image: true,
@@ -1906,11 +1934,12 @@ fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
     record.native_id = Some("exec_db47f954-a31a-74a3-8706-22baacdc0747".into());
     snapshot.trace.records = vec![record];
     snapshot.jobs.push(RuntimeClientJob {
+        deferred_fields: Vec::new(),
         bash: None,
         job_id: crate::runtime::identity::ToolExecutionId::new(
             "exec_68344812-64a3-79bc-815f-6c3b32dfac91",
         ),
-        tool_id: ToolId::new("same-tool"),
+        tool_id: Some(ToolId::new("same-tool")),
         tool_name: "same-name".into(),
         state: BackgroundLifecycle::Running,
         progress: None,
@@ -2003,9 +2032,10 @@ fn older_records_are_repaired_and_settle_by_identity() {
     .unwrap()
     .0;
     snapshot.jobs.push(RuntimeClientJob {
+        deferred_fields: Vec::new(),
         bash: None,
         job_id: execution.clone(),
-        tool_id: ToolId::new("tool"),
+        tool_id: Some(ToolId::new("tool")),
         tool_name: "tool".into(),
         state: BackgroundLifecycle::Running,
         progress: None,
@@ -2152,7 +2182,7 @@ fn canonical_tool_artifacts_merge_by_identity_with_first_occurrence_typing() {
                 record
                     .tool
                     .as_ref()
-                    .is_some_and(|view| view.call_id == call.id)
+                    .is_some_and(|view| view.call_id.as_ref() == Some(&call.id))
             })
             .unwrap();
         assert_eq!(
@@ -2447,7 +2477,7 @@ fn mandatory_tool_identities_bound_whole_details_and_historical_result_blocks() 
             .find(|r| {
                 r.request
                     .as_ref()
-                    .is_some_and(|r| r.request_id == next.request_id)
+                    .is_some_and(|r| r.request_id.as_ref() == Some(&next.request_id))
             })
             .unwrap();
         let detail = detail_of(&store, &record.id);
@@ -2817,7 +2847,7 @@ fn a_page_boundary_cannot_turn_changed_into_initial() {
         .request
         .as_ref()
         .expect("the newest row is the second request");
-    assert_eq!(only.request_id, second.request_id);
+    assert_eq!(only.request_id, Some(second.request_id));
     assert_eq!(
         only.system_prompt.state,
         TraceSystemPromptState::Changed,
@@ -2886,7 +2916,12 @@ fn canonical_context_is_projected_from_the_frozen_request_identities() {
     assert_eq!(
         additions
             .iter()
-            .map(|addition| addition.message_id.as_str().to_owned())
+            .map(|addition| addition
+                .message_id
+                .as_ref()
+                .expect("exact normal Context identity")
+                .as_str()
+                .to_owned())
             .collect::<Vec<_>>(),
         vec!["ctx-goal", "ctx-observation", "ctx-environment"],
         "the frozen snapshot order is preserved exactly"
@@ -3088,7 +3123,14 @@ fn context_presentation_is_reproducible_and_bounded() {
     // A deterministic prefix in frozen order: never a sampled or reordered
     // subset, and never a synthetic replacement identity.
     for (index, addition) in summary.context_additions.iter().enumerate() {
-        assert_eq!(addition.message_id.as_str(), format!("ctx-{index:03}"));
+        assert_eq!(
+            addition
+                .message_id
+                .as_ref()
+                .expect("exact normal Context identity")
+                .as_str(),
+            format!("ctx-{index:03}")
+        );
     }
     drop(store);
     let reopened = SqliteConversationStore::open(id, &path).unwrap();
@@ -3116,8 +3158,38 @@ fn an_oversized_context_identity_is_omitted_whole() {
         .unwrap()
         .clone();
     assert!(summary.context_truncated);
-    assert_eq!(summary.context_additions.len(), 1);
-    assert_eq!(summary.context_additions[0].message_id.as_str(), "ctx-kept");
+    assert_eq!(summary.context_additions.len(), 2);
+    let deferred = &summary.context_additions[0];
+    assert!(deferred.message_id.is_none());
+    assert!(matches!(
+        deferred.locator,
+        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. }
+    ));
+    let original_identity = deferred
+        .fields
+        .iter()
+        .find_map(|field| match field {
+            TraceFieldSource::Content {
+                field: TraceFieldKind::MessageId,
+                binding,
+            } => Some(binding),
+            _ => None,
+        })
+        .expect("positive original canonical identity remains selected");
+    assert_eq!(
+        original_identity.source_path.as_deref(),
+        Some(&["id".to_owned()][..])
+    );
+    assert_eq!(summary.context_total, 2);
+    assert!(summary.context_next_offset.is_none());
+    assert_eq!(
+        summary.context_additions[1]
+            .message_id
+            .as_ref()
+            .expect("exact normal Context identity")
+            .as_str(),
+        "ctx-kept"
+    );
     assert!(
         !serde_json::to_string(&projected)
             .unwrap()
@@ -3614,16 +3686,28 @@ fn refreshing_many_request_cursors_reconstructs_no_immutable_presentation() {
     assert_eq!(cursors.len(), 12);
 
     probe::reset();
-    let updates = projection
-        .refresh(&cursors, Some(&quiet_snapshot(&store)))
-        .unwrap();
+    let quiet = quiet_snapshot(&store);
+    let mut updates = Vec::new();
+    for batch in cursors.chunks(TRACE_RECORD_LIMIT) {
+        updates.extend(projection.refresh(batch, Some(&quiet)).unwrap());
+    }
     assert_eq!(updates.len(), 12);
+    assert_eq!(
+        updates
+            .iter()
+            .map(|update| update.id.as_str())
+            .collect::<Vec<_>>(),
+        cursors
+            .iter()
+            .map(|cursor| cursor.0.as_str())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         probe::counts(),
         (0, 0),
         "a wider interest set reintroduced immutable reconstruction"
     );
-    // The 512-record interest bound still governs the refreshed set.
+    // Every admitted batch is complete; the ninth interest is rejected.
     assert!(
         projection
             .refresh(
@@ -3759,7 +3843,12 @@ fn two_certified_extensions_stay_distinguishable_by_exact_contributor_identity()
     assert_eq!(
         additions
             .iter()
-            .map(|addition| addition.message_id.as_str().to_owned())
+            .map(|addition| addition
+                .message_id
+                .as_ref()
+                .expect("exact normal Context identity")
+                .as_str()
+                .to_owned())
             .collect::<Vec<_>>(),
         vec!["ctx-observation", "ctx-extension-a", "ctx-extension-b"],
         "native order is exactly request_context_ids"
@@ -3840,7 +3929,10 @@ fn all_context_assembly_semantic_pairs_project_from_durable_request_start() {
     assert_eq!(
         additions
             .iter()
-            .map(|item| item.message_id.clone())
+            .map(|item| item
+                .message_id
+                .clone()
+                .expect("exact normal Context identity"))
             .collect::<Vec<_>>(),
         frozen.request_context_ids
     );
@@ -3959,7 +4051,7 @@ fn non_admitted_context_provenance_is_rejected_after_durable_request_start() {
 /// construction invariant, so clients must still preserve each supplied fact.
 #[test]
 fn predecessor_presentation_state_matrix() {
-    use super::summary::PreviousRequest;
+    use super::oracle_summary::OriginalPreviousRequest as PreviousRequest;
     use TraceSystemPromptState as S;
     use TraceToolCatalogState as T;
 
@@ -4028,11 +4120,12 @@ fn shared_predecessor_compares_complete_prompt_and_tool_definitions() {
         assert_eq!(probe::tool_count(), 1);
         let record = &newest.records[0];
         let summary = record.request.as_ref().unwrap();
-        assert_eq!(summary.request_id, second.request_id);
+        assert_eq!(summary.request_id, Some(second.request_id));
         assert_eq!(
             summary.predecessor,
             TraceRequestPredecessor::Available {
-                request_id: first.request_id.clone()
+                request_id: Some(first.request_id.clone()),
+                request_id_source: None
             }
         );
         assert_eq!(
@@ -4122,6 +4215,29 @@ fn predecessor_prompt_bounds_are_independent_and_empty_is_available() {
     }
 }
 
+fn remove_retained_request_authority(connection: &rusqlite::Connection, request: &RequestId) {
+    assert!(
+        connection
+            .execute(
+                "DELETE FROM request_snapshots WHERE request_id=?1",
+                [request.as_str()],
+            )
+            .is_err(),
+        "native foreign keys protect retained indexed request authority"
+    );
+    // This deliberate diagnostic corruption models unavailable authority.
+    // Normal retention cannot leave an orphan byte index behind.
+    connection
+        .pragma_update(None, "foreign_keys", false)
+        .unwrap();
+    connection
+        .execute(
+            "DELETE FROM request_snapshots WHERE request_id=?1",
+            [request.as_str()],
+        )
+        .unwrap();
+}
+
 /// T1-01/02/14: exercise real `SQLite` corruption, not an error synthesized by the
 /// browser or a clock. Each mutation commits before the next exact read cut.
 #[test]
@@ -4142,22 +4258,24 @@ fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
     let projection = TraceProjection::new(&store).unwrap();
     let current = projection.page(None, 1).unwrap().records.remove(0);
     let connection = rusqlite::Connection::open(&path).unwrap();
-    let original: String = connection
+    let (original, summary): (String, Vec<u8>) = connection
         .query_row(
-            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            "SELECT snapshot_json,observation_summary FROM request_snapshots WHERE request_id=?1",
             [first.request_id.as_str()],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
+    std::str::from_utf8(&summary).unwrap();
+    serde_json::from_slice::<serde_json::Value>(&summary).unwrap();
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json='{' WHERE request_id=?1",
+            "UPDATE request_snapshots SET snapshot_json='{',observation_summary=CAST('{' AS BLOB) WHERE request_id=?1",
             [first.request_id.as_str()],
         )
         .unwrap();
     assert!(
         projection.page(None, 1).is_err(),
-        "corrupt durable content is an error"
+        "corrupt consumed finite source evidence is an error"
     );
     assert!(
         projection.detail(&current.id).is_err(),
@@ -4176,16 +4294,17 @@ fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
     assert_eq!(super::summary::probe::tool_count(), 0);
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json=?1 WHERE request_id=?2",
-            [&original, first.request_id.as_str()],
+            "UPDATE request_snapshots SET snapshot_json=?1,observation_summary=?2 WHERE request_id=?3",
+            rusqlite::params![original, summary, first.request_id.as_str()],
         )
         .unwrap();
-    connection
-        .execute(
-            "DELETE FROM request_snapshots WHERE request_id=?1",
-            [first.request_id.as_str()],
-        )
-        .unwrap();
+    remove_retained_request_authority(&connection, &first.request_id);
+    assert!(
+        store
+            .request_summary_header(&first.request_id, store.presentation_frontier().unwrap())
+            .is_err(),
+        "an orphan display index never substitutes for unavailable native input"
+    );
     let newest = projection.page(None, 1).unwrap();
     let summary = newest.records[0].request.as_ref().unwrap();
     assert_eq!(
@@ -4199,7 +4318,8 @@ fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
     assert_eq!(
         summary.predecessor,
         TraceRequestPredecessor::Unavailable {
-            request_id: Some(first.request_id)
+            request_id: Some(first.request_id),
+            request_id_source: None
         }
     );
     let detail = projection
@@ -4301,7 +4421,6 @@ fn tool_summary_one_exact_proposal_and_no_lifecycle_resolution() {
 #[test]
 fn lifecycle_location_preserves_bounded_escaped_native_identities() {
     let store = store("conv_5b2c8e14-7d3a-7f19-a0c6-2e9b41d7f3a9");
-    let read = TraceProjection::new(&store).unwrap();
     let anchor = event(
         &store,
         E::AttemptStarted {
@@ -4309,11 +4428,14 @@ fn lifecycle_location_preserves_bounded_escaped_native_identities() {
         },
         0,
     );
-    let mut facts = read.anchor_facts(&anchor).unwrap();
+    store.append_event(anchor).unwrap();
+    let read = TraceProjection::new(&store).unwrap();
+    let header = read.anchor_at(&TraceCursor::at(1)).unwrap().unwrap();
+    let mut facts = read.anchor_facts(&header).unwrap();
     let escaped = "\u{0001}".repeat(super::bounds::TRACE_IDENTITY_BYTES);
     facts.location.attempt_id = Some(AttemptId::new(escaped.clone()));
     facts.location.step_id = Some(TurnId::new(escaped.clone()));
-    let update = facts.lifecycle();
+    let update = facts.lifecycle().unwrap();
     assert_eq!(
         update.location.attempt_id,
         Some(AttemptId::new(escaped.clone()))
@@ -4457,11 +4579,15 @@ fn child_lifecycle_repair_uses_exact_attempt_and_request_and_never_revives_termi
     assert_eq!(records.last().unwrap().state, TraceState::Failed);
 }
 
-fn reused_tool_history() -> (SqliteConversationStore, u64, ToolCall) {
+fn reused_tool_history() -> (
+    SqliteConversationStore,
+    crate::durable::observation::ObservationReadCut,
+    ToolCall,
+) {
     let store = store("conv_1c21f5be-5204-7123-aabd-32d315c81672");
     start(&store);
     let call = bash_call("reused-call");
-    let mut first_cut = 0;
+    let mut first_cut = None;
     for index in 0..2048 {
         let message_id = MessageId::new(format!("assistant-{index}"));
         let mut committed = event(
@@ -4487,7 +4613,7 @@ fn reused_tool_history() -> (SqliteConversationStore, u64, ToolCall) {
             )
             .unwrap();
         if index == 0 {
-            first_cut = store.presentation_frontier().unwrap();
+            first_cut = Some(store.observation_read_cut().unwrap());
         }
         append_in_step(
             &store,
@@ -4499,91 +4625,201 @@ fn reused_tool_history() -> (SqliteConversationStore, u64, ToolCall) {
             &format!("step-{index}"),
         );
     }
-    (store, first_cut, call)
+    (store, first_cut.expect("first canonical native cut"), call)
+}
+
+fn native_numeric_tool_locator(
+    store: &SqliteConversationStore,
+    locator: &TraceToolLocator,
+) -> TraceToolLocator {
+    let ledger_position = store
+        .message_ledger_position(&MessageId::new("assistant-0"))
+        .unwrap()
+        .unwrap();
+    TraceToolLocator {
+        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+            locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+                position: ledger_position,
+            },
+            block_index: locator.occurrence.block_index,
+        },
+        ..locator.clone()
+    }
+}
+
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+
+    #[test]
+    fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
+        let (store, first_cut, call) = reused_tool_history();
+        let locator = TraceToolLocator {
+            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: MessageId::new("assistant-0"),
+                },
+                block_index: ContentBlockIndex::new(1),
+            },
+            call_id: Some(call.id.clone()),
+            tool_id: Some(call.tool_id.clone()),
+        };
+        assert!(
+            TraceProjection::at_cut(&store, &first_cut)
+                .unwrap()
+                .locate_tool_at(&locator, &first_cut)
+                .unwrap()
+                .is_none(),
+            "a proposal is not an execution at the captured cut"
+        );
+        let projection = TraceProjection::new(&store).unwrap();
+        let latest = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
+        let location = projection.locate_tool(&locator).unwrap().unwrap();
+        assert!(
+            !latest
+                .records
+                .iter()
+                .any(|record| record.id == location.record_id),
+            "the located call was never in the latest page"
+        );
+        let numeric_locator = native_numeric_tool_locator(&store, &locator);
+        assert_eq!(
+            projection.locate_tool(&numeric_locator).unwrap().unwrap(),
+            location,
+            "both typed source locators resolve exactly one immutable native occurrence"
+        );
+        assert_eq!(location.page.records.last().unwrap().id, location.record_id);
+        assert!(location.page.records.len() <= TRACE_PAGE_LIMIT);
+        let record = location.page.records.last().unwrap();
+        assert_eq!(record.location.step_id, Some(TurnId::new("step-0")));
+        let detail = projection.detail(&location.record_id).unwrap().unwrap();
+        assert_eq!(
+            detail.tool.unwrap().arguments.unwrap().value["command"],
+            call.arguments["command"]
+        );
+        let wrong_block = TraceToolLocator {
+            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: MessageId::new("assistant-0"),
+                },
+                block_index: ContentBlockIndex::new(0),
+            },
+            ..locator.clone()
+        };
+        assert!(projection.locate_tool(&wrong_block).unwrap().is_none());
+        let wrong_tool = TraceToolLocator {
+            tool_id: Some(ToolId::new("tool-read")),
+            ..locator.clone()
+        };
+        assert!(projection.locate_tool(&wrong_tool).unwrap().is_none());
+        let wrong_message = TraceToolLocator {
+            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    message_id: MessageId::new("unrelated-assistant"),
+                },
+                block_index: ContentBlockIndex::new(1),
+            },
+            ..locator.clone()
+        };
+        assert!(matches!(
+            projection.locate_tool(&wrong_message),
+            Err(ConversationStoreError::InvalidReference(message))
+                if message == "content source or read evidence unavailable"
+        ));
+        let wrong_call = TraceToolLocator {
+            call_id: Some(ToolCallId::new("different-call")),
+            ..locator.clone()
+        };
+        assert!(projection.locate_tool(&wrong_call).unwrap().is_none());
+        let second = projection
+            .locate_tool(&TraceToolLocator {
+                occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                        message_id: MessageId::new("assistant-2047"),
+                    },
+                    block_index: ContentBlockIndex::new(1),
+                },
+                ..locator
+            })
+            .unwrap()
+            .unwrap();
+        assert_ne!(second.record_id, location.record_id);
+        assert_eq!(
+            second.page.records.last().unwrap().location.step_id,
+            Some(TurnId::new("step-2047"))
+        );
+    }
 }
 
 #[test]
-fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
-    let (store, first_cut, call) = reused_tool_history();
-    let locator = TraceToolLocator {
-        occurrence: ToolCallOccurrenceRef::new(
-            MessageId::new("assistant-0"),
-            ContentBlockIndex::new(1),
-        ),
-        call_id: call.id.clone(),
-        tool_id: call.tool_id.clone(),
-    };
-    assert!(
-        TraceProjection::through(&store, first_cut)
-            .locate_tool(&locator)
-            .unwrap()
-            .is_none(),
-        "a proposal is not an execution at the captured cut"
+fn t12_t14_t19_trace_constructor_keeps_native_cut_across_later_canonical_and_journal_commits() {
+    let store = store("conv_1c21f5be-5204-7123-aabd-32d315c81675");
+    start(&store);
+    let first = bash_call("captured-proposal");
+    propose_tool_call(&store, "captured-assistant", &first, 2);
+    let captured = TraceProjection::new(&store).unwrap();
+    let cut = captured.source_cut.clone().unwrap();
+    let page = captured.page(None, TRACE_PAGE_LIMIT).unwrap();
+    let locator = trace_proposal_locator("captured-assistant", &first);
+    let later = bash_call("later-proposal");
+    propose_tool_call(&store, "later-assistant", &later, 3);
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: first.id.clone(),
+            tool_id: first.tool_id.clone(),
+        },
+        4,
     );
-    let projection = TraceProjection::new(&store).unwrap();
-    let latest = projection.page(None, TRACE_PAGE_LIMIT).unwrap();
-    let location = projection.locate_tool(&locator).unwrap().unwrap();
-    assert!(
-        !latest
-            .records
-            .iter()
-            .any(|record| record.id == location.record_id),
-        "the located call was never in the latest page"
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: later.id.clone(),
+            tool_id: later.tool_id.clone(),
+        },
+        5,
     );
-    assert_eq!(location.page.records.last().unwrap().id, location.record_id);
-    assert!(location.page.records.len() <= TRACE_PAGE_LIMIT);
-    let record = location.page.records.last().unwrap();
-    assert_eq!(record.location.step_id, Some(TurnId::new("step-0")));
-    let detail = projection.detail(&location.record_id).unwrap().unwrap();
-    assert_eq!(
-        detail.tool.unwrap().arguments.unwrap().value["command"],
-        call.arguments["command"]
-    );
-    let wrong_block = TraceToolLocator {
-        occurrence: ToolCallOccurrenceRef::new(
-            MessageId::new("assistant-0"),
-            ContentBlockIndex::new(0),
-        ),
-        ..locator.clone()
-    };
-    assert!(projection.locate_tool(&wrong_block).unwrap().is_none());
-    let wrong_tool = TraceToolLocator {
-        tool_id: ToolId::new("tool-read"),
-        ..locator.clone()
-    };
-    assert!(projection.locate_tool(&wrong_tool).unwrap().is_none());
-    let wrong_message = TraceToolLocator {
-        occurrence: ToolCallOccurrenceRef::new(
-            MessageId::new("unrelated-assistant"),
-            ContentBlockIndex::new(1),
-        ),
-        ..locator.clone()
-    };
+    assert_eq!(captured.source_cut.as_ref(), Some(&cut));
+    assert!(captured.locate_tool(&locator).unwrap().is_none());
+    let future = trace_proposal_locator("later-assistant", &later);
     assert!(matches!(
-        projection.locate_tool(&wrong_message),
-        Err(ConversationStoreError::InvalidReference(message))
-            if message == "message unrelated-assistant is unavailable"
+        captured.locate_tool(&future),
+        Err(ConversationStoreError::InvalidReference(_)),
     ));
-    let wrong_call = TraceToolLocator {
-        call_id: ToolCallId::new("different-call"),
-        ..locator.clone()
-    };
-    assert!(projection.locate_tool(&wrong_call).unwrap().is_none());
-    let second = projection
-        .locate_tool(&TraceToolLocator {
-            occurrence: ToolCallOccurrenceRef::new(
-                MessageId::new("assistant-2047"),
-                ContentBlockIndex::new(1),
-            ),
-            ..locator
-        })
-        .unwrap()
-        .unwrap();
-    assert_ne!(second.record_id, location.record_id);
-    assert_eq!(
-        second.page.records.last().unwrap().location.step_id,
-        Some(TurnId::new("step-2047"))
-    );
+    let latest = TraceProjection::new(&store).unwrap();
+    assert!(latest.locate_tool(&locator).unwrap().is_some());
+    assert!(latest.locate_tool(&future).unwrap().is_some());
+    let journal_only = TraceProjection::through(&store, cut.read.journal);
+    assert!(matches!(
+        journal_only.locate_tool(&locator),
+        Err(ConversationStoreError::InvalidReference(_)),
+    ));
+    assert!(matches!(
+        journal_only.locate_tool_at(&locator, &cut),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    let explicit = TraceProjection::at_cut(&store, &cut).unwrap();
+    assert!(explicit.locate_tool_at(&locator, &cut).unwrap().is_none());
+    assert_eq!(captured.page(None, TRACE_PAGE_LIMIT).unwrap(), page);
+    assert!(matches!(
+        journal_only.page(None, TRACE_PAGE_LIMIT),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    assert_eq!(explicit.page(None, TRACE_PAGE_LIMIT).unwrap(), page);
+}
+
+fn trace_proposal_locator(message: &str, call: &ToolCall) -> TraceToolLocator {
+    TraceToolLocator {
+        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                message_id: MessageId::new(message),
+            },
+            block_index: ContentBlockIndex::new(0),
+        },
+        call_id: Some(call.id.clone()),
+        tool_id: Some(call.tool_id.clone()),
+    }
 }
 
 #[test]
@@ -4593,12 +4829,14 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
     let call = bash_call("proposal-only");
     propose_tool_call(&source, "proposal", &call, 2);
     let locator = TraceToolLocator {
-        occurrence: ToolCallOccurrenceRef::new(
-            MessageId::new("proposal"),
-            ContentBlockIndex::new(0),
-        ),
-        call_id: call.id.clone(),
-        tool_id: call.tool_id.clone(),
+        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                message_id: MessageId::new("proposal"),
+            },
+            block_index: ContentBlockIndex::new(0),
+        },
+        call_id: Some(call.id.clone()),
+        tool_id: Some(call.tool_id.clone()),
     };
     assert!(
         TraceProjection::new(&source)
@@ -4642,4 +4880,11 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
             .is_none()
     );
     assert_eq!(child.presentation_frontier().unwrap(), 0);
+}
+
+mod frozen_tests {
+    include!("frozen_tests.rs");
+}
+mod inspection_tests {
+    include!("inspection_tests.rs");
 }

@@ -470,16 +470,73 @@ pub fn canonical_input(messages: &[MessageBlock]) -> Vec<ModelInputMessage> {
 /// Returns an error when a request-only item has no anchor or its frozen
 /// `BeforeMessage` identity is absent from the assembled provider-neutral
 /// request.
-pub fn assemble_model_input(
-    historical: &[ModelInputMessage],
+pub fn assemble_model_input<'a>(
+    historical: impl IntoIterator<Item = &'a ModelInputMessage>,
     staged: &[MessageBlock],
     carryover: Option<&RenderedUnresolvedOutputCarryover>,
     anchor: Option<&RequestOnlyInsertionAnchor>,
 ) -> Result<Vec<ModelInputMessage>, String> {
-    let mut messages = historical.to_vec();
+    assemble_with_location(historical, staged, carryover, anchor).map(|(messages, _)| messages)
+}
+
+/// Carry the native selection through the exact append and insertion that
+/// construct this request. The historical prefix is not scanned for equality.
+pub(crate) fn assemble_selected_model_input(
+    scope: &crate::runtime::identity::ConversationId,
+    historical: &super::SelectedModelInput,
+    manifest: &super::SelectedInputManifest,
+    staged: &[MessageBlock],
+    carryover: Option<&RenderedUnresolvedOutputCarryover>,
+    anchor: Option<&RequestOnlyInsertionAnchor>,
+) -> Result<(super::SelectedModelInput, super::SelectedInputManifest), String> {
+    #[cfg(test)]
+    let _reads = super::selected_input::PreparationReads::new();
+    #[cfg(test)]
+    let _profile = crate::agent::execution::attribution::Timer::new(
+        crate::agent::execution::attribution::Phase::InputAssembly,
+    );
+    if !manifest.messages().same_input(historical) {
+        return Err("historical input differs from its native manifest".into());
+    }
+    let mut selected = manifest.clone();
+    for message in staged {
+        selected = selected.append(scope, &ModelInputMessage::Canonical(message.clone()));
+    }
+    if let Some(carryover) = carryover {
+        let anchor = anchor
+            .ok_or_else(|| "request-only carryover has no frozen insertion anchor".to_owned())?;
+        let position = match anchor {
+            RequestOnlyInsertionAnchor::AfterCanonical => historical.len(),
+            RequestOnlyInsertionAnchor::BeforeMessage(id) => selected
+                .messages()
+                .iter()
+                .position(|message| message.canonical_id() == Some(id))
+                .ok_or_else(|| {
+                    format!("request-only carryover anchor message {id} is absent from the request")
+                })?,
+        };
+        selected = selected.insert(
+            scope,
+            position,
+            &ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+                carryover.clone(),
+            )),
+        );
+    }
+    Ok((selected.messages(), selected))
+}
+
+fn assemble_with_location<'a>(
+    historical: impl IntoIterator<Item = &'a ModelInputMessage>,
+    staged: &[MessageBlock],
+    carryover: Option<&RenderedUnresolvedOutputCarryover>,
+    anchor: Option<&RequestOnlyInsertionAnchor>,
+) -> Result<(Vec<ModelInputMessage>, Option<usize>), String> {
+    let mut messages: Vec<_> = historical.into_iter().cloned().collect();
+    let historical_len = messages.len();
     messages.extend(canonical_input(staged));
     let Some(carryover) = carryover else {
-        return Ok(messages);
+        return Ok((messages, None));
     };
     let anchor =
         anchor.ok_or_else(|| "request-only carryover has no frozen insertion anchor".to_owned())?;
@@ -492,7 +549,7 @@ pub fn assemble_model_input(
                     "request-only carryover anchor message {message_id} is absent from the request"
                 )
             })?,
-        RequestOnlyInsertionAnchor::AfterCanonical => historical.len(),
+        RequestOnlyInsertionAnchor::AfterCanonical => historical_len,
     };
     messages.insert(
         position,
@@ -500,7 +557,7 @@ pub fn assemble_model_input(
             carryover.clone(),
         )),
     );
-    Ok(messages)
+    Ok((messages, Some(position)))
 }
 
 #[cfg(test)]
@@ -530,5 +587,111 @@ mod tests {
         assert!(rendered.contains("\\u005D"));
         assert!(!rendered.contains("[carryover record]"));
         assert!(!rendered.contains("</close>"));
+    }
+}
+
+#[cfg(test)]
+mod selected_tests {
+    use super::*;
+    use crate::message::{
+        content::TextBlock,
+        types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource},
+    };
+    use crate::model::projected::FrozenModelInput;
+    use crate::runtime::identity::ConversationId;
+
+    fn original(id: &str) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: format!("body {id}"),
+            })],
+        })
+    }
+
+    #[test]
+    fn selected_assembly_carries_exact_inherited_prefix_staged_append_and_actual_request_only_insertion()
+     {
+        let ancestor = ConversationId::generate();
+        let local = ConversationId::generate();
+        let historical = canonical_input(&[original("old-a"), original("old-b")]);
+        let root = crate::model::SelectedInputManifest::from_messages(&ancestor, &historical);
+        let unchanged = serde_json::to_vec(&root).unwrap();
+        let staged = [original("new-a"), original("new-b")];
+        let carryover = RenderedUnresolvedOutputCarryover {
+            source_stream_id: PublicationStreamId::new("original-publication"),
+            source_settlement: UnresolvedOutputSettlement::Unaccepted,
+            records: Vec::new(),
+            omitted_blocks: CarryoverOmissionCounts::default(),
+        };
+        for anchor in [
+            RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new("old-b")),
+            RequestOnlyInsertionAnchor::AfterCanonical,
+        ] {
+            let (messages, selected) = assemble_selected_model_input(
+                &local,
+                &root.messages(),
+                &root,
+                &staged,
+                Some(&carryover),
+                Some(&anchor),
+            )
+            .unwrap();
+            assert_eq!(
+                messages.to_vec(),
+                assemble_model_input(&historical, &staged, Some(&carryover), Some(&anchor))
+                    .unwrap()
+            );
+            let position = if matches!(anchor, RequestOnlyInsertionAnchor::BeforeMessage(_)) {
+                1
+            } else {
+                2
+            };
+            let mut expected: Vec<_> = root.iter().cloned().collect();
+            expected.extend(
+                crate::model::SelectedInputManifest::from_messages(
+                    &local,
+                    &canonical_input(&staged),
+                )
+                .iter()
+                .cloned(),
+            );
+            expected.insert(
+                position,
+                FrozenModelInput::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+                    carryover.clone(),
+                )),
+            );
+            assert_eq!(selected.iter().cloned().collect::<Vec<_>>(), expected);
+            assert_eq!(serde_json::to_vec(&root).unwrap(), unchanged);
+            assert_eq!(selected.len(), 5);
+            assert!(
+                matches!(selected.get(0), Some(FrozenModelInput::Original(source)) if source.conversation_id == ancestor)
+            );
+            assert!(
+                matches!(selected.get(4), Some(FrozenModelInput::Original(source)) if source.conversation_id == local)
+            );
+        }
+        let (same, selected) =
+            assemble_selected_model_input(&local, &root.messages(), &root, &[], None, None)
+                .unwrap();
+        assert_eq!(same.to_vec(), historical);
+        assert_eq!(serde_json::to_vec(&selected).unwrap(), unchanged);
+        assert!(
+            assemble_selected_model_input(
+                &local,
+                &root.messages(),
+                &root,
+                &[],
+                Some(&carryover),
+                Some(&RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new(
+                    "absent"
+                )))
+            )
+            .is_err()
+        );
     }
 }

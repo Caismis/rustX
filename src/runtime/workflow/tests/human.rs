@@ -48,10 +48,12 @@ struct Published(tokio::sync::mpsc::UnboundedSender<InteractionRequest>);
 impl InteractionObserver for Published {
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &std::sync::Arc<crate::runtime::interaction::PendingInteractionSource>,
         _: &RuntimeEventEnvelope,
         _: crate::durable::TranscriptCursor,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
+        let request = source.request();
         self.0.send(request.clone()).unwrap();
     }
     fn on_settled(
@@ -59,6 +61,7 @@ impl InteractionObserver for Published {
         _: &crate::runtime::identity::InteractionId,
         _: &InteractionOutcome,
         _: Option<&(RuntimeEventEnvelope, crate::durable::TranscriptCursor)>,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
     }
 }

@@ -37,24 +37,65 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
-/// Suites that must run in full on a platform beyond Linux completeness.
+/// Suites that must run in full in a profile on a platform, beyond FULL's
+/// Linux completeness.
 ///
-/// Linux is the complete platform: every runnable test there must execute,
-/// so it needs no entries. macOS deliberately runs only the platform-sensitive
+/// FULL on Linux is complete: every runnable test there must execute. FAST
+/// entries name what every FAST run must execute (the capacity suite
+/// excluded), whatever the change touches. macOS deliberately runs only the platform-sensitive
 /// classes; these entries name the ones whose loss would silently remove
 /// native process, signal, socket and filesystem proof. The deterministic
 /// contract suites and the pure `contracts`/`provider` targets are Linux-only
 /// by design and are intentionally absent.
 const REQUIREMENTS: &[Requirement] = &[
-    Requirement::new(Platform::Macos, "lib", "boundary_suites::"),
-    Requirement::new(Platform::Macos, "test durable", ""),
-    Requirement::new(Platform::Macos, "test process", ""),
-    Requirement::new(Platform::Macos, "test subagent", ""),
-    Requirement::new(Platform::Macos, "test tools", ""),
-    Requirement::new(Platform::Macos, "test conformance", ""),
-    Requirement::new(Platform::Macos, "test cfg3_catalog", ""),
-    Requirement::new(Platform::Macos, "test cfg3_managed_output", ""),
+    // FAST, on every push touching Rust: the deterministic Agent Loop and
+    // runtime contracts and the real-process App Server and CLI workflows.
+    // libtest filters are substrings, so each names an unambiguous path.
+    Requirement::new(Profile::Fast, Platform::Linux, "lib", "scripted_suites::"),
+    Requirement::new(
+        Profile::Fast,
+        Platform::Linux,
+        "lib",
+        "runtime::conversation_runtime::",
+    ),
+    Requirement::new(Profile::Fast, Platform::Linux, "test process", ""),
+    // FULL executes the whole capacity suite (Linux completeness covers it
+    // too; this names it so an emptied or renamed suite fails).
+    Requirement::new(Profile::Full, Platform::Linux, "lib", SCALE_SUITE),
+    // macOS full: the lib test binary's in-crate boundary suites.
+    Requirement::new(Profile::Full, Platform::Macos, "lib", "boundary_suites::"),
+    // macOS core, in both profiles: every external boundary target.
+    Requirement::new(Profile::Fast, Platform::Macos, "test durable", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test process", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test subagent", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test tools", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test conformance", ""),
+    Requirement::new(Profile::Fast, Platform::Macos, "test cfg3_catalog", ""),
+    Requirement::new(
+        Profile::Fast,
+        Platform::Macos,
+        "test cfg3_managed_output",
+        "",
+    ),
+    Requirement::new(Profile::Full, Platform::Macos, "test durable", ""),
+    Requirement::new(Profile::Full, Platform::Macos, "test process", ""),
+    Requirement::new(Profile::Full, Platform::Macos, "test subagent", ""),
+    Requirement::new(Profile::Full, Platform::Macos, "test tools", ""),
+    Requirement::new(Profile::Full, Platform::Macos, "test conformance", ""),
+    Requirement::new(Profile::Full, Platform::Macos, "test cfg3_catalog", ""),
+    Requirement::new(
+        Profile::Full,
+        Platform::Macos,
+        "test cfg3_managed_output",
+        "",
+    ),
 ];
+
+/// The module name that marks a capacity test: its value comes from its scale
+/// (a thousand turns, hundreds of messages, deep pagination), so it runs in
+/// FULL, which must execute every one of them, and FAST requirements exclude
+/// it. FAST lanes skip it by this name.
+const SCALE_SUITE: &str = "::scale::";
 
 /// Command prefixes that only measure the Cargo process they wrap.
 const TRANSPARENT_WRAPPERS: &[&[&str]] = &[&["/usr/bin/time", "-l"]];
@@ -121,6 +162,27 @@ impl fmt::Display for Platform {
     }
 }
 
+/// The verification profile a job belongs to: FAST jobs give per-push
+/// feedback, FULL jobs are the complete verification of an integration
+/// candidate, `main` and the nightly run. A job declares it as
+/// `env: VERIFICATION_PROFILE` (not a `RUST*` or `CARGO*` name, which the
+/// Rust cache would hash into its key), and runs only when the workflow's
+/// `plan` job selects it (`.github/scripts/verification.py`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Profile {
+    Fast,
+    Full,
+}
+
+impl fmt::Display for Profile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Fast => "FAST",
+            Self::Full => "FULL",
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
     Lib,
@@ -175,18 +237,26 @@ impl fmt::Display for Target {
     }
 }
 
-/// A suite that must execute entirely on `platform`: every runnable test of
-/// `target` matching the libtest `filter` (all of them when empty).
+/// A suite that must execute entirely in `profile` on `platform`: every
+/// runnable test of `target` matching the libtest `filter` (all of them when
+/// empty).
 #[derive(Clone, Copy, Debug)]
 struct Requirement {
+    profile: Profile,
     platform: Platform,
     target: &'static str,
     filter: &'static str,
 }
 
 impl Requirement {
-    const fn new(platform: Platform, target: &'static str, filter: &'static str) -> Self {
+    const fn new(
+        profile: Profile,
+        platform: Platform,
+        target: &'static str,
+        filter: &'static str,
+    ) -> Self {
         Self {
+            profile,
             platform,
             target,
             filter,
@@ -195,9 +265,12 @@ impl Requirement {
 
     fn describe(&self) -> String {
         if self.filter.is_empty() {
-            format!("{} on {}", self.target, self.platform)
+            format!("{} on {} {}", self.target, self.platform, self.profile)
         } else {
-            format!("{} `{}` on {}", self.target, self.filter, self.platform)
+            format!(
+                "{} `{}` on {} {}",
+                self.target, self.filter, self.platform, self.profile
+            )
         }
     }
 }
@@ -208,6 +281,11 @@ struct Step {
     job: String,
     name: String,
     platform: Platform,
+    profile: Profile,
+    /// Selected by the plan for the change's affected components only
+    /// (`fromJSON(needs.plan.outputs.steps)['<job>:<key>']`); it never
+    /// satisfies a FAST requirement.
+    affected: bool,
     /// `--no-run` compiles without executing; it assigns nothing.
     executes: bool,
     features: Vec<String>,
@@ -219,7 +297,10 @@ struct Step {
 
 impl Step {
     fn label(&self) -> String {
-        format!("{} job `{}` step `{}`", self.platform, self.job, self.name)
+        format!(
+            "{} {} job `{}` step `{}`",
+            self.platform, self.profile, self.job, self.name
+        )
     }
 
     fn libtest(&self, filters: &[String], skips: &[String]) -> Vec<String> {
@@ -313,12 +394,24 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                     continue;
                 }
             };
+            let profiles = match profiles_of(id, job) {
+                Ok(profiles) => profiles,
+                Err(problem) => {
+                    errors.push(located(problem));
+                    continue;
+                }
+            };
+            let affected = match affected_step(id, &profiles, &step["if"]) {
+                Ok(affected) => affected,
+                Err(problem) => {
+                    errors.push(located(problem));
+                    continue;
+                }
+            };
             for (key, value) in [
-                ("if", &job["if"]),
                 ("strategy", &job["strategy"]),
                 ("continue-on-error", &job["continue-on-error"]),
                 ("defaults", &job["defaults"]),
-                ("if", &step["if"]),
                 ("continue-on-error", &step["continue-on-error"]),
                 ("working-directory", &step["working-directory"]),
                 ("shell", &step["shell"]),
@@ -331,12 +424,15 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                 }
             }
             match parse_command(run, targets) {
-                Ok(command) => steps.push(Step {
+                // A job in both profiles contributes its steps to each.
+                Ok(command) => steps.extend(profiles.iter().map(|profile| Step {
                     job: id.into(),
-                    name,
+                    name: name.clone(),
                     platform,
-                    ..command
-                }),
+                    profile: *profile,
+                    affected,
+                    ..command.clone()
+                })),
                 Err(problem) => errors.push(located(problem)),
             }
         }
@@ -353,6 +449,74 @@ fn platform_of(job: &serde_yaml::Value) -> Result<Platform, String> {
         Some(runner) if runner.starts_with("ubuntu-") => Ok(Platform::Linux),
         Some(runner) if runner.starts_with("macos-") => Ok(Platform::Macos),
         _ => Err(format!("unsupported runs-on {:?}", job["runs-on"])),
+    }
+}
+
+/// A test job's profiles (`VERIFICATION_PROFILE`: `fast`, `full`, or both), and the
+/// one job condition the check understands: selection by the `plan` job's
+/// `run` map under the job's own id. Any other condition would make the job's
+/// selection something this check cannot see.
+fn profiles_of(id: &str, job: &serde_yaml::Value) -> Result<Vec<Profile>, String> {
+    let gate = format!("fromJSON(needs.plan.outputs.run)['{id}']");
+    if job["if"].as_str() != Some(gate.as_str()) {
+        return Err(format!(
+            "a cargo test job must be selected by exactly `if: {gate}`, found {:?}",
+            job["if"]
+        ));
+    }
+    let declared = job["env"]["VERIFICATION_PROFILE"]
+        .as_str()
+        .unwrap_or_default();
+    let profiles: Option<Vec<Profile>> = declared
+        .split_whitespace()
+        .map(|profile| match profile {
+            "fast" => Some(Profile::Fast),
+            "full" => Some(Profile::Full),
+            _ => None,
+        })
+        .collect();
+    match profiles {
+        Some(mut profiles) if !profiles.is_empty() => {
+            profiles.sort();
+            profiles.dedup();
+            Ok(profiles)
+        }
+        _ => Err(format!(
+            "a cargo test job must declare `env: VERIFICATION_PROFILE` as `fast`, `full` or \
+             `fast full`, found {declared:?}"
+        )),
+    }
+}
+
+/// Whether a step runs only for affected components. The one step condition
+/// understood is the plan's `steps` map under `<job>:<key>`, and only in a
+/// FAST-only job: FULL never depends on what a change touches.
+fn affected_step(
+    job: &str,
+    profiles: &[Profile],
+    condition: &serde_yaml::Value,
+) -> Result<bool, String> {
+    let Some(condition) = condition.as_str() else {
+        return if condition.is_null() {
+            Ok(false)
+        } else {
+            Err(format!("unsupported step `if` {condition:?}"))
+        };
+    };
+    let prefix = format!("fromJSON(needs.plan.outputs.steps)['{job}:");
+    let key = condition
+        .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_suffix("']"))
+        .filter(|key| !key.is_empty() && !key.contains(['\'', ':']));
+    match key {
+        Some(_) if profiles == [Profile::Fast] => Ok(true),
+        Some(_) => Err("`if` makes a FULL cargo test step conditional; FULL steps \
+                        always run"
+            .into()),
+        None => Err(format!(
+            "`if` makes the cargo test step conditional; the lane check understands only \
+             `{prefix}<component>']`, found {condition:?}"
+        )),
     }
 }
 
@@ -406,6 +570,8 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         filters: Vec::new(),
         skips: Vec::new(),
         exact: false,
+        profile: Profile::Full,
+        affected: false,
     };
     let of = |kind: Kind| targets.iter().filter(move |target| target.kind == kind);
     let mut cargo = cargo.iter();
@@ -585,15 +751,17 @@ fn check(
     let executing: Vec<&Step> = steps.iter().filter(|step| step.executes).collect();
 
     // Assignment and requirement placement need no discovery; every host
-    // checks them for the whole workflow.
+    // checks them for the whole workflow. FULL is the complete profile: a
+    // target only FAST selects is not assigned.
     for target in targets {
-        if !executing
-            .iter()
-            .any(|step| step.platform == Platform::Linux && step.targets.contains(target))
-        {
+        if !executing.iter().any(|step| {
+            step.platform == Platform::Linux
+                && step.profile == Profile::Full
+                && step.targets.contains(target)
+        }) {
             report.findings.push(format!(
-                "{target} is not selected by any executing cargo test step on linux \
-                 (compile-only --no-run steps do not count); assign it to a lane"
+                "{target} is not selected by any executing FULL cargo test step on linux \
+                 (compile-only --no-run steps and FAST steps do not count); assign it to a lane"
             ));
         }
     }
@@ -608,7 +776,9 @@ fn check(
             )),
             Some(target) => {
                 if !executing.iter().any(|step| {
-                    step.platform == requirement.platform && step.targets.contains(target)
+                    step.platform == requirement.platform
+                        && step.profile == requirement.profile
+                        && step.targets.contains(target)
                 }) {
                     report.findings.push(format!(
                         "required suite {} is selected by no executing cargo test step",
@@ -636,15 +806,23 @@ fn check(
         .copied()
         .filter(|step| step.platform == host && (jobs.is_empty() || jobs.contains(&step.job)))
         .collect();
-    let evaluated: BTreeSet<&Target> = focus.iter().flat_map(|step| &step.targets).collect();
+    // Each profile's coverage is its own: FAST never borrows FULL's steps.
+    let evaluated: BTreeSet<(Profile, &Target)> = focus
+        .iter()
+        .flat_map(|step| step.targets.iter().map(|target| (step.profile, target)))
+        .collect();
 
-    for target in evaluated {
+    for (profile, target) in evaluated {
         let selecting: Vec<&Step> = executing
             .iter()
             .copied()
-            .filter(|step| step.platform == host && step.targets.contains(target))
+            .filter(|step| {
+                step.platform == host && step.profile == profile && step.targets.contains(target)
+            })
             .collect();
         let mut covered: BTreeMap<&[String], BTreeSet<String>> = BTreeMap::new();
+        // What every run of the profile executes, whatever the change touches.
+        let mut unconditional: BTreeMap<&[String], BTreeSet<String>> = BTreeMap::new();
         for step in &selecting {
             let arguments = step.libtest(&step.filters, &step.skips);
             match discovery.runnable(&step.features, target, &arguments) {
@@ -660,6 +838,12 @@ fn check(
                             step.label()
                         ));
                     }
+                    if !step.affected {
+                        unconditional
+                            .entry(step.features.as_slice())
+                            .or_default()
+                            .extend(runnable.iter().cloned());
+                    }
                     covered
                         .entry(step.features.as_slice())
                         .or_default()
@@ -669,14 +853,14 @@ fn check(
             }
         }
         for (features, covered) in &covered {
-            if host == Platform::Linux {
+            if host == Platform::Linux && profile == Profile::Full {
                 match discovery.runnable(features, target, &[]) {
                     Ok((universe, _)) => {
                         let missing: Vec<&String> = universe.difference(covered).collect();
                         if !missing.is_empty() {
                             report.findings.push(format!(
                                 "{} runnable test(s) of {target} on linux are executed by no \
-                                 lane, e.g. {:?}",
+                                 FULL lane, e.g. {:?}",
                                 missing.len(),
                                 &missing[..missing.len().min(5)]
                             ));
@@ -686,20 +870,26 @@ fn check(
                 }
             }
             for requirement in requirements.iter().filter(|requirement| {
-                requirement.platform == host && requirement.target == target.to_string()
+                requirement.platform == host
+                    && requirement.profile == profile
+                    && requirement.target == target.to_string()
             }) {
-                let filters: &[String] = if requirement.filter.is_empty() {
-                    &[]
+                let mut filters: Vec<String> = if requirement.filter.is_empty() {
+                    Vec::new()
                 } else {
-                    &[requirement.filter.to_owned()]
+                    vec![requirement.filter.to_owned()]
                 };
-                match discovery.runnable(features, target, filters) {
+                if requirement.profile == Profile::Fast {
+                    filters.extend(["--skip".to_owned(), SCALE_SUITE.to_owned()]);
+                }
+                match discovery.runnable(features, target, &filters) {
                     Ok((required, _)) if required.is_empty() => report.findings.push(format!(
                         "required suite {} matches no runnable test; was it renamed?",
                         requirement.describe()
                     )),
                     Ok((required, _)) => {
-                        let missing: Vec<&String> = required.difference(covered).collect();
+                        let always = unconditional.get(features).cloned().unwrap_or_default();
+                        let missing: Vec<&String> = required.difference(&always).collect();
                         if !missing.is_empty() {
                             report.findings.push(format!(
                                 "required suite {}: {} runnable test(s) are executed by no \
@@ -853,6 +1043,7 @@ mod tests {
                     ("scripted_suites::agent::order", false),
                     ("boundary_suites::durable::kill", false),
                     ("manager::tests::residency", false),
+                    ("model::scale::thousand_turns", false),
                 ],
             ),
             (Target::new(Kind::Bin, "rustx"), vec![]),
@@ -871,8 +1062,21 @@ mod tests {
     /// The repository's lane shape in miniature.
     const WORKFLOW: &str = r"
 jobs:
+  fast:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['fast']
+    env:
+      VERIFICATION_PROFILE: fast
+    steps:
+      - name: Core
+        run: 'cargo test --lib --all-features -- model:: --skip ::scale::'
   contracts:
     runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['contracts']
+    env:
+      VERIFICATION_PROFILE: full
     steps:
       - uses: actions/checkout@v4
       - name: Build
@@ -883,6 +1087,10 @@ jobs:
         run: cargo test --test contracts --all-features
   boundaries:
     runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['boundaries']
+    env:
+      VERIFICATION_PROFILE: full
     steps:
       - name: In-crate
         run: 'cargo test --lib --all-features -- boundary_suites::'
@@ -894,6 +1102,10 @@ jobs:
           --test durable
   platform:
     runs-on: macos-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['platform']
+    env:
+      VERIFICATION_PROFILE: fast full
     steps:
       - name: Compile
         run: /usr/bin/time -l cargo test --lib --all-features --no-run
@@ -904,8 +1116,11 @@ jobs:
 ";
 
     const MACOS: &[Requirement] = &[
-        Requirement::new(Platform::Macos, "lib", "boundary_suites::"),
-        Requirement::new(Platform::Macos, "test durable", ""),
+        Requirement::new(Profile::Full, Platform::Macos, "lib", "boundary_suites::"),
+        Requirement::new(Profile::Full, Platform::Macos, "test durable", ""),
+        Requirement::new(Profile::Fast, Platform::Macos, "test durable", ""),
+        Requirement::new(Profile::Fast, Platform::Linux, "lib", "model::"),
+        Requirement::new(Profile::Full, Platform::Linux, "lib", "::scale::"),
     ];
 
     fn run(workflow: &str, host: Platform, fake: &Fake) -> Vec<String> {
@@ -938,8 +1153,8 @@ jobs:
         assert_eq!(
             findings,
             [
-                "test fresh is not selected by any executing cargo test step on linux \
-              (compile-only --no-run steps do not count); assign it to a lane"
+                "test fresh is not selected by any executing FULL cargo test step on linux \
+              (compile-only --no-run steps and FAST steps do not count); assign it to a lane"
             ]
         );
     }
@@ -971,7 +1186,10 @@ jobs:
             findings_containing(&findings, "selects no runnable test of lib"),
             1
         );
-        assert_eq!(findings_containing(&findings, "executed by no lane"), 1);
+        assert_eq!(
+            findings_containing(&findings, "executed by no FULL lane"),
+            1
+        );
     }
 
     #[test]
@@ -1000,8 +1218,8 @@ jobs:
         assert_eq!(
             findings,
             [
-                "linux job `boundaries` step `In-crate`: filter `model::measure` matches only \
-              #[ignore]d tests"
+                "linux FULL job `boundaries` step `In-crate`: filter `model::measure` matches \
+              only #[ignore]d tests"
             ]
         );
     }
@@ -1014,8 +1232,10 @@ jobs:
         assert_eq!(
             findings,
             [
-                "macos job `platform` step `Native`: --skip `session_manager::tests::` excludes no \
-              test; a stale selector"
+                "macos FAST job `platform` step `Native`: --skip `session_manager::tests::` \
+              excludes no test; a stale selector",
+                "macos FULL job `platform` step `Native`: --skip `session_manager::tests::` \
+              excludes no test; a stale selector",
             ]
         );
     }
@@ -1075,7 +1295,7 @@ jobs:
         assert_eq!(
             macos,
             [
-                "required suite lib `boundary_suites::` on macos matches no runnable test; \
+                "required suite lib `boundary_suites::` on macos FULL matches no runnable test; \
               was it renamed?"
             ]
         );
@@ -1086,7 +1306,10 @@ jobs:
         );
         let macos = run(&workflow, Platform::Macos, &inventory());
         assert_eq!(
-            findings_containing(&macos, "required suite lib `boundary_suites::` on macos: 1"),
+            findings_containing(
+                &macos,
+                "required suite lib `boundary_suites::` on macos FULL: 1"
+            ),
             1
         );
     }
@@ -1142,14 +1365,172 @@ jobs:
             ),
         ] {
             let workflow = format!(
-                "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - name: s\n        run: {}\n",
+                "jobs:\n  j:\n    runs-on: ubuntu-latest\n    if: fromJSON(needs.plan.outputs.run)['j']\n    env:\n      VERIFICATION_PROFILE: full\n    steps:\n      - name: s\n        run: {}\n",
                 serde_json::to_string(run).unwrap()
             );
             let errors = parse_workflow(&workflow, &targets()).unwrap_err();
             assert!(errors[0].contains(problem), "{run}: {errors:?}");
         }
-        let conditional = "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - name: s\n        if: false\n        run: cargo test --lib\n";
+        let conditional = "jobs:\n  j:\n    runs-on: ubuntu-latest\n    if: fromJSON(needs.plan.outputs.run)['j']\n    env:\n      VERIFICATION_PROFILE: full\n    steps:\n      - name: s\n        if: false\n        run: cargo test --lib\n";
         assert!(parse_workflow(conditional, &targets()).unwrap_err()[0].contains("`if`"));
+    }
+
+    #[test]
+    fn a_test_job_must_declare_its_profile_and_plan_selection() {
+        let ungated = WORKFLOW.replace("    if: fromJSON(needs.plan.outputs.run)['fast']\n", "");
+        let errors = parse_workflow(&ungated, &targets()).unwrap_err();
+        assert!(
+            errors[0].contains(
+                "must be selected by exactly `if: fromJSON(needs.plan.outputs.run)['fast']`"
+            ),
+            "{errors:?}"
+        );
+        let borrowed = WORKFLOW.replace("run)['fast']", "run)['contracts']");
+        assert!(parse_workflow(&borrowed, &targets()).is_err());
+        for declared in [
+            "VERIFICATION_PROFILE: quick",
+            "VERIFICATION_PROFILE: ''",
+            "OTHER: fast",
+        ] {
+            let workflow = WORKFLOW.replacen("VERIFICATION_PROFILE: fast", declared, 1);
+            let errors = parse_workflow(&workflow, &targets()).unwrap_err();
+            assert!(
+                errors[0].contains("must declare `env: VERIFICATION_PROFILE`"),
+                "{declared}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_job_in_both_profiles_contributes_to_each() {
+        let steps = parse_workflow(WORKFLOW, &targets()).unwrap();
+        let profiles: BTreeSet<Profile> = steps
+            .iter()
+            .filter(|step| step.job == "platform")
+            .map(|step| step.profile)
+            .collect();
+        assert_eq!(profiles, BTreeSet::from([Profile::Fast, Profile::Full]));
+    }
+
+    #[test]
+    fn fast_steps_never_count_as_full_coverage() {
+        // The model tests now run only in FAST: FULL is incomplete.
+        let workflow = WORKFLOW.replace(
+            "-- --skip boundary_suites::'",
+            "-- --skip boundary_suites:: --skip model::'",
+        );
+        let findings = run(&workflow, Platform::Linux, &inventory());
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "test(s) of lib on linux are executed by no FULL lane"
+            ),
+            1
+        );
+        // ... including the scale suite, which FAST deliberately skips.
+        assert_eq!(
+            findings_containing(&findings, "required suite lib `::scale::` on linux FULL: 1"),
+            1
+        );
+    }
+
+    #[test]
+    fn an_unassigned_scale_test_fails_full_completeness() {
+        let mut fake = inventory();
+        let lib = fake.0.get_mut(&Target::new(Kind::Lib, "rustx")).unwrap();
+        lib.push(("boundary_suites::scale::million_rows", false));
+        // FAST skips nothing of it and FULL's in-crate boundary step runs it:
+        // complete. Skipping it from that step leaves it unassigned.
+        assert!(run(WORKFLOW, Platform::Linux, &fake).is_empty());
+        let workflow = WORKFLOW.replace(
+            "-- boundary_suites::'",
+            "-- boundary_suites:: --skip boundary_suites::scale::'",
+        );
+        let findings = run(&workflow, Platform::Linux, &fake);
+        assert_eq!(
+            findings,
+            [
+                "1 runnable test(s) of lib on linux are executed by no FULL lane, e.g. \
+              [\"boundary_suites::scale::million_rows\"]",
+                "required suite lib `::scale::` on linux FULL: 1 runnable test(s) are executed \
+              by no step, e.g. [\"boundary_suites::scale::million_rows\"]"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fast_requirement_is_not_satisfied_by_full() {
+        // The FAST lane loses its core selector; FULL still runs the tests.
+        let workflow = WORKFLOW.replace("-- model:: --skip ::scale::'", "-- boundary_suites::'");
+        let findings = run(&workflow, Platform::Linux, &inventory());
+        assert_eq!(
+            findings_containing(&findings, "required suite lib `model::` on linux FAST: 1"),
+            1
+        );
+    }
+
+    #[test]
+    fn a_critical_fast_selector_that_executes_nothing_fails() {
+        let mut fake = inventory();
+        let lib = fake.0.get_mut(&Target::new(Kind::Lib, "rustx")).unwrap();
+        lib.retain(|(name, _)| !name.starts_with("model::") || name.starts_with("model::scale::"));
+        let findings = run(WORKFLOW, Platform::Linux, &fake);
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "FAST job `fast` step `Core`: every runnable match of filter `model::` is excluded by --skip"
+            ),
+            1
+        );
+        assert_eq!(
+            findings_containing(
+                &findings,
+                "required suite lib `model::` on linux FAST matches no runnable test"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn an_affected_step_is_feedback_but_never_a_fast_requirement() {
+        let affected = WORKFLOW.replace(
+            "      - name: Core\n        run: 'cargo test --lib --all-features -- model:: --skip ::scale::'\n",
+            "      - name: Core\n        run: 'cargo test --lib --all-features -- scripted_suites::'\n      - name: Model\n        if: fromJSON(needs.plan.outputs.steps)['fast:model']\n        run: 'cargo test --lib --all-features -- model:: --skip ::scale::'\n",
+        );
+        let steps = parse_workflow(&affected, &targets()).unwrap();
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.name == "Model" && step.affected)
+        );
+        let findings = run(&affected, Platform::Linux, &inventory());
+        assert_eq!(
+            findings,
+            [
+                "required suite lib `model::` on linux FAST: 1 runnable test(s) are executed by no \
+              step, e.g. [\"model::unit\"]"
+            ]
+        );
+        for (condition, problem) in [
+            (
+                "fromJSON(needs.plan.outputs.steps)['other:model']",
+                "understands only",
+            ),
+            ("github.event_name == 'push'", "understands only"),
+        ] {
+            let workflow = affected.replace(
+                "fromJSON(needs.plan.outputs.steps)['fast:model']",
+                condition,
+            );
+            let errors = parse_workflow(&workflow, &targets()).unwrap_err();
+            assert!(errors[0].contains(problem), "{condition}: {errors:?}");
+        }
+        let full = WORKFLOW.replace(
+            "      - name: Pure\n",
+            "      - name: Pure\n        if: fromJSON(needs.plan.outputs.steps)['contracts:pure']\n",
+        );
+        let errors = parse_workflow(&full, &targets()).unwrap_err();
+        assert!(errors[0].contains("FULL steps always run"), "{errors:?}");
     }
 
     #[test]

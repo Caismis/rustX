@@ -28,7 +28,7 @@ use rustx::model::catalog::{MapCredentialEnvironment, ModelProfileId, ModelRef, 
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
-use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
+use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
     EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor,
     RuntimeClientEvent, RuntimeClientHost, RuntimeClientProtocolEvent,
@@ -166,14 +166,18 @@ async fn await_parked(model: &Arc<FakeModel>) {
 
 /// Receives from the observation stream until the predicate matches.
 async fn receive_until(
+    host: &RuntimeClientHost,
     subscription: &EventSubscription,
     mut predicate: impl FnMut(&RuntimeClientProtocolEvent) -> bool,
 ) -> Vec<RuntimeClientProtocolEvent> {
     tokio::time::timeout(LIVENESS, async {
         let mut seen = Vec::new();
         loop {
-            let EventDelivery::Event(event) = subscription.next().await else {
-                panic!("the subscription must stay open and contiguous");
+            let delivery = subscription.next().await;
+            let EventDelivery::Event(event) = delivery else {
+                let error = host.checkpoint().err();
+                let source = host.weak_inner().upgrade().expect("resident fixture").projection_source_debug();
+                panic!("the subscription must stay open and contiguous: {delivery:?}; checkpoint_error={error:?}; source={source}");
             };
             let matched = predicate(&event);
             seen.push(event);
@@ -329,7 +333,10 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
 
     // The runtime can truthfully report both facts at once, so a client never
     // has to infer them from event ordering.
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
     assert_eq!(
         snapshot.model.as_ref().unwrap().configured.model,
         beta.reference(),
@@ -343,8 +350,12 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
     );
 
     release.send_replace(true);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -375,8 +386,12 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
 
     // No second mutation is needed: the next independent Attempt snapshots B.
     submit(&attachment, 3, "second");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let beta_requests = beta.handle.requests();
@@ -416,8 +431,12 @@ async fn a_model_update_before_admission_is_observed_by_that_attempt() {
     assert!(response.error.is_none());
 
     submit(&attachment, 2, "hello");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -479,8 +498,12 @@ async fn a_transient_retry_after_live_selection_keeps_the_admitted_invocation() 
     });
     assert!(response.error.is_none(), "{response:?}");
     release.send_replace(true);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let requests = alpha.handle.requests();
@@ -495,8 +518,12 @@ async fn a_transient_retry_after_live_selection_keeps_the_admitted_invocation() 
     }
     assert!(beta.handle.requests().is_empty());
     submit(&attachment, 3, "new independent Attempt");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let requests = beta.handle.requests();
@@ -558,8 +585,12 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     // A long inbound turn: comfortably inside A's window, well past B's.
     let long = "compaction pressure ".repeat(600);
     submit(&attachment, 1, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(
@@ -575,8 +606,12 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     assert!(response.error.is_none(), "{response:?}");
 
     submit(&attachment, 3, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -653,15 +688,23 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     // compaction.
     let long = "compaction pressure ".repeat(600);
     submit(&attachment, 1, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     assert_eq!(alpha.handle.requests().len(), 1, "the first attempt fits");
 
     submit(&attachment, 2, &long);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -790,8 +833,12 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     );
 
     release.send_replace(true);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -918,7 +965,10 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         config: Box::new(selected("low", "long")),
     });
     assert!(response.error.is_none(), "{response:?}");
-    let (snapshot, _) = host.snapshot().expect("snapshot");
+    let (snapshot, _) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("checkpoint");
     let selected = snapshot.model.as_ref().unwrap();
     assert_eq!(
         selected.configured.profile,
@@ -931,8 +981,12 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     assert_eq!(frozen.primary.max_output_tokens, 300);
 
     release.send_replace(true);
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
 
@@ -958,8 +1012,12 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
 
     // The next Attempt uses the already committed selection without replay.
     submit(&attachment, 4, "next");
-    receive_until(&subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    receive_until(&host, &subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
     let primary = alpha.handle.requests();
@@ -1251,8 +1309,14 @@ async fn a_rejected_model_update_changes_nothing() {
         },
     )
     .await;
-    let (attachment, _subscription) = attach(&host);
-    let (_, before) = host.snapshot().expect("snapshot");
+    let (attachment, subscription) = attach(&host);
+    receive_until(&host, &subscription, |event| event.event.facts().iter().any(|fact| {
+        matches!(fact, RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility: rustx::local_runtime::configuration::application::AdoptionEligibility::Eligible })
+    })).await;
+    let (_, before) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
 
     for invalid in [
         // An unknown model.
@@ -1308,7 +1372,14 @@ async fn a_rejected_model_update_changes_nothing() {
         );
     }
 
-    let (snapshot, after) = host.snapshot().expect("snapshot");
+    let (snapshot, after) = host
+        .checkpoint()
+        .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
+        .expect("snapshot");
+    assert!(
+        matches!(subscription.try_next(), EventDelivery::Pending),
+        "rejected selections publish no additional fact"
+    );
     assert_eq!(
         after, before,
         "a rejected update allocates no cursor and publishes no event"
@@ -1317,15 +1388,14 @@ async fn a_rejected_model_update_changes_nothing() {
         snapshot.model.as_ref().unwrap().configured,
         SessionModelConfig::of(alpha.reference())
     );
-    let RuntimeClientResult::Model { model } = attachment
-        .handle_request(RuntimeClientRequest::ModelGet {
-            id: RequestId::new(10),
-        })
-        .result
-        .expect("model_get result")
-    else {
-        panic!("model_get returns the session model");
-    };
+    let model: rustx::model::session::SessionModelView = super::super::common::native_domain_single(
+        attachment
+            .handle_request(RuntimeClientRequest::ModelGet {
+                id: RequestId::new(10),
+            })
+            .result
+            .expect("model_get result"),
+    );
     assert_eq!(model.configured, SessionModelConfig::of(alpha.reference()));
 }
 

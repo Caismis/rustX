@@ -30,6 +30,9 @@ pub struct ProjectionTimelinePage {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionCommitReceipt {
+    /// Only a fresh native transaction publishes its observation receipt.
+    #[serde(skip)]
+    pub newly_committed: bool,
     pub operation_id: CompactionOperationId,
     pub candidate_fingerprint: String,
     pub checkpoint: ProjectionCheckpoint,
@@ -60,8 +63,10 @@ pub struct RequestHistoryCut {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalModelInput {
-    pub tool_associations: Vec<crate::model::occurrence::HistoricalToolAssociation>,
+    pub tool_associations: imbl::Vector<crate::model::occurrence::HistoricalToolAssociation>,
     pub cut: RequestHistoryCut,
-    pub messages: Vec<crate::model::ModelInputMessage>,
-    pub items: Vec<crate::context::checkpoint::CheckpointItem>,
+    pub messages: crate::model::SelectedModelInput,
+    pub input_manifest: crate::model::SelectedInputManifest,
+    pub items: imbl::Vector<crate::context::checkpoint::CheckpointItem>,
+    pub(crate) materialized_bytes: usize,
 }

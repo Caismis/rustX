@@ -40,6 +40,7 @@ struct ConversationCut {
     root: PathBuf,
     _access: ConversationAccess,
     artifact_lengths: BTreeMap<ArtifactId, Option<u64>>,
+    read_cut: Option<crate::context::resources::ResourceReadCut>,
 }
 #[derive(Serialize)]
 struct ArtifactManifest {
@@ -52,7 +53,18 @@ struct ArtifactManifest {
 struct ArtifactCut {
     manifest: ArtifactManifest,
     file: crate::tools::artifacts::ArtifactReadHandle,
+    #[cfg(test)]
+    read_hook: Option<ArtifactReadHook>,
 }
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArtifactReadStage {
+    Read,
+    Verified,
+}
+#[cfg(test)]
+type ArtifactReadHook = Box<dyn FnMut(ArtifactReadStage, u64) + Send>;
 
 /// One finite domain. All members share the instant when the final included
 /// database prefix and settled artifact lengths have been captured, before
@@ -120,7 +132,7 @@ impl SessionArchiveProducer {
             };
             let access = ConversationAccess::existing(&root, &owned.private_root)
                 .map_err(|_| unavailable)?;
-            let store = SqliteConversationStore::open_existing(
+            let store = SqliteConversationStore::open_for_archive(
                 owned.conversation_id.clone(),
                 &owned.database,
             )
@@ -135,20 +147,28 @@ impl SessionArchiveProducer {
                 store,
                 _access: access,
                 artifact_lengths: BTreeMap::new(),
+                read_cut: None,
             });
         }
         conversations.sort_by(|a, b| a.manifest.conversation_id.cmp(&b.manifest.conversation_id));
         // Ownership is already frozen, so lineage traversal above needed no
         // execution read barriers. Only bounded frontier/identity reads occur
-        // while all included databases are simultaneously read-locked.
+        // while all included databases simultaneously exclude writers.
         #[cfg(test)]
         before_capture();
         for conversation in &mut conversations {
+            check_cancel(cancel)?;
             conversation.store.archive_barrier()?;
-            conversation.manifest.frontiers = conversation.store.archive_frontiers()?;
+            check_cancel(cancel)?;
+            let (frontiers, read_cut) = conversation.store.archive_frontiers()?;
+            conversation.manifest.frontiers = frontiers;
+            conversation.read_cut = Some(read_cut);
             conversation.artifact_lengths =
                 ArtifactStore::archive_lengths(&conversation.root, || check_cancel(cancel))?;
+            #[cfg(test)]
+            capture_probe::observed(&conversation.manifest.conversation_id);
         }
+        check_cancel(cancel)?;
         // LINEARIZATION: all database prefixes still equal these frontiers;
         // captured settled artifact bytes are immutable native facts. The
         // reference set is a function of the frozen prefixes, resolved below.
@@ -175,6 +195,17 @@ impl SessionArchiveCut {
 
     fn preflight(&mut self, cancel: &CancellationToken) -> Result<(), SessionArchivePrepareError> {
         for conversation in &self.conversations {
+            check_cancel(cancel)?;
+            conversation
+                .store
+                .archive_validate(
+                    &conversation.manifest.frontiers,
+                    conversation
+                        .read_cut
+                        .as_ref()
+                        .expect("captured archive read cut"),
+                )
+                .map_err(|_| SessionArchivePrepareError::CorruptAuthority)?;
             let mut refs = BTreeMap::<ArtifactId, Value>::new();
             conversation
                 .records(cancel, |_, record| {
@@ -213,6 +244,8 @@ impl SessionArchiveCut {
                         bytes,
                     },
                     file,
+                    #[cfg(test)]
+                    read_hook: None,
                 });
             }
         }
@@ -247,6 +280,16 @@ impl SessionArchiveCut {
     #[cfg(test)]
     pub(crate) fn write_test(self, writer: impl Write) -> io::Result<()> {
         self.write_zip(writer, &CancellationToken::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_artifact_read_hook(
+        mut self,
+        hook: impl FnMut(ArtifactReadStage, u64) + Send + 'static,
+    ) -> Self {
+        assert_eq!(self.artifacts.len(), 1);
+        self.artifacts[0].read_hook = Some(Box::new(hook));
+        self
     }
 
     fn write_zip(mut self, writer: impl Write, cancel: &CancellationToken) -> io::Result<()> {
@@ -308,18 +351,44 @@ impl SessionArchiveCut {
             check_cancel(cancel)?;
             zip.start_file(&artifact.manifest.entry, options)
                 .map_err(error)?;
-            let mut remaining = artifact.manifest.bytes;
-            while remaining > 0 {
-                check_cancel(cancel)?;
-                let size = usize::try_from(remaining.min(CHUNK_BYTES as u64)).map_err(error)?;
-                artifact.file.read_exact(&mut buffer[..size])?;
-                zip.write_all(&buffer[..size])?;
-                remaining -= size as u64;
-            }
+            artifact.write_verified(&mut zip, &mut buffer, cancel)?;
         }
         check_cancel(cancel)?;
         zip.finish().map_err(error)?;
         Ok(())
+    }
+}
+
+impl ArtifactCut {
+    fn write_verified(
+        &mut self,
+        writer: &mut impl Write,
+        buffer: &mut [u8],
+        cancel: &CancellationToken,
+    ) -> io::Result<()> {
+        let mut verification = self.file.verification();
+        let mut offset = 0;
+        while offset < self.manifest.bytes {
+            check_cancel(cancel)?;
+            let size = usize::try_from((self.manifest.bytes - offset).min(CHUNK_BYTES as u64))
+                .map_err(error)?;
+            self.file.read_exact(&mut buffer[..size])?;
+            #[cfg(test)]
+            if let Some(hook) = &mut self.read_hook {
+                hook(ArtifactReadStage::Read, offset);
+            }
+            self.file
+                .verify_chunk(&mut verification, offset, &buffer[..size])?;
+            #[cfg(test)]
+            if let Some(hook) = &mut self.read_hook {
+                hook(ArtifactReadStage::Verified, offset);
+            }
+            // Emit the authenticated buffer itself; never reread the file after verification.
+            writer.write_all(&buffer[..size])?;
+            offset += size as u64;
+        }
+        check_cancel(cancel)?;
+        self.file.finish_verification(verification)
     }
 }
 
@@ -660,5 +729,33 @@ mod tests {
         let encoded = record.value().to_string();
         assert!(encoded.contains("authored Authorization: Bearer sk-literal"));
         assert!(!encoded.contains("PROVIDER_PRIVATE_SECRET"));
+    }
+}
+
+/// Thread-scoped deterministic capture gate; absent from production builds.
+#[cfg(test)]
+pub(crate) mod capture_probe {
+    use crate::runtime::identity::ConversationId;
+    use std::cell::RefCell;
+    type Probe = Box<dyn FnMut(&ConversationId)>;
+    thread_local! {
+        static PROBE: RefCell<Option<Probe>> = const { RefCell::new(None) };
+    }
+    pub(crate) fn observe(probe: impl FnMut(&ConversationId) + 'static) -> Guard {
+        PROBE.with(|slot| *slot.borrow_mut() = Some(Box::new(probe)));
+        Guard
+    }
+    pub(crate) struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PROBE.with(|slot| slot.borrow_mut().take());
+        }
+    }
+    pub(super) fn observed(id: &ConversationId) {
+        PROBE.with(|slot| {
+            if let Some(probe) = slot.borrow_mut().as_mut() {
+                probe(id);
+            }
+        });
     }
 }

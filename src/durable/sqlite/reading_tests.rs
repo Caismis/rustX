@@ -10,6 +10,7 @@ use crate::message::types::{
 use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId};
 use chrono::Utc;
 use rusqlite::params;
+include!("observation_turn_tests.rs");
 /// The exact transcript entry at a turn's native location, read as the page
 /// before the position just after it.
 fn located(
@@ -110,6 +111,8 @@ fn event(
     kind: RuntimeEvent,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
         schema_version: 1,
         event_id: EventId::new(format!(
             "event-{}",
@@ -315,6 +318,7 @@ fn delegated_tasks_open_turn_previews_without_reclassifying_the_source() {
         &frozen.surface_history,
         &frozen.completed_responses,
         &frozen.turns,
+        &frozen.raw_tool_arguments,
     )
     .unwrap();
     destination.initialize_lineage(&seed).unwrap();
@@ -615,13 +619,13 @@ fn pending_edits_and_removals_advance_the_mutation_epoch_without_moving_turns() 
     let first = store.conversation_turns(0, 64).unwrap();
     let expected = PendingInboundRef {
         sequence: accepted.sequence,
-        message_id: accepted.message_id,
+
         revision: 0,
     };
-    assert_eq!(
-        store.edit_pending(&expected, "edited").unwrap(),
-        PendingMutationOutcome::Applied
-    );
+    assert!(matches!(
+    store.edit_pending(&expected, "edited").unwrap(),
+    PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+    ));
     let edited = store.conversation_turns(0, 64).unwrap();
     assert_eq!(edited.turns, first.turns);
     assert_eq!(
@@ -656,15 +660,15 @@ fn pending_edits_and_removals_advance_the_mutation_epoch_without_moving_turns() 
         PendingMutationOutcome::Conflict
     );
     assert_eq!(store.conversation_read_cut().unwrap(), edited.cut);
-    assert_eq!(
-        store
-            .remove_pending(&PendingInboundRef {
-                revision: 1,
-                ..expected
-            })
-            .unwrap(),
-        PendingMutationOutcome::Applied
-    );
+    assert!(matches!(
+    store
+                .remove_pending(&PendingInboundRef {
+                    revision: 1,
+                    ..expected
+                })
+                .unwrap(),
+    PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+    ));
     let removed = store.conversation_turns(0, 64).unwrap();
     assert_eq!(removed.turns, edited.turns);
     assert_eq!(removed.cut.mutation_revision, 2);
@@ -835,19 +839,19 @@ fn message_windows_reject_foreign_future_and_mutated_cuts() {
             correlation: None,
         })
         .unwrap();
-    assert_eq!(
-        store
-            .edit_pending(
-                &PendingInboundRef {
-                    sequence: accepted.sequence,
-                    message_id: accepted.message_id,
-                    revision: 0
-                },
-                "edited"
-            )
-            .unwrap(),
-        PendingMutationOutcome::Applied
-    );
+    assert!(matches!(
+    store
+                .edit_pending(
+                    &PendingInboundRef {
+                        sequence: accepted.sequence,
+
+                        revision: 0
+                    },
+                    "edited"
+                )
+                .unwrap(),
+    PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+    ));
     assert!(
         store
             .conversation_window(
@@ -1142,7 +1146,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(super::SQLITE_SCHEMA_VERSION, 61);
+        assert_eq!(super::SQLITE_SCHEMA_VERSION, 70);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(
@@ -1150,7 +1154,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 56,
-                expected: 61
+                expected: super::SQLITE_SCHEMA_VERSION
             }
         )
     ));
@@ -1159,7 +1163,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
         Err(
             crate::durable::ConversationStoreError::SchemaVersionMismatch {
                 stored: 56,
-                expected: 61
+                expected: super::SQLITE_SCHEMA_VERSION
             }
         )
     ));

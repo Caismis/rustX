@@ -22,7 +22,7 @@ import dataclasses
 from typing import Callable
 
 from fake_provider.scenario import Scenario, Step, Stream, ToolCall
-from fake_provider.scenarios import conformance, tui, web_console
+from fake_provider.scenarios import conformance, observation, tui, web_console, runtime_benchmark
 
 #: The placeholder of the concrete absolute workspace root of the runtime
 #: under test, substituted into scripted tool-call arguments.
@@ -32,6 +32,8 @@ WORKSPACE_PLACEHOLDER = "{workspace}"
 #: scenario definition can never accumulate state across runs.
 SCENARIOS: dict[str, Callable[[], Scenario]] = {
     **conformance.SCENARIOS,
+    **runtime_benchmark.SCENARIOS,
+    **observation.SCENARIOS,
     **tui.SCENARIOS,
     **web_console.SCENARIOS,
 }

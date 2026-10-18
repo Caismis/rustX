@@ -1,3 +1,5 @@
+import{traceReceipt}from'../fixture';
+import { domainReceipt } from '../fixture';
 import { createActor } from 'xstate';
 import { shellNavigationMachine } from '../../src/app/navigation/machine';
 import { settingsNavigationMachine, createOwnerLookup } from '../../src/app/settings/machines/navigation';
@@ -14,7 +16,7 @@ import { Server, snapshot, childConversation } from '../fixture';
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/app-server';
-import type { Request } from '../../../protocol/app-server/v49';
+import type { CheckpointReadCut, Request } from '../../../protocol/app-server/v50';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -32,7 +34,7 @@ server.handlers.set('session/model', request => {
   if (request.method !== 'session/model') throw new Error('Wrong operation');
   const model = server.snapshots.get(request.params.target.session_id)?.model;
   if (!model) throw new Error('Missing native fixture model');
-  return { type: 'model', model };
+  return domainReceipt('model',[model]);
 });
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
@@ -42,7 +44,7 @@ if (new URL(location.href).searchParams.has('models')) {
   const saved = server.snapshots.get('A')!;
   saved.model = cfg3Effective().effective_model;
   saved.transcript.entries = Array.from({ length: 20 }, (_, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message: { id: `saved-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `Saved message ${index}: ` + 'Previously saved conversation content. '.repeat(12) }] } } }));
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: [{ model: saved.model!.configured.model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } }));
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [{ model: saved.model!.configured.model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] }).models??[])));
 }
 if (new URL(location.href).searchParams.has('cold-model')) {
   const models = ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'literal' as const }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'low', reasoningEnabled: true }, { id: 'high', reasoningEnabled: true }], defaultProfile: 'high' }));
@@ -52,12 +54,12 @@ if (new URL(location.href).searchParams.has('cold-model')) {
     if (result.kind === 'read') result.projection.session_models = { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models } };
     return result;
   };
-  server.handlers.set('session/models', () => ({ type: 'models', catalog: { models } }));
+  server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models }).models??[])));
   server.handlers.set('session/setModel', request => {
     if (request.method !== 'session/setModel') throw Error('Wrong method');
     const saved = server.snapshots.get(request.params.target.session_id)!;
     saved.model = { ...saved.model!, configured: request.params.config, effective: { ...saved.model!.effective!, model: request.params.config.model, profile: request.params.config.profile } };
-    return { type: 'model', model: saved.model };
+    return {type:'model_set',settings_revision:'1'};
   });
 }
 if (new URL(location.href).searchParams.has('trajectory')) {
@@ -77,7 +79,7 @@ if (new URL(location.href).searchParams.has('subagents')) {
     saved.transcript.entries!.push({ cursor: '22', item: { type: 'message', message: { role: 'assistant', id: 'delegation', content: [
       { type: 'text', text: 'I will delegate the source verification and review the evidence when it returns.' },
       ...invocations.map((invocation, index) => ({ type: 'tool_call' as const, id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, arguments: invocation.arguments })),
-    ] } }, tool_calls: invocations.map((invocation, index) => ({ message_id: 'delegation', block_index: index + 1, call_id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, state: { type: 'settled', arguments: JSON.stringify(invocation.arguments), result: { status: { type: 'success' }, content: [{ type: 'json', value: invocation.result }], duration_ms: 100 } } })) });
+    ] } }, tool_calls: invocations.map((invocation, index) => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'delegation'},block_index:index + 1},assembly_complete:true, message_id: 'delegation', block_index: index + 1, call_id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, state: { type: 'settled', arguments: JSON.stringify(invocation.arguments), result: { status: { type: 'success' }, content: [{ type: 'json', value: invocation.result }], duration_ms: '100' } } })) });
   }
   server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
   if (new URL(location.href).searchParams.has('nested-subagents')) saved.agents.push({ ...saved.agents[1]!, title: 'Verify original documents', agent: 'Verify original documents', agent_id: 'grandchild', parent_agent_id: 'child-1', child_conversation_id: 'grandchild-conversation' });
@@ -85,6 +87,11 @@ if (new URL(location.href).searchParams.has('subagents')) {
     if (request.method !== 'agent/sendMessage') throw Error('Wrong method');
     return { type: 'agent_message', agent_id: request.params.agent_id, activation_id: 'resumed-activation', resumed: true };
   });
+  const childTraceCut = (agent_id: string): CheckpointReadCut => {
+    const agent = saved.agents!.find(agent => agent.agent_id === agent_id)!;
+    const read = { conversation_id: agent.child_conversation_id, journal: '70', transcript: '0', mutation_revision: '0', ledger_through: '0', surface_revision: '0', transcript_total: '0', pending_through: '0', pending_total: '0' };
+    return { conversation_id: agent.child_conversation_id, activation_id: agent.activation_id, revision: '0', through: read.journal, domain_revisions: {}, collection_cuts: {}, source_cut: { read, ledger_through: read.ledger_through, surface_revision: read.surface_revision, transcript_total: read.transcript_total, inherited_through: '0' } };
+  };
   server.handlers.set('agent/trace', request => {
     if (request.method !== 'agent/trace') throw Error('Wrong method');
     const { agent_id, before, limit } = request.params;
@@ -93,16 +100,20 @@ if (new URL(location.href).searchParams.has('subagents')) {
       : traceRecord(n + 1, { preview: { text: `${agent_id} request ${n + 1}`, truncated: false } }));
     const end = before ? records.findIndex(record => record.position === before) : records.length;
     const start = Math.max(0, end - limit);
-    return { type: 'trace', page: { records: records.slice(start, end), next_cursor: start > 0 ? records[start]!.position : null } };
+    return { type: 'trace', page: { read_cut: childTraceCut(agent_id), records: records.slice(start, end), next_cursor: start > 0 ? records[start]!.position : null } };
   });
   server.handlers.set('agent/traceDetail', request => {
     if (request.method !== 'agent/traceDetail') throw Error('Wrong method');
     const n = Number(request.params.record_id.slice(6));
-    return { type: 'trace_detail', detail: ((n - 1) % 3 === 0 ? toolDetail : requestDetail)(n, { messages: [{ message_id: `${request.params.agent_id}-evidence`, role: 'assistant', blocks: [{ type: 'text', text: { text: `${request.params.agent_id} independent evidence`, truncated: false } }], truncated: false }] }) };
+    const result = traceReceipt(((n - 1) % 3 === 0 ? toolDetail : requestDetail)(n, { messages: [{ message_id: `${request.params.agent_id}-evidence`, role: 'assistant', blocks: [{ type: 'text', text: { text: `${request.params.agent_id} independent evidence`, truncated: false } }], truncated: false }] }));
+    result.page.domain = `trace.records.${n}.detail`;
+    result.page.read_cut = childTraceCut(request.params.agent_id);
+    result.page.cursor = result.page.read_cut.revision;
+    return result;
   });
-  server.handlers.set('agent/conversation', request => {
-    if (request.method !== 'agent/conversation') throw Error('Wrong method');
-    return childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] }, request.params.agent_id, 'activation-a', saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.child_conversation_id);
+  server.handlers.set('agent/observe', request => {
+    if (request.method !== 'agent/observe') throw Error('Wrong method');
+    return childConversation({ entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: `${request.params.agent_id}-reply`, content: [{ type: 'text', text: `# Child research report\n\nSelected agent: ${request.params.agent_id}\n\nSources have been checked.\n\n` + 'Detailed findings and supporting evidence. '.repeat(120) }] } } }] }, request.params.agent_id, saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.activation_id, saved.agents!.find(agent => agent.agent_id === request.params.agent_id)!.child_conversation_id);
   });
 }
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
@@ -131,9 +142,9 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
   requests: () => server.requests.map(({ request }) => request),
   async contextReading(input: number | null, running = false) {
     const next = { ...server.snapshots.get('A')! };
-    next.context = { compaction_count: 0, compaction_in_progress: false, occupancy: input === null ? null : { estimated: false,
-      input_tokens: input, context_window_tokens: 100000, model: 'measured/model',
-      breakdown: { system_tokens: 1000, tool_tokens: 2000, message_tokens: input - 3000 },
+    next.context = { compaction_count: 0, compaction_in_progress: false, occupancy: input === null ? null : { estimated: false, model_deferred:false, model_source:null,
+      input_tokens: String(input), context_window_tokens: "100000", model: 'measured/model',
+      breakdown: { system_tokens: "1000", tool_tokens: "2000", message_tokens: String(input - 3000) },
     } };
     next.attempt = running ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null;
     await server.update('A', next);
@@ -146,6 +157,10 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
   },
   defaultModel(model: string) { nativeDefault = model; },
   model: (id = 'created') => server.client.getSnapshot().views[id]?.snapshot?.model,
+  observation: (id = 'created') => {
+    const view = server.client.getSnapshot().views[id];
+    return { target: view?.target, cursor: view?.checkpoint?.cursor, revision: view?.checkpoint?.read_cut.revision, state: view?.observationState };
+  },
   operation: () => server.client.firstSubmissions.session('created'),
   async release(method: Request['method'], failure?: string) {
     const request = server.requests.find(row => row.request.method === method && !handled.has(row.request))?.request;

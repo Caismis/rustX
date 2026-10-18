@@ -2,5 +2,7 @@ node_modules/
 dist/
 test-results/
 playwright-report/
+blob-report/
+shard-report/
 
 /host/workspace-fs/build/

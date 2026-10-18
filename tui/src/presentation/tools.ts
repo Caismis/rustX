@@ -1,3 +1,6 @@
+import { messageDescriptors } from './message-descriptors.ts';
+import { sameToolOccurrence } from '../../../protocol/app-server/projection.ts';
+import type { ContentRef } from '../../../protocol/app-server/v50.ts';
 /**
  * The presentation join between committed tool facts and live execution.
  *
@@ -17,9 +20,8 @@
  * timing, or textual adjacency, so two concurrent calls of the same tool with
  * identical arguments stay two entities.
  *
- * Lifecycle is never computed here either. It is read from the runtime's
- * foreground projection, or from the presence of a committed canonical
- * result, and those two agree because both come from the same settlement.
+ * Lifecycle is read only from native foreground and loaded occurrence slots.
+ * A canonical result is separate C content and never implies J settlement.
  * Nothing in this file infers "running because no result yet" or "succeeded
  * because the output looks fine".
  *
@@ -102,6 +104,11 @@ export type ToolLifecycle =
 
 /** One logical tool call, as one visual entity. */
 export interface CorrelatedTool {
+  /** Canonical C payload, independent of the execution lifecycle. */
+  committedResult?: ToolExecutionResult;
+  committedResultDeferred?:boolean;
+  /** Exact canonical metadata authority when its result body is deferred. */
+  resultMetadataRef?: ContentRef;
   workflow?: import("../protocol/app-server.ts").WorkflowRunView;
   /** The stable runtime identity this entity is keyed by. */
   callId: ToolCallId;
@@ -122,11 +129,10 @@ export interface CorrelatedTool {
    */
   committed: boolean;
   /**
-   * Whether `lifecycle.result` is the committed canonical Tool-result message.
-   *
-   * A foreground settlement precedes that commit and is execution evidence
-   * only. Typed result facts that canonical commit alone makes authoritative,
-   * such as `present` deliveries, are read only when this is true.
+   * Whether the native canonical C result is committed independently of J.
+   * Its body may still require an explicit bounded source read.
+   * Typed result facts such as `present` deliveries require this commitment;
+   * an execution settlement alone does not authorize those facts.
    */
   resultCommitted: boolean;
 }
@@ -197,6 +203,18 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
     }
   });
 
+  // Native descriptor heads retain exact Tool C/J receipts even when the
+  // loaded transcript cache has not reached that canonical message yet.
+  const nativeSlots = [
+    ...state.transcript.flatMap(entry => entry.kind === 'committed' ? entry.toolCalls ?? [] : []),
+    ...messageDescriptors(state).flatMap(descriptor => descriptor.tool_calls),
+  ];
+  for(const slot of nativeSlots){
+    const native=nativeToolPresentation(slot);if(!native)continue;
+    const existing=byCallId.get(native.callId);
+    byCallId.set(native.callId,{...native,lifecycle:laterOf(existing?.lifecycle,native.lifecycle)});
+  }
+
   // 2. Conversation content: committed canonical results, and where each one
   //    sits in canonical order.
   const resultPositions = new Map<ToolCallId, number>();
@@ -213,7 +231,8 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
       toolId: existing?.toolId ?? message.tool_id,
       name: existing?.name ?? "",
       argumentsText: existing?.argumentsText ?? "",
-      lifecycle: { type: "settled", result: message.result },
+      lifecycle: existing?.lifecycle ?? {type:'assembled'},
+      committedResult:message.result,
       committed: true,
       resultCommitted: true,
     });
@@ -222,6 +241,7 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
   // 3. Execution lifecycle: the attempt's own foreground projection. It is
   //    the authority on assembled/running/settled and on progress.
   for (const execution of state.attempt?.foreground ?? []) {
+    if(execution.call_id==null || execution.tool_id==null)continue;
     const existing = byCallId.get(execution.call_id);
     const lifecycle = foregroundLifecycle(execution);
     byCallId.set(execution.call_id, {
@@ -233,9 +253,14 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
       argumentsText: existing?.argumentsText || argumentsOf(execution),
       lifecycle: laterOf(existing?.lifecycle, lifecycle),
       committed: existing?.committed ?? false,
-      // A tie keeps the committed result, so only a committed lifecycle
-      // keeps this true; a foreground settlement never sets it.
-      resultCommitted: existing?.resultCommitted ?? false,
+      // Native C metadata proves commitment even when its body is deferred;
+      // J settlement alone never sets this fact.
+      resultCommitted: existing?.resultCommitted === true || execution.result_metadata_ref != null
+        || execution.committed_result != null,
+      committedResult:execution.committed_result??existing?.committedResult,
+      committedResultDeferred: execution.result_metadata_ref != null
+        ? execution.committed_result_deferred : existing?.committedResultDeferred,
+      resultMetadataRef: execution.result_metadata_ref ?? existing?.resultMetadataRef,
     });
   }
 
@@ -243,10 +268,13 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
     const tool = byCallId.get(run.tool_call_id);
     if (tool !== undefined) byCallId.set(run.tool_call_id, { ...tool, workflow: run });
   }
-  const orphans = [...byCallId.values()].filter(
-    (tool) =>
-      !anchoredCalls.has(tool.callId) && !anchoredResults.has(tool.callId),
-  );
+  const orphans=(state.attempt?.foreground??[]).filter(execution=>!state.transcript.some(entry=>{
+    if(entry.kind==='committed')return (entry.toolCalls??[]).some(slot=>sameToolOccurrence(slot,execution))
+      || execution.message_id!=null && entry.message.id===execution.message_id && entry.message.role==='assistant'
+        && entry.message.content[execution.block_index]?.type==='tool_call';
+    return entry.kind==='streaming' && execution.message_id===entry.messageId
+      && entry.blocks.some(block=>block.kind==='tool_call' && block.blockIndex===execution.block_index);
+  })).map(nativeToolPresentation).filter((tool):tool is CorrelatedTool=>tool!==undefined);
   // 4. The fold plan, derived from the whole ordered transcript rather than
   //    from any one message's tail.
   const foldedResults = new Set<ToolCallId>();
@@ -415,7 +443,7 @@ function callIdByBlock(entry: TranscriptEntry): Array<ToolCallId | undefined> {
 function transcriptCalls(entry: TranscriptEntry): CorrelatedTool[] {
   if (entry.kind === "streaming") {
     return entry.blocks
-      .filter((block) => block.kind === "tool_call")
+      .filter((block): block is Extract<typeof block,{kind:"tool_call"}> & {callId:string;toolId:string} => block.kind === "tool_call" && block.callId!=null && block.toolId!=null)
       .map((block) => ({
         callId: block.callId,
         toolId: block.toolId,
@@ -447,6 +475,13 @@ function transcriptCalls(entry: TranscriptEntry): CorrelatedTool[] {
     }));
 }
 
+/** Exact loaded native occurrence presentation; optional IDs never select another call's lifecycle. */
+export function nativeToolPresentation(execution: ForegroundToolExecution): CorrelatedTool | undefined {
+  if(execution.call_id==null || execution.tool_id==null)return undefined;
+  return {callId:execution.call_id,toolId:execution.tool_id,name:execution.name,argumentsText:execution.state.arguments,
+    lifecycle:foregroundLifecycle(execution),committed:true,resultCommitted:execution.committed_result!=null||execution.result_metadata_ref!=null,committedResult:execution.committed_result??undefined,committedResultDeferred:execution.committed_result_deferred,resultMetadataRef:execution.result_metadata_ref??undefined};
+}
+
 function foregroundLifecycle(execution: ForegroundToolExecution): ToolLifecycle {
   switch (execution.state.type) {
     case "running":
@@ -465,9 +500,8 @@ function argumentsOf(execution: ForegroundToolExecution): string {
 /**
  * The further-advanced of two lifecycles.
  *
- * On a tie the *existing* one wins, which means a committed canonical result
- * is preferred over the attempt's foreground copy of the same settlement.
- * They describe the same fact; the committed one is the durable one.
+ * On a tie the existing native execution fact wins. Canonical content never
+ * contributes an execution lifecycle rank.
  */
 function laterOf(
   existing: ToolLifecycle | undefined,

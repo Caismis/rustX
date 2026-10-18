@@ -1,4 +1,4 @@
-import { formatDuration, formatExactTokens, formatTokens } from '../src/app/agent/token-format';
+import { formatCacheHitPercent, formatDuration, formatExactTokens, formatTokens } from '../src/app/agent/token-format';
 import { describe, expect, it, vi } from 'vitest';
 import { LocaleController, documentLanguage, LOCALE_STORAGE_KEY, type LocaleEnvironment, type LocaleId } from '../src/locale/controller';
 import { displayText, interpolate, message, searchVocabulary, translator } from '../src/locale/translation';
@@ -66,4 +66,15 @@ it('invariant search vocabulary preserves opaque strings and renders nested mess
   const nested = message('commands:tree.node-detail', { conversation: raw, origin: 'fork', parent: message('commands:copy.parent-value', { p0: 'node-原样' }) });
   expect(searchVocabulary(nested)).toBe(`${displayText(translator('en'), nested)} ${displayText(translator('zh'), nested)}`);
   expect(searchVocabulary(nested)).toContain('node-原样');
+});
+
+it('T14 native u64 quantities stay exact and a partial cache hit never rounds to full', () => {
+  const maximum = '18446744073709551615';
+  expect(formatExactTokens(maximum, translator('en'))).toBe('18,446,744,073,709,551,615');
+  expect(formatTokens(maximum, translator('en'))).toBe('18446744073710M');
+  const almost = formatCacheHitPercent('18446744073709551614', maximum)!;
+  expect(almost).toMatch(/^99\.9+$/);
+  expect(almost).not.toBe('100');
+  expect(formatCacheHitPercent(maximum, maximum)).toBe('100');
+  expect(() => formatExactTokens(Number(maximum), translator('en'))).toThrow('not exact');
 });

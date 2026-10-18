@@ -323,10 +323,12 @@ impl NativePendingSignal {
 impl InteractionObserver for NativePendingSignal {
     fn on_pending(
         &self,
-        request: &InteractionRequest,
+        source: &std::sync::Arc<rustx::runtime::interaction::PendingInteractionSource>,
         _audit: &rustx::events::types::RuntimeEventEnvelope,
         _transcript_cursor: rustx::durable::TranscriptCursor,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
+        let request = source.request();
         let count = {
             let mut requests = self.requests.lock().expect("native pending requests lock");
             requests.push(request.clone());
@@ -343,6 +345,7 @@ impl InteractionObserver for NativePendingSignal {
             rustx::events::types::RuntimeEventEnvelope,
             rustx::durable::TranscriptCursor,
         )>,
+        _proof: &crate::runtime::interaction::PendingHeadProof,
     ) {
     }
 }
@@ -385,6 +388,7 @@ impl FailingInteractionRoute {
         match event {
             InteractionRouteEvent::Requested(_) => self.fail_requested,
             InteractionRouteEvent::Settled { .. } => self.fail_settled,
+            InteractionRouteEvent::Removed { .. } => false,
         }
     }
 }
@@ -1053,10 +1057,10 @@ fn ledger_shape(result: &AgentExecutionResult) -> Vec<String> {
 
 use support::audit::assert_single_terminal;
 
-fn tool_messages(result: &AgentExecutionResult) -> Vec<&rustx::message::types::ToolMessageBlock> {
+fn tool_messages(result: &AgentExecutionResult) -> Vec<rustx::message::types::ToolMessageBlock> {
     result
         .messages()
-        .iter()
+        .into_iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
             _ => None,

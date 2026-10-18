@@ -36,9 +36,15 @@ counted as such:
 
 - **Measurement** — `#[ignore]`d instrumented runs
   (`issue419_measure_native_cold_load`,
-  `stage_profile_real_create_pipeline`) and the Web
+  `stage_profile_real_create_pipeline`,
+  `measure_native_request_index_complete_300_turn_source`) and the Web
   `pnpm test:issue-420-performance` counters. They record numbers for an
   issue report, assert no timing threshold and run only explicitly.
+  Run the native request-index comparison with
+  `CARGO_INCREMENTAL=0 cargo test --lib --all-features measure_native_request_index_complete_300_turn_source -- --ignored --nocapture`.
+  The separate `t08_t15_t20_layout_construction_buffers_tokens_and_scopes_preview_reader`
+  unit test proves exact preview bytes and bounded construction-write / scoped
+  reader counts; its correctness result does not depend on elapsed time.
 - **Fixture generator** — `#[ignore]`d `regenerate_committed_fixture_corpus`
   rewrites a committed corpus; the `generate_schemas` and
   `generate_app_server_protocol` examples regenerate checked-in artifacts
@@ -276,6 +282,128 @@ meaningful domain/boundary/dependency topology:
 | `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
 
+## Verification profiles
+
+Fast feedback for ordinary development; complete verification at deliberate
+integration checkpoints. CI runs one of two profiles, which differ in which
+suites run, never in what a suite asserts:
+
+- **FAST** — every pull request push: the always-on checks plus the suites
+  of the surfaces the change touches.
+- **FULL** — every job, complete: `main`, the nightly schedule, manual
+  dispatch, and a pull request carrying the `full-verification` label, for
+  its current head and every later one.
+
+The `plan` job (`.github/scripts/verification.py`) owns selection. It reads
+the pull request's changed files — each path with GitHub's change status and,
+for a rename or copy, its original path — and decides the profile, the risk, the
+affected surfaces (`rust`, `protocol`, `web`, `tui`, `dev`) and which jobs
+and affected steps run. Every gated job runs only when the plan's
+`run[<job id>]` is true, and the script's tests check that `ci.yml` gates
+each job exactly that way.
+
+**Risk.** Low risk is an explicit allowlist (`LOW_RISK` in
+`verification.py`); every other path is high risk, unknown paths and an
+unreadable or possibly truncated diff included. Low risk is:
+
+- documentation (`*.md` at the top level, `docs/`, the Web and TUI READMEs
+  and guides, `tests/README.md`, `LICENSE`) — Markdown under `examples/` is
+  not documentation, it defines Agents, Skills and Workflows;
+- Web presentation: `web-console/src/presentation/**` (the provenance check
+  fails a file there that imports a client, protocol, binding, storage,
+  fetch or WebSocket authority), the translation dictionaries, stylesheets
+  and `public/`;
+- leaf tests: `web-console/test/*.test.ts(x)`, `tui/test/*.test.ts`, browser
+  specs and their screenshot references, when added or modified. A changed
+  leaf test runs in FAST.
+
+Removing or renaming a leaf test or a screenshot reference is high risk:
+FAST runs only the tests that still exist and cannot notice coverage that
+disappeared, so the removal needs FULL, and its review needs the replacement
+proof or the changed test contract that justifies it. A rename is classified
+by both of its paths. A change status GitHub does not document, or none, is
+high risk.
+
+Everything that owns behaviour is therefore high risk, including Web
+connection, authorization, workspace admission and client ownership
+(`web-console/src/connection/`, `src/workspaces/`, `src/client/`, …), the
+TUI's command dispatcher, presentation state and protocol, shared test
+fixtures and helpers, CI, manifests and all Rust.
+
+**Browser FAST and FULL.** Both run the same build-once inputs, pinned
+Chromium and one Playwright worker per runner; they differ only in the
+selection the plan passes to `browser-prepare`:
+
+- **FULL** — every test Playwright discovers, in two shards. The coverage
+  gate fails unless all of them ran exactly once.
+- **FAST** — one shard of the `@smoke` tests (startup and admission, the
+  development launcher with the real Web carrier, App Server and Host,
+  connection authentication, a native retry workflow, lost-acknowledgement
+  model selection, configuration recovery, Harness primitives and an Agent
+  screenshot reference), every test of a changed spec (or of a spec whose
+  screenshot references changed), and, for a low-risk presentation change,
+  the presentation contracts — every spec that holds screenshot references
+  and every test tagged `@presentation` (the fixture matrices of the
+  replacement ledger below) — then over two shards. The coverage gate fails
+  if FAST selects no smoke test, omits a changed spec, names a changed spec
+  Playwright no longer discovers, or, for a presentation change, selects no
+  `@presentation` test; its summary says it is a subset, never full
+  coverage.
+
+**Merge.** `Merge verification` (the `verification` job) is the verdict, and
+the repository ruleset "Merge verification on main" requires it from GitHub
+Actions on `main`, with branches up to date, so a pull request whose check
+is missing, pending, cancelled or failed cannot merge. The job always runs
+and fails unless:
+
+- every job the plan selected succeeded and nothing unselected ran;
+- a high-risk change was verified by FULL;
+- the tested merge commit's parents are exactly the event's base and head,
+  and that head is still the pull request's head.
+
+The run's summary names the pull request head, base and tested merge commit
+separately; the browser inventory records the merge commit it checked out.
+
+**Promotion.** Add the `full-verification` label when a high-risk change is
+a stable candidate: the `labeled` event runs FULL on the current head, and
+every later push runs FULL while the label stays. To return to FAST for
+further development, remove the label (removal starts no run); add it again
+for the next candidate. Until a high-risk head has a successful FULL run, its
+`Merge verification` fails with the reason.
+
+**FAST Rust.** `rust-fast` compiles the library test harness and the
+`process` target once, runs every unit and deterministic contract module
+except the in-crate boundary suites, the capacity suite and four heavy
+contract groups, and runs the real-process `process` target. Each heavy group
+also runs in FAST when the change touches its owner:
+
+| Group | FAST runs it when the change touches |
+| --- | --- |
+| `durable::sqlite::` | `src/durable/` |
+| `local_runtime::session_runtime_manager::tests::`, `local_runtime::session::` | `src/app_server/`, `src/local_runtime/`, `tests/scripted/app_server/`, `tests/support/` |
+| `runtime_client::response::` | `src/runtime_client/` |
+
+On Linux the in-crate boundary suites, the other external boundary targets
+and the `contracts`/`provider` targets run in FULL only. macOS core (the
+seven external boundary targets) runs on every push that touches Rust;
+macOS full (those targets plus unit tests and in-crate boundary suites)
+runs in FULL instead. This is a
+deliberate scheduling tradeoff: before #479 every pull request push ran
+everything; now a high-risk change gets that complete verification once, on
+its promoted head, and its intermediate pushes get FAST feedback. A
+low-risk change merges on FAST, which selects the suites of its surfaces (a
+Web presentation change runs the Web client checks and the browser FAST
+selection with every screenshot-reference spec).
+
+**Capacity tests.** A test whose value comes from its scale — a thousand
+turns, thousands of requests, 2,048 tool calls, 4,097 releases, a thousand
+sessions — lives in a `scale` module beside the code it measures, so its
+name contains `::scale::`. FAST skips that suite and FULL runs all of it;
+the lane check requires the suite to be non-empty and completely executed
+in FULL. An ordinary regression test may use small boundary cases, but it
+never replaces a capacity test. When a change touches the logic a capacity
+test measures, run it locally (see Running) or promote the pull request.
+
 ## How CI selects the classes
 
 The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes. The
@@ -284,13 +412,13 @@ summarizes them and the lane check below verifies them against Cargo:
 
 | Suite / group | Class | Linux lane | macOS |
 | --- | --- | --- | --- |
-| source-module unit tests (`src/**`) | unit | rust-contracts | yes |
+| source-module unit tests (`src/**`) | unit | rust-contracts | full |
 | `scripted_suites::` | deterministic contracts | rust-contracts | skipped |
 | `local_runtime::session_runtime_manager::tests::` | deterministic contracts | rust-contracts | skipped |
-| `boundary_suites::` | boundary conformance | rust-boundaries | yes (required) |
+| `boundary_suites::` | boundary conformance | rust-boundaries | full (required) |
 | bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts | bins only |
 | `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts | no |
-| `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | yes (required) |
+| `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core and full (required) |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
 - **quality** (ubuntu) — fmt, clippy, whitespace.
@@ -306,26 +434,45 @@ summarizes them and the lane check below verifies them against Cargo:
   and `check_test_lanes` (the lane checker's own tests) do. Bins and
   examples stay selected so Cargo's own target discovery picks up a future
   test; the lane check allows their harnesses to be empty.
-- **rust-boundaries** (ubuntu) — the emulator's pytest suite,
-  `cargo build --bins` (the text_spill suite execs `bash-supervisor`),
-  `cargo test --lib --all-features -- boundary_suites::`, then
+- **rust-boundaries** (ubuntu) — the emulator's pytest suite, then
+  `cargo test --all-features --no-run` over the seven external boundary
+  targets, then `cargo test --lib --all-features -- boundary_suites::`, then
   `cargo test --all-features --test durable --test process --test subagent
   --test tools --test conformance --test cfg3_catalog --test
-  cfg3_managed_output`. Both test steps set
-  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
-- **rust-platform-boundaries** (macos) — only platform-sensitive classes,
-  natively: `cargo build --bins --all-features`, then
-  `cargo test --lib --bins --all-features -- --skip scripted_suites::
-  --skip local_runtime::session_runtime_manager::tests::`
+  cfg3_managed_output`. Compiling an integration target also builds every
+  real executable against the library the tests link and places it at
+  `target/debug/`, where the text_spill suite execs `bash-supervisor`; a
+  separate `cargo build --bins` would compile another complete library
+  (without dev-dependency features) that no test in the lane links. Both
+  test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
+- **rust-platform-core** (macos; FAST) — the seven external boundary
+  targets, natively: compiled first (which, as in rust-boundaries, places
+  the real executables at `target/debug/`), then run with
+  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Real process start and termination,
+  signals, PTY, stdio and WebSocket transports, the native configuration
+  writer lock race (`cfg3_catalog`), SQLite and filesystem durability and
+  cleanup. It never compiles the library test harness, which was about half
+  of the macOS lane's compilation (721 s of about 1,450 s in run
+  39015122730).
+- **rust-platform-boundaries** (macos; FULL) — one job: the same external
+  targets, compiled first, then `cargo test --lib --bins --all-features
+  -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
   primitives differ across OSes — plus the in-crate boundary suites) and the
-  seven external boundary targets, both with
-  `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The `--no-run` compile steps before
-  them exist for native timing measurement and execute nothing.
-  `contracts`/`provider` and the deterministic contract majority are
-  Linux-only: they carry no process or filesystem semantics. Overlap with
-  Linux is intentional: a macOS boundary test is native proof, not a
-  duplicate.
+  external targets, both with `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Running
+  the lib half on a second runner in parallel was measured and rejected:
+  with cold caches it shortened FULL by about a minute for about 17 more
+  macOS runner-minutes, since that runner compiles the dependencies and the
+  ordinary library again. The `--no-run` compile steps separate native
+  compile timing from execution and execute nothing; both macOS jobs keep
+  `CARGO_BUILD_JOBS=1`. `contracts`/`provider` and the deterministic
+  contract majority are Linux-only: they carry no process or filesystem
+  semantics. Overlap with Linux is intentional: a macOS boundary test is
+  native proof, not a duplicate. A pull request push that touches Rust runs
+  macOS core; the macOS unit tests and in-crate boundary suites run on its
+  promoted FULL head, on `main` and nightly. A low-risk change
+  (presentation, documentation) runs no macOS Rust lane at all; that is the
+  deliberate tradeoff of the FAST profile.
 - **tui** — independent Node/pnpm lane. `pnpm test` includes the real-child
   integration suite, which drives the actual `rustx` binary (built by
   `cargo build --bin rustx` in that lane) over the real stdio and WebSocket
@@ -336,36 +483,115 @@ summarizes them and the lane check below verifies them against Cargo:
   TypeScript through `cargo run --example generate_app_server_protocol` and
   fails on drift; `pnpm typecheck` checks the fixtures and reference
   intersections.
-- **web-console** — development launcher `typecheck`/`test`, Web
-  `typecheck`, deterministic `pnpm test` (Vitest over `test/**/*.test.ts(x)`;
-  the `*.measurement.tsx` counters are excluded), `check:i18n`,
-  `check:provenance` (source provenance and dependency notices), then
-  `cargo build --bins` and `pnpm test:e2e`. `test:e2e` is
-  `pnpm build && bash scripts/browser-tests.sh`: the job's only production
-  build (Vite, then `provenance.ts --artifact` over the new `dist/`) runs
-  from checked-in source immediately before Playwright, whose preview server
-  serves that `dist/`, in the digest-pinned browser container. No earlier
-  step builds or reuses `dist/`.
+- **Browser and Web client** — five jobs. `browser-prepare` builds once from
+  the checked-out source: `cargo build --bins --example
+  document_artifact_fixture` and the only production Web build (`pnpm
+  build`: Vite, then `provenance.ts --artifact` over the new `dist/`), both
+  run by `web-console/scripts/browser-artifact.ts pack`. It records them
+  (debug info stripped, symbols kept) with their identity — commit, runner
+  platform and architecture, the `rust-toolchain.toml` pin it proved its
+  compiler matched, the Cargo command, Node version and ABI, pnpm,
+  Playwright, and checksums of the Cargo and pnpm manifests and lockfiles —
+  and a checksum and mode per file, and takes Playwright's own `--list`
+  inventory of the suite. It assigns whole spec files to the two shards,
+  heaviest first onto the lighter shard, by their measured seconds in
+  `web-console/test/e2e/shard-weights.json` (a file without a measurement
+  weighs its test count at the measured mean); Playwright's own `--shard`
+  splits by test count, which put 1,298 s on one shard and 397 s on the other
+  in run 39026668816. Refresh the weights from complete runs' shard
+  reports with `node scripts/browser-shards.ts weights <report.json>...`;
+  each file's weight is its mean wall span (until the next test starts, so
+  fixture time outside a test's reported duration counts) over the runs
+  given. Runner speed varies, so several runs balance better than one.
+  Weights only steer balance: coverage is verified independently of them. Node native addons are not shared: `pnpm install`
+  rebuilds them from the lockfile in every job. `web-client` (launcher
+  `typecheck`/`test`, Web `typecheck`, Vitest `pnpm test` with the
+  `*.measurement.tsx` counters excluded, `check:i18n`, `check:provenance`)
+  and the two `browser-shard` jobs install those inputs only after
+  `browser-artifact.ts install` verifies the identity against their own
+  checkout and runner and every checksum, into a checkout holding no build
+  output; any mismatch fails, and nothing is rebuilt in its place. Each
+  shard runs `browser-tests.sh --test-list shard-<i>.txt` with one worker,
+  after the script re-verifies the installed
+  inputs (`RUSTX_BROWSER_PREPARED=1` selects that path instead of
+  `cargo build`) and `provenance.ts --artifact` re-checks the installed
+  bundle. `browser-report` ("Browser acceptance coverage", the one browser
+  verdict) merges the shards' blob reports into one HTML report with every
+  trace and screenshot, and `browser-shards.ts verify` passes only when every
+  inventoried test of the selection ran exactly once in exactly one shard,
+  against the inventory's commit and prepared inputs, and passed or skipped
+  itself; a missing or empty shard, a duplicate, an unexecuted test, a FULL
+  inventory smaller than discovery, a FAST selection without a smoke test or
+  without a changed spec, or another identity fails it, as does any shard's
+  failure. The preparation build refuses build-affecting overrides
+  (`RUSTFLAGS`, `CARGO_PROFILE_*`, `CARGO_BUILD_*` except `JOBS`, compiler
+  and linker flags, `NODE_ENV`, `VITE_*`, …), so the identity's `build:
+  repository-defaults` plus the checksums of the Cargo, toolchain, pnpm and
+  Vite configuration are its whole build configuration. Locally,
+  `pnpm test:e2e` stays self-contained: `pnpm build && bash
+  scripts/browser-tests.sh`, which runs `cargo build` itself.
+
+### Browser presentation matrices
+
+A native browser workflow (a real App Server, provider emulator and Agent
+execution per test) proves business semantics once per distinct failure
+boundary. Locale, theme and width are presentation dimensions: each value
+stays covered, by a retained native run or by a stable fixture or component
+test that asserts the same UI, but not every combination re-executes the
+Agent. Distinct runtime boundaries — lost acknowledgement, reconnect, Stop
+and late output, compaction ownership, retry transitions, model adoption —
+are never merged into one run.
+
+| Removed native run | Invariant | Retained or replacement proof | Saved (CI run 39015122730) |
+| --- | --- | --- | --- |
+| `model-retry` en dark, zh light | timeout retry disclosure, recovery placement, Stop during retry, late output hidden | the same workflow in en light 1440 (plus reload) and zh dark 390; `model-retry-presentation.spec.ts` (fixture: native Trace retry states) for en and zh × light and dark × 1440 and 390, active and settled: copy, active state, readable contrast in the theme, in-viewport without overflow, disclosure by pointer and keyboard, settled placement before the reply; both locales' timeout/active/settled copy in `test/model-retry.test.tsx` | 8.4 s + 8.8 s |
+| `compaction` en dark, zh light | failed and held manual compaction, reconnect, automatic compaction after a questionnaire, projection history, Stop and late output | the same workflow in en light 1440 (plus reconnect and reload) and zh dark 390; the Context summary card in en and zh, light and dark, 1440 and 390 in `compaction-summary.spec.ts` (fixture) | 9.5 s + 9.9 s |
+| `live-model` profile selection (1440, lost), (390, received) | same-model profile mutation with a received or lost acknowledgement, frozen admission, reload without replay, provider request parameters | (1440, received) and (390, lost): each acknowledgement outcome and each width once; neither the placement nor the lost-ACK recovery depends on the other | 7.1 s + 6.6 s |
+
+Both replacement matrices are tagged `@presentation`, so a low-risk Web
+presentation change, which merges on FAST, still runs every locale, theme
+and width of them (`test/browser-verification.test.ts` checks the
+discovered suite selects all eight cases of each).
+None of the removed runs held a screenshot reference; their captures went to
+`/tmp`. Each replacement was checked against a deliberate violation: a wrong
+Chinese retry label fails `model-retry.test.tsx`, a fixed dark retry summary
+colour fails the four dark `model-retry-presentation` cases, and a wrong
+English projection description fails the four English `compaction-summary`
+cases.
+The suite shrank by six native runs (about 50 s of test time) and gained four
+fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
+`shell`, `settings-presentation`) start no Agent and were left unchanged.
 
 ### The lane check
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
 second copy of it. Each Rust test lane ends with
-`cargo run --example check_test_lanes -- --job <job id>`, which reads the
+`cargo run --all-features --example check_test_lanes -- --job <job id>`, which reads the
 workflow's executing `cargo test` steps and asks libtest, through `--list`,
 what each one selects — so filters, `--skip`, features and `cfg` are
-Cargo's and libtest's own semantics. It fails for:
+Cargo's and libtest's own semantics. Every test job declares its profiles
+(`env: VERIFICATION_PROFILE: fast`, `full` or `fast full` — not a `RUST*`
+name, which the Rust cache would hash into its key) and must be gated by
+exactly `if: fromJSON(needs.plan.outputs.run)['<its id>']`; a FAST step may
+also be gated by the plan's affected-component map, and nothing else may
+make a test step conditional. Each profile's coverage is its own. It fails
+for:
 
 - a Cargo test target (lib, bin, example, integration test) selected by no
-  executing Linux step (`--no-run` does not count);
-- a Linux-discovered runnable test that no Linux step executes;
+  executing FULL Linux step (`--no-run` and FAST steps do not count);
+- a Linux-discovered runnable test that no FULL Linux step executes, the
+  capacity suite included;
 - a step that selects no runnable test of a lib or integration-test target;
 - a positive filter that matches nothing, only `#[ignore]`d tests, or only
   `--skip`ped tests, and a `--skip` that excludes nothing;
-- a suite in its `REQUIREMENTS` table (macOS: `boundary_suites::` and the
-  seven external boundary targets) that is missing or not fully executed on
-  its platform;
-- a step or libtest output it cannot interpret exactly.
+- a suite in its `REQUIREMENTS` table that is missing or not fully executed
+  in its profile on its platform: FAST on Linux must always run
+  `scripted_suites::`, `runtime::conversation_runtime::` and the `process`
+  target (affected steps never satisfy this; the capacity suite is
+  excluded), FULL on Linux the whole `::scale::` suite, FULL on macOS
+  `boundary_suites::` and the seven external boundary targets;
+- a test job without a declared profile or the canonical plan gate, and a
+  step or libtest output it cannot interpret exactly.
 
 Discovery is always native: the macOS job checks macOS, and `--job` refuses
 a job of another platform. Run it without `--job` to check every target of
@@ -385,6 +611,44 @@ production discovery with real Cargo over a small fixture package (its own
 temporary directory and target directory), once with
 `CARGO_TERM_COLOR=always` and once with `never`, each set only in a
 re-executed child's environment.
+
+### Measuring verification cost
+
+Compare only runs with matched conditions: the same lane, runner image,
+toolchain and cache state. Pull-request runs restore the caches published by
+`main`, so two PR runs in the same window are comparable; a failed or
+cancelled run is diagnostic evidence, not a timing baseline.
+
+- **Cache state**: the `Cache Rust dependencies` step logs either
+  `Restored from cache key "…" full match: true|false` or `No cache found`.
+  A miss turns dependency compilation into part of the first build step.
+- **Compilation vs execution**: Cargo's `Finished … in` line is the build
+  span of one command; libtest's `finished in` is execution of one harness.
+  A `cargo test` step's duration is their sum plus process startup, never
+  pure test time. The macOS lane separates them with `--no-run` steps,
+  `/usr/bin/time -l` (wall time, peak RSS) and the `macos-cargo-timings`
+  artifact (per-unit `--timings` reports).
+- **Library units**: two commands share compiled work only when they build
+  the same unit. Compare artifact hashes rather than command lines:
+
+  ```bash
+  cargo test --all-features --test process --no-run --message-format=json \
+    | jq -r 'select(.reason=="compiler-artifact" and .target.name=="rustx") | .filenames[0]'
+  ```
+
+  Features, `cfg(test)` and dev-dependency feature unification (any test or
+  example target in the invocation) each select a different unit. The macOS
+  lane keeps `CARGO_BUILD_JOBS=1`: a single rustX library compilation peaks
+  near 3.5 GB RSS there (`/usr/bin/time -l`), so two concurrent ones would
+  approach the runner's memory.
+- **Browser acceptance**: each `browser-shard-<i>` artifact holds
+  Playwright's JSON report of that shard (`shard-report/report.json`):
+  `stats.duration` is the shard's run and each result's `duration` covers one
+  test, including the fixture it starts; their difference is time outside
+  test bodies. `browser-report` prints a per-shard table (tests, wall time,
+  summed test time) in its step summary, and the critical path is
+  `browser-prepare` plus the slower shard plus `browser-report`. Runner
+  minutes are the sum over all five jobs.
 
 ## Prerequisites
 
@@ -507,31 +771,56 @@ feature suite.
 
 ## Running
 
+During implementation run the focused tests of what you change; at a
+checkpoint, run the affected modules; let CI's FAST run verify each push,
+and promote the final candidate to FULL instead of repeating the whole
+suite locally. CI verifies only committed, pushed heads — never local edits.
+
 ```bash
+# Focused: one module, one target, one test.
+cargo test --lib --all-features durable::sqlite::
+cargo test --all-features --test process app_server::
+(cd web-console && pnpm exec vitest run test/model-retry.test.tsx)
+
+# The FAST Rust lane (CI: rust-fast), without the affected heavy groups:
+cargo test --all-features --no-run --lib --test process
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- \
+  --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: \
+  --skip local_runtime::session_runtime_manager::tests:: \
+  --skip local_runtime::session:: --skip runtime_client::response::
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test process
+
+# The capacity suite (FULL), or one capacity test:
+cargo test --lib --all-features ::scale::
+
+# FULL: the lanes below. Promote a pull request with the
+# `full-verification` label to run all of them in CI on its exact head.
+
 # Unit tests + in-crate deterministic contracts (CI: rust-contracts):
 cargo build --bins   # unit tests exec target/debug/{bash,interactive}-supervisor
 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features
 
-# In-crate boundary conformance (CI: rust-boundaries); uv is mandatory:
-cargo build --bins   # text_spill execs the bash-supervisor binary by path
+# Boundary lanes (CI: rust-boundaries); uv is mandatory. Compiling the
+# external targets first also places the real executables at target/debug/,
+# where the text_spill suite execs bash-supervisor:
+BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
+  --test conformance --test cfg3_catalog --test cfg3_managed_output'
+cargo test --all-features --no-run $BOUNDARY_TARGETS
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features $BOUNDARY_TARGETS
 
-# External boundary targets (CI: rust-boundaries); the emulator is mandatory:
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features \
-  --test durable --test process --test subagent --test tools --test conformance \
-  --test cfg3_catalog --test cfg3_managed_output
-
-# Platform-sensitive classes on macOS (CI: rust-platform-boundaries):
-cargo build --bins --all-features
+# macOS core (CI: rust-platform-core): the seven external boundary targets
+# above. macOS full (CI: rust-platform-boundaries) adds, after the same
+# external-target compilation:
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
   --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
-# plus the seven external boundary targets above.
 
-# Lane coverage for one CI job on its own platform, or every target here:
-cargo run --example check_test_lanes -- --job rust-contracts
-cargo run --example check_test_lanes
+# Lane coverage for one CI job on its own platform, or every target here
+# (--all-features reuses the library the test targets already compiled):
+cargo run --all-features --example check_test_lanes -- --job rust-contracts
+cargo run --all-features --example check_test_lanes
 
 # Everything, the safety net (it does not prove the CI lanes' selection):
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features

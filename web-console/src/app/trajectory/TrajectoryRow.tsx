@@ -35,13 +35,13 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
   const error = record !== undefined && item?.type === 'RecordRow' && isErrorRecord(record);
   const toggleSummary = () => {
     if (row.callsOwner) actions.toggleCalls(row.callsOwner);
-    else if (turn) actions.toggleTurn(turn.attempt_id);
+    else if (turn) actions.toggleTurn(turn.ownerKey);
   };
   const onDoubleClick = (event: MouseEvent) => {
     if (summary || !item || item.type === 'RequestBoundary' || !turn) return;
-    if (folded.has(turn.attempt_id) && actions.foldableTurns.has(turn.attempt_id)) { event.preventDefault(); actions.toggleTurn(turn.attempt_id); return; }
+    if (folded.has(turn.ownerKey) && actions.foldableTurns.has(turn.ownerKey)) { event.preventDefault(); actions.toggleTurn(turn.ownerKey); return; }
     if (item.type === 'RecordRow' && actions.callOwners.has(item.owner_record_id)) { event.preventDefault(); actions.toggleCalls(item.owner_record_id); return; }
-    if (row.turnStart && actions.foldableTurns.has(turn.attempt_id)) { event.preventDefault(); actions.toggleTurn(turn.attempt_id); }
+    if (row.turnStart && actions.foldableTurns.has(turn.ownerKey)) { event.preventDefault(); actions.toggleTurn(turn.ownerKey); }
   };
   const request = row.request;
   const requestNumber = request ? actions.requestNumbers.get(request.owner_record_id) : undefined;
@@ -75,9 +75,9 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
         style={row.requestRun ? { '--request-boundary-offset': `${row.requestRun * 8}px` } as CSSProperties : undefined}
         onClick={event => { event.stopPropagation(); actions.select(request); }}
         onDoubleClick={event => { event.stopPropagation(); }} />}
-      {turn && turn.attempt_id === activeTurn && !initialSystem && <span className={css.turnRail} aria-hidden="true" />}
+      {turn && turn.ownerKey === activeTurn && !initialSystem && <span className={css.turnRail} aria-hidden="true" />}
       {selected && <span className={css.selectionRail} aria-hidden="true" />}
-      {row.turnStart && turn && <span className={turn.attempt_id === activeTurn ? `${css.turnLabel} ${css.turnLabelActive}` : css.turnLabel} aria-label={turn.label}>
+      {row.turnStart && turn && <span className={turn.ownerKey === activeTurn ? `${css.turnLabel} ${css.turnLabelActive}` : css.turnLabel} aria-label={turn.label}>
         <span className={css.turnLabelFull} aria-hidden="true">{turn.label}</span>
         <span className={css.turnLabelCompact} aria-hidden="true">#{turn.ordinal}</span>
       </span>}

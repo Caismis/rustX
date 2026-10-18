@@ -69,10 +69,12 @@
 //! ordered `P < U < C` and enforced by the store as `C => U => P`.
 
 pub mod inbox;
+pub mod observation;
 pub mod presentation;
 pub mod projection;
 pub mod reading;
 pub mod sqlite;
+pub mod trace;
 
 pub use inbox::{
     AcceptedInbound, CanonicalMessagePage, ContributionEmissionLookup, ContributionEmissionRecord,

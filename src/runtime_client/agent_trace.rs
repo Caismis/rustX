@@ -1,7 +1,7 @@
 //! Child-owned Trace reads use the same durable projection as the root.
 //! Registry identity chooses the store; callers never supply a child path or
 //! substitute the parent's observation cursor. Reads remain valid after exit.
-use super::trace::{TraceCursor, TraceProjection};
+use super::trace::TraceCursor;
 use super::{RuntimeClientError, RuntimeClientResult, host::ClientInner};
 use crate::runtime::identity::AgentId;
 use std::sync::Arc;
@@ -12,27 +12,7 @@ impl ClientInner {
         id: &AgentId,
         locator: super::trace::TraceToolLocator,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let owner = Arc::clone(self);
-        let id = id.clone();
-        tokio::task::spawn_blocking(move || {
-            owner.read_agent_trace(&id, |projection, agent| {
-                let mut location = projection.locate_tool(&locator)?;
-                if let Some(location) = &mut location {
-                    let positions = location
-                        .page
-                        .records
-                        .iter()
-                        .map(|record| record.position.clone())
-                        .collect::<Vec<_>>();
-                    location.page.updates = projection.refresh_agent(&positions, agent)?;
-                }
-                Ok(RuntimeClientResult::TraceToolLocation { location })
-            })
-        })
-        .await
-        .map_err(|_| RuntimeClientError::RuntimeFailure {
-            message: "Agent Trace locator failed".into(),
-        })?
+        self.agent_trace_locate_via_inspection(id, locator).await
     }
 
     pub(crate) async fn agent_trace(
@@ -42,20 +22,8 @@ impl ClientInner {
         limit: usize,
         records: Vec<TraceCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let owner = Arc::clone(self);
-        let id = id.clone();
-        tokio::task::spawn_blocking(move || {
-            owner.read_agent_trace(&id, |projection, agent| {
-                let mut page = projection.page(before.as_ref(), limit)?;
-                super::trace::repair_agent_records(&mut page.records, agent);
-                page.updates = projection.refresh_agent(&records, agent)?;
-                Ok(RuntimeClientResult::TracePage { page })
-            })
-        })
-        .await
-        .map_err(|_| RuntimeClientError::RuntimeFailure {
-            message: "Agent Trace reader failed".into(),
-        })?
+        self.agent_trace_via_inspection(id, before, limit, records)
+            .await
     }
 
     pub(crate) async fn agent_trace_detail(
@@ -68,53 +36,28 @@ impl ClientInner {
                 message: "Trace record identity is too long".into(),
             });
         }
-        let owner = Arc::clone(self);
-        let id = id.clone();
-        tokio::task::spawn_blocking(move || {
-            owner.read_agent_trace(&id, |projection, _| {
-                Ok(RuntimeClientResult::TraceDetail {
-                    detail: projection.detail(&record_id)?.map(Box::new),
-                })
-            })
-        })
-        .await
-        .map_err(|_| RuntimeClientError::RuntimeFailure {
-            message: "Agent Trace detail reader failed".into(),
-        })?
-    }
-
-    fn read_agent_trace(
-        &self,
-        id: &AgentId,
-        read: impl FnOnce(
-            &TraceProjection<'_>,
-            &super::snapshot::RuntimeClientAgent,
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        let observed = self.agent_observe_with_deadline(id, None, deadline).await?;
+        let RuntimeClientResult::AgentObserve { observation } = observed else {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: "native child checkpoint result is unavailable".into(),
+            });
+        };
+        let super::agent_observation::AgentObservation::Checkpoint { checkpoint, .. } = observation
+        else {
+            return Err(RuntimeClientError::ObservationUnavailable {
+                message: "native child checkpoint is required for Trace inspection".into(),
+            });
+        };
+        let domain = super::trace_observation::detail_domain(&record_id)?;
+        let page = tokio::time::timeout_at(
+            deadline,
+            self.agent_checkpoint_page(id, &checkpoint.read_cut, &domain, 0, 32),
         )
-            -> Result<RuntimeClientResult, crate::durable::ConversationStoreError>,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        let agent = self.agent_view(id)?;
-        let store = self
-            .agent_registry()?
-            .transcript_store(&agent.activation_id)
-            .map_err(|error| match error {
-                crate::runtime::subagent::SubagentTranscriptError::Unknown(subagent_id) => {
-                    RuntimeClientError::UnknownSubagent { subagent_id }
-                }
-                crate::runtime::subagent::SubagentTranscriptError::Unavailable(message) => {
-                    RuntimeClientError::RuntimeFailure { message }
-                }
-            })?;
-        let projection = TraceProjection::new(&store).map_err(trace_error)?;
-        read(&projection, &agent).map_err(trace_error)
-    }
-}
-fn trace_error(error: crate::durable::ConversationStoreError) -> RuntimeClientError {
-    match error {
-        crate::durable::ConversationStoreError::InvalidReference(message) => {
-            RuntimeClientError::InvalidRequest { message }
-        }
-        error => RuntimeClientError::RuntimeFailure {
-            message: error.to_string(),
-        },
+        .await
+        .map_err(|_| RuntimeClientError::ObservationUnavailable {
+            message: "total child Trace inspection deadline exhausted".into(),
+        })??;
+        Ok(RuntimeClientResult::DomainPage { page })
     }
 }

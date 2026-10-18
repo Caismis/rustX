@@ -1,3 +1,4 @@
+import { checkpoint } from './support/fixtures.ts';
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { editorText, editorSubmission, RestoredEditorOrderingError } from '../src/app-server/editor.ts';
@@ -55,8 +56,12 @@ it('TUI refuses an ambiguous restored edit without turn/start and retains the dr
   const client = {
     closed: undefined,
     onClose: () => () => {},
+    onNotification: () => () => {},
     call: async (method: string, params: { content: UserInputBlock[] }) => {
-      if (method === 'session/attach') return { target, snapshot: snapshot(), cursor: runtimeCursor(1) };
+      if (method === 'session/attach') return {target,configuration_revision:'0',attachment_kind:'controller',observation_source:'live'};
+      if(method==='session/checkpoint')return {checkpoint:checkpoint({...snapshot(),conversation_id:target.conversation_id},runtimeCursor(1))};
+      if(method==='session/subscribe')return {target,registration_id:'fixture-registration',after_cursor:runtimeCursor(1)};
+      if(method==='session/configuration')return {application:null};
       assert.equal(method, 'turn/start');
       turns.push(params.content);
       return { message_id: 'accepted', inbound_sequence: '1' };

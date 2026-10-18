@@ -1,20 +1,18 @@
-//! Exact Tool-occurrence navigation across the complete native Journal.
+//! Exact Tool-occurrence navigation from indexed native commit evidence.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{TRACE_PAGE_LIMIT, TraceCursor, TracePage, TraceProjection};
-use crate::durable::{ConversationStoreError, presentation::FactScope};
-use crate::events::types::RuntimeEvent;
-use crate::message::types::{AssistantContentBlock, MessageBlock, ToolCallOccurrenceRef};
+use crate::durable::ConversationStoreError;
 use crate::runtime::identity::{ToolCallId, ToolId};
 
-/// The occurrence, rather than a globally ambiguous provider call ID, owns navigation.
+/// Native occurrence identity owns navigation; optional inline IDs are checks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceToolLocator {
-    pub occurrence: ToolCallOccurrenceRef,
-    pub call_id: ToolCallId,
-    pub tool_id: ToolId,
+    pub occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence,
+    pub call_id: Option<ToolCallId>,
+    pub tool_id: Option<ToolId>,
 }
 
 /// A contiguous native history window ending at the selected execution.
@@ -26,83 +24,91 @@ pub struct TraceToolLocation {
 }
 
 impl TraceProjection<'_> {
-    /// Resolves a canonical occurrence at this finite cut, independently of loaded pages.
-    /// A proposal without a native start (or inherited history without local
-    /// execution facts) returns None; neighbours and repeated IDs never stand in.
+    /// Resolves an exact occurrence against a durable source-owned read cut.
+    /// # Errors
+    /// A modified locator or unavailable read cut is an explicit source error.
+    pub(crate) fn locate_tool_at(
+        &self,
+        locator: &TraceToolLocator,
+        cut: &crate::durable::observation::ObservationReadCut,
+    ) -> Result<Option<TraceToolLocation>, ConversationStoreError> {
+        if locator
+            .call_id
+            .as_ref()
+            .is_some_and(|id| id.as_str().len() > 256)
+            || locator
+                .tool_id
+                .as_ref()
+                .is_some_and(|id| id.as_str().len() > 256)
+            || matches!(&locator.occurrence.locator,crate::runtime_client::content::CanonicalContentLocator::ByMessageId {message_id} if message_id.as_str().len()>256)
+            || cut != self.cut()?
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid Tool occurrence read evidence".into(),
+            ));
+        }
+        let page = self.store.tool_association_headers_by_locator(
+            cut,
+            &locator.occurrence.locator,
+            u64::from(locator.occurrence.block_index.get()),
+            1,
+        )?;
+        let Some(header) = page
+            .headers
+            .first()
+            .filter(|header| header.block_index == locator.occurrence.block_index)
+        else {
+            return Ok(None);
+        };
+        if locator
+            .call_id
+            .as_ref()
+            .is_some_and(|id| header.call_id.as_ref() != Some(id))
+            || locator
+                .tool_id
+                .as_ref()
+                .is_some_and(|id| header.tool_id.as_ref() != Some(id))
+        {
+            return Ok(None);
+        }
+        let crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position } =
+            page.locator
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "Tool occurrence has no native canonical position".into(),
+            ));
+        };
+        let Some(sequence) = self.store.observation_tool_trace_sequence(
+            cut,
+            position,
+            locator.occurrence.block_index,
+        )?
+        else {
+            return Ok(None);
+        };
+        let cursor = TraceCursor::at(sequence);
+        let end = TraceCursor::at(sequence.checked_add(1).ok_or_else(|| {
+            ConversationStoreError::InvalidReference("Trace cursor exhausted".into())
+        })?);
+        Ok(Some(TraceToolLocation {
+            record_id: cursor.0,
+            page: self.page(Some(&end), TRACE_PAGE_LIMIT)?,
+        }))
+    }
+
+    /// Locates a canonical occurrence at the complete cut captured by `new`.
+    /// A J-only `through` projection requires explicit `locate_tool_at` evidence.
     /// # Errors
     /// Invalid identities and durable read failures are explicit errors.
     pub fn locate_tool(
         &self,
         locator: &TraceToolLocator,
     ) -> Result<Option<TraceToolLocation>, ConversationStoreError> {
-        if !super::bounds::identity_fits(locator.occurrence.assistant_message_id.as_str())
-            || !super::bounds::identity_fits(locator.call_id.as_str())
-            || !super::bounds::identity_fits(locator.tool_id.as_str())
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "Tool occurrence identity is too long".into(),
-            ));
-        }
-        let messages = self.store.load_messages(std::slice::from_ref(
-            &locator.occurrence.assistant_message_id,
-        ))?;
-        let Some(MessageBlock::Assistant(assistant)) = messages.first() else {
-            return Ok(None);
-        };
-        let Some(AssistantContentBlock::ToolCall(call)) = assistant
-            .content
-            .get(locator.occurrence.block_index.get() as usize)
-        else {
-            return Ok(None);
-        };
-        if call.id != locator.call_id || call.tool_id != locator.tool_id {
-            return Ok(None);
-        }
-        // Find this canonical commit across the finite Journal, then use its
-        // exact native Step to query the execution index. Never enumerate all
-        // executions merely because a provider reused the same call ID.
-        let Some(commit) = self
-            .facts(
-                FactScope::Message(assistant.id.to_string()),
-                &["assistant_message_committed"],
-                None,
-                1,
-            )?
-            .into_iter()
-            .next()
-        else {
-            return Ok(None);
-        };
-        let candidates = self.facts(
-            FactScope::ToolCall {
-                call_id: locator.call_id.to_string(),
-                attempt: commit.attempt_id.clone(),
-                turn: commit.turn_id.clone(),
-            },
-            &["tool_execution_started"],
-            None,
-            1,
-        )?;
-        for anchor in candidates {
-            if anchor.sequence > commit.sequence
-                && let RuntimeEvent::ToolExecutionStarted {
-                    tool_call_id,
-                    tool_id,
-                } = &anchor.event
-                && tool_call_id == &locator.call_id
-                && tool_id == &locator.tool_id
-                && let Some((message_id, _)) =
-                    self.step_tool_call(&anchor, tool_call_id, tool_id)?
-                && message_id == assistant.id
-            {
-                let cursor = TraceCursor::at(anchor.sequence);
-                let end = TraceCursor::at(anchor.sequence.saturating_add(1));
-                return Ok(Some(TraceToolLocation {
-                    record_id: cursor.0,
-                    page: self.page(Some(&end), TRACE_PAGE_LIMIT)?,
-                }));
-            }
-        }
-        Ok(None)
+        let cut = self.source_cut.as_ref().ok_or_else(|| {
+            ConversationStoreError::InvalidReference(
+                "Tool occurrence requires complete native source cut".into(),
+            )
+        })?;
+        self.locate_tool_at(locator, cut)
     }
 }

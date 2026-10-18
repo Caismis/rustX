@@ -784,7 +784,9 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
                     .remove(&Modality::Image);
                 projected.images.clear();
             }
-            rustx::model::images::project(&mut projected.messages, image_enabled);
+            let mut rendered = projected.messages.to_vec();
+            rustx::model::images::project(&mut rendered, image_enabled);
+            projected.messages = rendered.into();
             let before = server.attempt_count();
             let events = crate::common::collect_events(adapter.as_ref(), projected).await;
             assert!(

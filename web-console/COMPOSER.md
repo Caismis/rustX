@@ -27,8 +27,9 @@ composer-stack geometry; see [PROVENANCE.md](PROVENANCE.md).
 ## Authority
 
 Every dock reads the replaceable authoritative `RuntimeClientSnapshot` through
-`src/bindings/composer-context.ts`. The client still has no event fold: a
-`session/event` invalidates, `session/snapshot` replaces. Transcript pages, Trace
+`src/bindings/composer-context.ts`. Complete consecutive `session/event`
+transitions fold into the applied projection;
+`session/checkpoint` supplies bounded initialization or recovery. Transcript pages, Trace
 entries and historical `todo`/Goal Tool facts stay visible in Chat and Trajectory
 as history; they never feed a dock.
 
@@ -130,25 +131,25 @@ substituted into a sent mutation.
 
 ```text
 goal/control applied or refused   -> outcome known
-successful session/snapshot after -> authoritative Goal observed
+successful bounded checkpoint after -> authoritative Goal observed
 ```
 
 `AppServerClient.controlGoal` reports both:
 
 | Outcome | Meaning | Dock |
 | --- | --- | --- |
-| `applied`, `observed: true` | mutation committed and a later snapshot read succeeded | unlocked on the new observation |
+| `applied`, `observed: true` | mutation committed and a later bounded checkpoint succeeded | unlocked on the new observation |
 | `applied`, `observed: false` | mutation committed, reread failed | old GoalRef stays rendered; controls locked |
 | `rejected`, `observed: true` | native refusal (e.g. stale CAS), reread succeeded | reason shown; unlocked on the reread Goal |
 | `rejected`, `observed: false` | native refusal, reread failed | reason shown; controls locked |
 | `uncertain` | response lost after transmission | uncertain notice; controls locked; the global diagnostic remains |
 | `obsolete` | connection or attachment changed | nothing applies to the current view |
 
-`observed` is true only when a snapshot request issued after the outcome succeeds
+`observed` is true only when a checkpoint request issued after the outcome succeeds
 for the same attachment; a coalesced in-flight refresh is re-marked dirty so it
-cannot count. A locked dock unlocks only when the client replaces the snapshot,
-which happens only after a successful authoritative read (a later event refresh,
-resync or reconnect) — never on request completion, a timer or a rerender. The
+cannot count. A locked dock unlocks on matching native Goal read-domain evidence
+or a successfully applied bounded checkpoint after reconciliation or reconnect;
+request completion, a timer or a rerender cannot establish convergence. The
 embedded `current` of a native `GoalRejection` is never adopted.
 
 Revision-only changes (autonomous round admission) keep an open draft; a change to
@@ -289,7 +290,7 @@ Disconnect, remount, route change and unmount send nothing: they do not cancel
 queued work, pause or mutate Goal, modify Todo, settle a mutation or invent a
 terminal state. Connection loss clears only accepted provisional rows (presentation,
 never a claim about server work); the last observation stays visible but inert.
-Reconnect and reload rebuild every dock from the attach snapshot; disclosure state
+Reconnect and reload rebuild every dock from the bounded native checkpoint; disclosure state
 may reset. Old-generation and old-attachment results are fenced by the existing
 client generation/target checks.
 

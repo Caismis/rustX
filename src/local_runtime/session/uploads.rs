@@ -645,6 +645,31 @@ fn remove_contents(directory: &File) -> io::Result<()> {
 use std::os::unix::ffi::OsStrExt;
 
 impl SessionCatalog {
+    pub(crate) fn editor_upload_receipt(
+        &self,
+        session_id: &SessionId,
+        block: &crate::message::types::UserContentBlock,
+    ) -> Result<UploadReceipt, SessionError> {
+        let session =
+            self.document
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: session_id.clone(),
+                })?;
+        let content = session
+            .uploads
+            .editor_input(session_id, std::slice::from_ref(block))
+            .map_err(|error| SessionError::Catalog {
+                detail: error.to_string(),
+            })?;
+        match content.into_iter().next() {
+            Some(UserInputBlock::Upload(receipt)) => Ok(receipt),
+            _ => Err(SessionError::Catalog {
+                detail: "editor block is not an upload".into(),
+            }),
+        }
+    }
     pub(crate) fn upload_registry(
         &self,
         session: &SessionId,

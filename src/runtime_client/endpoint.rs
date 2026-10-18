@@ -84,7 +84,41 @@ pub struct RuntimeClientEndpoint {
     /// admission and fences control requests at the attachment boundary.
     read_only: bool,
     /// The admitted attachment, once `initialize` succeeded.
-    attachment: Mutex<Option<Arc<RuntimeAttachment>>>,
+    attachment: Arc<Mutex<EndpointAttachment>>,
+    /// Ordinary dispatch stays serialized while retirement can reach the
+    /// attachment without waiting on an admitted physical Source read.
+    dispatch: Mutex<()>,
+}
+
+#[derive(Default)]
+struct EndpointAttachment {
+    retired: bool,
+    attachment: Option<Arc<RuntimeAttachment>>,
+}
+
+/// A listener's weak retirement capability for one exact connection endpoint.
+/// It retains neither the endpoint nor the runtime's physical storage owner.
+pub(crate) struct EndpointRetirement(Weak<Mutex<EndpointAttachment>>);
+impl EndpointRetirement {
+    pub(crate) fn is_alive(&self) -> bool {
+        self.0.strong_count() != 0
+    }
+
+    pub(crate) fn retire(&self) {
+        let Some(state) = self.0.upgrade() else {
+            return;
+        };
+        let attachment = {
+            let mut slot = state.lock().expect("runtime client endpoint lock poisoned");
+            slot.retired = true;
+            slot.attachment.take()
+        };
+        // Detach acquires the Host lock and wakes its exact subscriber. Never
+        // hold the endpoint slot across this native retirement boundary.
+        if let Some(attachment) = attachment {
+            attachment.detach();
+        }
+    }
 }
 
 impl core::fmt::Debug for RuntimeClientEndpoint {
@@ -114,8 +148,13 @@ impl RuntimeClientEndpoint {
         Self {
             host: Arc::downgrade(&host.inner),
             read_only,
-            attachment: Mutex::new(None),
+            attachment: Arc::new(Mutex::new(EndpointAttachment::default())),
+            dispatch: Mutex::new(()),
         }
+    }
+
+    pub(crate) fn retirement(&self) -> EndpointRetirement {
+        EndpointRetirement(Arc::downgrade(&self.attachment))
     }
 
     /// Handles one Runtime Client protocol request and returns its
@@ -131,15 +170,22 @@ impl RuntimeClientEndpoint {
     /// mean a previous operation panicked while holding the lock.
     pub fn handle_request(&self, request: RuntimeClientRequest) -> RuntimeClientResponse {
         let id = request.id();
+        let _dispatch = self
+            .dispatch
+            .lock()
+            .expect("runtime client dispatch lock poisoned");
         let mut slot = self
             .attachment
             .lock()
             .expect("runtime client endpoint lock poisoned");
+        if slot.retired {
+            return error(id, RuntimeClientError::NotAttached);
+        }
         match request {
             RuntimeClientRequest::Initialize {
                 protocol_version, ..
             } => {
-                if slot.is_some() {
+                if slot.attachment.is_some() {
                     return error(
                         id,
                         RuntimeClientError::InvalidRequest {
@@ -148,7 +194,7 @@ impl RuntimeClientEndpoint {
                     );
                 }
                 // Version negotiation, admission, identity allocation, and
-                // the linearized initial snapshot are all the host's, not
+                // the bounded identity receipt are all the host's, not
                 // the transport's.
                 let Some(host) = self.host.upgrade() else {
                     return error(id, RuntimeClientError::NotAttached);
@@ -160,24 +206,29 @@ impl RuntimeClientEndpoint {
                 };
                 match attached {
                     Ok((attachment, result)) => {
-                        *slot = Some(Arc::new(attachment));
+                        slot.attachment = Some(Arc::new(attachment));
                         ok(id, result)
                     }
                     Err(error_value) => error(id, error_value),
                 }
             }
             other => {
-                let Some(attachment) = slot.as_ref() else {
+                let Some(attachment) = slot.attachment.clone() else {
                     return error(id, RuntimeClientError::NotAttached);
                 };
+                drop(slot);
                 let detaching = matches!(other, RuntimeClientRequest::Detach { .. });
                 let response = attachment.handle_request(other);
                 if detaching && response.error.is_none() {
                     // The attachment released itself; returning the slot to
                     // the unattached state lets the same connection
                     // re-initialize into a fresh attachment identity.
-                    let released = slot.take();
-                    drop(slot);
+                    let released = self
+                        .attachment
+                        .lock()
+                        .expect("runtime client endpoint lock poisoned")
+                        .attachment
+                        .take();
                     drop(released);
                 }
                 response
@@ -197,7 +248,10 @@ impl RuntimeClientEndpoint {
         &self,
         request: RuntimeClientRequest,
     ) -> RuntimeClientResponse {
-        if !request.requires_async() {
+        // Checkpoint recovery may await the existing Source worker. Never
+        // block the socket executor (including its IO/timer driver) on it.
+        let checkpoint_read = matches!(request, RuntimeClientRequest::CheckpointGet { .. });
+        if !request.requires_async() && !checkpoint_read {
             return self.handle_request(request);
         }
         let id = request.id();
@@ -205,11 +259,25 @@ impl RuntimeClientEndpoint {
             .attachment
             .lock()
             .expect("runtime client endpoint lock poisoned")
-            .as_ref()
-            .cloned();
+            .attachment
+            .clone();
         let Some(attachment) = attachment else {
             return error(id, RuntimeClientError::NotAttached);
         };
+        if checkpoint_read {
+            // The admitted socket task awaits the physical blocking call;
+            // inspection shutdown retains its JoinSet slot through this join.
+            return tokio::task::spawn_blocking(move || attachment.handle_request(request))
+                .await
+                .unwrap_or_else(|_| {
+                    error(
+                        id,
+                        RuntimeClientError::ObservationUnavailable {
+                            message: "native checkpoint worker did not complete".into(),
+                        },
+                    )
+                });
+        }
         attachment.handle_request_async(request).await
     }
 
@@ -224,6 +292,7 @@ impl RuntimeClientEndpoint {
         self.attachment
             .lock()
             .expect("runtime client endpoint lock poisoned")
+            .attachment
             .as_ref()
             .and_then(|attachment| attachment.subscription())
     }
@@ -258,6 +327,7 @@ impl RuntimeClientEndpoint {
         self.attachment
             .lock()
             .expect("runtime client endpoint lock poisoned")
+            .attachment
             .as_ref()
             .map(|attachment| attachment.attachment_id().clone())
     }
@@ -280,3 +350,6 @@ fn error(id: RequestId, error: RuntimeClientError) -> RuntimeClientResponse {
         error: Some(error),
     }
 }
+
+#[cfg(test)]
+mod retirement_tests;

@@ -68,6 +68,7 @@ pub(super) fn read_at(
             .is_none_or(|id| referenced.contains(id))
     });
     let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
+    let raw_tool_arguments = super::content::canonical_raw_arguments(connection, &canonical)?;
     let projection_len = if let Some((id, include)) = boundary {
         canonical.iter().position(|m| m.id() == id).ok_or_else(|| {
             ConversationStoreError::InvalidReference(
@@ -87,6 +88,7 @@ pub(super) fn read_at(
     )?;
     Ok(LineageReadCut {
         projections,
+        raw_tool_arguments,
         read_cut,
         conversation_id: conversation.clone(),
         surface_revision: revision,

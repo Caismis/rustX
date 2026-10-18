@@ -17,11 +17,50 @@ use crate::context::projection::ContextProjection;
 use crate::context::tokens::{ProviderObservedInput, TokenEstimator};
 use crate::conversation::SurfaceRevision;
 use crate::message::types::MessageBlock;
-use crate::model::input::{ModelInputMessage, RequestOnlyInsertionAnchor, assemble_model_input};
+#[cfg(test)]
+use crate::model::input::ModelInputMessage;
+use crate::model::input::RequestOnlyInsertionAnchor;
 use crate::runtime::identity::MessageId;
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use crate::tools::types::ModelToolDefinition;
+
+/// Assemble a hypothetical context candidate using the same immutable prefix.
+/// Only newly staged facts and an admitted carryover receive new leaves.
+pub(crate) fn assemble_context_input(
+    historical: &crate::model::SelectedModelInput,
+    staged: &[MessageBlock],
+    carryover: Option<&crate::model::RenderedUnresolvedOutputCarryover>,
+    anchor: Option<&RequestOnlyInsertionAnchor>,
+) -> Result<crate::model::SelectedModelInput, String> {
+    let mut messages = historical.clone();
+    for message in staged {
+        let item = crate::model::ModelInputMessage::Canonical(message.clone());
+        #[cfg(test)]
+        super::planning::record_materialized_message(&item);
+        messages.push(item);
+    }
+    if let Some(carryover) = carryover {
+        let position = match anchor
+            .ok_or_else(|| "request-only carryover has no frozen insertion anchor".to_owned())?
+        {
+            RequestOnlyInsertionAnchor::AfterCanonical => historical.len(),
+            RequestOnlyInsertionAnchor::BeforeMessage(id) => messages
+                .iter()
+                .position(|message| message.canonical_id() == Some(id))
+                .ok_or_else(|| {
+                    format!("request-only carryover anchor message {id} is absent from the request")
+                })?,
+        };
+        let item = crate::model::ModelInputMessage::RequestOnly(
+            crate::model::RequestOnlyModelContext::UnresolvedOutputCarryover(carryover.clone()),
+        );
+        #[cfg(test)]
+        super::planning::record_materialized_message(&item);
+        messages.insert(position, item);
+    }
+    Ok(messages)
+}
 
 /// The static current-runtime context policy.
 ///
@@ -378,12 +417,12 @@ impl ContextEngine {
     /// extends it for admitted core input. Existing resources are never reread.
     pub(crate) async fn prepare_media(
         &mut self,
-        historical: &[ModelInputMessage],
-        complete: &[ModelInputMessage],
+        historical: &crate::model::SelectedModelInput,
+        complete: &crate::model::SelectedModelInput,
         cancellation: &crate::runtime::CancellationSignal,
     ) -> Result<(), ContextError> {
         tokio::task::yield_now().await;
-        let captured = crate::model::media::MediaSnapshot::capture(
+        let captured = crate::model::media::MediaSnapshot::capture_selected(
             self.media.as_deref(),
             historical,
             complete,
@@ -410,14 +449,14 @@ impl ContextEngine {
 
     fn media_for(
         &self,
-        messages: &[ModelInputMessage],
+        messages: &crate::model::SelectedModelInput,
     ) -> Result<Arc<crate::model::media::MediaSnapshot>, String> {
         if let Some(media) = &self.media {
             return Ok(media.clone());
         }
         // Read-only diagnostics outside an executing generation use the same
         // finite capture owner; they cannot advertise a frozen search proof.
-        crate::model::media::MediaSnapshot::capture(
+        crate::model::media::MediaSnapshot::capture_selected(
             None,
             messages,
             messages,
@@ -428,14 +467,33 @@ impl ContextEngine {
         )
         .map(Arc::new)
     }
+    #[cfg(test)]
     pub(crate) fn materialize_media(
         &self,
         messages: &mut [ModelInputMessage],
     ) -> Result<crate::model::images::ResolvedImages, ContextError> {
-        let media = self.media_for(messages).map_err(|e| malformed(&e))?;
+        let selected = messages.to_vec().into();
+        let media = self.media_for(&selected).map_err(|e| malformed(&e))?;
         media.materialize(messages).map_err(|e| malformed(&e))?;
         media.selected_images(messages).map_err(|e| malformed(&e))
     }
+    /// Materialize at the actual native mutation owner and return only its
+    /// changed indices, for updating the same persistent selected-input root.
+    pub(crate) fn materialize_selected_media(
+        &self,
+        messages: &mut crate::model::SelectedModelInput,
+        manifest: &crate::model::SelectedInputManifest,
+    ) -> Result<(crate::model::images::ResolvedImages, Vec<usize>), ContextError> {
+        let media = self.media_for(messages).map_err(|e| malformed(&e))?;
+        let changed = media
+            .materialize_selected_with_changes(messages, Some(manifest))
+            .map_err(|e| malformed(&e))?;
+        let images = media
+            .selected_images_input(messages)
+            .map_err(|e| malformed(&e))?;
+        Ok((images, changed))
+    }
+
     /// The engine configuration.
     #[must_use]
     pub fn config(&self) -> &ContextConfig {
@@ -531,7 +589,7 @@ impl ContextEngine {
         carryover: Option<&crate::model::RenderedUnresolvedOutputCarryover>,
         carryover_anchor: Option<&RequestOnlyInsertionAnchor>,
     ) -> u64 {
-        let messages = assemble_model_input(
+        let messages = assemble_context_input(
             &projection.messages,
             staged_request_context,
             carryover,
@@ -552,46 +610,65 @@ impl ContextEngine {
     #[must_use]
     pub fn estimate_model_input(
         &self,
-        messages: &[ModelInputMessage],
+        messages: &crate::model::SelectedModelInput,
         effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        let Ok(media) = self.media_for(messages) else {
+        #[cfg(test)]
+        let _timer = crate::agent::execution::attribution::Timer::new(
+            crate::agent::execution::attribution::Phase::ContextMeasure,
+        );
+        let Ok(rendered) = self.rendered_input(messages) else {
             return u64::MAX;
         };
-        #[cfg(test)]
-        crate::model::media::count_copy(messages);
-        let mut rendered = messages.to_vec();
-        if media.materialize(&mut rendered).is_err() {
-            return u64::MAX;
+        let input =
+            self.estimator
+                .estimate_selected(&rendered, effective_system_prompt, tool_definitions);
+        if !rendered.has_media() {
+            return input;
         }
-        self.estimator
-            .estimate_input(&rendered, effective_system_prompt, tool_definitions)
-            .saturating_add(media.image_cost(&rendered))
+        self.media_for(&rendered).map_or(u64::MAX, |media| {
+            input.saturating_add(media.image_cost_input(&rendered))
+        })
     }
 
-    pub(crate) fn supports_monotone_compaction(&self, messages: &[ModelInputMessage]) -> bool {
-        // A snapshot proves prefix-deletion stability of our concrete media
-        // transforms; it never grants a property the underlying estimator lacks.
-        if self.image_input.is_some() || self.uploads.is_some() {
-            let Some(media) = &self.media else {
-                return false;
-            };
-            #[cfg(test)]
-            crate::model::media::count_copy(messages);
-            let mut rendered = messages.to_vec();
-            if media.materialize(&mut rendered).is_err() {
-                return false;
-            }
-            self.estimator.supports_monotone_compaction(&rendered)
-        } else {
-            self.estimator.supports_monotone_compaction(messages)
+    fn rendered_input(
+        &self,
+        messages: &crate::model::SelectedModelInput,
+    ) -> Result<crate::model::SelectedModelInput, String> {
+        let mut rendered = messages.clone();
+        if rendered.has_media() {
+            self.media_for(messages)?
+                .materialize_selected_with_changes(&mut rendered, None)?;
         }
+        Ok(rendered)
     }
 
-    /// Price the frozen provider-neutral request after dynamic materialization.
+    pub(crate) fn supports_monotone_compaction(
+        &self,
+        messages: &crate::model::SelectedModelInput,
+    ) -> bool {
+        if messages.has_media()
+            && (self.image_input.is_some() || self.uploads.is_some())
+            && self.media.is_none()
+        {
+            return false;
+        }
+        self.rendered_input(messages)
+            .is_ok_and(|rendered| self.estimator.supports_monotone_selected(&rendered))
+    }
+
+    /// Price final provider-visible input without selecting resources again.
     #[must_use]
     pub fn estimate_frozen_request(&self, request: &crate::model::ModelRequest) -> u64 {
+        #[cfg(test)]
+        let _timer = crate::agent::execution::attribution::Timer::new(
+            crate::agent::execution::attribution::Phase::ContextMeasure,
+        );
+        let input = self.estimator.estimate_frozen_request(request);
+        if !request.messages.has_media() {
+            return input;
+        }
         let costs: std::collections::BTreeMap<_, _> = request
             .images
             .iter()
@@ -604,11 +681,10 @@ impl ContextEngine {
                 )
             })
             .collect();
-        self.estimator
-            .estimate_frozen_request(request)
-            .saturating_add(crate::model::media::image_cost(&request.messages, |id| {
-                costs.get(id).copied().flatten()
-            }))
+        input.saturating_add(crate::model::media::image_cost_input(
+            &request.messages,
+            |id| costs.get(id).copied().flatten(),
+        ))
     }
 
     /// Measure an already structurally compiled historical projection and core overlay.
@@ -616,7 +692,7 @@ impl ContextEngine {
     pub fn build_projection_input(
         &self,
         revision: SurfaceRevision,
-        messages: Vec<ModelInputMessage>,
+        messages: crate::model::SelectedModelInput,
         tools: &[ModelToolDefinition],
         observed: Option<&ProviderObservedInput>,
         prompt: &str,
@@ -642,8 +718,8 @@ impl ContextEngine {
     /// Reuses one provider measurement for this projection, exactly or as a
     /// prefix anchor, or refuses it.
     ///
-    /// The exact match is unchanged: an identical request context keeps the
-    /// provider's own number with `ProviderReported` provenance. The anchored
+    /// Exact native input and scalar identity keep the provider's own number
+    /// with `ProviderReported` provenance. The anchored
     /// case is the one that matters over a long conversation. The provider
     /// measured the cost of a prefix of this context — including its
     /// Effective System Prompt and tool definitions — so that part needs no
@@ -663,32 +739,24 @@ impl ContextEngine {
         projection: &ContextProjection,
         tool_definitions: &[ModelToolDefinition],
     ) -> Option<TokenMeasurement> {
-        let mut rendered = projection.messages.clone();
-        self.media_for(&rendered)
-            .ok()?
-            .materialize(&mut rendered)
-            .ok()?;
-        let mut projected = projection.clone();
-        projected.messages.clone_from(&rendered);
-        if observed.fingerprint == projected.fingerprint()
-            || observed.fingerprint
-                == crate::context::tokens::model_input_fingerprint(
-                    projection.surface_revision,
-                    &rendered,
-                    &projection.effective_system_prompt,
-                )
-        {
+        let rendered = self.rendered_input(&projection.messages).ok()?;
+        if observed.anchor.matches_selected(
+            projection.surface_revision,
+            &rendered,
+            &projection.effective_system_prompt,
+            tool_definitions,
+        ) {
             return Some(TokenMeasurement {
                 input_tokens: observed.input_tokens,
                 source: TokenMeasurementSource::ProviderReported,
             });
         }
-        let covered = observed.anchor.as_ref()?.covered_prefix_model_input(
+        let covered = observed.anchor.covered_prefix_model_input(
             &rendered,
             &projection.effective_system_prompt,
             tool_definitions,
         )?;
-        let appended = self.estimate_model_input(&projected.messages[covered..], "", &[]);
+        let appended = self.estimate_model_input(&rendered.range(covered..rendered.len()), "", &[]);
         Some(TokenMeasurement {
             input_tokens: observed.input_tokens.saturating_add(appended),
             source: TokenMeasurementSource::ProviderAnchored,

@@ -9,6 +9,7 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 import { LocalWorkspaceHost } from '../../host/workspaces';
 import { WorkspaceTerminals } from '../../host/workbench';
 import { observeTerminalOwnership } from '../../host/terminal-ownership';
+import { followRoot } from './source-reading';
 
 function gate() { let resolve!:()=>void,reject!:(error:Error)=>void; const promise=new Promise<void>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject}; }
 
@@ -28,11 +29,10 @@ test('real native ABA commits and delayed wire retirements preserve successor PT
     const created=await native.createSession({cwd:fixture.workspaceA});
     const session=created.session.id,root=created.session.active_node;
     const attached=await native.client.call('session/attach',{session_id:session},'attached');
-    await native.client.call('session/subscribe',{target:attached.target,after_cursor:attached.cursor},'subscribed');
-    const finished=gate();
-    const unlisten=native.client.onNotification(note=>{if(note.method==='session/event'&&note.params.target.session_id===session&&note.params.event.type==='attempt_settled'){if(note.params.event.outcome.type==='completed')finished.resolve();else finished.reject(Error(JSON.stringify(note.params.event.outcome)));}});
+    const following=await followRoot(native,attached.target);
+    const finished=following.nextSettlement();
     await native.client.call('turn/start',{target:attached.target,content:[{type:'text',text:'Ownership branch seed'}]},'inbound_accepted');
-    await finished.promise;unlisten();
+    await finished;following.stop();
     const boundaries=await native.client.call('session/boundaries',{target:attached.target,offset:0,limit:32},'boundaries');
     const scope=await host.listWorkspaces();
     const summary=async()=>(await native.client.call('session/summary',{session_id:session},'session_summary')).summary;
@@ -44,7 +44,7 @@ test('real native ABA commits and delayed wire retirements preserve successor PT
       for(;;){const result=await host.workbench(scope,{target,request:{kind:'poll',id,cursor}});if(!('cursor' in result))throw Error('Missing poll');cursor=result.cursor!;output+=result.output;const match=/PTY_(\d+)_READY/.exec(output);if(match)return {target,id,cursor,pid:Number(match[1])};}
     };
     const a1=await summary(),t1=await start(root);
-    const branch=await native.branchSession(session,root,boundaries.surface_revision,boundaries.boundaries[0].message.id);
+    const branch=await native.branchSession(session,root,boundaries.surface_revision,boundaries.boundaries[0].locator);
     await observed[0].promise;
     const b=await summary(),t2=await start(branch.session.active_node);
     expect(BigInt(b.ownership_generation)).toBeGreaterThan(BigInt(a1.ownership_generation));

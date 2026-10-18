@@ -1,11 +1,11 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v49';
+import type { TurnProcessView, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v50';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
-import { turnProcesses } from '../src/bindings/turn-process';
+import { isFinalTurnMessage, turnProcesses } from '../src/bindings/turn-process';
 import { snapshot } from './fixture';
 afterEach(cleanup);
-const process = (attempt = 'a', final = 'final'): TurnProcessView => ({ conversation_id: 'c', attempt_id: attempt, final_message_id: final, outcome: 'completed', control_cursor: '1', message_count: 2, tool_call_count: 0 });
+const process = (attempt = 'a', final = 'final'): TurnProcessView => ({attempt_id_source:null, conversation_id: 'c', attempt_id: attempt, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: final, outcome: 'completed', control_cursor: '1', message_count: 2, tool_call_count: 0 });
 const row = (id: string, owner?: TurnProcessView, reasoning = false): RuntimeClientTranscriptEntry => ({ cursor: id, turn_process: owner, item: { type: 'message', message: { role: 'assistant', id, content: [...(reasoning ? [{ type: 'reasoning' as const, text: `Thought ${id}` }] : []), { type: 'text', text: `Answer ${id}` }] } } });
 const user: RuntimeClientTranscriptEntry = { cursor: 'u', item: { type: 'message', message: { role: 'user', id: 'u', source: 'human', content: [{ type: 'text', text: 'steering' }] } } };
 it('folds only native completed membership across steering and interleaved Attempts, leaving final and live work visible', () => {
@@ -43,12 +43,12 @@ it('pagination and retry origins preserve disclosure identity without merging tu
 it.each([0, 1, 3])('counts %i exact native tool occurrences, not result bodies or display names', count => {
   const owner = { ...process(), tool_call_count: count };
   const entry = row('calls', owner);
-  entry.tool_calls = Array.from({ length: count }, (_, block_index) => ({ message_id: 'calls', block_index, call_id: String(block_index), tool_id: 'bash', name: 'anything', state: { type: 'assembled', arguments: '{}' } }));
+  entry.tool_calls = Array.from({ length: count }, (_, block_index) => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'calls'},block_index:block_index},assembly_complete:true, message_id: 'calls', block_index, call_id: String(block_index), tool_id: 'bash', name: 'anything', state: { type: 'assembled', arguments: '{}' } }));
   const groups = turnProcesses([entry, row('final', owner)]);
   expect([...groups.groups.values()][0].tools).toBe(count);
 });
 it('a page beginning at a suppressed Tool result retains a reachable process disclosure and final answer', () => {
-  const result: RuntimeClientTranscriptEntry = { cursor: 'result', turn_process: process(), item: { type: 'message', message: { role: 'tool', id: 'result', occurrence: { assistant_message_id: 'earlier-call', block_index: 0 }, tool_call_id: 'call', tool_id: 'bash', result: { status: { type: 'success' }, duration_ms: 1, content: [] } } } };
+  const result: RuntimeClientTranscriptEntry = { cursor: 'result', turn_process: process(), item: { type: 'message', message: { role: 'tool', id: 'result', occurrence: { assistant_message_id: 'earlier-call', block_index: 0 }, tool_call_id: 'call', tool_id: 'bash', result: { status: { type: 'success' }, duration_ms: "1", content: [] } } } };
   render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries: [result, row('final', process())] } }}/>);
   expect(screen.getByRole('button', { name: 'Worked' })).toBeTruthy();
   expect(screen.getByText('Answer final').closest('[hidden]')).toBeNull();
@@ -102,12 +102,12 @@ it('pagination moves only the disclosure seat and preserves its expanded native 
 
 
 it.each(['failed', 'cancelled', 'timed_out', 'limit_exceeded'] as const)('native %s process owns real content, counts and a stable always-open control across pages', outcome => {
-  const owner: TurnProcessView = { conversation_id: 'c', attempt_id: 'failed-native', event_id: 'terminal-native', control_cursor: '2', outcome,
+  const owner: TurnProcessView = {attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null, conversation_id: 'c', attempt_id: 'failed-native', event_id: 'terminal-native', control_cursor: '2', outcome,
     started_at: '2026-09-25T00:00:00Z', ended_at: '2026-09-25T00:00:07Z', message_count: 2, tool_call_count: 1 };
   const first = row('reasoning-and-call', owner, true); first.cursor = '2';
   if (first.item.type === 'message' && first.item.message.role === 'assistant') first.item.message.content.push({ type: 'tool_call', id: 'call', tool_id: 'bash', name: 'bash', arguments: { command: 'pwd' } });
-  first.tool_calls = [{ message_id: 'reasoning-and-call', block_index: 2, call_id: 'call', tool_id: 'bash', name: 'bash', state: { type: 'assembled', arguments: '{"command":"pwd"}' } }];
-  const result: RuntimeClientTranscriptEntry = { cursor: '3', turn_process: owner, item: { type: 'message', message: { role: 'tool', id: 'result', occurrence: { assistant_message_id: 'reasoning-and-call', block_index: 2 }, tool_call_id: 'call', tool_id: 'bash', result: { status: { type: 'success' }, duration_ms: 1, content: [] } } } };
+  first.tool_calls = [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'reasoning-and-call'},block_index:2},assembly_complete:true, message_id: 'reasoning-and-call', block_index: 2, call_id: 'call', tool_id: 'bash', name: 'bash', state: { type: 'assembled', arguments: '{"command":"pwd"}' } }];
+  const result: RuntimeClientTranscriptEntry = { cursor: '3', turn_process: owner, item: { type: 'message', message: { role: 'tool', id: 'result', occurrence: { assistant_message_id: 'reasoning-and-call', block_index: 2 }, tool_call_id: 'call', tool_id: 'bash', result: { status: { type: 'success' }, duration_ms: "1", content: [] } } } };
   const intermediate = row('intermediate', owner); intermediate.cursor = '4';
   const terminal: RuntimeClientTranscriptEntry = { cursor: '5', turn_process: owner, item: { type: 'attempt_terminal', turn: owner } };
   const label = outcome === 'cancelled' ? 'Stopped' : 'Failed';
@@ -149,10 +149,52 @@ it.each(['failed', 'cancelled', 'timed_out', 'limit_exceeded'] as const)('native
 });
 
 it('incomplete inherited process is historical, has no running timer and is not reported failed',()=>{
- const owner:TurnProcessView={conversation_id:'origin',attempt_id:'copied-live',outcome:'incomplete_at_cut',control_cursor:'1',message_count:1,tool_call_count:0,started_at:'2026-09-25T00:00:00Z'};
+ const owner:TurnProcessView={attempt_id_source:null, final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,conversation_id:'origin',attempt_id:'copied-live',outcome:'incomplete_at_cut',control_cursor:'1',message_count:1,tool_call_count:0,started_at:'2026-09-25T00:00:00Z'};
  const timer=vi.spyOn(globalThis,'setInterval');
  const ui=render(<AgentTranscript snapshot={{...snapshot(),transcript:{entries:[{...row('retained',owner),cursor:'1'}]}}}/>);
  expect(ui.getByRole('button',{name:'Incomplete'})).toBeTruthy();expect(ui.queryByText('Failed')).toBeNull();expect(timer).not.toHaveBeenCalled();
  expect(ui.getByRole('button',{name:'Incomplete'}).closest('[data-chat-turn-owner]')?.getAttribute('data-chat-turn-owner')).toBe('turn:["origin","copied-live"]');
  timer.mockRestore();
+});
+
+it('native successful completion identifies its exact inline member while a numeric locator alone never invents row identity',()=>{
+ const locator={type:'by_ledger_position' as const,position:17};
+ const reference={conversation_id:'c',source:{type:'canonical_message_block' as const,component:'message_metadata' as const,locator,block_index:0},representation:'canonical_json_v1' as const,version:1,content_revision:1,readable_end:900};
+ const owner={...process(),final_message_id:null,final_message_locator:locator,final_message_id_deferred:true,final_message_id_source:reference};
+ const final=row('final',owner);
+ expect(isFinalTurnMessage(final)).toBe(false);
+ expect(isFinalTurnMessage({...final,turn_process:{...owner,final_message_id:'final'}})).toBe(true);
+ expect(isFinalTurnMessage({...final,turn_process:{...owner,final_message_locator:{type:'by_message_id',message_id:'final'}}})).toBe(true);
+ for(const outcome of ['running','failed','cancelled','incomplete_at_cut'] as const)
+   expect(isFinalTurnMessage({...final,turn_process:{...owner,outcome}})).toBe(false);
+ expect(turnProcesses([final]).finalMetadataSeats.get('["c","a"]')).toBe(final.cursor);
+});
+
+it('a settled Turn first shown from its canonical head folds behind its disclosure once the durable transcript holds it', () => {
+  // Browser acceptance interacts with this settled presentation: until the
+  // source-owned transcript window holds the Message, its process is shown
+  // directly with no disclosure; the durable entry then replaces those seats
+  // with a collapsed Turn disclosure over closed step groups.
+  const owner = { ...process('image', 'final'), tool_call_count: 1 };
+  const call = { role: 'assistant' as const, id: 'call', content: [{ type: 'reasoning' as const, text: 'Thought call' }, { type: 'text' as const, text: 'Answer call' }] };
+  const final = { role: 'assistant' as const, id: 'final', content: [{ type: 'text' as const, text: 'Answer final' }] };
+  const descriptor = (message: typeof call): import('../../protocol/app-server/v50').RuntimeClientMessageDescriptor => ({
+    identity: message.id, locator: { type: 'by_message_id', message_id: message.id }, role: 'assistant', kind: 'message', block_count: String(message.content.length),
+    tool_call_count: '0', tool_calls: [], turn_process: owner, completed_response: null, content: [], collections: [] });
+  const state = { ...snapshot(), conversation_id: 'c', messages: [call, final] };
+  const ui = render(<AgentTranscript snapshot={{ ...state, message_descriptors: [descriptor(call), descriptor(final)] }}/>);
+  const head = screen.getByRole('button', { name: 'Worked' });
+  expect(head.hasAttribute('aria-expanded')).toBe(false);
+  expect(screen.getByText('Answer call').closest('[hidden]')).toBeNull();
+  expect(ui.container.querySelector('[data-step-process] > button')?.hasAttribute('hidden')).toBe(true);
+  ui.rerender(<AgentTranscript snapshot={{ ...state, transcript: { entries: [row('call', owner, true), row('final', owner)] } }}/>);
+  const durable = screen.getByRole('button', { name: 'Worked' });
+  expect(durable.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.getByText('Answer call').closest('[hidden]')).not.toBeNull();
+  fireEvent.click(durable);
+  const step = screen.getByRole('button', { name: 'Analysis completed' });
+  expect(step.getAttribute('aria-expanded')).toBe('false');
+  expect(step.closest('[hidden]')).toBeNull();
+  fireEvent.click(step);
+  expect(screen.getByText('Answer call').closest('[hidden]')).toBeNull();
 });

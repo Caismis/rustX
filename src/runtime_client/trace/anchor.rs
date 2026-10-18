@@ -1,53 +1,15 @@
-//! The native and durable facts one anchor owns, before any presentation.
-//!
-//! Trace has two read responsibilities, and they are deliberately different:
-//!
-//! ```text
-//! summary    immutable historical presentation, resolved once per page
-//! lifecycle  mutable lifecycle repair of records a client already holds
-//! ```
-//!
-//! Both start from the same anchor, so the facts an anchor owns *by itself*
-//! — its native identity, its own grouping, its own durable terminal, and
-//! the canonical content it already had to read to know its own outcome —
-//! are resolved here, once, and shared.
-//!
-//! Adoption ownership can resolve after its initial read and is refreshed here. The System
-//! Prompt predecessor, the canonical Context a request introduced and the
-//! recorded model-facing Tool name are historical presentation joins: they
-//! belong to [`super::record`], they are resolved only when a summary page
-//! is built, and a lifecycle refresh never performs them. That separation is
-//! the point of this module. A lifecycle refresh may cover up to
-//! [`super::TRACE_RECORD_LIMIT`] records, and the availability of ordinary
-//! lifecycle repair must not depend on immutable joins whose result a
-//! [`super::TraceLifecycle`] does not even carry.
-
+//! Finite own lifecycle evidence from original native J and captured C headers.
+use super::TraceProjection;
 use super::bounds::TracePreview;
-use super::content::{message_preview, tool_outcome, tool_status_detail};
 use super::types::{
-    TraceArtifact, TraceCursor, TraceGeneration, TraceKind, TraceLocation, TraceState, TraceTiming,
-    TraceToolCall, TraceToolSummary,
+    TraceArtifact, TraceCursor, TraceFieldSource, TraceGeneration, TraceKind, TraceLocation,
+    TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
 };
-use super::{ADOPTED_MESSAGE_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
-use crate::durable::presentation::FactScope;
-use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
-use crate::message::types::{AssistantContentBlock, MessageBlock};
-use crate::model::error::ModelErrorKind;
-use crate::model::snapshot::RequestSnapshot;
-use crate::model::types::ModelUsage;
-use crate::runtime::identity::{MessageId, ToolCallId};
+use crate::durable::observation::{
+    TraceFactData as D, TraceFactHeader, TraceFactKind as K, TraceTerminalClass,
+};
 
-use super::bounds::identity_fits;
-use super::record::{generation_metrics, terminal};
-
-/// One anchor's native identity, own grouping and own durable lifecycle.
-///
-/// `preview`, `calls` and `has_detail` are summary vocabulary, but they are
-/// derived here when — and only when — the anchor already had to load the
-/// canonical message for a lifecycle fact of its own, so keeping them costs
-/// a lifecycle refresh nothing. Every preview that would need a read of its
-/// own is left to the summary projection.
 pub(super) struct AnchorFacts {
     pub id: String,
     pub position: TraceCursor,
@@ -61,365 +23,329 @@ pub(super) struct AnchorFacts {
     pub agent_id: Option<crate::runtime::identity::AgentId>,
     pub activation_id: Option<crate::runtime::identity::SubagentId>,
     pub activation_origin: Option<crate::runtime::subagent::AgentActivationOrigin>,
-    pub originating_tool_call_id: Option<ToolCallId>,
-    pub message_id: Option<MessageId>,
+    pub originating_tool_call_id: Option<crate::runtime::identity::ToolCallId>,
+    pub message_id: Option<crate::runtime::identity::MessageId>,
     pub attachments: Vec<TraceArtifact>,
     pub tool: Option<TraceToolSummary>,
     pub request: Option<AnchorRequest>,
     pub has_detail: bool,
     pub truncated: bool,
+    pub fields: Vec<TraceFieldSource>,
+    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
 }
-
-/// One request anchor's own immutable snapshot and own terminal outcome.
-///
-/// The snapshot is loaded once. Lifecycle repair needs the frozen
-/// provisional Assistant identity and the frozen grouping from it; the
-/// summary projection additionally reads the historical model and ordinal.
-/// Neither reads any *other* request's snapshot — that join belongs to the
-/// System Prompt presentation and happens only for a summary.
 pub(super) struct AnchorRequest {
-    pub frozen: RequestSnapshot,
-    pub failure_kind: Option<ModelErrorKind>,
-    pub usage: Option<ModelUsage>,
+    pub start_sequence: u64,
+    pub retry_number: Option<u32>,
+    pub request_id: Option<crate::runtime::identity::RequestId>,
+    pub assistant_message_id: Option<crate::runtime::identity::MessageId>,
+    pub failure_kind: Option<crate::model::error::ModelErrorKind>,
+    pub usage: Option<crate::model::types::ModelUsage>,
     pub generation: Option<TraceGeneration>,
 }
-
-impl TraceProjection<'_> {
-    /// Resolves the facts one anchor owns from its own native authorities.
-    ///
-    /// # Errors
-    ///
-    /// Propagates the failed durable read; an unreadable authority is never
-    /// interpreted as an absent fact.
-    #[allow(clippy::too_many_lines)] // One closed anchor vocabulary, one place.
-    pub(super) fn anchor_facts(
-        &self,
-        anchor: &RuntimeEventEnvelope,
-    ) -> Result<AnchorFacts, ConversationStoreError> {
-        let mut facts = AnchorFacts {
-            id: format!("trace:{}", anchor.sequence),
-            position: TraceCursor::at(anchor.sequence),
-            location: TraceLocation {
-                attempt_id: anchor.attempt_id.clone(),
-                step_id: anchor.turn_id.clone(),
-            },
+impl AnchorFacts {
+    fn from_header(header: &TraceFactHeader) -> Self {
+        Self {
+            id: format!("trace:{}", header.sequence),
+            position: TraceCursor::at(header.sequence),
+            location: header.location.clone(),
             kind: TraceKind::Step,
             state: TraceState::Incomplete,
             timing: TraceTiming {
-                started_at: anchor.timestamp,
+                started_at: header.timestamp,
                 ended_at: None,
                 duration_ms: None,
             },
             preview: None,
-            calls: vec![],
+            calls: Vec::new(),
             native_id: None,
             agent_id: None,
             activation_id: None,
             activation_origin: None,
             originating_tool_call_id: None,
             message_id: None,
-            attachments: vec![],
+            attachments: Vec::new(),
             tool: None,
             request: None,
             has_detail: false,
             truncated: false,
-        };
-        let ending = match &anchor.event {
-            E::AttemptStarted { attempt_id } => {
-                facts.kind = TraceKind::Attempt;
-                self.ending(
-                    FactScope::Attempt(attempt_id.clone()),
-                    &[
-                        "attempt_completed",
-                        "attempt_failed",
-                        "attempt_cancelled",
-                        "attempt_timed_out",
-                        "attempt_limit_exceeded",
-                    ],
-                )?
-            }
-            E::TurnStarted => {
-                if let (Some(attempt), Some(turn)) = (&anchor.attempt_id, &anchor.turn_id) {
-                    self.ending(
-                        FactScope::Step(attempt.clone(), turn.clone()),
-                        &["turn_completed"],
-                    )?
-                } else {
-                    None
-                }
-            }
-            E::InboundTurnAdopted { message_ids } => {
-                // Adoption is the canonical linearization point at which
-                // inbound became a turn this conversation owes an answer
-                // for. It is instantaneous: it has no terminal boundary and
-                // therefore no duration. Its identities and its overflow are
-                // both in the anchor itself, so no message is loaded for a
-                // lifecycle fact — the preview that needs one belongs to the
-                // summary projection.
-                // Idle adoption precedes its answering Attempt. Resolve at this
-                // read cut for both summaries and retained-record refreshes.
-                if facts.location.attempt_id.is_none() {
-                    facts.location.attempt_id = self.answering_attempt(anchor.sequence)?;
-                }
-                facts.kind = TraceKind::User;
-                facts.state = TraceState::Completed;
-                facts.has_detail = !message_ids.is_empty();
-                facts.message_id = message_ids.first().cloned();
-                facts.truncated = message_ids.len() > ADOPTED_MESSAGE_LIMIT;
-                None
-            }
-            E::ModelRequestStarted { request_id, .. } => {
-                facts.kind = TraceKind::Request;
-                facts.has_detail = true;
-                let frozen = self.store.load_request_snapshot(request_id)?;
-                // The frozen snapshot owns this request's grouping. The
-                // anchor's own correlation columns agree, but the snapshot is
-                // the authority the ordinal is read from.
-                facts.location = TraceLocation {
-                    attempt_id: Some(frozen.identity.attempt_id.clone()),
-                    step_id: Some(frozen.identity.turn.clone()),
-                };
-                let end = self.ending(
-                    FactScope::Request(request_id.to_string()),
-                    &["model_request_completed", "model_request_failed"],
-                )?;
-                let (failure_kind, usage, generation) = request_terminal(end.as_ref());
-                facts.preview = Some(TracePreview::of(&frozen.invocation.model));
-                facts.request = Some(AnchorRequest {
-                    generation: generation
-                        .map(|evidence| generation_metrics(evidence, usage.as_ref())),
-                    frozen,
-                    failure_kind,
-                    usage,
-                });
-                end
-            }
-            E::AssistantMessageCommitted { message_id } => {
-                facts.kind = TraceKind::Assistant;
-                // Acceptance is the canonical commit itself; the record is
-                // complete at the instant it exists.
-                facts.state = TraceState::Completed;
-                facts.has_detail = true;
-                facts.message_id = Some(message_id.clone());
-                for message in self.store.load_messages(std::slice::from_ref(message_id))? {
-                    facts.preview = message_preview(&message);
-                    if let MessageBlock::Assistant(assistant) = message {
-                        for block in &assistant.content {
-                            match block {
-                                AssistantContentBlock::ToolCall(call)
-                                    if identity_fits(call.id.as_str())
-                                        && identity_fits(call.tool_id.as_str()) =>
-                                {
-                                    facts.calls.push(TraceToolCall {
-                                        call_id: call.id.clone(),
-                                        tool_id: call.tool_id.clone(),
-                                        name: call.name.clone(),
-                                    });
-                                }
-                                AssistantContentBlock::Image(image)
-                                    if identity_fits(image.artifact_id.as_str()) =>
-                                {
-                                    facts.attachments.push(TraceArtifact {
-                                        artifact_id: image.artifact_id.clone(),
-                                        image: true,
-                                        name: None,
-                                        mime_type: None,
-                                    });
-                                }
-                                AssistantContentBlock::ToolCall(_)
-                                | AssistantContentBlock::Image(_) => {
-                                    facts.truncated = true;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                None
-            }
-            E::ToolExecutionStarted {
-                tool_call_id,
-                tool_id,
-            } => {
-                facts.kind = TraceKind::Tool;
-                facts.has_detail = true;
-                let scope = || FactScope::ToolCall {
-                    call_id: tool_call_id.to_string(),
-                    attempt: anchor.attempt_id.clone(),
-                    turn: anchor.turn_id.clone(),
-                };
-                let end = self
-                    .ending(
-                        scope(),
-                        &["tool_execution_completed", "tool_execution_failed"],
-                    )?
-                    // Both the call and the Tool identity must match. Names
-                    // and positions never pair an outcome to a call.
-                    .filter(|event| match &event.event {
-                        E::ToolExecutionCompleted { tool_id: id, .. }
-                        | E::ToolExecutionFailed { tool_id: id, .. } => id == tool_id,
-                        _ => false,
-                    });
-                let mut summary = TraceToolSummary {
-                    call_id: tool_call_id.clone(),
-                    tool_id: tool_id.clone(),
-                    // The recorded model-facing name is a historical
-                    // presentation join over the Step's Assistant proposals.
-                    // A lifecycle update does not carry it, so it is resolved
-                    // only when a summary row is built.
-                    name: None,
-                    arguments: None,
-                    // This anchor *is* the durable start fact, so execution
-                    // is proven for this record by construction.
-                    started: true,
-                    outcome: None,
-                    detail: None,
-                };
-                if let Some(commit) = self.ending(scope(), &["tool_message_committed"])?
-                    && let E::ToolMessageCommitted { message_id, .. } = commit.event
-                {
-                    for message in self
-                        .store
-                        .load_messages(std::slice::from_ref(&message_id))?
-                    {
-                        if let MessageBlock::Tool(tool) = &message
-                            && tool.tool_call_id == *tool_call_id
-                            && tool.tool_id == *tool_id
-                        {
-                            facts.message_id = Some(message_id.clone());
-                            summary.outcome = Some(tool_outcome(&tool.result.status));
-                            summary.detail = tool_status_detail(&tool.result.status)
-                                .as_deref()
-                                .map(TracePreview::of);
-                            facts.preview = message_preview(&message);
-                            let (attachments, truncated) =
-                                super::content::tool_result_artifacts(&tool.result);
-                            facts.attachments = attachments;
-                            facts.truncated |= truncated;
-                        }
-                    }
-                }
-                facts.tool = Some(summary);
-                end
-            }
-            E::CompactionStarted { operation_id } => {
-                facts.kind = TraceKind::Compaction;
-                // Detail exists throughout the lifecycle. A loaded running row
-                // must remain inspectable when refresh supplies its summary ID.
-                facts.has_detail = true;
-                // The operation identity owns correlation even when unrelated lifecycle facts interleave.
-                let end = self
-                    .store
-                    .read_presentation_events(&crate::durable::presentation::FactQuery {
-                        scope: FactScope::Compaction(operation_id.clone()),
-                        kinds: vec!["compaction_completed", "compaction_failed"],
-                        before: None,
-                        after: anchor.sequence,
-                        ascending: true,
-                        through: self.through,
-                        limit: 1,
-                    })?
-                    .pop()
-                    .filter(|event| !matches!(event.event, E::CompactionStarted { .. }));
-                if let Some(event) = end.as_ref()
-                    && let E::CompactionCompleted { checkpoint_id, .. } = &event.event
-                {
-                    facts.native_id = Some(checkpoint_id.to_string());
-                }
-                end
-            }
-            E::BackgroundExecutionCommitted {
-                execution_id,
-                tool_call_id,
-                ..
-            } => {
-                facts.kind = TraceKind::Background;
-                facts.native_id = Some(execution_id.to_string());
-                facts.originating_tool_call_id = Some(tool_call_id.clone());
-                self.ending(
-                    FactScope::Execution(execution_id.to_string()),
-                    &["background_terminal_published"],
-                )?
-            }
-            E::SubagentOwnershipCommitted {
-                subagent_id,
-                child_agent_id,
-                agent,
-                origin,
-                ..
-            } => {
-                facts.kind = TraceKind::Subagent;
-                facts.native_id = Some(subagent_id.to_string());
-                facts.agent_id = Some(child_agent_id.clone());
-                facts.activation_id = Some(subagent_id.clone());
-                facts.activation_origin = Some(origin.clone());
-                facts.originating_tool_call_id = origin.tool_call_id().cloned();
-                facts.preview = Some(TracePreview::of(agent.as_str()));
-                self.ending(
-                    FactScope::Subagent(subagent_id.to_string()),
-                    &["subagent_terminal_published", "subagent_terminal_settled"],
-                )?
-            }
-            E::WorkflowStarted {
-                run_id,
-                tool_call_id,
-                ..
-            } => {
-                facts.kind = TraceKind::Workflow;
-                facts.originating_tool_call_id = Some(tool_call_id.clone());
-                let id = serde_json::to_string(run_id).map_err(|_| {
-                    ConversationStoreError::InvalidReference("invalid Workflow identity".into())
-                })?;
-                facts.native_id = Some(id.clone());
-                self.ending(
-                    FactScope::Workflow(id),
-                    &[
-                        "workflow_completed",
-                        "workflow_failed",
-                        "workflow_cancelled",
-                    ],
-                )?
-            }
-            E::InteractionRequested { interaction_id, .. } => {
-                facts.kind = TraceKind::Interaction;
-                facts.native_id = Some(interaction_id.to_string());
-                self.ending(
-                    FactScope::Interaction(interaction_id.to_string()),
-                    &["interaction_settled"],
-                )?
-            }
-            _ => unreachable!("allowlisted anchors only"),
-        };
-        if let Some(end) = ending.filter(|end| end.sequence > anchor.sequence) {
-            facts.state = terminal(&end.event);
-            facts.timing.ended_at = Some(end.timestamp);
-            // Both endpoints exist, so the duration is measured rather than
-            // assumed. A record with one endpoint keeps none.
-            facts.timing.duration_ms =
-                u64::try_from((end.timestamp - anchor.timestamp).num_milliseconds()).ok();
+            fields: header.fields.clone(),
+            collections: Vec::new(),
         }
-        Ok(facts)
+    }
+    pub(super) fn canonical(
+        &mut self,
+        summary: crate::durable::observation::TraceCanonicalSummary,
+    ) {
+        self.preview = summary.preview;
+        self.message_id = summary.identity;
+        self.calls = summary.calls;
+        self.attachments = summary.attachments;
+        self.fields.extend(summary.fields);
+        self.collections.extend(summary.collections);
+        self.truncated |= summary.truncated;
+    }
+    fn terminal(&mut self, ending: Option<TraceFactHeader>, anchor: u64) {
+        let Some(end) = ending.filter(|end| end.sequence > anchor) else {
+            return;
+        };
+        let D::Terminal(terminal) = end.fact else {
+            return;
+        };
+        if self.kind == TraceKind::Compaction
+            && end.kind == K::CompactionCompleted
+            && let Some(crate::durable::observation::TraceBootstrapFact::CompactionCompleted {
+                reading,
+            }) = end.bootstrap
+            && let Some(preview) = reading.projection_head.summary_preview
+        {
+            // The matched original Completed J already owns this finite
+            // projection summary. Never substitute the current projection head
+            // or a canonical Message for a historical compaction.
+            self.truncated |= preview.truncated;
+            self.preview = Some(TracePreview {
+                text: preview.text,
+                truncated: preview.truncated,
+            });
+        }
+        self.state = terminal_state(terminal.class);
+        self.timing.ended_at = Some(end.timestamp);
+        self.timing.duration_ms =
+            u64::try_from((end.timestamp - self.timing.started_at).num_milliseconds()).ok();
+        self.fields.extend(end.fields);
+        if let Some(request) = &mut self.request {
+            request.failure_kind = terminal.failure_kind;
+            request.generation = terminal.generation.map(|evidence| {
+                super::record::generation_metrics(evidence, terminal.usage.as_ref())
+            });
+            request.usage = terminal.usage;
+        }
+        if let Some(tool) = &mut self.tool {
+            // Actual J outcome remains positive before its canonical result exists.
+            if tool.outcome.is_none() {
+                tool.outcome = terminal.tool_outcome;
+            }
+            if tool.detail.is_none() {
+                tool.detail = terminal.detail;
+            }
+        }
     }
 }
+pub(super) fn terminal_state(class: TraceTerminalClass) -> TraceState {
+    match class {
+        TraceTerminalClass::Completed => TraceState::Completed,
+        TraceTerminalClass::Failed => TraceState::Failed,
+        TraceTerminalClass::Cancelled => TraceState::Cancelled,
+        TraceTerminalClass::TimedOut => TraceState::TimedOut,
+        TraceTerminalClass::Limited => TraceState::Limited,
+        TraceTerminalClass::Denied => TraceState::Denied,
+        TraceTerminalClass::OutcomeUnknown => TraceState::OutcomeUnknown,
+        TraceTerminalClass::Interrupted => TraceState::Interrupted,
+    }
+}
+impl TraceProjection<'_> {
+    pub(super) fn anchor_facts(
+        &self,
+        anchor: &TraceFactHeader,
+    ) -> Result<AnchorFacts, ConversationStoreError> {
+        let mut facts = AnchorFacts::from_header(anchor);
+        let endings = self.anchor_start(&mut facts, anchor)?;
+        let ending = if endings.is_empty() {
+            None
+        } else {
+            self.ending(anchor.sequence, &endings)?
+        };
+        facts.terminal(ending, anchor.sequence);
+        Ok(facts)
+    }
+    fn anchor_start(
+        &self,
+        facts: &mut AnchorFacts,
+        anchor: &TraceFactHeader,
+    ) -> Result<Vec<K>, ConversationStoreError> {
+        let endings = match &anchor.fact {
+            D::AttemptStart => {
+                facts.kind = TraceKind::Attempt;
+                vec![
+                    K::AttemptCompleted,
+                    K::AttemptFailed,
+                    K::AttemptCancelled,
+                    K::AttemptTimedOut,
+                    K::AttemptLimitExceeded,
+                ]
+            }
+            D::StepStart => vec![K::TurnCompleted],
+            D::Adoption {
+                total,
+                classification,
+                unanimous_agent,
+                ..
+            } => {
+                facts.kind = match classification {
+                    crate::durable::observation::TraceAdoptionClass::Human => TraceKind::User,
+                    crate::durable::observation::TraceAdoptionClass::Context => TraceKind::Context,
+                };
+                facts.state = TraceState::Completed;
+                facts.has_detail = *total > 0;
+                facts.truncated = *total > 8;
+                facts.agent_id.clone_from(unanimous_agent);
+                if facts.location.attempt_id.is_none()
+                    && facts.location.attempt_id_source.is_none()
+                    && let Some(next) = self.next_attempt(anchor.sequence)?
+                {
+                    facts.location = next.location;
+                }
+                Vec::new()
+            }
+            request @ D::RequestStart { .. } => request_start(facts, request),
+            D::AssistantCommit { ledger_position } => {
+                facts.kind = TraceKind::Assistant;
+                facts.state = TraceState::Completed;
+                facts.has_detail = true;
+                facts.canonical(
+                    self.store
+                        .observation_trace_canonical_summary(self.cut()?, *ledger_position)?,
+                );
+                Vec::new()
+            }
+            D::ToolStart {
+                occurrence,
+                call_id,
+                tool_id,
+            } => {
+                self.tool_start(facts, occurrence.as_ref(), call_id.clone(), tool_id.clone())?;
+                vec![K::ToolExecutionCompleted, K::ToolExecutionFailed]
+            }
+            D::CompactionStart { native_id } => {
+                facts.kind = TraceKind::Compaction;
+                facts.native_id.clone_from(native_id);
+                facts.has_detail = true;
+                vec![K::CompactionCompleted, K::CompactionFailed]
+            }
+            D::BackgroundStart {
+                native_id,
+                originating_tool_call_id,
+            } => {
+                facts.kind = TraceKind::Background;
+                facts.native_id.clone_from(native_id);
+                facts
+                    .originating_tool_call_id
+                    .clone_from(originating_tool_call_id);
+                vec![K::BackgroundTerminalPublished]
+            }
+            subagent @ D::SubagentStart { .. } => subagent_start(facts, subagent),
+            D::WorkflowStart {
+                native_id,
+                originating_tool_call_id,
+            } => {
+                facts.kind = TraceKind::Workflow;
+                facts.native_id.clone_from(native_id);
+                facts
+                    .originating_tool_call_id
+                    .clone_from(originating_tool_call_id);
+                vec![
+                    K::WorkflowCompleted,
+                    K::WorkflowFailed,
+                    K::WorkflowCancelled,
+                ]
+            }
+            D::InteractionStart { native_id } => {
+                facts.kind = TraceKind::Interaction;
+                facts.native_id.clone_from(native_id);
+                vec![K::InteractionSettled]
+            }
+            D::CanonicalToolCommit { .. } | D::Terminal(_) => {
+                return Err(ConversationStoreError::InvalidReference(
+                    "native fact is not a Trace anchor".into(),
+                ));
+            }
+        };
+        Ok(endings)
+    }
+    fn tool_start(
+        &self,
+        facts: &mut AnchorFacts,
+        occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
+        call_id: Option<crate::runtime::identity::ToolCallId>,
+        tool_id: Option<crate::runtime::identity::ToolId>,
+    ) -> Result<(), ConversationStoreError> {
+        facts.kind = TraceKind::Tool;
+        facts.has_detail = true;
+        let mut tool = TraceToolSummary {
+            call_id,
+            tool_id,
+            occurrence: occurrence.map(public_occurrence),
+            fields: Vec::new(),
+            name: None,
+            arguments: None,
+            started: true,
+            outcome: None,
+            detail: None,
+        };
+        if let Some(occurrence) = occurrence
+            && let Some(summary) = self
+                .store
+                .observation_trace_tool_result(self.cut()?, occurrence)?
+        {
+            tool.outcome = summary.tool_outcome;
+            tool.detail.clone_from(&summary.tool_detail);
+            facts.canonical(summary);
+        }
+        facts.tool = Some(tool);
+        Ok(())
+    }
+}
+fn request_start(facts: &mut AnchorFacts, data: &D) -> Vec<K> {
+    let D::RequestStart {
+        start_sequence,
+        retry_number,
+        request_id,
+        assistant_message_id,
+    } = data
+    else {
+        unreachable!("native Request start classification")
+    };
+    facts.kind = TraceKind::Request;
+    facts.has_detail = true;
+    facts.request = Some(AnchorRequest {
+        start_sequence: *start_sequence,
+        retry_number: *retry_number,
+        request_id: request_id.clone(),
+        assistant_message_id: assistant_message_id.clone(),
+        failure_kind: None,
+        usage: None,
+        generation: None,
+    });
+    vec![K::ModelRequestCompleted, K::ModelRequestFailed]
+}
+fn subagent_start(facts: &mut AnchorFacts, data: &D) -> Vec<K> {
+    let D::SubagentStart {
+        activation_id,
+        agent_id,
+        origin,
+        agent_preview,
+    } = data
+    else {
+        unreachable!("native Subagent start classification")
+    };
+    facts.kind = TraceKind::Subagent;
+    facts.native_id = activation_id.as_ref().map(ToString::to_string);
+    facts.agent_id = Some(agent_id.clone());
+    facts.activation_id.clone_from(activation_id);
+    facts.activation_origin.clone_from(origin);
+    facts.originating_tool_call_id = origin
+        .as_ref()
+        .and_then(|origin| origin.tool_call_id().cloned());
+    facts.preview = Some(agent_preview.clone());
+    vec![K::SubagentTerminalPublished, K::SubagentTerminalSettled]
+}
 
-/// The terminal outcome facts of one request, from its own terminal event.
-fn request_terminal(
-    end: Option<&RuntimeEventEnvelope>,
-) -> (
-    Option<ModelErrorKind>,
-    Option<ModelUsage>,
-    Option<crate::model::generation_evidence::GenerationEvidence>,
-) {
-    match end.map(|event| &event.event) {
-        Some(E::ModelRequestCompleted {
-            usage, generation, ..
-        }) => (None, usage.clone(), *generation),
-        Some(E::ModelRequestFailed {
-            error,
-            usage,
-            generation,
-            ..
-        }) => (Some(error.kind.clone()), usage.clone(), *generation),
-        _ => (None, None, None),
+pub(super) fn public_occurrence(
+    occurrence: &crate::events::types::ToolObservationOccurrence,
+) -> crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+    crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+        locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+            position: occurrence.ledger_position,
+        },
+        block_index: occurrence.block_index,
     }
 }

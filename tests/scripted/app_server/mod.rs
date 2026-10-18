@@ -23,6 +23,57 @@ use crate::message::types::UserContentBlock;
 use crate::scripted_suites::common::{FixtureReply, FixtureServer, HeaderGate};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Bounded fixture timings, emitted only when an existing operation is dropped.
+struct FixturePhase {
+    label: &'static str,
+    started: std::time::Instant,
+    entered: std::time::Instant,
+    stage: &'static str,
+    finished: [(&'static str, u128); 32],
+    count: usize,
+    complete: bool,
+}
+impl FixturePhase {
+    fn new(label: &'static str) -> Self {
+        let started = std::time::Instant::now();
+        Self {
+            label,
+            started,
+            entered: started,
+            stage: "start",
+            finished: [("", 0); 32],
+            count: 0,
+            complete: false,
+        }
+    }
+    fn enter(&mut self, stage: &'static str) {
+        let now = std::time::Instant::now();
+        if self.count < self.finished.len() {
+            self.finished[self.count] = (self.stage, now.duration_since(self.entered).as_micros());
+            self.count += 1;
+        }
+        self.stage = stage;
+        self.entered = now;
+    }
+    fn finish(&mut self) {
+        self.complete = true;
+    }
+}
+impl Drop for FixturePhase {
+    fn drop(&mut self) {
+        if !self.complete {
+            eprintln!(
+                "incomplete fixture phases: label={} stage={} elapsed_us={} stage_us={} finished_us={:?}",
+                self.label,
+                self.stage,
+                self.started.elapsed().as_micros(),
+                self.entered.elapsed().as_micros(),
+                &self.finished[..self.count],
+            );
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct AsyncGate {
     entered: watch::Sender<bool>,
@@ -154,20 +205,17 @@ impl Fixture {
         Self::with_session_count(tool, 2).await
     }
     async fn with_session_count(tool: Option<&'static str>, count: usize) -> Self {
+        let mut phases = FixturePhase::new("Session fixture construction");
+        phases.enter("provider listener");
         let gates = [HeaderGate::new(), HeaderGate::new()];
         let server_gates = gates.clone();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
             let request: serde_json::Value = serde_json::from_str(body).unwrap();
-            let index = usize::from(if tool == Some("delivery-child") {
-                // A parent's retained Tool arguments also contain the child's task.
-                // Only native user input identifies which fixture request is gated.
-                request["messages"].as_array().unwrap().iter().any(|message| {
-                    message["role"] == "user"
-                        && message["content"].to_string().contains("request-B")
-                })
+            let index = if tool == Some("delivery-child") {
+                delivery_child_input_index(&request)
             } else {
-                body.contains("request-B")
-            });
+                usize::from(body.contains("request-B"))
+            };
             if tool == Some("delivery-child") && request["tools"].as_array().is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"] == "subagent"))
                 && !request["messages"].as_array().unwrap().iter().any(|message| message["role"] == "tool") {
                 let chunk = serde_json::json!({"id":"child-delivery","object":"chat.completion.chunk","created":1,"model":"a", "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"child-delivery-call","type":"function", "function":{"name":"subagent","arguments":serde_json::json!({"title":"Delivery child","agent":"reviewer","task":"request-B"}).to_string()}}]},"finish_reason":"tool_calls"}]});
@@ -206,6 +254,10 @@ impl Fixture {
                 "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
                 "data: [DONE]\n\n")).with_header_gate(server_gates[index].clone())
         }).await;
+        phases.enter("workspace and configuration");
+        if tool == Some("delivery-child") {
+            eprintln!("ChildDelivery Fixture: listener ready; native initialization");
+        }
         // Match the runtime's canonical workspace identity, including macOS's
         // /var -> /private/var temporary-directory alias. Keep strict cwd checks.
         let root =
@@ -266,13 +318,21 @@ impl Fixture {
             toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_status"]})).unwrap());
         documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
+        phases.enter("launch analysis");
         let paths = launch::analyze(&LaunchRequest::default(), &host)
             .unwrap()
             .admit(CredentialSnapshot::default)
             .unwrap();
+        if tool == Some("delivery-child") {
+            eprintln!("ChildDelivery Fixture: configuration ready; catalog open");
+        }
         let controller = SessionController::open(&paths.runtime_root).unwrap();
         let mut sessions = Vec::new();
-        for workspace in workspaces.iter().take(count) {
+        for (ordinal, workspace) in workspaces.iter().take(count).enumerate() {
+            phases.enter("create native Session");
+            if tool == Some("delivery-child") {
+                eprintln!("ChildDelivery Fixture: create native Session {ordinal}");
+            }
             sessions.push(
                 controller
                     .create_session(SessionPersistentState::from_input(
@@ -283,7 +343,11 @@ impl Fixture {
                     .session,
             );
         }
+        if tool == Some("delivery-child") {
+            eprintln!("ChildDelivery Fixture: Sessions created; manager wiring");
+        }
         let archive_root = paths.runtime_root.clone();
+        phases.enter("manager construction");
         let manager = SessionRuntimeManager::new(
             controller,
             UserConfigManager::new(paths.sources.clone()).unwrap(),
@@ -306,6 +370,7 @@ impl Fixture {
             },
         )
         .unwrap();
+        phases.finish();
         Self {
             _root: root,
             archive_root,
@@ -354,6 +419,46 @@ impl Fixture {
         }
     }
 }
+/// Provider fixtures distinguish ordinary task text from model-visible Context
+/// that mentions it. Both native OpenAI-chat text representations are accepted.
+fn delivery_child_input_index(request: &serde_json::Value) -> usize {
+    usize::from(
+        request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| {
+                message["role"] == "user"
+                    && (message["content"].as_str() == Some("request-B")
+                        || message["content"].as_array().is_some_and(|parts| {
+                            parts.iter().any(|part| {
+                                part["type"] == "text" && part["text"].as_str() == Some("request-B")
+                            })
+                        }))
+            }),
+    )
+}
+
+#[test]
+fn delivery_child_gate_uses_exact_task_text_not_parent_context_mentions() {
+    for context in [
+        serde_json::json!("AgentStatus: Delivery Child task request-B"),
+        serde_json::json!([{"type":"text","text":"AgentStatus: Delivery Child task request-B"}]),
+    ] {
+        let parent = serde_json::json!({"messages":[{"role":"user","content":"request-A"},{"role":"user","content":context}]});
+        assert_eq!(delivery_child_input_index(&parent), 0);
+    }
+    for content in [
+        serde_json::json!("request-B"),
+        serde_json::json!([{"type":"text","text":"request-B"}]),
+    ] {
+        let child = serde_json::json!({"messages":[{"role":"user","content":"request-A"},{"role":"user","content":content}]});
+        assert_eq!(delivery_child_input_index(&child), 1);
+    }
+    let tool = serde_json::json!({"messages":[{"role":"tool","content":"request-B"},{"role":"user","content":"request-A"}]});
+    assert_eq!(delivery_child_input_index(&tool), 0);
+}
+
 fn input(text: &str) -> Vec<UserContentBlock> {
     vec![UserContentBlock::Text(TextBlock { text: text.into() })]
 }
@@ -721,7 +826,7 @@ async fn replacement_waits_for_active_attempt_task_and_changes_only_incarnation_
         );
         assert!(old.submit_inbound(input("stale")).is_err());
         assert_eq!(
-            a.client().snapshot().unwrap_err(),
+            a.client().checkpoint().unwrap_err(),
             RuntimeManagerError::StaleIncarnation
         );
         assert!(Arc::ptr_eq(&b, &f.load(1).await.unwrap().unwrap()));
@@ -1124,7 +1229,9 @@ async fn cold_load_preserves_unknown_external_tool_outcome_without_replay() {
         let id = access.node.conversation_id.clone();
         let attempt = AttemptId::for_conversation(&id, 0);
         let envelope = |key: &str, event| RuntimeEventEnvelope {
-            schema_version: EVENT_SCHEMA_VERSION, event_id: EventId::new(key), sequence: 0,
+            tool_occurrence: None,
+            observation: None,
+ schema_version: EVENT_SCHEMA_VERSION, event_id: EventId::new(key), sequence: 0,
             conversation_id: id.clone(), attempt_id: Some(attempt.clone()), turn_id: Some(TurnId::new("0")),
             timestamp: chrono::DateTime::from_timestamp(1, 0).unwrap(), event,
         };
@@ -1567,7 +1674,7 @@ async fn retained_client_and_identity_cannot_keep_unloaded_allocation_alive() {
         let f = Fixture::new().await;
         let identity = f.load(0).await.unwrap().unwrap();
         let client = identity.client();
-        client.snapshot().unwrap();
+        client.checkpoint().unwrap();
         let weak = identity.inspect_runtime().unwrap().weak_inner();
         f.manager.unload(identity.conversation_id()).await.unwrap();
         assert_eq!(
@@ -1594,7 +1701,7 @@ async fn retained_client_and_identity_cannot_keep_unloaded_allocation_alive() {
             RuntimeManagerError::StaleIncarnation
         );
         assert_eq!(
-            identity.client().snapshot().unwrap_err(),
+            identity.client().checkpoint().unwrap_err(),
             RuntimeManagerError::StaleIncarnation
         );
         f.close().await;
@@ -1610,8 +1717,9 @@ async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
         let f = Fixture::new().await;
         let identity = f.load(0).await.unwrap().unwrap();
         let client = identity.client();
-        let attachment = client.attach().unwrap().0.attachment;
-        let subscription = attachment.subscription().unwrap();
+        let attachment = client.attach().unwrap().0;
+        let checkpoint = attachment.checkpoint().unwrap();
+        let subscription = attachment.subscribe_events(checkpoint.cursor).unwrap();
         let (endpoint, weak_host) = {
             let resident = identity.resident.upgrade().unwrap();
             let composition = resident.composition.lock().unwrap();
@@ -1638,7 +1746,7 @@ async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
         assert_eq!(subscription.next().await, EventDelivery::Closed);
         assert_eq!(
             attachment
-                .handle_request(RuntimeClientRequest::SnapshotGet {
+                .handle_request(RuntimeClientRequest::CheckpointGet {
                     id: RequestId::new(1),
                 })
                 .error,
@@ -1660,7 +1768,7 @@ async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
                 .error,
             Some(RuntimeClientError::NotAttached)
         );
-        let _new_attachment = replacement.client().attach().unwrap().0.attachment;
+        let _new_attachment = replacement.client().attach().unwrap().0;
         f.manager
             .unload(replacement.conversation_id())
             .await
@@ -1686,10 +1794,10 @@ async fn replacement_revokes_old_client_and_releases_old_composition() {
             RuntimeManagerError::StaleIncarnation
         );
         assert_eq!(
-            client.snapshot().unwrap_err(),
+            client.checkpoint().unwrap_err(),
             RuntimeManagerError::StaleIncarnation
         );
-        new.client().snapshot().unwrap();
+        new.client().checkpoint().unwrap();
         assert!(
             f.manager
                 .is_current(new.conversation_id(), new.incarnation_id())

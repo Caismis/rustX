@@ -1,3 +1,5 @@
+import { domainReceipt } from '../fixture';
+import { boundedSettings } from "../fixture";
 // Deterministic native protocol fixture, never part of the production entry.
 import { useState } from 'react';
 import { AgentComposer } from '../../src/app/agent/AgentComposer';
@@ -6,7 +8,8 @@ import { createRoot } from 'react-dom/client';
 import { RpcFailure } from '../../src/client/app-server';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v49';
+import { traceRecord } from '../trace-fixture';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v50';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -32,10 +35,10 @@ server.handlers.set('session/effectiveConfiguration', () => { throw new RpcFailu
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true };
 const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, reasoningEnabled: true, profile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };
 const catalog: CatalogModelView[] = [{ model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'deliberate', reasoningEnabled: true }, { id: 'brief', reasoningEnabled: true }], defaultProfile: 'deliberate', credentialSource: { type: 'literal' } }];
-const source: SourceSettings = { prospective_approval_mode: 'full_access', absent_resource_revision: 'absent', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, repair_sequence: '0', user: { path: '/home/rustx.toml', revision: 'user', authored: {} }, workspace: { path: '/workspace/A/rustx.toml', revision: 'workspace', authored: {} }, user_resource_root: '/home/.agents', workspace_resource_root: '/workspace/A/.agents', runtime_root: '/runtime', user_mcp: { path: '/home/.agents/mcp.toml', revision: 'missing' }, workspace_mcp: { path: '/workspace/A/.agents/mcp.toml', revision: 'missing' }, agents: [] };
-server.handlers.set('session/model', () => ({ type: 'model', model }));
-server.handlers.set('session/models', () => ({ type: 'models', catalog: { models: catalog } }));
-server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: source, session_revision: '1' }));
+const source: SourceSettings = { prospective_approval_mode: 'full_access', absent_resource_revision: 'absent', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, user: { path: '/home/rustx.toml', revision: 'user', authored: {} }, workspace: { path: '/workspace/A/rustx.toml', revision: 'workspace', authored: {} }, user_resource_root: '/home/.agents', workspace_resource_root: '/workspace/A/.agents', runtime_root: '/runtime', user_mcp: { path: '/home/.agents/mcp.toml', revision: 'missing' }, workspace_mcp: { path: '/workspace/A/.agents/mcp.toml', revision: 'missing' }, agents: [], repair_sequence: '0' };
+server.handlers.set('session/model', () => (domainReceipt('model',[model])));
+server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: catalog }).models??[])));
+server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection:boundedSettings(source), session_revision: '1' }));
 const s = snapshot(); s.model = model;
 s.messages = [
  { role: 'user', id: 'user-1', source: 'human', content: [{ type: 'text', text: 'Inspect the native runtime boundary and summarize the change.' }, { type: 'uploaded_file', batch_id: 'batch-1', name: 'runtime-notes.md' }] },
@@ -43,10 +46,10 @@ s.messages = [
 ];
 s.transcript.entries = s.messages.map((message, i) => ({ cursor: String(i + 1), item: { type: 'message', message } }));
 if (mode === 'settled') {
- s.transcript.entries[1].completed_response = { closing_message_id: 'answer-1', origin: { conversation_id: 'origin-conversation', closing_message_id: 'answer-1', attempt_id: 'attempt-1' }, surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: 15000, output_tokens: 800, total_tokens: 15800, details: { cached_input_tokens: 12000 } }, models: ['native/coder'] };
- s.transcript.statistics = { turns: '12', steps: '34', completed_responses: '1', model_requests: '2', requests_with_usage: '2', reported_usage: s.transcript.entries[1].completed_response.usage,
+ s.transcript.entries[1].completed_response = {closing_locator:{type:'by_message_id',message_id:'answer-1'},deferred_fields:[],retry_locator:{type:'by_message_id',message_id:'user-1'}, closing_message_id: 'answer-1', origin: {attempt_id_source:null, conversation_id: 'origin-conversation', closing_message_id: 'answer-1', attempt_id: 'attempt-1' }, surface_revision: '2', retry_message_id: 'user-1', completed_at: '2026-09-18T11:59:00Z', usage: { input_tokens: "15000", output_tokens: "800", total_tokens: "15800", details: { cached_input_tokens: "12000" } }, models: ['native/coder'] };
+ s.transcript.statistics = { turns: '12', steps: '34', completed_responses: '1', model_requests: '2', requests_with_usage: '2', reported_usage: s.transcript.entries[1].completed_response!.usage,
    timing: { model_ms: 20500, tool_ms: 9652000, mean_ttft_ms: 3100, output_tokens_per_second: 49 } };
- s.context = { compaction_count: 0, compaction_in_progress: false, occupancy: { estimated: false, input_tokens: 15000, context_window_tokens: 128000, model: 'native/coder', breakdown: { system_tokens: 1900, tool_tokens: 6000, message_tokens: 7100 } } };
+ s.context = { compaction_count: 0, compaction_in_progress: false, occupancy: { estimated: false, model_deferred:false, model_source:null, input_tokens: "15000", context_window_tokens: "128000", model: 'native/coder', breakdown: { system_tokens: "1900", tool_tokens: "6000", message_tokens: "7100" } } };
 }
 if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
 if (mode === 'streaming') {
@@ -56,18 +59,18 @@ if (mode === 'streaming') {
 if (mode === 'tools' || mode === 'error') {
  const calls = [{ id: 'read-1', tool_id: 'tool-read', name: 'read', arguments: { path: 'src/runtime_client/snapshot.rs' } }, { id: 'bash-1', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'cargo test --lib' } }, { id: 'edit-1', tool_id: 'tool-edit', name: 'edit', arguments: { path: 'src/main.rs', edits: [{ oldText: 'legacy_view()', newText: 'native_projection()' }] } }];
  s.messages[1] = { role: 'assistant', id: 'calls-1', content: [{ type: 'reasoning', text: 'Inspect the projection, then validate the native contract.' }, ...calls.map(call => ({ type: 'tool_call' as const, ...call }))] };
- s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: calls.map((call, index) => ({ message_id: 'calls-1', block_index: index + 1, call_id: call.id, tool_id: call.tool_id, name: call.name, state: index === 1 && mode === 'tools' ? { type: 'running', arguments: JSON.stringify(call.arguments) } : { type: 'settled', arguments: JSON.stringify(call.arguments), result: { status: index === 1 ? { type: 'failed', error: 'Native test failure: assertion failed' } : { type: 'success' }, duration_ms: 12, content: [{ type: 'text', text: index === 0 ? 'pub struct RuntimeClientSnapshot {\n    pub conversation_id: ConversationId,\n}' : index === 2 ? 'Replaced one occurrence.' : 'test native_boundary ... FAILED' }] } } })) };
+ s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: calls.map((call, index) => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'calls-1'},block_index:index + 1},assembly_complete:true, message_id: 'calls-1', block_index: index + 1, call_id: call.id, tool_id: call.tool_id, name: call.name, state: index === 1 && mode === 'tools' ? { type: 'running', arguments: JSON.stringify(call.arguments) } : { type: 'settled', arguments: JSON.stringify(call.arguments), result: { status: index === 1 ? { type: 'failed', error: 'Native test failure: assertion failed' } : { type: 'success' }, duration_ms: '12', content: [{ type: 'text', text: index === 0 ? 'pub struct RuntimeClientSnapshot {\n    pub conversation_id: ConversationId,\n}' : index === 2 ? 'Replaced one occurrence.' : 'test native_boundary ... FAILED' }] } } })) };
 }
 if (mode === 'approval') s.pending_interactions = [interaction('approval')];
 if (mode === 'questionnaire') {
  const pending = interaction('questionnaire');
- if (pending.request.kind.type === 'questionnaire') pending.request.kind.questionnaire.questions.push({ header: 'Coverage', question: 'Which checks should be included?', answer: { type: 'multi_choice', min_selected: 1, max_selected: 2, allow_custom: true, options: [{ label: 'Native contracts', description: 'Verify runtime authority.' }, { label: 'Browser references', description: 'Verify the pinned presentation.' }] } });
+ if (pending.body!.kind.type === 'questionnaire') pending.body!.kind.questionnaire.questions.push({ header: 'Coverage', question: 'Which checks should be included?', answer: { type: 'multi_choice', min_selected: 1, max_selected: 2, allow_custom: true, options: [{ label: 'Native contracts', description: 'Verify runtime authority.' }, { label: 'Browser references', description: 'Verify the pinned presentation.' }] } });
  s.pending_interactions = [pending];
  // The pending call's own transcript row reports the wait, never the questions.
  const ask = { id: 'call-ask', tool_id: 'tool-ask-user', name: 'ask_user', arguments: { questions: [{ header: 'Direction', question: 'Which direction?', options: [] }, { header: 'Coverage', question: 'Which checks should be included?', options: [] }] } };
  const answer = s.messages[1];
  if (answer.role === 'assistant') answer.content.push({ type: 'tool_call', ...ask });
- s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: [{ message_id: 'answer-1', block_index: 2, call_id: ask.id, tool_id: ask.tool_id, name: ask.name, state: { type: 'running', arguments: JSON.stringify(ask.arguments) } }] };
+ s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'answer-1'},block_index:2},assembly_complete:true, message_id: 'answer-1', block_index: 2, call_id: ask.id, tool_id: ask.tool_id, name: ask.name, state: { type: 'running', arguments: JSON.stringify(ask.arguments) } }] };
 }
 if (mode === 'compaction') {
  s.attempt = null;
@@ -83,6 +86,22 @@ if (mode === 'fork') {
  server.handlers.set('session/read', () => ({ type: 'session', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' } }));
  server.handlers.set('session/node', () => ({ type: 'node', node: { ordinal: '1', id: 'node-A', conversation_id: 'conversation-A', origin: { type: 'fork', source_session: 'B', source_node: 'node-B', source_surface_revision: '2', source_message: 'answer-1', side: 'after' } } }));
 }
+if (mode === 'retry-active' || mode === 'retry-settled') {
+ // One native timeout and its retry, as the Trace publishes them: the
+ // presentation matrix of model-retry.spec.ts's native workflow.
+ const failed = traceRecord(0, { state: 'failed' }); failed.request!.failure_kind = 'timeout';
+ const retry = traceRecord(1, { state: mode === 'retry-active' ? 'running' : 'completed' });
+ retry.request!.previous_failure_kind = 'timeout'; retry.request!.predecessor = { availability: 'available', request_id: 'request-0', request_id_source: null };
+ s.trace = { records: [failed, retry] };
+ const recovered = { role: 'assistant' as const, id: retry.request!.assistant_message_id!, content: [{ type: 'text' as const, text: 'Recovered after timeout.' }] };
+ if (mode === 'retry-active') {
+  s.messages.pop(); s.transcript.entries.pop();
+  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, in_flight: { message_id: recovered.id, blocks: [] }, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+ } else {
+  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } }, turn: 1 };
+  s.messages[1] = recovered; s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: recovered } };
+ }
+}
 server.snapshots.set('A', s);
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
@@ -96,7 +115,7 @@ if (mode === 'composer') {
     docks: async value => {
       const next = structuredClone(server.snapshots.get('A')!);
       next.todos = value ? { next_id: '2', tasks: [{ id: '1', subject: 'Review the composer', status: 'in_progress', active_form: 'Reviewing the composer' }] } : null;
-      next.goal = value ? { current: { reference: { id: 'goal', revision: '1' }, objective: 'Restore the compact input contract', phase: 'paused', autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' } } } : null;
+      next.goal = value ? { current: { objective_deferred: false, blocked_reason_deferred: false, last_round_message_id_deferred: false, fields: [], reference: { id: 'goal', revision: '1' }, objective: 'Restore the compact input contract', phase: 'paused', autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' } } } : null;
       next.inbound = { pending: value ? [{ sequence: '1', revision: '0', message: { id: 'queued', source: 'human', content: [{ type: 'text', text: 'Verify the native queue controls' }] } }] : [] };
       await server.update('A', next);
     },
@@ -116,7 +135,7 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v49').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v50').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

@@ -1,3 +1,4 @@
+import { materializeSource } from '../../protocol/app-server/source-observation';
 // @vitest-environment jsdom
 /** Issue #464: native automatic configuration repair in the Web console —
  * source-scoped client observations, one nonblocking notification per
@@ -6,7 +7,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
-import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v49';
+import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v50';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
@@ -16,7 +17,7 @@ import type { ProductHostWorkspaces } from '../src/workspaces/host';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { translator } from '../src/locale/translation';
 import { cfg3Source } from './cfg3-data';
-import { endpoint, Server, TOKEN } from './fixture';
+import { applicationReceipt, boundedSettings, sourceReceipt, settingsReceipt, endpoint, Server, TOKEN } from './fixture';
 import { openSettingsPage, settingsReady, SettingsSurface } from './settings-harness';
 
 beforeEach(() => localStorage.clear());
@@ -105,7 +106,7 @@ async function inspectionShell(native: NativeSources = {}) {
     projection.target = target;
     projection.user_repair = native.user ?? null;
     projection.workspace_repair = target.kind === 'workspace' ? native.workspace ?? null : null;
-    return { type: 'source_settings', projection };
+    return { type: 'source_settings', projection: boundedSettings(projection) };
   });
   const lookups: { directory: string; answer: (resolution: OwnerResolution) => void }[] = [];
   const directory = (id: string) => id === 'wA' ? '/workspace/A' : '/workspace/B';
@@ -115,7 +116,8 @@ async function inspectionShell(native: NativeSources = {}) {
     configureWorkspace: async (id, _endpoint, operation) => {
       if (operation.kind !== 'read') throw new Error('read only');
       const { projection } = await s.client.request({ method: 'configuration/sourcesRead', params: { target: { kind: 'workspace', directory: directory(id) } } }, 'source_settings');
-      return { kind: 'read', projection };
+      const source = await materializeSource(projection, async (reference, offset) => (await s.client.request({ method: 'configuration/sourceValueRead', params: { target: projection.target, reference, offset, max_bytes: 65_536 } }, 'source_value_chunk')).chunk, () => s.client.getSnapshot().connection === 'connected');
+      return { kind: 'read', projection: source };
     } };
   await s.connect();
   const acknowledgements = new RepairAcknowledgements(localStorage);
@@ -613,7 +615,7 @@ class Native {
 it('renders Auto Repair from the authoritative read and keeps an unsaved draft fenced', async () => {
   const native = new Native();
   const s = new Server();
-  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(native.projection()) }));
   await s.connect();
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await settingsReady();
@@ -627,7 +629,7 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   // separate application publication of the committed bytes.
   native.revision = 'user-2'; native.repair = receipt({ after_revision: 'user-2' }); native.version = 2;
   await announce(s, { kind: 'user' }, native.repair);
-  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: native.application() } }); });
+  await act(async () => { s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: applicationReceipt(native.application()) } }); });
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeGreaterThan(1));
   // The draft is neither erased, submitted nor silently rebased: the moved
   // source requires the explicit review gesture.
@@ -653,7 +655,7 @@ it('shows an unresolved repair as a failure next to the manual repair', async ()
   source.user.authored = null;
   source.user.diagnostic = 'invalid rustx.toml; source was not loaded';
   source.user_repair = receipt({ status: 'unresolved', after_revision: null, backup_available: false, diagnostic: 'malformed TOML at line 3, column 1; syntax is never repaired automatically', changes: [] , changed_count: 0 });
-  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: source }));
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(source) }));
   await s.connect();
   render(<SettingsSurface client={s.client} target={userSettingsTarget} initialPage="advanced" />);
   const section = await screen.findByRole('region', { name: 'Auto Repair' });
@@ -737,11 +739,11 @@ describe('WEB-BOUND-04 a revisited Workspace the client forgot is recovered from
       const directory = '/workspace/A';
       const target: SourceTarget = { kind: 'workspace', directory };
       // Both fixture Sessions belong to Workspace A.
-      s.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: directory } }));
+      s.handlers.set('session/settings', () => settingsReceipt({ cwd: directory }, '0'));
       // Native's current answer for the Workspace, once it is read.
       s.handlers.set('configuration/sourcesRead', request => {
         const asked = (request.params as { target: SourceTarget }).target;
-        return { type: 'source_settings', projection: nativeRead(asked, '1000', current === null ? null : receiptOf(asked, current)) };
+        return { type: 'source_settings', projection: boundedSettings(nativeRead(asked, '1000', current === null ? null : receiptOf(asked, current))) };
       });
       await s.connect();
       render(<RepairNotice client={s.client} acknowledgements={new RepairAcknowledgements(undefined, undefined)} viewDetails={vi.fn()} />);
@@ -782,7 +784,7 @@ describe('WEB-BOUND-05 a delayed read never overwrites a newer native notificati
     it(name, async () => {
       const s = new Server();
       const target: SourceTarget = { kind: 'workspace', directory: '/workspace/A' };
-      s.handlers.set('configuration/sourcesRead', request => ({ type: 'source_settings', projection: nativeRead((request.params as { target: SourceTarget }).target, '90', receiptOf(target, 'older')) }));
+      s.handlers.set('configuration/sourcesRead', request => ({ type: 'source_settings', projection: boundedSettings(nativeRead((request.params as { target: SourceTarget }).target, '90', receiptOf(target, 'older'))) }));
       await s.connect();
       // 65 Workspaces: this connection has forgotten one, so an absent
       // Workspace is read when one of its Sessions is attached.
@@ -852,8 +854,8 @@ it('WEB-BOUND-07 a replacement authority presents a distinct receipt with an equ
 it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base, an in-flight Save or Session state', async () => {
   const native = new Native();
   const s = new Server();
-  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
-  s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(native.projection()) }));
+  s.handlers.set('configuration/sourceWrite', () => ({ type: 'sources_written', revision: sourceReceipt(native.projection()).revision, configuration_revision: null }));
   await s.attached('B');
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await settingsReady();
@@ -897,7 +899,7 @@ const unresolvedAt = (target: SourceTarget, id: string) => receiptOf(target, id,
 function answering(s: Server, sequence: () => number, current: () => ConfigRepairReceipt | null) {
   s.handlers.set('configuration/sourcesRead', request => {
     const asked = (request.params as { target: SourceTarget }).target;
-    return { type: 'source_settings', projection: nativeRead(asked, String(sequence()), asked.kind === 'workspace' ? current() : null) };
+    return { type: 'source_settings', projection: boundedSettings(nativeRead(asked, String(sequence()), asked.kind === 'workspace' ? current() : null)) };
   });
 }
 
@@ -1060,8 +1062,8 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   const native = new Native();
   const s = new Server();
   const w0 = workspace;
-  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: native.projection() }));
-  s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
+  s.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(native.projection()) }));
+  s.handlers.set('configuration/sourceWrite', () => ({ type: 'sources_written', revision: sourceReceipt(native.projection()).revision, configuration_revision: null }));
   await s.connect();
   const acknowledgements = new RepairAcknowledgements(localStorage);
   render(<>
@@ -1122,11 +1124,11 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   let w0Receipt: ConfigRepairReceipt | null = null;
   s.handlers.set('configuration/sourcesRead', request => {
     const asked = (request.params as { target: SourceTarget }).target;
-    if (asked.kind === 'user') return { type: 'source_settings', projection: native.projection() };
-    return { type: 'source_settings', projection: nativeRead(asked, String(sequence), asked.directory === w0.directory ? w0Receipt : null) };
+    if (asked.kind === 'user') return { type: 'source_settings', projection: boundedSettings(native.projection()) };
+    return { type: 'source_settings', projection: boundedSettings(nativeRead(asked, String(sequence), asked.directory === w0.directory ? w0Receipt : null)) };
   });
-  s.handlers.set('configuration/sourceWrite', () => ({ type: 'source_settings', projection: native.projection() }));
-  s.handlers.set('session/settings', () => ({ type: 'settings', revision: '0', settings: { cwd: w0.directory } }));
+  s.handlers.set('configuration/sourceWrite', () => ({ type: 'sources_written', revision: sourceReceipt(native.projection()).revision, configuration_revision: null }));
+  s.handlers.set('session/settings', () => settingsReceipt({ cwd: w0.directory }, '0'));
   await s.connect();
   const acknowledgements = new RepairAcknowledgements(localStorage);
   render(<>

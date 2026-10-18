@@ -14,9 +14,9 @@ import card from './AskQuestionCard.module.css';
 
 /** One question call's verdict and, once settled, its read-only record. */
 export type QuestionRowView =
-  | { readonly id: string; readonly verdict: 'waiting' }
-  | { readonly id: string; readonly verdict: 'answered'; readonly answered: number; readonly total: number; readonly questions: readonly { readonly question: string; readonly answers: readonly string[] }[] }
-  | { readonly id: string; readonly verdict: 'cancelled' | 'interrupted'; readonly questions: readonly string[] };
+  | { readonly id?: string; readonly verdict: 'waiting' }
+  | { readonly id?: string; readonly verdict: 'answered'; readonly answered: number; readonly total: number; readonly questions: readonly { readonly question: string; readonly answers: readonly string[] }[] }
+  | { readonly id?: string; readonly verdict: 'cancelled' | 'interrupted'; readonly questions: readonly string[] };
 
 export function QuestionRow({ row, inspect }: { row: QuestionRowView; inspect?: () => Promise<void> }) {
   const tx = useTranslation();

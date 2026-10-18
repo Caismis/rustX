@@ -1,4 +1,4 @@
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v49';
+import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v50';
 import type { useTranslation } from '../../locale/react';
 import type { StateDotState } from '../../presentation/primitives/StateDot';
 
@@ -11,6 +11,7 @@ export function agentDot(agent: RuntimeClientAgent): StateDotState {
 }
 export function agentStatus(agent: RuntimeClientAgent, tx: ReturnType<typeof useTranslation>) {
   if (agent.state === 'inactive') return agent.activation_state === 'succeeded' ? tx('common:subagents.completed') : tx(`common:state.${agent.activation_state}`);
+  if (agent.state === 'active' && agent.observation.activity.type === 'tool_group') return tx('common:activity.tools-active', { count: agent.observation.activity.active });
   if (agent.state === 'active' && agent.observation.activity.type === 'waiting') return tx('common:activity.waiting-for', { state: tx(`common:state.${agent.observation.activity.on.type}`) });
   return tx(`common:activity.${agent.state === 'active' ? 'working' : agent.state === 'admitting' ? 'admitting' : agent.state === 'stopping' ? 'stopping' : 'unavailable'}`);
 }

@@ -1,3 +1,4 @@
+import {traceAttemptKey,traceStepKey} from '../../protocol/app-server/trace-identity';
 import { recordText } from '../src/app/trajectory/TrajectoryCell';
 import { traceStateLabel } from '../src/bindings/status-labels';
 import { localeController } from '../src/locale/controller';
@@ -12,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, repl
 import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v49';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v50';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -27,7 +28,7 @@ const cacheOf = (records: TraceRecord[]) => replaceTrace({ records, next_cursor:
 function show(cache: TraceCache, load = vi.fn(), older = vi.fn()) {
   return render(<Trajectory cache={cache} loadEarlier={older} onSelect={noop} onLoadDetail={load} />);
 }
-const context = (id: string): TraceContextPresentation => ({ message_id: id, producer: { Native: 'workspace_instructions' }, context_kind: 'native_environment', source: { type: 'runtime' }, preview: { text: `Preview ${id}`, truncated: false }, attachments: [], truncated: false });
+const context = (id: string): TraceContextPresentation => ({locator:{type:'by_message_id',message_id:id},fields:[], message_id: id, producer: { Native: 'workspace_instructions' }, context_kind: 'native_environment', source: { type: 'runtime' }, preview: { text: `Preview ${id}`, truncated: false }, attachments: [], truncated: false });
 const richRequest = (n = 0) => {
   const record = traceRecord(n);
   record.request!.system_prompt = { state: 'initial', preview: { text: 'Frozen prompt', truncated: false } };
@@ -255,7 +256,7 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Turn %s anchor gives the Tur
   const load = vi.fn(); const select = vi.fn(); const older = vi.fn();
   render(<Trajectory cache={cacheOf([child])} onSelect={select} onLoadDetail={load} loadEarlier={older} />);
   const step = trajectoryItems([child]).find(item => item.type === 'GroupHeader')!;
-  expect(step.display_key).toBe(JSON.stringify(['group', 'attempt-a', '1']));
+  expect(step.display_key).toBe(JSON.stringify(['group',traceAttemptKey(child.location),traceStepKey(child.location)]));
   expect(trajectoryItems([{ ...child, state: 'running' }]).find(item => item.type === 'GroupHeader')!.display_key).toBe(step.display_key);
   // As in Harness, a Step has no chrome and the Turn label is not a control.
   expect(document.querySelector('[data-structural]')).toBeNull();
@@ -270,11 +271,11 @@ it.each(['request', 'tool'] as const)('T1-04/06 mid-Turn %s anchor gives the Tur
   expect(screen.getByRole('tab', { name: kind === 'request' ? 'Options' : 'Payload' })).toBeDefined();
 });
 
-const proposal = () => traceRecord(0, { kind: 'assistant', request: null, message_id: 'assistant-0', calls: [{ call_id: 'same', tool_id: 'tool-a', name: 'same name' }, { call_id: 'not-executed', tool_id: 'tool-a', name: 'same name' }] });
-const execution = (n: number, overrides: Partial<TraceRecord> = {}) => traceTool(n, { tool: { ...traceTool(n).tool!, call_id: 'same', tool_id: 'tool-a', name: 'same name' }, ...overrides });
+const proposal = () => traceRecord(0, { kind: 'assistant', request: null, message_id: 'assistant-0', calls: [{occurrence:{locator:{type:'by_message_id',message_id:'assistant-0'},block_index:0},fields:[], call_id: 'same', tool_id: 'tool-a', name: 'same name' }, {occurrence:{locator:{type:'by_message_id',message_id:'assistant-0'},block_index:1},fields:[], call_id: 'not-executed', tool_id: 'tool-a', name: 'same name' }] });
+const execution = (n: number, overrides: Partial<TraceRecord> = {}) => traceTool(n, { tool: { ...traceTool(n).tool!,occurrence:{locator:{type:'by_message_id',message_id:'assistant-0'},block_index:0}, call_id: 'same', tool_id: 'tool-a', name: 'same name' }, ...overrides });
 it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page split', () => {
   const assistant = proposal();
-  const unrelated = [execution(2, { location: { attempt_id: 'other', step_id: '1' } }), execution(3, { location: { attempt_id: 'attempt-a', step_id: '2' } }), execution(4, { tool: { ...execution(4).tool!, tool_id: 'tool-b' } }), execution(5, { location: {} })];
+  const unrelated = [execution(2, { location: { attempt_id: 'other', step_id: '1' } }), execution(3, { location: { attempt_id: 'attempt-a', step_id: '2' } }), execution(4, { tool: { ...execution(4).tool!,occurrence:{locator:{type:'by_message_id',message_id:'foreign-assistant'},block_index:0}, tool_id: 'tool-b' } }), execution(5, { location: {} })];
   expect(matchingCalls([assistant, execution(1), ...unrelated]).get(assistant.id)?.map(r => r.id)).toEqual(['trace:1']);
   const records = [assistant, execution(1), ...unrelated];
   const visible = visibleItems(translator('en'), trajectoryItems(records), records, new Set([assistant.id]), null);
@@ -403,7 +404,7 @@ it('T1-09 structural search and Attempt collapse never borrow child facts or ano
   expect(structural.record_ids).toEqual([child.id]);
   // A Turn with a single content row has nothing to fold, as in Harness.
   const visible = visibleItems(translator('en'), items, [child, other], new Set(), null);
-  const ledger = ledgerRows(translator('en'), projectTrajectory(translator('en'), [child, other]), visible, new Set(['attempt-a', 'attempt-b']), false);
+  const ledger = ledgerRows(translator('en'), projectTrajectory(translator('en'), [child, other]), visible, new Set(['attempt-a', 'attempt-b'].map(attempt_id=>traceAttemptKey({attempt_id,attempt_id_source:null})!)), false);
   expect(ledger.some(row => row.kind === 'summary')).toBe(false);
   expect(ledger.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual([child.id, other.id]);
 });
@@ -490,7 +491,7 @@ it('407: exact Attempt and Step identity own one Turn/group across interleaved r
   expect(items.filter(item => item.type === 'GroupHeader').map(item => item.label)).toEqual(['Message', 'Step 1', 'Step 2', 'Step 1']);
   const folded = visibleItems(translator('en'), items, records, new Set(), null);
   // A Turn with one content row has nothing to fold, as in Harness.
-  expect(ledgerRows(translator('en'), projection, folded, new Set(['attempt-a', 'attempt-b']), false).flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual(['trace:0', 'trace:1', 'trace:2', 'trace:4', 'trace:5', 'trace:3']);
+  expect(ledgerRows(translator('en'), projection, folded, new Set(['attempt-a', 'attempt-b'].map(attempt_id=>traceAttemptKey({attempt_id,attempt_id_source:null})!)), false).flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual(['trace:0', 'trace:1', 'trace:2', 'trace:4', 'trace:5', 'trace:3']);
   expect(trajectoryTimeline(translator('en'), projection, 'sequence')!.boundaries.map(boundary => boundary.nativeAttemptId)).toEqual(
     items.filter(item => item.type === 'TurnHeader').map(item => item.attempt_id),
   );
@@ -567,7 +568,7 @@ it.each([
 ] as const)('structural search %s shares exact ledger/timeline membership without reads or collapse mutation', (query, type, label, attempt, ids) => {
   const records = structuralSearchRecords();
   const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records), 'older');
-  const collapsed = new Set(['attempt-a', 'attempt-b']);
+  const collapsed = new Set(['attempt-a', 'attempt-b'].map(attempt_id=>traceAttemptKey({attempt_id,attempt_id_source:null})!));
   const before = visibleItems(translator('en'), items, records, new Set(), null);
   const matches = searchItems(projectTrajectory(translator('en'), records), query);
   expect(matchedRecordIds(items, matches)).toEqual(new Set(ids));
@@ -575,7 +576,7 @@ it.each([
   expect(exposed.filter(isInspectable).map(item => item.owner_record_id)).toEqual([...ids]);
   expect(exposed).toContainEqual(expect.objectContaining({ type, label, attempt_id: attempt }));
   expect(visibleItems(translator('en'), items, records, new Set(), null)).toEqual(before);
-  expect([...collapsed]).toEqual(['attempt-a', 'attempt-b']);
+  expect([...collapsed]).toEqual(['attempt-a','attempt-b'].map(attempt_id=>traceAttemptKey({attempt_id,attempt_id_source:null})));
 
   const load = vi.fn(); const older = vi.fn();
   show(replaceTrace({ records, next_cursor: 'older' }), load, older);
@@ -599,7 +600,7 @@ it.each([
 });
 
 it('search conversion covers every inspectable cell, deduplicates owners and excludes history boundaries', () => {
-  const assistant = traceRecord(1, { kind: 'assistant', request: null, message_id: 'assistant', calls: [{ call_id: 'call-2', tool_id: 'tool-bash', name: 'bash' }] });
+  const assistant = traceRecord(1, { kind: 'assistant', request: null, message_id: 'assistant', calls: [{ call_id: 'call-2', tool_id: 'tool-bash', name: 'bash', occurrence: {locator: {type:'by_message_id',message_id:'assistant'},block_index:0}, fields: [] }] });
   const records = [richRequest(), assistant, traceTool(2)];
   const items = flattenTrajectory(translator('en'), projectTrajectory(translator('en'), records), 'older');
   const folded = visibleItems(translator('en'), items, records, new Set([assistant.id]), null);
@@ -1231,7 +1232,7 @@ it('424 order: search keeps native position and restores exact folds across loca
   const projection = projectTrajectory(translator('en'), records);
   const items = trajectoryItems(records);
   const matches = searchItems(projection, 'order-match')!;
-  const rows = ledgerRows(translator('en'), projection, visibleItems(translator('en'), items, records, new Set(), matches), new Set(['ordered-turn']), true);
+  const rows = ledgerRows(translator('en'), projection, visibleItems(translator('en'), items, records, new Set(), matches), new Set([traceAttemptKey({attempt_id:'ordered-turn',attempt_id_source:null})!]), true);
   expect(rows.map(row => [row.item?.owner_record_id, row.turnStart])).toEqual([['trace:702', false], ['trace:706', true]]);
   expect(rows.some(row => row.item?.type === 'ContextRow')).toBe(false);
   const load = vi.fn(); show(cacheOf(records), load);
@@ -1253,7 +1254,7 @@ it.each(['many', 'initial', 'middle'] as const)('424 compact: bounded fold and e
   const records = scenario === 'many' ? manyStepRecords() : orderedStepRecords(scenario === 'initial');
   const tx = translator('en'); const projection = projectTrajectory(tx, records); const items = trajectoryItems(records);
   const nativeSteps = projection.sections.flatMap(section => section.kind === 'turn' ? section.groups.filter(group => group.kind === 'step').map(group => group.nativeStepId) : []);
-  const project = (folded: boolean) => ledgerRows(tx, projection, items, new Set(folded ? ['ordered-turn'] : []), false);
+  const project = (folded: boolean) => ledgerRows(tx, projection, items, new Set(folded ? [traceAttemptKey({attempt_id:'ordered-turn',attempt_id_source:null})!] : []), false);
   const expanded = project(false);
   expect(nativeSteps).toHaveLength(scenario === 'many' ? 50 : 4);
   // Fifty native Steps cost no rows: only visible content and the Turn's
@@ -1315,7 +1316,7 @@ it.each(['structure-only', 'initial-only', 'updated-system'] as const)('424 comp
     records.push(updated);
   }
   const tx = translator('en');
-  const rows = ledgerRows(tx, projectTrajectory(tx, records), trajectoryItems(records), new Set(['ordered-turn']), false);
+  const rows = ledgerRows(tx, projectTrajectory(tx, records), trajectoryItems(records), new Set([traceAttemptKey({attempt_id:'ordered-turn',attempt_id_source:null})!]), false);
   // Without content rows there is nothing to fold; the Turn keeps one seat for its label.
   expect(rows.some(row => row.kind === 'summary')).toBe(false);
   expect(rows.filter(row => row.turnStart)).toHaveLength(1);
@@ -1327,10 +1328,10 @@ it.each(['structure-only', 'initial-only', 'updated-system'] as const)('424 comp
 
 it('424 compact: summary counts the folded Turn\'s Tool records, as Harness does', () => {
   const records = orderedStepRecords(false);
-  records.at(-1)!.calls = [{ call_id: 'one', tool_id: 'tool-a', name: 'same' }, { call_id: 'two', tool_id: 'tool-a', name: 'same' }];
-  records.push(traceTool(708, { location: { attempt_id: 'ordered-turn', step_id: 'b-last' } }));
+  records.at(-1)!.calls = [{occurrence:{locator:{type:'by_message_id',message_id:'ordered-assistant706'},block_index:0},fields:[],call_id:'one',tool_id:'tool-a',name:'same'},{occurrence:{locator:{type:'by_message_id',message_id:'ordered-assistant706'},block_index:1},fields:[],call_id:'two',tool_id:'tool-a',name:'same'}];
+  records.push(traceTool(708, {location:{attempt_id:'ordered-turn',step_id:'b-last'},tool:{...traceTool(708).tool!,occurrence:{locator:{type:'by_message_id',message_id:'ordered-assistant706'},block_index:0},call_id:'one',tool_id:'tool-a',name:'same'}}));
   const tx = translator('en'); const projection = projectTrajectory(tx, records);
-  const rows = ledgerRows(tx, projection, trajectoryItems(records), new Set(['ordered-turn']), false);
+  const rows = ledgerRows(tx, projection, trajectoryItems(records), new Set([traceAttemptKey({attempt_id:'ordered-turn',attempt_id_source:null})!]), false);
   expect(rows.map(row => row.kind)).toEqual(['semantic', 'summary']);
   expect(rows.at(-1)!.summary).toBe('4 steps · 1 tool call');
   expect(rows.some(row => row.item?.owner_record_id === 'trace:706')).toBe(false);
@@ -1362,7 +1363,7 @@ it('424: explicit-null Step membership preserves native order across partial win
     expect(expanded.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual(window.map(record => record.id));
     const userTargets = ledgerFocusTargets(expanded).filter(target => target.item.type !== 'RequestBoundary');
     expect(userTargets.map(target => isInspectable(target.item) && target.item.owner_record_id)).toEqual(window.map(record => record.id));
-    const folded = new Set(['adopted-attempt']);
+    const folded = new Set([traceAttemptKey({attempt_id:'adopted-attempt',attempt_id_source:null})!]);
     const collapsed = ledgerRows(translator('en'), projection, items, folded, false);
     expect(collapsed.flatMap(row => row.item ? [row.item.owner_record_id] : [])).toEqual([window[0]!.id]);
     expect(collapsed.map(row => row.height)).toEqual([30, 20]);
@@ -1412,7 +1413,7 @@ it('retained idle inputs move into their native answering turns, below the initi
   const before = selectTrace(cacheOf(records), first.id);
   const updates = [first, second].map((record, i) => ({ id: record.id,
     location: { attempt_id: i ? 'attempt-b' : 'attempt-a', step_id: null },
-    state: record.state, timing: record.timing, attachments: [], truncated: false }));
+    state: record.state, timing: record.timing, fields: [], collections: [], attachments: [], truncated: false }));
   const repaired = refreshTrace(before, { records: [records.at(-1)!] }, updates);
   expect(repaired.selection?.location).toEqual(updates[0].location);
   const projection = projectTrajectory(translator('en'), repaired.page.records);

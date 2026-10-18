@@ -74,7 +74,14 @@ impl StatusRecorder {
 }
 
 impl AgentExecutionObserver for StatusRecorder {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
+    ) {
         self.events
             .lock()
             .expect("runtime event lock")
@@ -85,11 +92,15 @@ impl AgentExecutionObserver for StatusRecorder {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<rustx::durable::TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, observation: &AgentStatusObservation) {
+    fn observe_status(
+        &self,
+        observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
         self.observations
             .lock()
             .expect("status observation lock")
@@ -107,6 +118,7 @@ impl AgentExecutionObserver for StatusRecorder {
         &self,
         _attempt_id: &AttemptId,
         _frame: &rustx::publication::PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
     ) {
     }
 
@@ -114,7 +126,7 @@ impl AgentExecutionObserver for StatusRecorder {
         &self,
         _attempt_id: &AttemptId,
         _audit: &rustx::publication::PublicationAudit,
-        _transcript_cursor: rustx::durable::TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }
@@ -289,11 +301,11 @@ async fn run_attempt(
     (execution.run().await, recorder)
 }
 
-fn status_messages(result: &rustx::agent::AgentExecutionResult) -> Vec<&UserMessageBlock> {
+fn status_messages(result: &rustx::agent::AgentExecutionResult) -> Vec<UserMessageBlock> {
     result
         .messages()
-        .iter()
-        .filter(|message| message.is_agent_status())
+        .into_iter()
+        .filter(MessageBlock::is_agent_status)
         .filter_map(|message| match message {
             MessageBlock::User(user) => Some(user),
             _ => None,

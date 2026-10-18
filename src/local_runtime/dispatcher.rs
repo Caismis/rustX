@@ -1472,12 +1472,22 @@ mod tests {
             questionnaire.conversation_id.clone(),
             questionnaire.id.clone(),
         );
+        let approval = crate::runtime_client::checkpoint::interaction_request_header(
+            &approval,
+            crate::runtime::interaction::InteractionSource::Primary,
+        );
+        let questionnaire = crate::runtime_client::checkpoint::interaction_request_header(
+            &questionnaire,
+            crate::runtime::interaction::InteractionSource::Primary,
+        );
         handle
-            .send_reliable(ChildFrame::InteractionRequested(approval.clone()))
+            .send_reliable(ChildFrame::InteractionRequested(Box::new(approval.clone())))
             .await
             .expect("approval request is reliable");
         handle
-            .send_reliable(ChildFrame::InteractionRequested(questionnaire.clone()))
+            .send_reliable(ChildFrame::InteractionRequested(Box::new(
+                questionnaire.clone(),
+            )))
             .await
             .expect("questionnaire request is reliable");
         handle
@@ -1505,13 +1515,13 @@ mod tests {
             read_child_frame(&mut parent)
                 .await
                 .expect("approval request"),
-            Some(ChildFrame::InteractionRequested(approval)),
+            Some(ChildFrame::InteractionRequested(Box::new(approval))),
         );
         assert_eq!(
             read_child_frame(&mut parent)
                 .await
                 .expect("questionnaire request"),
-            Some(ChildFrame::InteractionRequested(questionnaire)),
+            Some(ChildFrame::InteractionRequested(Box::new(questionnaire))),
         );
         assert_eq!(
             read_child_frame(&mut parent)

@@ -14,7 +14,7 @@ export class WorkspaceSessionAdmission {
     const settings = await this.client.request({ method: 'session/settings', params: { session_id: id } }, 'settings');
     if (!valid() || !observation.current()) return false;
     if (!endpoint || !sameEndpoint(observation.catalog.endpoint, endpoint)) throw new Error('No matching rustX endpoint.');
-    const cwd = settings.settings.cwd;
+    const cwd = settings.projection.cwd;
     const [location] = await this.authority.classify([cwd], endpoint, observation);
     const admitted = () => valid() && observation.current();
     if (!admitted()) return false;

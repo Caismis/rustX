@@ -1,0 +1,13 @@
+test_exit_zero_with_invalid_json_is_rejected (test_run.MeasurementAcceptance.test_exit_zero_with_invalid_json_is_rejected) ... ok
+test_exit_zero_with_invalid_or_incomplete_oracle_is_rejected (test_run.MeasurementAcceptance.test_exit_zero_with_invalid_or_incomplete_oracle_is_rejected) ... ok
+test_exit_zero_with_missing_sample_is_rejected (test_run.MeasurementAcceptance.test_exit_zero_with_missing_sample_is_rejected) ... ok
+test_exit_zero_with_zero_matching_tests_is_rejected (test_run.MeasurementAcceptance.test_exit_zero_with_zero_matching_tests_is_rejected) ... ok
+test_valid_single_measurement_is_accepted (test_run.MeasurementAcceptance.test_valid_single_measurement_is_accepted) ... ok
+test_deferred_post_turn_work_is_in_phase_and_whole_totals (test_summarize.LifecycleAccounting.test_deferred_post_turn_work_is_in_phase_and_whole_totals) ... ok
+test_incomplete_window_cannot_be_labeled_whole (test_summarize.LifecycleAccounting.test_incomplete_window_cannot_be_labeled_whole) ... ok
+test_unavailable_counters_are_null_not_zero (test_summarize.LifecycleAccounting.test_unavailable_counters_are_null_not_zero) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.004s
+
+OK

@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v49` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v50` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -135,7 +135,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v49.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v50.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -157,13 +157,13 @@ reattachment; only a fresh committed observation restores recovery. Neither muta
 is replayed. A recovery notice remains available when another Session is focused.
 
 Each Session has its own target tuple (SessionId, ConversationId, runtime
-incarnation, attachment ID), cursor and snapshot. A/B notifications cannot share a
-projection. Successful attach installs the native authoritative snapshot and atomic
-subscription. Cursor-contiguous events deterministically fold the same read model
-below React. Full snapshots initialize, recover or explicitly reconcile; ordinary
-streaming issues none. Gaps and `resyncRequired` retire incremental continuation,
+incarnation, attachment ID), Applied cursor and bounded checkpoint. A/B notifications
+cannot share a projection. Successful attach yields an identity receipt, followed
+by an independent checkpoint and receipt-gated subscription. Cursor-contiguous
+events deterministically fold the same read model below React. Bounded checkpoints
+initialize, recover or explicitly reconcile. Gaps and `resyncRequired` retire incremental continuation,
 coalesce an authoritative read, then subscribe after its cursor. Native bounded
-replay owns snapshot overlap; no browser event log exists. See [CHAT.md](CHAT.md).
+replay owns checkpoint overlap; no browser event log exists. See [CHAT.md](CHAT.md).
 
 Session selection lives only in the Sidebar. The center header identifies the
 current Session and offers bounded actions, Inspector, and Chat/Trajectory views;
@@ -209,14 +209,14 @@ changing the Sidebar page or owning catalog membership. Read-order/generation fe
 prevent older observations overwriting newer summaries. Rename rereads the exact summary.
 
 Every new connection has a new generation. Socket callbacks, resolved request
-continuations and attachment workers are fenced. A fresh attach/snapshot replaces
+continuations and attachment workers are fenced. A fresh attachment/checkpoint replaces
 stale observations; old attachment work cannot overwrite a new incarnation, even
 within the same connection. Native retirement may close an attachment before a delete or branch-switch reply;
 its acknowledgement applies only to the exact requested operation.
 
 **Disconnect** closes only the socket and stays disconnected. An unexpected loss
 marks observations stale. **Reconnect** is explicit: initialize, list, reattach
-Sessions whose current `attachmentIntent` is `wanted`, then replace snapshots.
+Sessions whose current `attachmentIntent` is `wanted`, then load bounded checkpoints.
 There is no automatic connection loop. Selection controls focus; `openViews`
 tracks bounded browser views; `attachmentIntent` records desired controller ownership;
 `attachment`/target and uncertain-operation diagnostics record server observations.

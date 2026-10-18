@@ -192,7 +192,7 @@ impl ToolExecutor for SubagentExecutor {
                 };
                 let spec = SubagentStartSpec {
                     authority: crate::runtime::subagent::DurableAgentAuthority {
-                        title: input.title.trim().to_owned(),
+                        title: input.title.trim().into(),
                         execution_policy: subagent_context.execution_policy(),
                         resolved,
                         approval_mode: subagent_context.approval_mode(),

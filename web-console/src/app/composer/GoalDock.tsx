@@ -8,7 +8,7 @@ import { useTranslation } from '../../locale/react';
 // offers Pause and a stopped one offers Resume — never both, and never a
 // separate arm/play step. There is no create, clear or complete control here.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { GoalMutation, GoalRef, GoalSnapshot } from '../../../../protocol/app-server/v49';
+import type { GoalMutation, GoalRef, RuntimeClientGoalSnapshot } from '../../../../protocol/app-server/v50';
 import type { GoalDockState } from '../../bindings/composer-context';
 import type { GoalControlOutcome } from '../../client/app-server';
 import {
@@ -42,15 +42,16 @@ function parseBudget(draft: string): number | undefined {
 
 
 
-export function GoalDock({ state, observation, disabled, mutate }: {
+export function GoalDock({ state, observation, disabled, mutate, loadObjective }: {
   state: GoalDockState | undefined;
   /** Identity of the rendered authoritative snapshot. The client replaces it only after a successful read. */
   observation: object | undefined;
   disabled: boolean;
   mutate: (expected: GoalRef, mutation: GoalMutation) => Promise<GoalControlOutcome>;
+  loadObjective?: (expected: GoalRef) => Promise<string>;
 }) {
   const tx = useTranslation();
-  const STATUS: Record<GoalSnapshot['phase'], string> = {
+  const STATUS: Record<RuntimeClientGoalSnapshot['phase'], string> = {
   active: tx('agent:copy.active'), paused: tx('agent:copy.paused'), blocked: tx('agent:copy.blocked'), complete: tx('agent:copy.complete'),
 };
   const AWAITING: Record<Awaiting['kind'], string> = {
@@ -61,6 +62,10 @@ export function GoalDock({ state, observation, disabled, mutate }: {
   const goal = state?.goal;
   const [editing, setEditing] = useState<{ field: Field; draft: string }>();
   const [pending, setPending] = useState(false);
+  const [reading, setReading] = useState(false);
+  const readingObjective = useRef(false), readGeneration = useRef(0);
+  const currentGoal = useRef(goal); currentGoal.current = goal;
+  useEffect(() => () => { readGeneration.current++; }, []);
   const [error, setError] = useState<string>();
   const [awaiting, setAwaiting] = useState<Awaiting>();
   const inFlight = useRef(false);
@@ -78,6 +83,7 @@ export function GoalDock({ state, observation, disabled, mutate }: {
   const objective = goal?.objective, budget = goal?.autonomous_round_budget;
   useEffect(() => { setEditing(current => current?.field === 'objective' ? undefined : current); }, [objective]);
   useEffect(() => { setEditing(current => current?.field === 'budget' ? undefined : current); }, [budget]);
+  useEffect(() => { if (goal?.objective_deferred) setEditing(current => current?.field === 'objective' ? undefined : current); }, [goal?.reference.revision, goal?.objective_deferred]);
   useEffect(() => {
     if (editing || !returnFocus.current) return;
     (returnFocus.current === 'objective' ? objectiveButton : budgetButton).current?.focus();
@@ -115,7 +121,17 @@ export function GoalDock({ state, observation, disabled, mutate }: {
     if (budgetRounds !== undefined) void run({ action: 'budget', rounds: budgetRounds }, 'budget');
   };
   const cancel = () => { if (!editing || pending) return; returnFocus.current = editing.field; setEditing(undefined); };
-  const open = (field: Field) => { setError(undefined); setEditing({ field, draft: field === 'objective' ? goal.objective : String(goal.autonomous_round_budget) }); };
+  const open = async (field: Field) => {
+    setError(undefined);
+    if (field !== 'objective' || !goal.objective_deferred) { setEditing({ field, draft: field === 'objective' ? goal.objective : String(goal.autonomous_round_budget) }); return; }
+    if (!loadObjective || readingObjective.current) return;
+    readingObjective.current = true; setReading(true);
+    const token = ++readGeneration.current, expected = goal.reference;
+    const current = () => token === readGeneration.current && currentGoal.current?.reference.id === expected.id && currentGoal.current.reference.revision === expected.revision;
+    try { const original = await loadObjective(expected); if (current()) setEditing({ field, draft: original }); }
+    catch (error) { if (current()) setError(String(error).slice(0, 512)); }
+    finally { readingObjective.current = false; if (token === readGeneration.current) setReading(false); }
+  };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') { event.preventDefault(); cancel(); }
     else if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); save(); }
@@ -141,11 +157,12 @@ export function GoalDock({ state, observation, disabled, mutate }: {
         {goal.phase === 'active'
           ? <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.pause-goal')} disabled={locked} onClick={() => void run({ action: 'pause' })}><IconPauseOutline16 size={14} /></button>
           : <button type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.resume-goal')} disabled={locked} onClick={() => void run({ action: 'resume' })}><IconPlayOutline16 size={14} /></button>}
-        <button ref={objectiveButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-goal-objective')} disabled={locked} onClick={() => open('objective')}><IconEditOutline16 size={14} /></button>
-        <button ref={budgetButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-round-budget')} disabled={locked} onClick={() => open('budget')}><BudgetGlyph /></button>
+        <button ref={objectiveButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-goal-objective')} disabled={locked || reading || goal.objective_deferred && !loadObjective} onClick={() => void open('objective')}><IconEditOutline16 size={14} /></button>
+        <button ref={budgetButton} type="button" className={css.iconButton} aria-label={tx('agent:goal-dock.edit-round-budget')} disabled={locked} onClick={() => void open('budget')}><BudgetGlyph /></button>
       </>}</div>
     </div>
     {goal.phase === 'blocked' && goal.blocked_reason && <p className={css.note}>{tx('agent:goal-dock.blocked')}{' '}{goal.blocked_reason}</p>}
+    {(goal.objective_deferred || goal.blocked_reason_deferred) && <p className={css.note} role="status">{tx('common:activity.content-deferred')}</p>}
     {error && <p className={css.error} role="alert">{error}</p>}
     {locking && <p className={css.note} role="status">{AWAITING[locking.kind]}</p>}
   </section>;

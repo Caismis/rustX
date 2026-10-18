@@ -3,7 +3,7 @@
 `rustx-session-archive/v5` is a ZIP64/DEFLATE inspection archive produced by
 `src/session_archive.rs`. `SessionArchiveProducer` is a native library owner,
 independent of App Server, Web, TUI and Trace. This is neither a canonical log nor
-an import, recovery or persistence format. SQLite schema 61 stores the common accepted contributions; export projects those
+an import, recovery or persistence format. SQLite schema 70 stores the common accepted contributions; export projects those
 historical records without creating a second persistence authority.
 
 In v2, request snapshots expose common accepted contribution records instead of
@@ -98,8 +98,13 @@ ownership admission or snapshot. Deletion preview also releases its snapshot
 before managed writer retirement; neither snapshot reader waits on registry
 commit locks.
 
-For this finite membership, capture opens each database read-only, establishes a
-rollback-journal SQLite SHARED barrier and reads its immutable append frontiers.
+For this finite membership, capture opens each existing bound WAL database with
+read-write access solely to acquire `BEGIN IMMEDIATE` writer exclusion. It never
+creates, converts, initializes or repairs application state. The lock order is
+ProductRoot ownership freeze, allocation lifetime pins, then SQLite barriers in
+ConversationId order. Every legitimate writer, including another process, crosses
+SQLite's writer lock. Contention fails immediately; cancellation is checked around
+each acquisition. Failure drops every acquired connection and lifetime pin.
 Previously acquired barriers remain held until all members have been captured.
 It also captures each store's bounded artifact identity/settled-length inventory
 (at most 256 native identities per Conversation), without reading artifact bodies.
@@ -109,8 +114,10 @@ whole lifetime. An archive reader first opens the already-published byte file,
 then attempts shared reservation ownership. A reservation without bytes cannot
 be locked by archive inspection; visible bytes with an active writer are refused.
 Thus inspection can never steal writer admission in the publication window.
-Shared reader admission proves the one-shot writer has ended. Native create-new
-allocation prevents reopening settled identities for writing. Required artifacts that were
+Shared reader admission requires the one-shot writer to have ended and its explicit
+finish to have published a valid bounded settlement-seal header. Dropping an
+uncompleted writer does not publish settlement. Native create-new allocation
+prevents reopening settled identities for writing. Required artifacts that were
 absent or still being written at capture fail subsequent preflight, rather than
 being silently read at a later instant.
 
@@ -146,6 +153,12 @@ its cross-database barriers; it never holds them during compression/download.
 
 Native readers fetch one logical record at a time, ending each SQLite statement
 before writing ZIP output. Artifact readers consume at most 64 KiB at a time.
+Each artifact buffer is verified against its native settlement seal before those
+same bytes enter ZIP compression; completion also verifies the captured aggregate
+and exact EOF. Equal-length external mutation after settlement or preflight fails
+the stream rather than exporting replacement bytes under the recorded identity.
+No artifact body scan is added to the capture barrier. ZIP CRC32 still describes
+container integrity, not native source authentication.
 The producer's bounded channel holds two chunks, each at most 64 KiB, with at most
 one additional writer chunk waiting for capacity. ZIP metadata and manifest
 identity metadata scale with included entries; serialization memory scales with
@@ -330,7 +343,7 @@ Chromium. `git diff --check` must also pass.
   writer with synchronous channels before reservation ownership and again after
   byte publication but before `open_writer` returns. Direct archive reads and
   inventory scans run at both boundaries; writer admission/write succeeds and
-  bytes become archiveable only after writer drop. No sleeps or retries.
+  bytes become archiveable only after explicit successful writer finish. No sleeps or retries.
 - `archive_global_ownership_rejects_same_child_across_sessions_before_cut` creates
   competing child claims with readable allocations under both Sessions, then
   repeats with one missing allocation. Both exports fail `CorruptAuthority`.

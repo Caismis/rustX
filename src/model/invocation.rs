@@ -729,6 +729,39 @@ impl ResolvedModelInvocation {
             declared_capabilities: self.declared_capabilities.clone(),
         }
     }
+
+    /// Credential-free borrowed fields from this immutable invocation.
+    /// Observation encoding never clones opaque request parameters.
+    pub(crate) fn read_view(&self) -> ModelInvocationReadView<'_> {
+        ModelInvocationReadView {
+            model: &self.model_ref,
+            protocol: self.protocol,
+            context_window: self.context_window,
+            model_max_output_tokens: self.model_max_output_tokens,
+            max_output_tokens: self.effective_output_tokens,
+            profile: self.profile.as_ref(),
+            reasoning_enabled: self.reasoning_enabled,
+            request_params: &self.request_params,
+            capabilities: &self.capabilities,
+            declared_capabilities: &self.declared_capabilities,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ModelInvocationReadView<'a> {
+    model: &'a ModelRef,
+    protocol: ModelProtocol,
+    context_window: u64,
+    model_max_output_tokens: u32,
+    max_output_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<&'a ModelProfileId>,
+    reasoning_enabled: bool,
+    request_params: &'a RequestParams,
+    capabilities: &'a ModelCapabilities,
+    declared_capabilities: &'a ModelCapabilities,
 }
 
 /// The redacted client-facing projection of one resolved model invocation.
@@ -1007,8 +1040,8 @@ impl From<crate::model::catalog::ModelCatalogError> for ModelInvocationError {
 /// a cached binding; the first admitted use constructs that provider's client.
 #[derive(Clone)]
 pub struct ModelBindingRegistry {
-    catalog: ResolvedModelCatalog,
-    adapters: BTreeMap<(ProviderId, ModelProtocol), LazyAdapter>,
+    catalog: Arc<ResolvedModelCatalog>,
+    adapters: Arc<BTreeMap<(ProviderId, ModelProtocol), LazyAdapter>>,
 }
 
 type LazyAdapter = Arc<std::sync::OnceLock<Arc<dyn ModelAdapter>>>;
@@ -1133,7 +1166,10 @@ impl ModelBindingRegistry {
                 slot.insert(Arc::new(std::sync::OnceLock::new()));
             }
         }
-        Ok(Self { catalog, adapters })
+        Ok(Self {
+            catalog: Arc::new(catalog),
+            adapters: Arc::new(adapters),
+        })
     }
 
     /// The in-crate deterministic binding seam.
@@ -1157,12 +1193,15 @@ impl ModelBindingRegistry {
                 slot.insert(Arc::new(adapter));
             }
         }
-        Ok(Self { catalog, adapters })
+        Ok(Self {
+            catalog: Arc::new(catalog),
+            adapters: Arc::new(adapters),
+        })
     }
 
     /// The resolved catalog behind this registry.
     #[must_use]
-    pub const fn catalog(&self) -> &ResolvedModelCatalog {
+    pub fn catalog(&self) -> &ResolvedModelCatalog {
         &self.catalog
     }
 
@@ -1442,8 +1481,8 @@ fn protocol_name(protocol: ModelProtocol) -> String {
 /// # Errors
 ///
 /// Returns [`ModelErrorKind::Unsupported`] naming the unsupported modality.
-pub fn validate_content_modalities(
-    messages: &[crate::model::input::ModelInputMessage],
+pub fn validate_content_modalities<'a>(
+    messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
     capabilities: &ModelCapabilities,
 ) -> Result<(), ModelError> {
     use crate::message::types::{AssistantContentBlock, UserContentBlock};

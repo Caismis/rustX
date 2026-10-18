@@ -193,14 +193,11 @@ impl Parent {
                 node_id: None,
             })
             .await;
-        let Ok(MethodResult::Attached {
-            target, snapshot, ..
-        }) = attached
-        else {
+        let Ok(MethodResult::Attached { target, .. }) = attached else {
             panic!("the parent Session attaches: {attached:?}");
         };
         self.target = Some(target);
-        *snapshot
+        self.snapshot().await
     }
 
     pub(crate) fn target(&self) -> AttachmentTarget {
@@ -212,19 +209,144 @@ impl Parent {
     ) -> (RuntimeClientSnapshot, RuntimeClientCursor) {
         let target = self.target();
         match self
-            .call(Method::SessionSnapshot {
+            .call(Method::SessionCheckpoint {
                 target,
                 trace_records: Vec::new(),
             })
             .await
         {
-            Ok(MethodResult::Snapshot { snapshot, cursor }) => (*snapshot, cursor),
-            other => panic!("session/snapshot must succeed: {other:?}"),
+            Ok(MethodResult::Checkpoint { checkpoint }) => (checkpoint.snapshot, checkpoint.cursor),
+            other => panic!("session/checkpoint must succeed: {other:?}"),
         }
     }
 
     pub(crate) async fn snapshot(&mut self) -> RuntimeClientSnapshot {
         self.snapshot_with_cursor().await.0
+    }
+
+    /// Reads original Tool definitions at the advertised capability cut.
+    pub(crate) async fn capability_tools(
+        &mut self,
+    ) -> Vec<rustx::runtime_client::snapshot::RuntimeClientTool> {
+        let Ok(MethodResult::DomainPage { page: header }) = self
+            .call(Method::Capability {
+                target: self.target(),
+            })
+            .await
+        else {
+            panic!("capability source header")
+        };
+        let domain = "capabilities.tools";
+        let total = header
+            .collections
+            .iter()
+            .find(|row| row.domain == domain)
+            .expect("advertised Tool source")
+            .total;
+        let mut offset = 0;
+        let mut tools = Vec::new();
+        loop {
+            let Ok(MethodResult::CheckpointPage { page }) = self
+                .call(Method::ConversationCheckpointPage {
+                    target: self.target(),
+                    agent_id: None,
+                    cut: header.read_cut.clone(),
+                    domain: domain.into(),
+                    offset,
+                    limit: 32,
+                })
+                .await
+            else {
+                panic!("exact native Tool page")
+            };
+            assert_eq!(page.read_cut, header.read_cut);
+            assert_eq!(page.domain, domain);
+            assert_eq!(page.total, total);
+            assert!(page.items.len() <= 32);
+            let previous = offset;
+            for item in page.items {
+                assert_eq!(item.offset, offset);
+                let value = match item.value.filter(|_| !item.deferred) {
+                    Some(value) => value,
+                    None => {
+                        self.selected_value(None, &header.read_cut, domain, offset, &[])
+                            .await
+                    }
+                };
+                tools.push(
+                    rustx::runtime_client::checkpoint::decode_domain_value(value)
+                        .expect("original typed Tool definition"),
+                );
+                offset += 1;
+            }
+            assert_eq!(page.next_offset, (offset < total).then_some(offset));
+            if page.next_offset.is_none() {
+                assert_eq!(u64::try_from(tools.len()).unwrap(), total);
+                return tools;
+            }
+            assert!(offset > previous, "Tool continuation advances");
+        }
+    }
+
+    /// Reconstructs only an explicitly selected original value through bounded chunks.
+    pub(crate) async fn selected_value(
+        &mut self,
+        agent_id: Option<rustx::runtime::identity::AgentId>,
+        cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+        domain: &str,
+        item_offset: u64,
+        path: &[String],
+    ) -> serde_json::Value {
+        use base64::Engine;
+        let mut offset = 0;
+        let mut bytes = Vec::new();
+        let mut readable_end = None;
+        loop {
+            let result = self
+                .call(Method::ConversationCheckpointValueRead {
+                    target: self.target(),
+                    agent_id: agent_id.clone(),
+                    cut: cut.clone(),
+                    domain: domain.into(),
+                    item_offset,
+                    path: path.to_vec(),
+                    offset,
+                    max_bytes: 65_536,
+                })
+                .await;
+            let Ok(MethodResult::CheckpointValueChunk { chunk }) = result else {
+                panic!("original selected value: {result:?}")
+            };
+            assert_eq!(chunk.cut, *cut);
+            assert_eq!(chunk.domain, domain);
+            assert_eq!(chunk.item_offset, item_offset);
+            assert_eq!(chunk.path, path);
+            assert_eq!(chunk.offset, offset);
+            assert_eq!(
+                *readable_end.get_or_insert(chunk.readable_end),
+                chunk.readable_end
+            );
+            assert_eq!(
+                chunk.representation,
+                rustx::runtime_client::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1
+            );
+            let previous = offset;
+            let part = base64::engine::general_purpose::STANDARD
+                .decode(chunk.bytes_base64)
+                .unwrap();
+            assert!(part.len() <= 65_536);
+            offset += u64::try_from(part.len()).unwrap();
+            bytes.extend(part);
+            assert_eq!(
+                chunk.next_offset,
+                (offset < chunk.readable_end).then_some(offset)
+            );
+            if chunk.next_offset.is_none() {
+                assert_eq!(offset, chunk.readable_end);
+                return serde_json::from_slice(&bytes).expect("complete original JSON value");
+            }
+            assert!(offset > previous, "original byte continuation advances");
+        }
     }
 
     /// Starts one ordinary user turn.

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ProjectionDetail, ProjectionPage } from '../../../../protocol/app-server/v49';
+import type { CheckpointReadCut, ProjectionDetail, ProjectionPage } from '../../../../protocol/app-server/v50';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
+import { TraceFields } from '../trajectory/TraceFields';
+import type { TraceFieldReader } from '../../client/trace';
 import { ProjectionSummary } from './ContextSeat';
 
 type Props = { client: AppServerClient; sessionId: string };
@@ -15,7 +17,7 @@ export function ProjectionHistory(props: Props) {
 function ProjectionHistoryPages({ client, sessionId }: Props) {
   const tx = useTranslation();
   const [page, setPage] = useState<ProjectionPage>();
-  const [detail, setDetail] = useState<ProjectionDetail>();
+  const [detail, setDetail] = useState<ProjectionDetail & { sources: Map<number, {cut:CheckpointReadCut;reader?:TraceFieldReader}> }>();
   const [historyError, setHistoryError] = useState<string>();
   const [detailError, setDetailError] = useState<string>();
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -60,13 +62,15 @@ function ProjectionHistoryPages({ client, sessionId }: Props) {
       if (next.items.some(item => item.occurrence.checkpoint_id !== checkpoint)) throw new Error('Projection item returned another checkpoint');
       setDetail(previous => {
         const items = offset === 0 ? [] : [...(previous?.items ?? [])];
+        const sources = offset === 0 ? new Map<number, {cut:CheckpointReadCut;reader?:TraceFieldReader}>() : new Map(previous?.sources);
         const seen = new Set(items.map(item => item.occurrence.item_index));
         for (const item of next.items) {
           if (seen.has(item.occurrence.item_index)) continue;
           seen.add(item.occurrence.item_index); items.push(item);
+          sources.set(item.occurrence.item_index, {cut:next.read_cut,reader:client.projectionDetailReader(next)});
         }
         items.sort((a, b) => a.occurrence.item_index - b.occurrence.item_index);
-        return { ...next, checkpoint: offset === 0 ? next.checkpoint : previous?.checkpoint ?? next.checkpoint, items };
+        return { ...next, checkpoint: offset === 0 ? next.checkpoint : previous?.checkpoint ?? next.checkpoint, items, sources };
       });
     } catch (failure) {
       if (detailRequest.current === request) setDetailError(String(failure));
@@ -89,6 +93,7 @@ function ProjectionHistoryPages({ client, sessionId }: Props) {
         {item.content.blocks.map((block, index) => block.type === 'text'
           ? <MarkdownText key={index} text={block.text.text}/>
           : <pre key={index}>{JSON.stringify(block, null, 2)}</pre>)}
+        {item.content.provenance_source && <TraceFields fields={[item.content.provenance_source]} cut={detail.sources.get(item.occurrence.item_index)?.cut} reader={detail.sources.get(item.occurrence.item_index)?.reader} owned={()=>selected.current===detail.checkpoint.checkpoint_id}/>}
         {item.content.truncated && <p>{tx('agent:context.projection-truncated')}</p>}
       </article>)}
       {detail.next_item != null && <button disabled={detailLoading} onClick={() => { void inspect(detail.checkpoint.checkpoint_id, detail.next_item!); }}>{tx('agent:context.projection-more')}</button>}

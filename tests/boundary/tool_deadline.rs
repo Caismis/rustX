@@ -22,7 +22,6 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionObserver, AgentExecutionRequest,
     AgentStatusObservation,
 };
-use rustx::durable::TranscriptCursor;
 use rustx::events::types::RuntimeEvent;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
@@ -45,7 +44,14 @@ struct StartedSignal {
 }
 
 impl AgentExecutionObserver for StartedSignal {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        event: &RuntimeEvent,
+        _journal_sequence: u64,
+        _tool_occurrence: Option<&rustx::events::types::ToolObservationOccurrence>,
+        _receipt: Option<&rustx::durable::observation::NativeObservationBatch>,
+    ) {
         if matches!(event, RuntimeEvent::ToolExecutionStarted { .. }) {
             self.started.send_replace(true);
         }
@@ -55,22 +61,33 @@ impl AgentExecutionObserver for StartedSignal {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _transcript_cursor: Option<TranscriptCursor>,
+        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
     ) {
     }
 
-    fn observe_status(&self, _observation: &AgentStatusObservation) {}
+    fn observe_status(
+        &self,
+        _observation: &AgentStatusObservation,
+        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+    ) {
+    }
 
     fn observe_publication_opened(&self, _attempt_id: &AttemptId, _start: &PublicationStreamStart) {
     }
 
-    fn observe_publication(&self, _attempt_id: &AttemptId, _frame: &PublicationFrame) {}
+    fn observe_publication(
+        &self,
+        _attempt_id: &AttemptId,
+        _frame: &PublicationFrame,
+        _receipt: &rustx::publication::PublicationFrameReceipt,
+    ) {
+    }
 
     fn observe_publication_settled(
         &self,
         _attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        _transcript_cursor: TranscriptCursor,
+        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
     ) {
     }
 }
@@ -228,9 +245,9 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     controller.await.expect("boundary deadline controller");
     let audit = common::durable_agent_result(result, fixture.store.as_ref());
 
-    let messages: Vec<_> = audit
-        .result
-        .messages()
+    let canonical_messages = audit.result.messages();
+
+    let messages: Vec<_> = canonical_messages
         .iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),

@@ -7317,6 +7317,7 @@ fn write_artifact(
         .open_writer(&id)
         .map_err(|error| error.to_string())?;
     writer.write_all(bytes).map_err(|error| error.to_string())?;
+    writer.finish().map_err(|error| error.to_string())?;
     Ok(id)
 }
 

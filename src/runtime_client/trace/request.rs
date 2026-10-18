@@ -1,35 +1,29 @@
-//! Historical request inspection from frozen native authority.
-//!
-//! The one rule this module exists to enforce: **a historical request is
-//! reconstructed, never re-derived**. Every value comes from that request's
-//! own immutable [`RequestSnapshot`] and its exact frozen input dependencies,
-//! through the durable store's existing
-//! [`reconstruct_model_request`] seam. Current model configuration, the
-//! current tool catalog, the current system prompt and the current Surface
-//! are never read here, so changing a Session's model or tools after the
-//! fact cannot rewrite what an old request shows.
-//!
-//! [`RequestSnapshot`]: crate::model::snapshot::RequestSnapshot
-//! [`reconstruct_model_request`]: crate::durable::ConversationStore::reconstruct_model_request
+//! Finite canonical-message shaping for the native request read index.
+//! Full historical request reconstruction is a test-only independent oracle.
 
-use super::bounds::{
-    TRACE_DETAIL_MESSAGES, TRACE_DETAIL_TOOLS, TraceJson, TraceText, identity_fits,
-};
+#[cfg(test)]
+use super::bounds::{TRACE_DETAIL_MESSAGES, TRACE_DETAIL_TOOLS, TraceJson};
+use super::bounds::{TraceText, identity_fits};
 use super::content::{assistant_blocks, tool_result_block, user_blocks, user_source_label};
+use super::types::{TraceMessageRole, TraceRequestMessage};
+#[cfg(test)]
 use super::types::{
-    TraceMessageRole, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage,
-    TraceRequestOption, TraceToolDefinition,
+    TraceRequestDetail, TraceRequestFailure, TraceRequestOption, TraceToolDefinition,
 };
+#[cfg(test)]
 use crate::durable::{ConversationStore, ConversationStoreError};
 use crate::message::types::MessageBlock;
 use crate::model::input::ModelInputMessage;
-use crate::model::snapshot::RequestSnapshot;
-use crate::model::types::{ModelProtocol, ModelRequest};
-
+#[cfg(test)]
 use crate::model::inspection::REQUEST_OPTION_ALLOWLIST;
+#[cfg(test)]
+use crate::model::snapshot::RequestSnapshot;
+use crate::model::types::ModelProtocol;
+#[cfg(test)]
+use crate::model::types::ModelRequest;
 
 /// The provider-neutral protocol label of one historical invocation.
-const fn protocol_label(protocol: ModelProtocol) -> &'static str {
+pub(super) const fn protocol_label(protocol: ModelProtocol) -> &'static str {
     match protocol {
         ModelProtocol::OpenAiChatCompletions => "openai_chat_completions",
         ModelProtocol::OpenAiResponses => "openai_responses",
@@ -39,6 +33,7 @@ const fn protocol_label(protocol: ModelProtocol) -> &'static str {
 
 /// The terminal outcome facts of one actual request, read from its own
 /// Journal terminal rather than from any later request's.
+#[cfg(test)]
 pub(super) struct RequestOutcome {
     pub usage: Option<crate::model::types::ModelUsage>,
     pub failure: Option<TraceRequestFailure>,
@@ -52,12 +47,12 @@ pub(super) struct RequestOutcome {
 ///
 /// Propagates the durable read failure of snapshot or immutable-input
 /// reconstruction; a failure is never interpreted as an empty request.
-#[allow(clippy::too_many_lines)] // One bounded exact-snapshot inspection with independently scoped coordinates.
+#[cfg(test)]
 pub(super) fn request_detail(
     store: &dyn ConversationStore,
     snapshot: &RequestSnapshot,
     outcome: RequestOutcome,
-    previous: &super::summary::PreviousRequest,
+    previous: &super::oracle_summary::OriginalPreviousRequest,
 ) -> Result<Option<TraceRequestDetail>, ConversationStoreError> {
     if !identity_fits(snapshot.request_id.as_str())
         || !identity_fits(snapshot.identity.attempt_id.as_str())
@@ -89,42 +84,7 @@ pub(super) fn request_detail(
         });
     }
     let (options, omitted_option_count) = request_options(&snapshot.invocation.request_params);
-    let contributions = snapshot
-        .contributions
-        .iter()
-        .map(|record| {
-            let presentation = match &record.presentation {
-                Some(crate::context::contribution::ContributionPresentation::AgentStatus(
-                    status,
-                )) => {
-                    let turn = snapshot.identity.turn.as_str().parse().map_err(|_| {
-                        ConversationStoreError::InvalidReference(
-                            "historical contribution has invalid logical step".to_owned(),
-                        )
-                    })?;
-                    Some(super::types::TraceContributionPresentation::AgentStatus(
-                        crate::runtime_client::projection::status_view(
-                            &crate::agent::AgentStatusObservation {
-                                attempt_id: snapshot.identity.attempt_id.clone(),
-                                turn,
-                                status_message_id: record.message_id.clone(),
-                                opportunities: record.opportunities.clone(),
-                                post_tool_batch_anchor: record.post_tool_batch_anchor,
-                                status: status.clone(),
-                            },
-                        ),
-                    ))
-                }
-                None => None,
-            };
-            Ok(super::types::TraceContributionMetadata {
-                message_id: record.message_id.clone(),
-                producer: record.producer.clone(),
-                metadata: record.metadata.clone(),
-                presentation,
-            })
-        })
-        .collect::<Result<Vec<_>, ConversationStoreError>>()?;
+    let contributions = contribution_metadata(snapshot)?;
     Ok(Some(TraceRequestDetail {
         tool_associations: snapshot
             .tool_associations
@@ -174,7 +134,50 @@ pub(super) fn request_detail(
     }))
 }
 
+#[cfg(test)]
+pub(super) fn contribution_metadata(
+    snapshot: &RequestSnapshot,
+) -> Result<Vec<super::types::TraceContributionMetadata>, ConversationStoreError> {
+    snapshot
+        .contributions
+        .iter()
+        .map(|record| {
+            let presentation = match &record.presentation {
+                Some(crate::context::contribution::ContributionPresentation::AgentStatus(
+                    status,
+                )) => {
+                    let turn = snapshot.identity.turn.as_str().parse().map_err(|_| {
+                        ConversationStoreError::InvalidReference(
+                            "historical contribution has invalid logical step".to_owned(),
+                        )
+                    })?;
+                    Some(super::types::TraceContributionPresentation::AgentStatus(
+                        crate::runtime_client::projection::status_view(
+                            &crate::agent::AgentStatusObservation {
+                                attempt_id: snapshot.identity.attempt_id.clone(),
+                                turn,
+                                status_message_id: record.message_id.clone(),
+                                opportunities: record.opportunities.clone(),
+                                post_tool_batch_anchor: record.post_tool_batch_anchor,
+                                status: status.clone(),
+                            },
+                        ),
+                    ))
+                }
+                None => None,
+            };
+            Ok(super::types::TraceContributionMetadata {
+                message_id: record.message_id.clone(),
+                producer: record.producer.clone(),
+                metadata: record.metadata.clone(),
+                presentation,
+            })
+        })
+        .collect::<Result<Vec<_>, ConversationStoreError>>()
+}
+
 /// Projects the reconstructed provider-neutral request context, in wire order.
+#[cfg(test)]
 fn request_messages(
     request: &ModelRequest,
     scope: &crate::runtime::identity::ConversationId,
@@ -185,7 +188,8 @@ fn request_messages(
     // user turn and the tool results that prompted the call are all there.
     let truncated = request.messages.len() > TRACE_DETAIL_MESSAGES;
     let start = request.messages.len().saturating_sub(TRACE_DETAIL_MESSAGES);
-    let messages = request.messages[start..]
+    let selected = request.messages.range(start..request.messages.len());
+    let messages = selected
         .iter()
         .enumerate()
         .map(|(index, message)| {
@@ -202,30 +206,189 @@ fn request_messages(
     (messages, truncated)
 }
 
-#[allow(clippy::too_many_lines)] // Exhaustive bounded Original/Derived/request-only content and provenance projection.
+fn provenance_prefix<T: Clone + serde::Serialize + schemars::JsonSchema>(
+    references: &[T],
+    remaining: &mut usize,
+) -> Vec<T> {
+    references
+        .iter()
+        .take(64)
+        .take_while(|reference| {
+            let Some(bytes) =
+                crate::runtime_client::checkpoint::bounded_bytes(*reference, *remaining)
+            else {
+                return false;
+            };
+            *remaining -= bytes.len();
+            true
+        })
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn bind_original_provenance(
+    message: &mut TraceRequestMessage,
+    header: &crate::durable::observation::MessageHeader,
+) -> Result<(), crate::durable::ConversationStoreError> {
+    use super::types::TraceInputProvenance;
+    use crate::runtime_client::content::{
+        CanonicalContentComponent, CanonicalContentLocator, ContentSource,
+    };
+    let TraceInputProvenance::Original {
+        source,
+        locator,
+        message_id_source,
+        ..
+    } = &mut message.provenance
+    else {
+        return Ok(());
+    };
+    let position = header.ledger_position.ok_or_else(|| {
+        crate::durable::ConversationStoreError::Storage(
+            "canonical provenance has no native Ledger position".into(),
+        )
+    })?;
+    *locator = Some(CanonicalContentLocator::ByLedgerPosition { position });
+    if source.is_none() {
+        let original = header
+            .content
+            .iter()
+            .find(|binding| {
+                matches!(
+                    binding.content_ref.source,
+                    ContentSource::CanonicalMessageBlock {
+                        component: CanonicalContentComponent::MessageMetadata,
+                        ..
+                    }
+                )
+            })
+            .ok_or_else(|| {
+                crate::durable::ConversationStoreError::Storage(
+                    "canonical provenance identity metadata unavailable".into(),
+                )
+            })?;
+        *message_id_source = Some(Box::new(
+            crate::runtime_client::checkpoint::ContentBinding {
+                path: vec!["provenance".into(), "source".into(), "message_id".into()],
+                source_path: Some(vec!["id".into()]),
+                content_ref: original.content_ref.clone(),
+                deferred: true,
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn original_provenance(
+    reference: &crate::model::projected::CanonicalMessageRef,
+) -> super::types::TraceInputProvenance {
+    let inline = identity_fits(reference.message_id.as_str());
+    super::types::TraceInputProvenance::Original {
+        conversation_id: reference.conversation_id.clone(),
+        content_digest: reference.content_digest.clone(),
+        locator: inline.then(|| {
+            crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                message_id: reference.message_id.clone(),
+            }
+        }),
+        source: inline.then(|| reference.clone()),
+        message_id_source: None,
+    }
+}
+
+fn input_provenance(
+    message: &ModelInputMessage,
+    scope: &crate::runtime::identity::ConversationId,
+) -> super::types::TraceInputProvenance {
+    use super::types::TraceInputProvenance;
+    match message {
+        ModelInputMessage::Canonical(message) => original_provenance(
+            &crate::model::projected::CanonicalMessageRef::of(scope, message),
+        ),
+        ModelInputMessage::Derived(derived) => {
+            let mut remaining = 4096;
+            let sources = provenance_prefix(&derived.sources, &mut remaining);
+            let checkpoint_sources = provenance_prefix(&derived.checkpoint_sources, &mut remaining);
+            TraceInputProvenance::Derived {
+                truncated: sources.len() < derived.sources.len()
+                    || checkpoint_sources.len() < derived.checkpoint_sources.len()
+                    || derived.transformations.len() > 16,
+                sources,
+                checkpoint_sources,
+                transformations: derived.transformations.iter().take(16).copied().collect(),
+            }
+        }
+        ModelInputMessage::RequestOnly(_) => TraceInputProvenance::RequestOnly,
+    }
+}
+
+fn derived_message(
+    derived: &crate::model::projected::DerivedModelMessage,
+    provenance: super::types::TraceInputProvenance,
+) -> TraceRequestMessage {
+    let provenance_truncated = matches!(
+        &provenance,
+        super::types::TraceInputProvenance::Derived {
+            truncated: true,
+            ..
+        }
+    );
+    let (role, blocks, truncated) = match &derived.message {
+        crate::model::projected::ProjectedMessage::User { content, .. } => {
+            let (blocks, truncated) = user_blocks(content);
+            (TraceMessageRole::User, blocks, truncated)
+        }
+        crate::model::projected::ProjectedMessage::Assistant { content } => {
+            let (blocks, truncated) = assistant_blocks(content);
+            (TraceMessageRole::Assistant, blocks, truncated)
+        }
+        crate::model::projected::ProjectedMessage::Tool {
+            tool_call_id,
+            tool_id,
+            result,
+        } => {
+            let block = super::content::projected_tool_result_block(tool_call_id, tool_id, result);
+            let truncated = block.is_none();
+            (
+                TraceMessageRole::Tool,
+                block.into_iter().collect(),
+                truncated,
+            )
+        }
+    };
+    TraceRequestMessage {
+        request_occurrence: None,
+        provenance,
+        provenance_source: None,
+        role,
+        message_id: None,
+        source: Some(format!(
+            "derived:{:?}",
+            derived.transformations.iter().take(16).collect::<Vec<_>>()
+        )),
+        blocks,
+        truncated: truncated || provenance_truncated,
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn request_message(
     message: &ModelInputMessage,
     scope: &crate::runtime::identity::ConversationId,
 ) -> TraceRequestMessage {
-    use super::types::TraceInputProvenance;
-    let provenance = match message {
-        ModelInputMessage::Canonical(message) => TraceInputProvenance::Original {
-            source: crate::model::projected::CanonicalMessageRef::of(scope, message),
-        },
-        ModelInputMessage::Derived(derived) => TraceInputProvenance::Derived {
-            sources: derived.sources.iter().take(64).cloned().collect(),
-            checkpoint_sources: derived
-                .checkpoint_sources
-                .iter()
-                .take(64)
-                .cloned()
-                .collect(),
-            transformations: derived.transformations.iter().take(16).copied().collect(),
-            truncated: derived.sources.len() > 64
-                || derived.checkpoint_sources.len() > 64
-                || derived.transformations.len() > 16,
-        },
-        ModelInputMessage::RequestOnly(_) => TraceInputProvenance::RequestOnly,
+    request_message_with_original(message, scope, None)
+}
+
+/// The native reconstruction/commit owner has already validated this dependency.
+/// Reusing its exact immutable reference avoids hashing the canonical body for display.
+pub(crate) fn request_message_with_original(
+    message: &ModelInputMessage,
+    scope: &crate::runtime::identity::ConversationId,
+    original: Option<&crate::model::projected::CanonicalMessageRef>,
+) -> TraceRequestMessage {
+    let provenance = match (message, original) {
+        (ModelInputMessage::Canonical(_), Some(reference)) => original_provenance(reference),
+        _ => input_provenance(message, scope),
     };
     match message {
         ModelInputMessage::Canonical(MessageBlock::User(user)) => {
@@ -233,6 +396,7 @@ pub(crate) fn request_message(
             TraceRequestMessage {
                 request_occurrence: None,
                 provenance,
+                provenance_source: None,
                 role: TraceMessageRole::User,
                 message_id: identity_fits(user.id.as_str()).then(|| user.id.clone()),
                 source: Some(user_source_label(&user.source).to_owned()),
@@ -245,6 +409,7 @@ pub(crate) fn request_message(
             TraceRequestMessage {
                 request_occurrence: None,
                 provenance,
+                provenance_source: None,
                 role: TraceMessageRole::Assistant,
                 message_id: identity_fits(assistant.id.as_str()).then(|| assistant.id.clone()),
                 source: None,
@@ -258,6 +423,7 @@ pub(crate) fn request_message(
             TraceRequestMessage {
                 request_occurrence: None,
                 provenance,
+                provenance_source: None,
                 role: TraceMessageRole::Tool,
                 message_id: identity_fits(tool.id.as_str()).then(|| tool.id.clone()),
                 source: None,
@@ -265,44 +431,11 @@ pub(crate) fn request_message(
                 truncated,
             }
         }
-        ModelInputMessage::Derived(derived) => {
-            let (role, blocks, truncated) = match &derived.message {
-                crate::model::projected::ProjectedMessage::User { content, .. } => {
-                    let (blocks, truncated) = user_blocks(content);
-                    (TraceMessageRole::User, blocks, truncated)
-                }
-                crate::model::projected::ProjectedMessage::Assistant { content } => {
-                    let (blocks, truncated) = assistant_blocks(content);
-                    (TraceMessageRole::Assistant, blocks, truncated)
-                }
-                crate::model::projected::ProjectedMessage::Tool {
-                    tool_call_id,
-                    tool_id,
-                    result,
-                } => {
-                    let block =
-                        super::content::projected_tool_result_block(tool_call_id, tool_id, result);
-                    let truncated = block.is_none();
-                    (
-                        TraceMessageRole::Tool,
-                        block.into_iter().collect(),
-                        truncated,
-                    )
-                }
-            };
-            TraceRequestMessage {
-                request_occurrence: None,
-                provenance,
-                role,
-                message_id: None,
-                source: Some(format!("derived:{:?}", derived.transformations)),
-                blocks,
-                truncated,
-            }
-        }
+        ModelInputMessage::Derived(derived) => derived_message(derived, provenance),
         ModelInputMessage::RequestOnly(context) => TraceRequestMessage {
             request_occurrence: None,
             provenance,
+            provenance_source: None,
             role: TraceMessageRole::RequestOnly,
             // A request-only item deliberately has no canonical identity;
             // inventing one here would manufacture history.
@@ -317,6 +450,7 @@ pub(crate) fn request_message(
 }
 
 /// Splits configured request parameters into allowlisted and omitted.
+#[cfg(test)]
 fn request_options(
     params: &crate::model::invocation::RequestParams,
 ) -> (Vec<TraceRequestOption>, usize) {

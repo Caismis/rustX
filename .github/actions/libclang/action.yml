@@ -1,0 +1,22 @@
+name: SQLite binding build dependency
+description: Install libclang for rusqlite's safe preupdate-hook bindings.
+runs:
+  using: composite
+  steps:
+    - name: Install libclang
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$RUNNER_OS" in
+          Linux)
+            sudo apt-get update
+            sudo apt-get install -y libclang-dev
+            ;;
+          macOS)
+            brew list --versions llvm >/dev/null || brew install llvm
+            clang_library="$(brew --prefix llvm)/lib"
+            test -f "$clang_library/libclang.dylib"
+            echo "LIBCLANG_PATH=$clang_library" >> "$GITHUB_ENV"
+            ;;
+          *) echo "Unsupported native build platform: $RUNNER_OS" >&2; exit 1 ;;
+        esac

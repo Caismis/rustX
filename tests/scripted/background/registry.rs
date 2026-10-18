@@ -706,7 +706,7 @@ async fn terminal_records_remain_queryable() {
             .snapshot(&execution_id)
             .expect("terminal record queryable");
         assert_eq!(snapshot.state, BackgroundLifecycle::Succeeded);
-        assert_eq!(snapshot.result, Some(success()));
+        assert_eq!(snapshot.result.as_deref(), Some(&success()));
     }
 }
 
@@ -851,12 +851,12 @@ async fn run_with_mailbox(
     common::durable_agent_result(result, store.as_ref())
 }
 
-fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
+fn tool_messages(result: &AgentExecutionResult) -> Vec<ToolMessageBlock> {
     result
         .messages()
         .iter()
         .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool),
+            MessageBlock::Tool(tool) => Some(tool.clone()),
             _ => None,
         })
         .collect()
@@ -1248,8 +1248,8 @@ fn agent_status_background_section_rendering() {
         BackgroundExecutionSnapshot {
             bash: None,
             execution_id: ToolExecutionId::new("exec_215a03ee-2332-70b6-8e2d-634da8066f98"),
-            tool_id: ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_id: std::sync::Arc::new(ToolId::new("tool-bash")),
+            tool_name: "bash".into(),
             state: BackgroundLifecycle::Starting,
             progress: None,
             result: None,
@@ -1257,8 +1257,8 @@ fn agent_status_background_section_rendering() {
         BackgroundExecutionSnapshot {
             bash: None,
             execution_id: ToolExecutionId::new("exec_20eb7fc0-b69d-7476-8553-c156fdc879c3"),
-            tool_id: ToolId::new("tool-bash"),
-            tool_name: "bash".to_owned(),
+            tool_id: std::sync::Arc::new(ToolId::new("tool-bash")),
+            tool_name: "bash".into(),
             state: BackgroundLifecycle::Running,
             progress: Some(ToolProgress {
                 message: Some("compiling workspace".to_owned()),
@@ -1270,8 +1270,8 @@ fn agent_status_background_section_rendering() {
         BackgroundExecutionSnapshot {
             bash: None,
             execution_id: ToolExecutionId::new("exec_478f38a9-b143-721b-8cd7-16660b763e95"),
-            tool_id: ToolId::new("tool-grep"),
-            tool_name: "grep".to_owned(),
+            tool_id: std::sync::Arc::new(ToolId::new("tool-grep")),
+            tool_name: "grep".into(),
             state: BackgroundLifecycle::Cancelling,
             progress: None,
             result: None,
@@ -1358,7 +1358,7 @@ async fn agent_status_active_snapshot_excludes_terminal_entries() {
     let active = registry.active_snapshot();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].execution_id, execution_id);
-    assert_eq!(active[0].tool_name, "grep");
+    assert_eq!(active[0].tool_name.as_ref(), "grep");
     assert_eq!(active[0].state, BackgroundLifecycle::Running);
 }
 
@@ -1662,8 +1662,8 @@ fn background_status_accounting() {
                         execution_id: ToolExecutionId::new(
                             "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
                         ),
-                        tool_id: ToolId::new("tool-bash"),
-                        tool_name: "bash".to_owned(),
+                        tool_id: std::sync::Arc::new(ToolId::new("tool-bash")),
+                        tool_name: "bash".into(),
                         state: BackgroundLifecycle::Running,
                         progress: None,
                         result: None,
@@ -1675,14 +1675,14 @@ fn background_status_accounting() {
     });
     let with_status = engine.build_projection_input(
         rustx::conversation::SurfaceRevision::INITIAL,
-        vec![],
+        vec![].into(),
         &[],
         None,
         &rendered,
     );
     let without_status = engine.build_projection_input(
         rustx::conversation::SurfaceRevision::INITIAL,
-        vec![],
+        vec![].into(),
         &[],
         None,
         "",
@@ -1695,11 +1695,11 @@ fn background_status_accounting() {
     let tools: Vec<rustx::tools::types::ModelToolDefinition> = Vec::new();
     let estimator = DefaultTokenEstimator;
     assert!(
-        estimator.estimate_input(
+        estimator.estimate_selected(
             &with_status.messages,
             &with_status.effective_system_prompt,
             &tools
-        ) > estimator.estimate_input(
+        ) > estimator.estimate_selected(
             &without_status.messages,
             &without_status.effective_system_prompt,
             &tools
@@ -1707,8 +1707,8 @@ fn background_status_accounting() {
         "the background section participates in the full request estimate"
     );
     assert_eq!(
-        estimator.estimate_input(&with_status.messages, "", &[]),
-        estimator.estimate_input(&without_status.messages, "", &[]),
+        estimator.estimate_selected(&with_status.messages, "", &[]),
+        estimator.estimate_selected(&without_status.messages, "", &[]),
         "keep_recent_tokens is unaffected by the status size"
     );
     // keep_recent_tokens is measured over conversation content only, and
@@ -1717,7 +1717,7 @@ fn background_status_accounting() {
     // regardless of the request-time prompt.
     assert_eq!(
         estimator.estimate_conversation_input(&[]),
-        estimator.estimate_input(&without_status.messages, "", &[]),
+        estimator.estimate_selected(&without_status.messages, "", &[]),
     );
 }
 
@@ -1927,7 +1927,7 @@ async fn bash_presentation_survives_background_start_and_terminal_snapshot() {
     wait_for_state(registry, &execution_id, BackgroundLifecycle::Succeeded).await;
     let terminal = registry.snapshot(&execution_id).unwrap();
     assert_eq!(terminal.bash, running.bash);
-    assert_eq!(terminal.result, Some(success()));
+    assert_eq!(terminal.result.as_deref(), Some(&success()));
     let restored: BackgroundExecutionSnapshot =
         serde_json::from_value(serde_json::to_value(&terminal).unwrap()).unwrap();
     assert_eq!(restored, terminal);

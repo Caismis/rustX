@@ -14,10 +14,38 @@ fn failure(message: &str) -> RuntimeClientError {
         message: message.into(),
     }
 }
-fn io_failure(_: impl std::fmt::Debug) -> RuntimeClientError {
+fn io_failure(error: &std::io::Error) -> RuntimeClientError {
+    report_io_failure("read_source", error);
     failure(
         "authored source I/O failed before publication; inspect document permissions and retry after reading its revision",
     )
+}
+
+/// Failure-only diagnostics contain neither source paths nor document bytes.
+pub(super) fn report_io_failure(operation: &'static str, error: &std::io::Error) {
+    tracing::warn!(operation, kind = ?error.kind(), errno = error.raw_os_error(), "authored source I/O failed");
+}
+
+/// Interrupted `flock` waits have not acquired the lock. Continue the same
+/// operation on the same descriptor; never retry a source transaction here.
+fn lock_file(file: &File, shared: bool) -> std::io::Result<()> {
+    loop {
+        #[cfg(test)]
+        let injected = locks::attempt();
+        #[cfg(not(test))]
+        let injected: std::io::Result<()> = Ok(());
+        let result = injected.and_then(|()| {
+            if shared {
+                file.lock_shared()
+            } else {
+                file.lock()
+            }
+        });
+        match result {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
 }
 // Writer artifacts beside a source document have fixed-length names, so
 // every basename the filesystem accepts stays writable. The persistent writer
@@ -41,21 +69,36 @@ pub(super) fn is_writer_artifact(name: &OsStr) -> bool {
     name.starts_with(LOCK_PREFIX.as_bytes()) || name.starts_with(STAGE_PREFIX.as_bytes())
 }
 
-/// Shared with create-only initialization. Never unlink the lock inode.
-pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
-    let lock = lock_path(target)?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(lock)?;
+/// Open the persistent writer lock inode, creating it when missing.
+///
+/// The inode is created once and never unlinked, so creation is exclusive:
+/// open the existing lock; when it is missing, create it with `O_EXCL`; a
+/// creator that loses that race opens the inode the winner created. A
+/// non-exclusive `O_CREAT` is never used: on macOS two concurrent
+/// non-exclusive creators of one new name can see the loser fail with
+/// `ENOENT`, which would report a lost creation race as an I/O failure.
+fn open_lock(open: impl Fn(OFlag) -> nix::Result<File>) -> std::io::Result<File> {
+    let flags = OFlag::O_RDWR | OFlag::O_NONBLOCK | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    let file = match open(flags) {
+        Err(nix::errno::Errno::ENOENT) => match open(flags | OFlag::O_CREAT | OFlag::O_EXCL) {
+            Err(nix::errno::Errno::EEXIST) => open(flags),
+            created => created,
+        },
+        opened => opened,
+    }?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other("lock is not a regular file"));
     }
-    file.lock()?;
+    Ok(file)
+}
+
+/// Shared with create-only initialization. Never unlink the lock inode.
+pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
+    let lock = lock_path(target)?;
+    let file = open_lock(|flags| {
+        nix::fcntl::open(&lock, flags, Mode::S_IRUSR | Mode::S_IWUSR).map(File::from)
+    })?;
+    lock_file(&file, false)?;
     Ok(file)
 }
 
@@ -87,7 +130,7 @@ pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClien
 /// pathname that no longer names the admitted directory answers nothing.
 pub(super) fn read_source(document: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
     AdmittedSource::admit(document)
-        .map_err(io_failure)?
+        .map_err(|error| io_failure(&error))?
         .reread()
         .map_err(|failure| match failure {
             SourceReread::Unreadable(error) => error,
@@ -217,9 +260,13 @@ fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, Runtime
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(not_regular()),
-        Err(error) => return Err(io_failure(error)),
+        Err(error) => return Err(io_failure(&error)),
     };
-    if !file.metadata().map_err(io_failure)?.is_file() {
+    if !file
+        .metadata()
+        .map_err(|error| io_failure(&error))?
+        .is_file()
+    {
         return Err(not_regular());
     }
     let mut bytes = Vec::new();
@@ -227,7 +274,7 @@ fn read_opened(opened: std::io::Result<File>) -> Result<Option<Vec<u8>>, Runtime
         &mut std::io::Read::take(file, crate::bounded_file::MAX_RESOURCE_BYTES + 1),
         &mut bytes,
     )
-    .map_err(io_failure)?;
+    .map_err(|error| io_failure(&error))?;
     if !crate::bounded_file::within_bound(&bytes) {
         return Err(failure("authored source exceeds 1 MiB"));
     }
@@ -402,7 +449,7 @@ impl SourceDirectory {
         if !file.metadata()?.is_file() {
             return Err(std::io::Error::other("lock is not a regular file"));
         }
-        file.lock_shared()?;
+        lock_file(&file, true)?;
         Ok(Some(file))
     }
 
@@ -424,15 +471,11 @@ impl SourceDirectory {
     /// [`lock_document`] locks while this directory holds. Advisory: it
     /// serializes rustX writers, never an external rename.
     pub(super) fn lock(&self, name: &OsStr) -> std::io::Result<File> {
-        let file = self.open_file(
-            OsStr::new(&lock_name(name)),
-            OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_NONBLOCK,
-            Mode::S_IRUSR | Mode::S_IWUSR,
-        )?;
-        if !file.metadata()?.is_file() {
-            return Err(std::io::Error::other("lock is not a regular file"));
-        }
-        file.lock()?;
+        let lock = lock_name(name);
+        let file = open_lock(|flags| {
+            self.open_file(OsStr::new(&lock), flags, Mode::S_IRUSR | Mode::S_IWUSR)
+        })?;
+        lock_file(&file, false)?;
         Ok(file)
     }
 
@@ -659,6 +702,125 @@ fn identity(directory: &std::os::fd::OwnedFd) -> std::io::Result<(u64, u64)> {
         reason = "dev_t and ino_t are signed or narrower on some platforms"
     )]
     Ok((status.st_dev as u64, status.st_ino as u64))
+}
+
+/// Thread-local syscall fault injection at the real lock acquisition boundary.
+#[cfg(test)]
+pub(super) mod locks {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static NEXT: RefCell<(Option<i32>, usize)> = const { RefCell::new((None, 0)) };
+    }
+
+    pub(crate) fn fail_next(errno: i32) {
+        NEXT.with_borrow_mut(|state| *state = (Some(errno), 0));
+    }
+
+    pub(crate) fn attempts() -> usize {
+        NEXT.with_borrow(|state| state.1)
+    }
+
+    pub(super) fn attempt() -> std::io::Result<()> {
+        NEXT.with_borrow_mut(|state| {
+            state.1 += 1;
+            state.0.take().map_or(Ok(()), |errno| {
+                Err(std::io::Error::from_raw_os_error(errno))
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    /// The exact losing-creator interleaving on a real filesystem: the lock is
+    /// missing when first opened, another creator wins before this one's
+    /// exclusive create, and this one then opens the winner's inode. No
+    /// attempt is a non-exclusive create.
+    #[test]
+    fn a_creator_that_loses_the_lock_creation_race_opens_the_winners_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(".rustx-lock-race.lock");
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let winner = std::cell::Cell::new(None);
+        let file = open_lock(|flags| {
+            attempts.borrow_mut().push(flags);
+            let opened = nix::fcntl::open(&path, flags, Mode::S_IRUSR | Mode::S_IWUSR);
+            if attempts.borrow().len() == 1 {
+                // The concurrent creator commits right after the first lookup.
+                let created = File::create_new(&path).unwrap();
+                winner.set(Some(created.metadata().unwrap().ino()));
+            }
+            opened.map(File::from)
+        })
+        .unwrap();
+        let attempts = attempts.into_inner();
+        assert_eq!(attempts.len(), 3, "open, exclusive create, open");
+        assert!(!attempts[0].contains(OFlag::O_CREAT));
+        assert!(attempts[1].contains(OFlag::O_CREAT | OFlag::O_EXCL));
+        assert!(!attempts[2].contains(OFlag::O_CREAT));
+        assert_eq!(Some(file.metadata().unwrap().ino()), winner.get());
+    }
+
+    /// Writers that race to create a document's first lock all hold the same
+    /// inode, one at a time. On macOS a non-exclusive create failed the loser
+    /// with ENOENT (CI run 38988313366).
+    #[test]
+    fn concurrent_first_writers_all_lock_the_same_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("rustx.toml");
+        let source = SourceDirectory::create(&path).unwrap();
+        for round in 0..32 {
+            let document = std::ffi::OsString::from(format!("rustx-{round}.toml"));
+            let barrier = std::sync::Barrier::new(8);
+            let inodes: Vec<_> = std::thread::scope(|threads| {
+                let workers: Vec<_> = (0..8)
+                    .map(|_| {
+                        threads.spawn(|| {
+                            barrier.wait();
+                            source
+                                .lock(&document)
+                                .map(|lock| lock.metadata().unwrap().ino())
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().unwrap())
+                    .collect()
+            });
+            let inodes: Result<std::collections::BTreeSet<_>, _> = inodes.into_iter().collect();
+            assert_eq!(inodes.unwrap().len(), 1, "round {round}");
+        }
+    }
+
+    #[test]
+    fn interrupted_shared_and_initialization_locks_continue_but_other_errors_survive() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("rustx.toml");
+        locks::fail_next(libc::EINTR);
+        drop(lock_document(&path).unwrap());
+        assert_eq!(locks::attempts(), 2);
+        let source = SourceDirectory::create(&path).unwrap();
+        locks::fail_next(libc::EINTR);
+        drop(
+            source
+                .share_lock(path.file_name().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(locks::attempts(), 2);
+        locks::fail_next(libc::EACCES);
+        assert_eq!(
+            lock_document(&path).unwrap_err().raw_os_error(),
+            Some(libc::EACCES)
+        );
+        assert_eq!(locks::attempts(), 1);
+    }
 }
 
 /// Test-only cross-thread hook right before a source entry is opened relative

@@ -12,7 +12,7 @@ import { SearchTextBlock } from '../primitives/SearchBlock';
 
 
 export interface ToolCardView {
- id: string; nativeName?: string; identity?: 'call' | 'job'; title: string; summary: string; state: 'assembled' | 'running' | 'success' | 'failure' | 'cancelled' | 'uncertain' | 'starting' | 'cancelling' | 'publishing_terminal';
+ id?: string; nativeName?: string; identity?: 'call' | 'job'; title: string; summary: string; state: 'assembled' | 'running' | 'success' | 'failure' | 'cancelled' | 'uncertain' | 'starting' | 'cancelling' | 'publishing_terminal';
  variant: 'generic' | 'bash' | 'image' | 'read' | 'write' | 'edit' | 'search'; input?: string; output?: string;
  artifacts?: ReactNode; path?: string; exitCode?: number | null; truncated?: boolean; diffs?: DiffHunk[];
 }

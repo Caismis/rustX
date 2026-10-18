@@ -62,7 +62,8 @@ pub(crate) mod workflow_resources;
 pub use cli::ArgumentError;
 pub use composition::{
     HeadlessConversationRuntime, LocalConversationCore, LocalConversationRuntime,
-    LocalRuntimeDependencies, LocalRuntimeError, StartupSession,
+    LocalConversationShutdownError, LocalProjectionJoinFailure, LocalRuntimeDependencies,
+    LocalRuntimeError, StartupSession,
 };
 pub use config::{
     CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,

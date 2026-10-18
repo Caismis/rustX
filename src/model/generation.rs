@@ -68,7 +68,7 @@ use crate::model::finish::ModelFinishReason;
 /// visible model-generated output that assembles into the canonical
 /// Assistant message, so a refusal repetition loop is exactly as degenerate
 /// as a text repetition loop; the choice is explicit rather than accidental.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationChannel {
     /// Model reasoning output.
@@ -95,7 +95,7 @@ impl GenerationChannel {
 /// legitimately produce a long answer, and it may legitimately think before
 /// answering, but "may think without bound" is not implied by "may answer at
 /// length".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationBudgetKind {
     /// The whole generation's output budget.
@@ -129,7 +129,7 @@ impl GenerationBudgetKind {
 /// bound is structural rather than a truncation rule. The rendered
 /// [`Self::message`] is likewise runtime-authored and never echoes model
 /// output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GenerationFailure {
     /// One generated text channel deterministically degenerated into

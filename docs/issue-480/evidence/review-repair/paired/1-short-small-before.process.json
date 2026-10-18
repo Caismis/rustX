@@ -1,0 +1,16 @@
+{
+  "validation_errors": [],
+  "accepted": true,
+  "argv": [
+    "/tmp/rustx-480-evidence/before-review-conformance",
+    "agent_loop::runtime_benchmark::measure_runtime",
+    "--exact",
+    "--ignored",
+    "--nocapture"
+  ],
+  "returncode": 0,
+  "elapsed_seconds": 6.522404161747545,
+  "pair": 1,
+  "case": "short-small",
+  "label": "before"
+}

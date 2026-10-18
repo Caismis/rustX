@@ -330,6 +330,81 @@ impl FrozenModelSpec {
     }
 }
 
+pub(crate) struct FrozenCatalogReadView<'a>(&'a FrozenModelSpec);
+impl FrozenModelSpec {
+    pub(crate) fn catalog_model_at(
+        &self,
+        ordinal: usize,
+    ) -> Option<crate::model::catalog::CatalogModelReadView<'_>> {
+        let model = match ordinal {
+            0 => &self.primary,
+            1 => match &self.summary {
+                FrozenSummaryModel::Explicit(value) if value.model != self.primary.model => value,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some(crate::model::catalog::CatalogModelReadView {
+            model: &model.model,
+            protocol: model.protocol,
+            context_window: model.context_window,
+            max_output_tokens: model.model_max_output_tokens,
+            declared_capabilities: &model.declared_capabilities,
+            effective_capabilities: model.capabilities.clone(),
+            profiles: crate::model::catalog::ProfilesReadView::Frozen(
+                model
+                    .profile
+                    .as_ref()
+                    .map(|id| (id, model.reasoning_enabled)),
+            ),
+            default_profile: model.profile.as_ref(),
+            credential_source: model.binding.credential.read_view(),
+        })
+    }
+    pub(crate) fn read_catalog_view(&self) -> FrozenCatalogReadView<'_> {
+        FrozenCatalogReadView(self)
+    }
+}
+impl Serialize for FrozenCatalogReadView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeSeq, SerializeStruct};
+        struct Models<'a>(&'a FrozenModelSpec);
+        impl Serialize for Models<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let extra = match &self.0.summary {
+                    FrozenSummaryModel::Explicit(value) if value.model != self.0.primary.model => {
+                        Some(value.as_ref())
+                    }
+                    _ => None,
+                };
+                let mut seq = serializer.serialize_seq(Some(1 + usize::from(extra.is_some())))?;
+                for model in std::iter::once(&self.0.primary).chain(extra) {
+                    seq.serialize_element(&crate::model::catalog::CatalogModelReadView {
+                        model: &model.model,
+                        protocol: model.protocol,
+                        context_window: model.context_window,
+                        max_output_tokens: model.model_max_output_tokens,
+                        declared_capabilities: &model.declared_capabilities,
+                        effective_capabilities: model.capabilities.clone(),
+                        profiles: crate::model::catalog::ProfilesReadView::Frozen(
+                            model
+                                .profile
+                                .as_ref()
+                                .map(|id| (id, model.reasoning_enabled)),
+                        ),
+                        default_profile: model.profile.as_ref(),
+                        credential_source: model.binding.credential.read_view(),
+                    })?;
+                }
+                seq.end()
+            }
+        }
+        let mut view = serializer.serialize_struct("ModelCatalogView", 1)?;
+        view.serialize_field("models", &Models(self.0))?;
+        view.end()
+    }
+}
+
 /// A minimal frozen authority for in-crate tests that need the *shape* of a
 /// frozen model specification without composing a catalog.
 ///

@@ -69,6 +69,9 @@
 //! Cancellation is a generic Agent Loop invariant for every execution:
 //! observable cancellation is checked before every model turn begins.
 
+#[cfg(test)]
+pub(crate) mod attribution;
+
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -346,14 +349,14 @@ impl AgentExecutionResult {
     /// normal projection and compaction paths never enumerate the durable
     /// historical Ledger; callers needing retired history page the store.
     #[must_use]
-    pub fn messages(&self) -> &[MessageBlock] {
+    pub fn messages(&self) -> Vec<MessageBlock> {
         self.conversation.ledger().audit_records()
     }
 
     /// The active ordered message identities of the settled Conversation
     /// Surface.
     #[must_use]
-    pub fn active_ids(&self) -> &[MessageId] {
+    pub fn active_ids(&self) -> Vec<MessageId> {
         self.conversation.active_ids()
     }
 }
@@ -519,11 +522,10 @@ pub struct AgentExecution<'a> {
     /// invocation and the opaque provider continuation — are still the
     /// same. When they are not, the measurement is dropped rather than
     /// stretched over a request the provider never measured.
-    observed_request_identity: Option<u64>,
-    last_request_fingerprint: Option<u64>,
+    observed_request_identity: Option<Arc<RequestObservationIdentity>>,
     /// The request identity of the last started request, promoted alongside
     /// its measurement when the provider reports one.
-    last_request_identity: Option<u64>,
+    last_request_identity: Option<Arc<RequestObservationIdentity>>,
     /// The structural anchor of the last started request, kept so its
     /// provider-reported input measurement can be reused for every later
     /// request context that extends it.
@@ -657,7 +659,13 @@ fn publish_model_turn_start_events(
     }
     for event in commit.events() {
         if let Some(observer) = observer {
-            observer.observe_event(attempt_id, &event.event, event.sequence);
+            observer.observe_event(
+                attempt_id,
+                &event.event,
+                event.sequence,
+                event.tool_occurrence.as_ref(),
+                event.observation.as_deref(),
+            );
         }
     }
 }
@@ -706,9 +714,17 @@ struct ModelInvocation {
 /// together so publication can never be attributed to a different actual
 /// request generation.
 struct StartedModelTurn {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     request_start_ms: Option<u64>,
     request: ModelRequest,
     message_id: MessageId,
+}
+
+#[derive(Clone, PartialEq)]
+struct RequestObservationIdentity {
+    invocation: crate::model::ModelInvocationConfig,
+    continuation: Option<crate::runtime::continuation::ProviderContinuationState>,
 }
 
 /// The fully prepared, not-yet-started model turn (Issue #12, M9b).
@@ -723,6 +739,8 @@ struct StartedModelTurn {
 /// cancellation-vs-start arbitration in [`AgentExecution::start_model_turn`],
 /// and is discarded without a trace when cancellation wins there.
 struct PreparedModelTurn {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     /// The validated, not-yet-committed request-scoped context commits, in
     /// canonical append order.
     context: Vec<PreparedCanonicalCommit>,
@@ -730,9 +748,6 @@ struct PreparedModelTurn {
     snapshot: RequestSnapshot,
     /// The exact provider-neutral request of the staged projection.
     request: ModelRequest,
-    /// The staged projection's fingerprint, used to match a later
-    /// provider-observed input measurement to exactly this request context.
-    fingerprint: u64,
     /// The staged projection's structural anchor, used to reuse a later
     /// provider-observed measurement for every request context this one is a
     /// prefix of.
@@ -740,7 +755,7 @@ struct PreparedModelTurn {
     /// The identity of the non-conversation request state this request
     /// carries: its resolved invocation configuration and its provider
     /// continuation. A measurement is only reusable while this is unchanged.
-    request_identity: u64,
+    request_identity: Arc<RequestObservationIdentity>,
     /// The runtime's deterministic input estimate for exactly this request.
     ///
     /// When the provider rejects the request as oversized, this is the
@@ -752,11 +767,12 @@ struct PreparedModelTurn {
 /// Working set of the existing execution owner; never an execution state machine.
 #[derive(Clone)]
 struct FrozenLogicalInput {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     snapshot: RequestSnapshot,
     request: ModelRequest,
-    fingerprint: u64,
     anchor: ObservedAnchor,
-    request_identity: u64,
+    request_identity: Arc<RequestObservationIdentity>,
     estimated_input: u64,
 }
 
@@ -791,6 +807,8 @@ struct PendingPostToolBatch {
 /// Effective System Prompt, projection, snapshot metadata, and request — all
 /// transient, nothing committed.
 struct StagedModelTurn {
+    #[cfg(feature = "issue-387-profile")]
+    adapter_input_profile: crate::model::adapter::profile::InputLayout,
     /// The staged projection (over the scratch conversation that includes
     /// the not-yet-committed request-scoped context).
     projection: ContextProjection,
@@ -800,6 +818,8 @@ struct StagedModelTurn {
     snapshot: RequestSnapshot,
     /// The exact provider-neutral request of the staged projection.
     request: ModelRequest,
+    /// Native selection root carried through the actual request mutations.
+    input_manifest: crate::model::SelectedInputManifest,
     /// Coverage reconciliation is committed to hot state only after preflight.
     retire_continuation: bool,
     /// The deterministic estimate of the exact mixed request input.
@@ -1209,14 +1229,12 @@ impl<'a> AgentExecution<'a> {
         // Standalone fixtures may provide a fresh store rather than
         // constructing a ConversationRuntime first; initialize it once from
         // the supplied current facts (normal construction already did).
-        let head = store
-            .load_head()
-            .map_err(|error| MailboxError::Durable(error.clone()))?;
-        if head.revision == crate::conversation::SurfaceRevision::INITIAL
-            && head.active_message_ids.is_empty()
+        if !store
+            .is_initialized()
+            .map_err(|error| MailboxError::Durable(error.clone()))?
         {
             store
-                .initialize(conversation.ledger().audit_records())
+                .initialize(&conversation.ledger().audit_records())
                 .map_err(MailboxError::Durable)?;
         }
         let admitted_tools = std::sync::Arc::new(
@@ -1262,7 +1280,6 @@ impl<'a> AgentExecution<'a> {
             context_generation_serial: 0,
             observed: None,
             observed_request_identity: None,
-            last_request_fingerprint: None,
             last_request_identity: None,
             last_request_anchor: None,
             last_request_estimated_input: None,
@@ -2220,6 +2237,7 @@ impl<'a> AgentExecution<'a> {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             })?;
         let adoption = adopted.adoption;
+        let canonical_receipts = adopted.canonical_receipts;
         let adopted = adopted.items;
         if adopted.is_empty() {
             return Ok(false);
@@ -2239,17 +2257,15 @@ impl<'a> AgentExecution<'a> {
                 .collect(),
         )
         .expect("nonempty ordered committed identities");
-        for (commit, item) in prepared.into_iter().zip(&adopted) {
+        for ((commit, _item), receipt) in
+            prepared.into_iter().zip(&adopted).zip(&canonical_receipts)
+        {
             // Infallible: every adopted identity was validated above under
             // exclusive ownership of the conversation state.
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
-                observer.observe_committed(
-                    &self.request.attempt_id,
-                    &block,
-                    item.transcript_cursor(),
-                );
+                observer.observe_committed(&self.request.attempt_id, &block, receipt);
             }
         }
         // The adoption fact is published after its canonical messages, with
@@ -2257,7 +2273,13 @@ impl<'a> AgentExecution<'a> {
         // record, and the observation queue holds its receipt until exactly
         // this publication releases it.
         if let (Some(observer), Some(adoption)) = (self.observer, adoption.as_ref()) {
-            observer.observe_event(&self.request.attempt_id, &adoption.event, adoption.sequence);
+            observer.observe_event(
+                &self.request.attempt_id,
+                &adoption.event,
+                adoption.sequence,
+                adoption.tool_occurrence.as_ref(),
+                adoption.observation.as_deref(),
+            );
         }
         self.pending_fresh_inbound = Some(fresh);
         Ok(true)
@@ -2307,6 +2329,8 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         request_ordinal: u32,
     ) -> Result<PreparedModelTurn, Terminal> {
+        #[cfg(test)]
+        let _profile = attribution::Timer::new(attribution::Phase::Prepare);
         if let Some(message) = self.durable_failure.clone() {
             return Err(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -2653,9 +2677,11 @@ impl<'a> AgentExecution<'a> {
         let Some(fresh) = self.pending_fresh_inbound.as_ref() else {
             return Ok(());
         };
-        let active = self.canonical_model_history().map_err(|error| {
-            ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
-        })?;
+        let active = self
+            .claimed_model_input(fresh.message_ids())
+            .map_err(|error| {
+                ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
+            })?;
         fresh.validate_against(&active).map_err(|error| {
             ContextError::new(
                 ContextErrorKind::MalformedHistory,
@@ -2683,8 +2709,10 @@ impl<'a> AgentExecution<'a> {
             .as_ref()
             .filter(|_| anchor.is_some())
             .and_then(FrozenCarryover::admitted);
-        let complete = crate::model::input::assemble_model_input(
+        let (complete, _) = crate::model::input::assemble_selected_model_input(
+            &self.request.conversation_id,
             &history.messages,
+            &history.input_manifest,
             staged_context,
             carryover.as_ref(),
             anchor,
@@ -2748,8 +2776,14 @@ impl<'a> AgentExecution<'a> {
         for _ in staged_context {
             revision = revision.next();
         }
-        let mut projected = active.clone();
-        projected.extend(crate::model::input::canonical_input(staged_context));
+        let mut projected = history.input_manifest.clone();
+        for message in staged_context {
+            projected = projected.append(
+                &self.request.conversation_id,
+                &ModelInputMessage::Canonical(message.clone()),
+            );
+        }
+        let projected = projected.messages();
         let projection = self.context_runtime.engine.build_projection_input(
             revision,
             projected,
@@ -2757,23 +2791,33 @@ impl<'a> AgentExecution<'a> {
             self.reusable_observation(),
             &effective_system_prompt,
         );
-        let mut request_messages = crate::model::input::assemble_model_input(
-            active,
-            staged_context,
-            carryover.as_ref(),
-            carryover_anchor,
-        )
-        .map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::Internal,
-                format!("request-only context cannot be assembled: {error}"),
-            ))
-        })?;
-        let images = self
+        let (mut request_messages, mut input_manifest) =
+            crate::model::input::assemble_selected_model_input(
+                &self.request.conversation_id,
+                active,
+                &history.input_manifest,
+                staged_context,
+                carryover.as_ref(),
+                carryover_anchor,
+            )
+            .map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    format!("request-only context cannot be assembled: {error}"),
+                ))
+            })?;
+        let (images, changed) = self
             .context_runtime
             .engine
-            .materialize_media(&mut request_messages)
+            .materialize_selected_media(&mut request_messages, &input_manifest)
             .map_err(|error| Self::context_failure_terminal(&error))?;
+        for index in changed {
+            input_manifest = input_manifest.replace(
+                &self.request.conversation_id,
+                index,
+                &request_messages[index],
+            );
+        }
         let mut request = self.model_request_from_projection(&projection, request_messages);
         request.images = images;
         let compatibility_failure = |message: String| Terminal::Failed {
@@ -2831,17 +2875,24 @@ impl<'a> AgentExecution<'a> {
                 .unresolved_output_carryover_anchor
                 .clone_from(&frozen_carryover.anchor);
         }
-        snapshot.contributions = accepted.request_contributions(
-            &projection
-                .messages
-                .iter()
-                .filter_map(|m| m.as_canonical().cloned())
-                .collect::<Vec<_>>(),
+        // Recovery stages no new Context: the first start already committed
+        // this logical step's accepted records. Retain their frozen receipts
+        // together with that input instead of treating an empty append delta
+        // as an empty contribution set.
+        snapshot.contributions = self.current_input.as_ref().map_or_else(
+            || accepted.request_contributions(staged_context),
+            |input| input.snapshot.contributions.clone(),
         );
         let inserted_at = request
             .messages
-            .iter()
-            .position(|message| matches!(message, ModelInputMessage::RequestOnly(_)));
+            .has_request_only()
+            .then(|| {
+                request
+                    .messages
+                    .iter()
+                    .position(|message| matches!(message, ModelInputMessage::RequestOnly(_)))
+            })
+            .flatten();
         snapshot.tool_associations = crate::model::occurrence::freeze_associations(
             &history,
             &snapshot.request_id,
@@ -2859,6 +2910,12 @@ impl<'a> AgentExecution<'a> {
             .engine
             .estimate_frozen_request(&request);
         Ok(StagedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: crate::model::adapter::profile::InputLayout {
+                selected_history_count: history.messages.len(),
+                request_only_at: inserted_at,
+            },
+            input_manifest,
             retire_continuation,
             projection,
             effective_system_prompt: request.effective_system_prompt.clone(),
@@ -2891,6 +2948,11 @@ impl<'a> AgentExecution<'a> {
         // The single mandatory adapter-owned semantic admission boundary follows
         // all compaction/carryover/media transformations, before freeze and start.
         // Ordinary retries bypass finalization and reuse this validated input.
+        #[cfg(feature = "issue-387-profile")]
+        let adapter_preflight_profile = crate::model::adapter::profile::NativeScope::new(
+            staged.snapshot.request_id.as_str(),
+            staged.adapter_input_profile,
+        );
         crate::model::adapter::validation::validate_prepared_request(&staged.request).map_err(
             |error| Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -2900,10 +2962,16 @@ impl<'a> AgentExecution<'a> {
                 },
             },
         )?;
+        #[cfg(feature = "issue-387-profile")]
+        drop(adapter_preflight_profile);
         let associations = std::mem::take(&mut staged.snapshot.tool_associations);
         staged
             .snapshot
-            .freeze_input(&self.request.conversation_id, &staged.request)
+            .freeze_selected_input(
+                &self.request.conversation_id,
+                &staged.request,
+                &staged.input_manifest,
+            )
             .map_err(|error| {
                 Self::context_failure_terminal(&ContextError::new(
                     ContextErrorKind::CannotFit,
@@ -2928,31 +2996,23 @@ impl<'a> AgentExecution<'a> {
                 }
             })?);
         }
-        let anchor = ObservedAnchor::of_model_input(
+        let anchor = ObservedAnchor::of_selected(
+            staged.projection.surface_revision,
             &staged.request.messages,
             &staged.request.effective_system_prompt,
             &staged.request.tools,
         );
-        let request_identity = crate::context::request_identity_fingerprint(
-            &staged.request.invocation,
-            staged.request.continuation.as_ref(),
-        );
+        let request_identity = Arc::new(RequestObservationIdentity {
+            invocation: staged.request.invocation.clone(),
+            continuation: staged.request.continuation.clone(),
+        });
         let request = staged.request;
-        // Fingerprint the exact provider-visible request. Request-scoped
-        // protocol feedback is part of that request even when its messages
-        // remain canonical-only; carryover is likewise included when present.
-        // With no request-only additions and no feedback this is identical to
-        // the projection fingerprint.
-        let fingerprint = crate::context::model_input_fingerprint(
-            staged.projection.surface_revision,
-            &request.messages,
-            &request.effective_system_prompt,
-        );
         Ok(PreparedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: staged.adapter_input_profile,
             context,
             snapshot: staged.snapshot,
             request,
-            fingerprint,
             anchor,
             request_identity,
             estimated_input: staged.estimated_input,
@@ -2991,6 +3051,8 @@ impl<'a> AgentExecution<'a> {
         prepared: PreparedModelTurn,
     ) -> Result<StartedModelTurn, Terminal> {
         #[cfg(test)]
+        let _profile = attribution::Timer::new(attribution::Phase::Start);
+        #[cfg(test)]
         if let Some(pause) = self
             .start_boundary_pause
             .lock()
@@ -3020,9 +3082,12 @@ impl<'a> AgentExecution<'a> {
             // dispatch can precede commit or reconstruction verification.
             let request_start_ms = self.monotonic_clock.now_millis();
             let timestamp = Utc::now();
-            store
-                .commit_model_turn_start(&context, &prepared.snapshot, timestamp)
-                .map(|commit| (commit, request_start_ms))
+            let committed = {
+                #[cfg(test)]
+                let _profile = attribution::Timer::new(attribution::Phase::Commit);
+                store.commit_model_turn_start(&context, &prepared.snapshot, timestamp)
+            };
+            committed.map(|commit| (commit, request_start_ms))
         });
         let (start_commit, request_start_ms) = match arbitration {
             Ok(StartAdjudication::CancelledBeforeStart) => {
@@ -3057,24 +3122,38 @@ impl<'a> AgentExecution<'a> {
         // invoked.
         self.last_started_request = Some(prepared.snapshot.identity.clone());
         self.logical_model_step = LogicalModelStepState::Unresolved;
-        for commit in prepared.context {
+        for (commit, receipt) in prepared
+            .context
+            .into_iter()
+            .zip(&start_commit.context_receipts)
+        {
             let block = commit.message().clone();
             self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
                 // Request-scoped Context-kind messages are model history, not
                 // ordinary transcript items, so they carry no transcript
                 // cursor and never create a semantic user echo.
-                observer.observe_committed(&self.request.attempt_id, &block, None);
+                observer.observe_committed(&self.request.attempt_id, &block, receipt);
             }
         }
         if let Some(observer) = self.observer {
-            for contribution in &prepared.snapshot.contributions {
+            for (ordinal, contribution) in prepared.snapshot.contributions.iter().enumerate() {
                 if prepared
                     .snapshot
                     .request_context_ids
                     .contains(&contribution.message_id)
                 {
-                    contribution.observe(observer, &self.request.attempt_id, self.turn);
+                    contribution.observe(
+                        observer,
+                        &self.request.attempt_id,
+                        self.turn,
+                        start_commit.started.observation.as_ref().and_then(|_| {
+                            start_commit
+                                .status_sources
+                                .iter()
+                                .find(|source| source.contribution_ordinal == ordinal as u64)
+                        }),
+                    );
                 }
             }
         }
@@ -3083,54 +3162,39 @@ impl<'a> AgentExecution<'a> {
         // idempotent store verification returns the historical receipt but
         // must not replay those facts to a live observer.
         publish_model_turn_start_events(self.observer, &self.request.attempt_id, &start_commit);
-        self.last_request_fingerprint = Some(prepared.fingerprint);
-        self.last_request_identity = Some(prepared.request_identity);
+        self.last_request_identity = Some(prepared.request_identity.clone());
         self.last_request_anchor = Some(prepared.anchor.clone());
         self.last_request_estimated_input = Some(prepared.estimated_input);
         self.last_request_id = Some(prepared.snapshot.request_id.clone());
-        let reconstructed = self
-            .store
-            .reconstruct_model_request(&prepared.snapshot.request_id)
-            .map_err(|error| {
-                self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
-                self.durable_failure = Some(format!(
-                    "durable request reconstruction failed after start: {error}"
-                ));
-                Terminal::Failed {
-                    failure: AttemptFailure::Runtime {
-                        error: RuntimeError::DurableStore {
-                            message: format!(
-                                "durable request reconstruction failed after start: {error}"
-                            ),
-                        },
-                    },
-                }
-            })?;
-        if reconstructed != prepared.request {
+        let accepts_prepared = {
+            #[cfg(test)]
+            let _profile = attribution::Timer::new(attribution::Phase::CommitEvidence);
+            start_commit.accepts_prepared(&prepared.snapshot, &prepared.request)
+        };
+        if !accepts_prepared {
             self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
-            self.durable_failure = Some(
-                "durable request reconstruction differs from the live provider-neutral request"
-                    .to_owned(),
-            );
+            let message =
+                "durable request commit evidence differs from the immutable prepared input"
+                    .to_owned();
+            self.durable_failure = Some(message.clone());
             return Err(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
-                    error: RuntimeError::DurableStore {
-                        message:
-                            "durable request reconstruction differs from the live provider-neutral request"
-                                .to_owned(),
-                    },
+                    error: RuntimeError::DurableStore { message },
                 },
             });
         }
         self.current_input = Some(Box::new(FrozenLogicalInput {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: prepared.adapter_input_profile,
             snapshot: prepared.snapshot.clone(),
             request: prepared.request.clone(),
-            fingerprint: prepared.fingerprint,
             anchor: prepared.anchor.clone(),
-            request_identity: prepared.request_identity,
+            request_identity: prepared.request_identity.clone(),
             estimated_input: prepared.estimated_input,
         }));
         Ok(StartedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: prepared.adapter_input_profile,
             // A replay's old timestamp must never be paired with a new clock read.
             request_start_ms: (start_commit.disposition
                 == ModelTurnStartCommitDisposition::NewlyCommitted)
@@ -3176,11 +3240,10 @@ impl<'a> AgentExecution<'a> {
     /// ever measured — and that number decides compaction.
     fn reusable_observation(&self) -> Option<&ProviderObservedInput> {
         let observed = self.observed.as_ref()?;
-        let identity = crate::context::request_identity_fingerprint(
-            &self.request.model.primary().invocation_config(),
-            self.pending_continuation.as_ref(),
-        );
-        (self.observed_request_identity == Some(identity)).then_some(observed)
+        let identity = self.observed_request_identity.as_deref()?;
+        (identity.invocation == self.request.model.primary().invocation_config()
+            && identity.continuation == self.pending_continuation)
+            .then_some(observed)
     }
 
     /// The current finite projection of the Conversation Surface, or the
@@ -3189,6 +3252,8 @@ impl<'a> AgentExecution<'a> {
         &self,
         effective_system_prompt: &str,
     ) -> Result<ContextProjection, Terminal> {
+        #[cfg(test)]
+        let _profile = attribution::Timer::new(attribution::Phase::ContextProjection);
         let history = self.store.projected_history().map_err(|error| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::MalformedHistory,
@@ -3223,47 +3288,48 @@ impl<'a> AgentExecution<'a> {
         Ok(render_effective_system_prompt(&sections))
     }
 
-    /// Creates the finite immutable input visible to all contributors.
-    /// Finite canonical members of the current compiled model projection.
-    /// Derived messages carry no execution identity and cannot become contributor facts.
-    fn canonical_model_history(
+    fn claimed_model_input(
         &self,
+        ids: &[MessageId],
     ) -> Result<Vec<MessageBlock>, crate::durable::ConversationStoreError> {
-        Ok(self
-            .store
-            .projected_history()?
+        #[cfg(test)]
+        let _reads = crate::model::selected_input::PreparationReads::new();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let history = self.store.projected_history()?;
+        let mut selected = Vec::with_capacity(ids.len());
+        for message in history
             .messages
-            .into_iter()
-            .filter_map(|m| m.as_canonical().cloned())
-            .collect())
+            .iter_rev()
+            .filter_map(ModelInputMessage::as_canonical)
+        {
+            if ids.iter().any(|id| id == message.id()) {
+                selected.push(message.clone());
+                if selected.len() == ids.len() {
+                    break;
+                }
+            }
+        }
+        selected.reverse();
+        Ok(selected)
     }
 
     fn contributor_input_snapshot(&self) -> Result<ContributorInputSnapshot, Terminal> {
-        let active = self.canonical_model_history().map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
-        let claimed_ids = self
-            .pending_fresh_inbound
-            .as_ref()
-            .map_or_else(Vec::new, |fresh| fresh.message_ids().to_vec());
-        let claimed_inbound = active
-            .iter()
-            .filter(|message| {
-                let id = crate::conversation::message_id_of(message);
-                claimed_ids.iter().any(|claimed| claimed == &id)
-            })
-            .cloned()
-            .collect();
-        Ok(ContributorInputSnapshot {
-            surface: self.conversation.freeze_active_surface().map_err(|error| {
+        let claimed_inbound = self
+            .claimed_model_input(
+                self.pending_fresh_inbound
+                    .as_ref()
+                    .map_or(&[], |fresh| fresh.message_ids()),
+            )
+            .map_err(|error| {
                 Self::context_failure_terminal(&ContextError::new(
                     ContextErrorKind::MalformedHistory,
                     error.to_string(),
                 ))
-            })?,
+            })?;
+        Ok(ContributorInputSnapshot {
+            surface: self.conversation.freeze_active_surface(),
             opportunities: ContributionOpportunities {
                 fresh_inbound: self.pending_fresh_inbound.as_ref().map(|fresh| {
                     FreshInboundOpportunity {
@@ -3283,7 +3349,6 @@ impl<'a> AgentExecution<'a> {
             conversation_id: self.request.conversation_id.clone(),
             turn: self.turn,
             surface_revision: self.conversation.revision(),
-            surface_ids: self.conversation.active_ids().to_vec(),
             claimed_inbound,
             workspace_root: self.capability.snapshot().workspace_root().to_path_buf(),
             capability_revision: self.capability.snapshot().revision(),
@@ -3294,10 +3359,9 @@ impl<'a> AgentExecution<'a> {
     /// the generation, provenance, semantic kind, and canonical `MessageId`;
     /// contributors have no access to any of those authorities.
     ///
-    /// Staging is transient preparation only: it validates every staged
-    /// message in a scratch conversation (which makes identity allocation
-    /// observe the already-staged messages) and records the accepted
-    /// generation, but commits nothing. The staged blocks become canonical
+    /// Staging validates the new messages against the canonical owner and
+    /// the already-staged identities, then records the accepted generation.
+    /// It commits nothing and does not rebuild historical canonical bodies. The staged blocks become canonical
     /// exactly when the model-turn start arbitration commits them inside
     /// the durable start transaction; if cancellation wins there, they are
     /// discarded without a trace and history never claims the model
@@ -3312,27 +3376,26 @@ impl<'a> AgentExecution<'a> {
             .expect("context generation cannot overflow");
         accepted.generation.id = self.context_generation_serial;
         let namespace = format!("{}-turn-{}", self.request.attempt_id, self.turn);
-        let active = self.canonical_model_history().map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
-        let mut scratch = ConversationState::from_durable_head(
-            active,
-            self.conversation.active_ids().to_vec(),
-            self.conversation.revision(),
-            self.conversation.surface().compaction_generation(),
-        )
-        .map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::MalformedHistory,
-                error.to_string(),
-            ))
-        })?;
+        let mut serial = self
+            .conversation
+            .revision()
+            .get()
+            .max(self.conversation.ledger().len() as u64);
         let mut staged = Vec::with_capacity(accepted.user_messages.len());
         for context in &mut accepted.user_messages {
-            let id = scratch.allocate_context_message_id(&namespace);
+            let id = loop {
+                let candidate = MessageId::new(format!("rustx-context-{namespace}-{serial}"));
+                serial = serial
+                    .checked_add(1)
+                    .expect("context identity space exhausted");
+                if !self.conversation.ledger().contains(&candidate)
+                    && !staged
+                        .iter()
+                        .any(|message: &MessageBlock| message.id() == &candidate)
+                {
+                    break candidate;
+                }
+            };
             context.message_id = Some(id.clone());
             let block = MessageBlock::User(crate::message::types::UserMessageBlock {
                 id,
@@ -3341,8 +3404,8 @@ impl<'a> AgentExecution<'a> {
                 kind: crate::message::types::InboundKind::Context(context.kind.clone()),
                 timestamp: None,
             });
-            scratch
-                .commit(block.clone())
+            self.conversation
+                .prepare_commit(&block)
                 .map_err(|error| Terminal::Failed {
                     failure: AttemptFailure::Runtime {
                         error: RuntimeError::ContractViolation {
@@ -3634,7 +3697,9 @@ impl<'a> AgentExecution<'a> {
             Ok(completed) => completed,
             Err(CompactionExecutionError::Context(error)) => return Err(error),
             Err(CompactionExecutionError::Committed { completed, error }) => {
-                self.record_persisted_event(completed.persisted_event);
+                if completed.newly_committed {
+                    self.record_persisted_event(completed.persisted_event);
+                }
                 self.durable_failure_kind = Some(DurableFailureKind::Compaction);
                 self.durable_failure = Some(format!(
                     "committed projection could not be installed: {error}"
@@ -3649,7 +3714,9 @@ impl<'a> AgentExecution<'a> {
                 return Err(ContextError::new(ContextErrorKind::Internal, error));
             }
         };
-        self.record_persisted_event(completed.persisted_event);
+        if completed.newly_committed {
+            self.record_persisted_event(completed.persisted_event);
+        }
         Ok(CompletedCompaction)
     }
 
@@ -3704,6 +3771,8 @@ impl<'a> AgentExecution<'a> {
         started: StartedModelTurn,
     ) -> Result<ModelInvocation, Terminal> {
         let StartedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile,
             request_start_ms,
             request,
             message_id,
@@ -3732,12 +3801,22 @@ impl<'a> AgentExecution<'a> {
         // at the same dispatch frontier, so a retry can never inherit the
         // accounting or the repetition window of the generation it replaces.
         let guard = GenerationGuard::new(self.generation_policy);
+        #[cfg(feature = "issue-387-profile")]
+        let adapter_dispatch_profile = crate::model::adapter::profile::NativeScope::new(
+            self.last_request_id
+                .as_ref()
+                .expect("native started request")
+                .as_str(),
+            adapter_input_profile,
+        );
         let stream = self
             .request
             .model
             .primary()
             .adapter()
             .stream(request, self.cancellation.model_cancellation());
+        #[cfg(feature = "issue-387-profile")]
+        drop(adapter_dispatch_profile);
         let mut assembler = ModelEventAssembler::new();
         let terminal = match self
             .consume_model_stream(&mut assembler, &message_id, stream, deadline, guard)
@@ -3784,10 +3863,11 @@ impl<'a> AgentExecution<'a> {
         // retains the original snapshot in the durable start authority.
         snapshot.request_context_ids.clear();
         let prepared = PreparedModelTurn {
+            #[cfg(feature = "issue-387-profile")]
+            adapter_input_profile: input.adapter_input_profile,
             context: Vec::new(),
             snapshot,
             request: input.request,
-            fingerprint: input.fingerprint,
             anchor: input.anchor,
             request_identity: input.request_identity,
             estimated_input: input.estimated_input,
@@ -4383,18 +4463,18 @@ impl<'a> AgentExecution<'a> {
     /// only while its structural anchor and request identity remain
     /// compatible; no estimate is promoted here.
     fn record_provider_observation(&mut self, usage: &ModelUsage) {
-        let Some(fingerprint) = self.last_request_fingerprint.take() else {
+        let Some(anchor) = self.last_request_anchor.take() else {
             return;
         };
         self.observed = Some(ProviderObservedInput {
-            fingerprint,
             input_tokens: usage.input_tokens,
-            anchor: self.last_request_anchor.take(),
+            anchor,
         });
         // The measurement travels with the request identity it was taken
         // under, so a later request that changed invocation or continuation
         // cannot inherit it.
-        self.observed_request_identity = self.last_request_identity;
+        self.observed_request_identity
+            .clone_from(&self.last_request_identity);
     }
 
     /// Executes the turn's tool calls through deterministic scheduling
@@ -4720,7 +4800,9 @@ impl<'a> AgentExecution<'a> {
             let block = MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new(format!(
                     "{}-tool-{}-{}",
-                    self.request.attempt_id, self.turn, slot.call.id
+                    self.request.attempt_id,
+                    self.turn,
+                    occurrences[batch_position].block_index.get()
                 )),
                 occurrence: occurrences[batch_position].clone(),
                 tool_call_id: slot.call.id.clone(),
@@ -5288,7 +5370,7 @@ impl<'a> AgentExecution<'a> {
     fn model_request_from_projection(
         &mut self,
         projection: &ContextProjection,
-        messages: Vec<ModelInputMessage>,
+        messages: crate::model::SelectedModelInput,
     ) -> ModelRequest {
         let primary = self.request.model.primary();
         // Projection and invocation share exactly the frozen registry.
@@ -5368,7 +5450,7 @@ impl<'a> AgentExecution<'a> {
         let stream_id = publication.start.stream_id.clone();
         let prepared = self.conversation.prepare_commit(&block)?;
         let event = Self::canonical_event(&block).expect("an Assistant commit has its event");
-        let (persisted, transcript_cursor) = self
+        let (persisted, receipt) = self
             .store
             .commit_canonical_publication(
                 &stream_id,
@@ -5381,7 +5463,7 @@ impl<'a> AgentExecution<'a> {
         self.publication = None;
         self.conversation.install_prepared(prepared);
         if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, &block, Some(transcript_cursor));
+            observer.observe_committed(&self.request.attempt_id, &block, &receipt);
         }
         self.record_persisted_event(persisted);
         Ok(())
@@ -5439,11 +5521,7 @@ impl<'a> AgentExecution<'a> {
                 batch_anchor = Some(cursor);
             }
             if let Some(observer) = self.observer {
-                observer.observe_committed(
-                    &self.request.attempt_id,
-                    block,
-                    receipt.transcript_cursor,
-                );
+                observer.observe_committed(&self.request.attempt_id, block, &receipt);
             }
         }
         for event in persisted_events {
@@ -5578,13 +5656,16 @@ impl<'a> AgentExecution<'a> {
         if frames.is_empty() {
             return;
         }
-        if let Err(error) = self.store.stage_publication_frames(&frames) {
-            self.record_publication_failure(&format!(
-                "publication frames could not be staged before release: {error}"
-            ));
-            return;
-        }
-        self.release_publication(&frames);
+        let receipts = match self.store.stage_publication_frames(&frames) {
+            Ok(receipts) => receipts,
+            Err(error) => {
+                self.record_publication_failure(&format!(
+                    "publication frames could not be staged before release: {error}"
+                ));
+                return;
+            }
+        };
+        self.release_publication(&frames, &receipts);
     }
 
     /// Commits **U** — the final publication frame and the publication
@@ -5603,26 +5684,38 @@ impl<'a> AgentExecution<'a> {
         }
         let stream_id = publication.start.stream_id.clone();
         let frames = publication.coalescer.take_terminal_frames();
-        if let Err(error) = self.store.commit_publication_terminal(&stream_id, &frames) {
-            let message =
-                format!("the publication terminal could not be committed durably: {error}");
-            self.record_publication_failure(&message);
-            return Err(RuntimeError::DurableStore { message });
-        }
+        let receipts = match self.store.commit_publication_terminal(&stream_id, &frames) {
+            Ok(receipts) => receipts,
+            Err(error) => {
+                let message =
+                    format!("the publication terminal could not be committed durably: {error}");
+                self.record_publication_failure(&message);
+                return Err(RuntimeError::DurableStore { message });
+            }
+        };
         if let Some(publication) = self.publication.as_mut() {
             publication.terminal_committed = true;
         }
-        self.release_publication(&frames);
+        self.release_publication(&frames, &receipts);
         Ok(())
     }
 
     /// Releases already-committed frames to the live observation seam.
-    fn release_publication(&self, frames: &[PublicationFrame]) {
+    fn release_publication(
+        &self,
+        frames: &[PublicationFrame],
+        receipts: &[crate::publication::PublicationFrameReceipt],
+    ) {
         let Some(observer) = self.observer else {
             return;
         };
-        for frame in frames {
-            observer.observe_publication(&self.request.attempt_id, frame);
+        assert_eq!(
+            frames.len(),
+            receipts.len(),
+            "one native receipt per staged Frame"
+        );
+        for (frame, receipt) in frames.iter().zip(receipts) {
+            observer.observe_publication(&self.request.attempt_id, frame, receipt);
         }
     }
 
@@ -5654,7 +5747,7 @@ impl<'a> AgentExecution<'a> {
             .store
             .terminalize_publication_audit(&stream_id, Utc::now())
         {
-            Ok((audit, transcript_cursor)) => {
+            Ok((audit, receipt)) => {
                 // Only remove the in-memory owner after the durable
                 // settlement committed. On failure it remains the one
                 // recoverable unsettled stream.
@@ -5663,7 +5756,7 @@ impl<'a> AgentExecution<'a> {
                     observer.observe_publication_settled(
                         &self.request.attempt_id,
                         &audit,
-                        transcript_cursor,
+                        &receipt,
                     );
                 }
                 Ok(())
@@ -5729,6 +5822,8 @@ impl<'a> AgentExecution<'a> {
             Some(TurnId::new(self.turn.to_string()))
         };
         RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
             event_id: EventId::new(""),
             sequence: 0,
@@ -5743,7 +5838,13 @@ impl<'a> AgentExecution<'a> {
     fn record_persisted_event(&self, envelope: RuntimeEventEnvelope) {
         let event = envelope.event;
         if let Some(observer) = self.observer {
-            observer.observe_event(&self.request.attempt_id, &event, envelope.sequence);
+            observer.observe_event(
+                &self.request.attempt_id,
+                &event,
+                envelope.sequence,
+                envelope.tool_occurrence.as_ref(),
+                envelope.observation.as_deref(),
+            );
         }
     }
 
@@ -6455,9 +6556,14 @@ pub(crate) mod test_sync {
         }
 
         fn park(&self) {
-            let parks = self.parks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-            self.reached.send_replace(parks);
-            let _ = self.release.recv();
+            // Hand off the worker before announcing this synchronous fixture
+            // park, so a control task in its unstealable LIFO slot can run.
+            // Both M9 call sites retain their original arbitration boundary.
+            tokio::task::block_in_place(|| {
+                let parks = self.parks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                self.reached.send_replace(parks);
+                let _ = self.release.recv();
+            });
         }
     }
 
@@ -6511,6 +6617,7 @@ pub(crate) mod test_sync {
 #[cfg(test)]
 mod tests {
     include!("execution_contribution_tests.rs");
+    include!("execution_selected_input_tests.rs");
     use crate::conversation::ConversationState;
     use crate::durable::inbox::ConversationStore;
     use crate::durable::{ModelTurnStartCommit, ModelTurnStartCommitDisposition};
@@ -6552,10 +6659,11 @@ mod tests {
 
     use super::{
         AgentExecution, AgentExecutionRequest, ForegroundProgressBuffer,
+        RequestObservationIdentity,
         test_sync::{ContinuationBoundaryPause, StartBoundaryPause},
     };
     use crate::agent::cancellation::AgentCancellation;
-    use crate::context::ContextRuntime;
+    use crate::context::{ContextRuntime, ObservedAnchor};
 
     /// An empty bounded foreground progress buffer for one scripted call.
     fn foreground_buffer() -> ForegroundProgressBuffer {
@@ -6929,6 +7037,8 @@ mod tests {
             _attempt_id: &AttemptId,
             event: &RuntimeEvent,
             _journal_sequence: u64,
+            _tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
+            _receipt: Option<&crate::durable::observation::NativeObservationBatch>,
         ) {
             if matches!(event, RuntimeEvent::ModelRequestStarted { .. })
                 && let Some((clock, store)) = &self.start_gap
@@ -6954,7 +7064,7 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             block: &MessageBlock,
-            _transcript_cursor: Option<crate::durable::TranscriptCursor>,
+            _receipt: &crate::durable::inbox::TranscriptCommitReceipt,
         ) {
             self.committed
                 .lock()
@@ -6962,7 +7072,11 @@ mod tests {
                 .push(block.clone());
         }
 
-        fn observe_status(&self, observation: &crate::agent::AgentStatusObservation) {
+        fn observe_status(
+            &self,
+            observation: &crate::agent::AgentStatusObservation,
+            _source: Option<&crate::durable::inbox::StatusObservationSource>,
+        ) {
             self.statuses
                 .lock()
                 .expect("observer status lock")
@@ -6976,7 +7090,12 @@ mod tests {
         ) {
         }
 
-        fn observe_publication(&self, _attempt_id: &AttemptId, frame: &PublicationFrame) {
+        fn observe_publication(
+            &self,
+            _attempt_id: &AttemptId,
+            frame: &PublicationFrame,
+            _receipt: &crate::publication::PublicationFrameReceipt,
+        ) {
             self.frames
                 .lock()
                 .expect("observer frame lock")
@@ -6987,7 +7106,7 @@ mod tests {
             &self,
             _attempt_id: &AttemptId,
             audit: &crate::publication::PublicationAudit,
-            _transcript_cursor: crate::durable::TranscriptCursor,
+            _receipt: &crate::durable::inbox::PublicationAuditReceipt,
         ) {
             self.audits
                 .lock()
@@ -7020,7 +7139,12 @@ mod tests {
             fingerprint: "observer-fingerprint".to_owned(),
         };
         ModelTurnStartCommit {
+            verified_snapshot: None,
+            status_sources: Vec::new(),
+            context_receipts: Vec::new(),
             started: RuntimeEventEnvelope {
+                tool_occurrence: None,
+                observation: None,
                 schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
                 event_id: EventId::new("observer-start"),
                 sequence: 1,
@@ -7041,6 +7165,8 @@ mod tests {
                 },
             },
             contribution_emissions: vec![RuntimeEventEnvelope {
+                tool_occurrence: None,
+                observation: None,
                 schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
                 event_id: EventId::new("observer-emission"),
                 sequence: 2,
@@ -7664,7 +7790,9 @@ mod tests {
                 },
             },
             RuntimeEvent::ToolMessageCommitted {
-                message_id: MessageId::new("attempt-1-tool-1-call-1"),
+                // The existing tool owner derives new message identity from the
+                // canonical occurrence, independent of opaque provider call ID.
+                message_id: MessageId::new("attempt-1-tool-1-0"),
                 tool_call_id: ToolCallId::new("call-1"),
             },
             RuntimeEvent::TurnCompleted,
@@ -7818,14 +7946,18 @@ mod tests {
         .expect("execution construction");
 
         // A request measured with no continuation at all.
-        let measured_identity = crate::context::request_identity_fingerprint(
-            &execution.request.model.primary().invocation_config(),
-            None,
-        );
+        let measured_identity = Arc::new(RequestObservationIdentity {
+            invocation: execution.request.model.primary().invocation_config(),
+            continuation: None,
+        });
         execution.observed = Some(ProviderObservedInput {
-            fingerprint: 7,
             input_tokens: 1_234,
-            anchor: None,
+            anchor: ObservedAnchor::of_selected(
+                crate::conversation::SurfaceRevision::new(0),
+                &crate::model::SelectedModelInput::default(),
+                "",
+                &[],
+            ),
         });
         execution.observed_request_identity = Some(measured_identity);
         assert!(
@@ -9681,8 +9813,8 @@ mod tests {
                 reason: CancellationReason::UserRequested,
             }
         );
-        let committed: Vec<&MessageBlock> = result
-            .messages()
+        let current_messages = result.messages();
+        let committed: Vec<&MessageBlock> = current_messages
             .iter()
             .filter(|block| {
                 matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-a"))

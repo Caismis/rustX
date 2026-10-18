@@ -2,16 +2,111 @@
 //! boundaries, its source-scoped receipts and notices, and their separation
 //! from runtime application, canonical history and execution.
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
-use super::protocol::{call, initialize};
+use super::protocol::initialize;
 use super::*;
 use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::{
     JsonRpcVersion, Method, MethodResult, NotificationMethod, Request, RequestId, Response,
 };
+use crate::local_runtime::configuration::observation::{BoundedSourceSettings, SourceFieldName};
 use crate::local_runtime::configuration::repair::{
     ConfigRepairChange, ConfigRepairReceipt, ConfigRepairStatus,
 };
-use crate::local_runtime::configuration::settings::{SourceMutation, SourceSettings, SourceTarget};
+use crate::local_runtime::configuration::settings::{
+    SourceDocumentView, SourceMutation, SourceTarget, SourceView,
+};
+
+async fn call(connection: &AppServerConnection, id: i64, method: Method) -> MethodResult {
+    let response = connection
+        .handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call: method,
+        })
+        .await;
+    let Response::Success(reply) = response else {
+        panic!("{response:?}")
+    };
+    assert_eq!(reply.id, RequestId::Integer(id));
+    reply.result
+}
+
+/// Only source fields this repair contract asserts, from one authoritative read cut.
+struct RepairSourceFields {
+    user_repair: Option<ConfigRepairReceipt>,
+    workspace_repair: Option<ConfigRepairReceipt>,
+    repair_sequence: u64,
+    workspace: Option<SourceView<SourceDocumentView>>,
+    prospective_diagnostic: Option<String>,
+}
+
+async fn source_field<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+    connection: &AppServerConnection,
+    target: &SourceTarget,
+    view: &BoundedSourceSettings,
+    name: SourceFieldName,
+) -> T {
+    use base64::Engine as _;
+    static NEXT_READ_ID: std::sync::atomic::AtomicI64 =
+        std::sync::atomic::AtomicI64::new(100_000_000);
+    let field = view
+        .fields
+        .iter()
+        .find(|field| field.name == name)
+        .expect("advertised source field");
+    let value = if let Some(reference) = &field.reference {
+        assert_eq!(reference.revision, view.revision);
+        assert_eq!(reference.field, name);
+        assert!(reference.item_index.is_none());
+        assert!(
+            reference.byte_length <= 16 * 1024 * 1024,
+            "explicit fixture field byte-cache bound"
+        );
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let id = NEXT_READ_ID.fetch_add(1, Ordering::Relaxed);
+            let MethodResult::SourceValueChunk { chunk } = call(
+                connection,
+                id,
+                Method::SourcesValueRead {
+                    target: target.clone(),
+                    reference: reference.clone(),
+                    offset,
+                    max_bytes: 65_536,
+                },
+            )
+            .await
+            else {
+                panic!("source value chunk")
+            };
+            assert_eq!(chunk.reference, *reference);
+            assert_eq!(chunk.offset, offset);
+            assert!(chunk.data_base64.len() <= 87_384);
+            let part = base64::engine::general_purpose::STANDARD
+                .decode(chunk.data_base64)
+                .unwrap();
+            assert!(part.len() <= 65_536);
+            let end = offset + u64::try_from(part.len()).unwrap();
+            assert_eq!(chunk.end_offset, end);
+            assert!(end <= reference.byte_length);
+            assert!(end > offset || end == reference.byte_length);
+            assert_eq!(
+                chunk.next_offset,
+                (end < reference.byte_length).then_some(end)
+            );
+            bytes.extend_from_slice(&part);
+            offset = end;
+            if offset == reference.byte_length {
+                break;
+            }
+        }
+        serde_json::from_slice(&bytes).unwrap()
+    } else {
+        field.value.clone().expect("inline source field")
+    };
+    crate::runtime_client::structural_json::decode(value).unwrap()
+}
 
 fn workspace(f: &Fixture, index: usize) -> SourceTarget {
     SourceTarget::Workspace {
@@ -38,7 +133,7 @@ async fn sources(
     connection: &AppServerConnection,
     id: i64,
     target: &SourceTarget,
-) -> SourceSettings {
+) -> RepairSourceFields {
     let MethodResult::SourceSettings { projection } = call(
         connection,
         id,
@@ -50,7 +145,44 @@ async fn sources(
     else {
         panic!("source settings")
     };
-    *projection
+    assert_eq!(projection.target, *target);
+    if let Some(source) = projection.inline {
+        RepairSourceFields {
+            user_repair: source.user_repair,
+            workspace_repair: source.workspace_repair,
+            repair_sequence: source.repair_sequence,
+            workspace: source.workspace,
+            prospective_diagnostic: source.prospective_diagnostic,
+        }
+    } else {
+        RepairSourceFields {
+            user_repair: source_field(connection, target, &projection, SourceFieldName::UserRepair)
+                .await,
+            workspace_repair: source_field(
+                connection,
+                target,
+                &projection,
+                SourceFieldName::WorkspaceRepair,
+            )
+            .await,
+            repair_sequence: source_field(
+                connection,
+                target,
+                &projection,
+                SourceFieldName::RepairSequence,
+            )
+            .await,
+            workspace: source_field(connection, target, &projection, SourceFieldName::Workspace)
+                .await,
+            prospective_diagnostic: source_field(
+                connection,
+                target,
+                &projection,
+                SourceFieldName::ProspectiveDiagnostic,
+            )
+            .await,
+        }
+    }
 }
 
 /// The next repair notice of `target` with its sequence, skipping
@@ -263,7 +395,7 @@ async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
         let probe = f.manager.probe(&f.id(0).await);
         let baseline = super::configuration::settled(&f, 0).await;
         let before = probe.configuration_preparations.load(Ordering::SeqCst);
-        let MethodResult::ConfigurationApplication { .. } = call(
+        let MethodResult::ConfigurationReceipt { .. } = call(
             &connection,
             4,
             Method::ConfigurationReconcile {
@@ -358,7 +490,7 @@ async fn an_unrepairable_workspace_is_announced_and_manual_repair_clears_it() {
         );
         // The existing manual repair stays available; a committed valid
         // document withdraws the unresolved observation.
-        let MethodResult::SourceSettings { projection } = call(
+        let MethodResult::SourcesWritten { revision, .. } = call(
             &connection,
             3,
             Method::SourcesWrite {
@@ -373,7 +505,9 @@ async fn an_unrepairable_workspace_is_announced_and_manual_repair_clears_it() {
         else {
             panic!("manual repair")
         };
-        assert!(projection.workspace_repair.is_none());
+        let observed = sources(&connection, 4, &target).await;
+        assert_eq!(observed.workspace.as_ref().unwrap().revision, revision);
+        assert!(observed.workspace_repair.is_none());
         assert!(repair_notice(&connection, &target).await.is_none());
         assert!(connection.next_source_repair().is_none());
     })
@@ -1021,10 +1155,10 @@ fn commit_repair(f: &Fixture, target: &SourceTarget) -> ConfigRepairReceipt {
 }
 
 /// Withdraw `target`'s unresolved receipt through the existing manual repair
-/// on `connection`; the sequence the write reported.
+/// on `connection`; return the sequence from the explicit post-commit read.
 async fn withdraw(connection: &AppServerConnection, id: i64, target: &SourceTarget) -> u64 {
     let read = sources(connection, id, target).await;
-    let MethodResult::SourceSettings { projection } = call(
+    let MethodResult::SourcesWritten { revision, .. } = call(
         connection,
         id + 1,
         Method::SourcesWrite {
@@ -1039,8 +1173,10 @@ async fn withdraw(connection: &AppServerConnection, id: i64, target: &SourceTarg
     else {
         panic!("manual repair")
     };
-    assert!(projection.workspace_repair.is_none());
-    projection.repair_sequence
+    let observed = sources(connection, id + 2, target).await;
+    assert_eq!(observed.workspace.as_ref().unwrap().revision, revision);
+    assert!(observed.workspace_repair.is_none());
+    observed.repair_sequence
 }
 
 fn sequence(f: &Fixture) -> u64 {
@@ -1743,7 +1879,7 @@ async fn reconcile_announced(
     id: i64,
 ) -> (ConfigRepairReceipt, u64) {
     let target = workspace(f, 0);
-    let MethodResult::ConfigurationApplication { .. } = call(
+    let MethodResult::ConfigurationReceipt { .. } = call(
         connection,
         id,
         Method::ConfigurationReconcile {
@@ -1866,7 +2002,7 @@ async fn notices_and_reads_carry_the_same_redacted_receipt() {
             ),
         )
         .unwrap();
-        let MethodResult::ConfigurationApplication { .. } = call(
+        let MethodResult::ConfigurationReceipt { .. } = call(
             &connection,
             1,
             Method::ConfigurationReconcile {

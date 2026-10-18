@@ -1,5 +1,100 @@
 # Native conversation reading
 
+## Bounded observation and deferred bytes
+
+Root attachment returns an identity receipt. Clients load a bounded checkpoint,
+then follow the registration installed by its physically accepted subscription
+receipt. Recovery preserves the locally Applied Cursor until an authoritative
+checkpoint and contiguous continuation are installed. Child reads use the same
+checkpoint/event/content contracts and retain the distinct `Live` and
+`DurableOnly` source modes; a read failure does not declare an execution outcome.
+
+Content reads retain original byte identity and use at most 65,536 decoded bytes.
+The authorized readable end permits an empty EOF read; a read beyond that end
+returns `invalid_range`, separately from an unavailable source or expired cut.
+The shared client byte cache retains at most 64 ranges and 4 MiB, including empty
+ranges in the count. Cache eviction never changes Applied. Deferred raw JSON and
+structural metadata display in a separate original-byte view, so reading metadata
+cannot replace a loaded payload or round an opaque Tool integer. Typed native u64
+quantities use the protocol's decimal-string codec. A structural value containing
+an unsafe opaque integer remains readable as bytes and is refused as rounded
+editor input.
+
+`model_status.available` is native Session admission availability;
+`model_status.body_deferred` separately describes its display body. A missing
+inline model is therefore not an unavailable model or a missing frozen Attempt.
+Catalog defaults can be selected through exact native binding revision and native model
+and profile ordinals without loading a giant identity into a mutation request.
+
+Display owner identities preserve the original Conversation and Attempt. A
+bounded inline Attempt ID is exact; an oversized ID is deferred through its
+original Journal field or inherited Turn/Response ordinal. These are read
+selectors, not replacement execution IDs. Canonical Turn and lineage identities
+remain required and unchanged. A response-only inherited owner does not become
+an invented Turn.
+
+Each native observation transition carries its bounded Trace window at the same
+read cut. Default checkpoint reads retain that published window; explicit Trace
+inspection reads are independent caches. Preparing a later transition cannot
+replace the checkpoint's source evidence or expose its unfinished bytes.
+
+A standalone Trace page carries its complete `read_cut`. An embedded checkpoint
+or event page inherits the enclosing cut. Clients retain that cut with each loaded
+record and lifecycle update; selecting a field never substitutes the latest
+checkpoint. Canonical position can advance without a Journal event, so a Journal
+sequence alone cannot identify the cut for a Tool result or request context.
+
+Trace lifecycle queries read finite typed headers captured from the original
+Journal records. Numeric original owner sequences join starts and terminal facts;
+optional request, context and proposal summaries do not own that lifecycle.
+A Compaction preview comes from that record's exact Completed-J bootstrap,
+including its original truncation flag. A later projection activation cannot
+replace historical summary content. Truncated Summary and Raw views remain
+explicitly deferred; no canonical summary Message is synthesized.
+Selected fields advertise either the existing bounded Value reader or an existing
+Content binding. Canonical metadata uses the original Content source, rather than
+an invented message-identity selector. A deferred request or Tool identifier is
+never replaced by a synthetic execution ID. Navigation to a committed Assistant
+requires an explicit native identity relation at the captured canonical frontier.
+
+Request field metadata is selected through the Store's immutable selected-input
+root and its authenticated Source augmentation. Requests retain their own original
+capture witness, sequence and occurrence order; shared nodes do not substitute a
+later request's identity. Original ranges and bounded field previews use the same
+composed source at the captured cut. Their work limits differ from ordinary
+segmented canonical, Journal and state sources; see [Request field metadata](#request-field-metadata)
+for the current page, traversal and byte limits.
+
+Loaded Trace caches retain at most 512 page records and one protected selection.
+Lifecycle repair admits at most eight explicit interests in one read; clients batch their cache independently of
+the native event cursor. A page bounds both its records and repair bytes, so a
+large loaded cache cannot turn a bounded row into an oversized response.
+
+Publication Audit settlement is positive Publication Plane evidence. Its bounded
+`publication_settlements` head retains exact native stream/request/Attempt/Message
+identities, transcript position, source cut, settlement kind, time, and block count
+when the audit body is deferred. Audit events carry the native-selected complete
+head, including its retention decision. A late settlement never clears a later
+publication, changes canonical history, or settles execution. Deferred content
+remains readable through its original source evidence.
+
+Canonical commit callbacks carry a complete finite canonical head at their SQL
+cut, including the indexed opening preview, human clock and Todo summary. A later
+callback can therefore cover an earlier committed canonical effect without a
+second history or callback registry. Journal and transcript readiness still fence
+unreleased owner effects, including hidden Context commits. Loaded transcript rows
+remain owned by their captured read cut until a native read-domain update replaces
+the window; a canonical commit alone does not insert rows into an older window.
+
+Canonical Tool commitment and execution settlement remain separate observations.
+`ToolResultCommitted` fills `committed_result` and its source references; it does
+not advance the Tool execution state. Journal terminal evidence advances that
+state. Clients can display a later canonical body without replacing the Journal's
+terminal status, duration or exit evidence. A pre-start policy result can be saved
+without claiming that an executor started or physically settled.
+
+## Native history authority
+
 The durable ConversationStore owns the conversation turn outline and exact
 transcript locations. A user-facing turn is one native Attempt, matching the
 existing TurnProcess and conversation-statistics vocabulary. Its identity is
@@ -17,24 +112,20 @@ there is no assistant member. A just-started Attempt with neither has no locatio
 the live Runtime Client still supplies its current identity; navigation to it
 remains disabled.
 
-A directory page selects at most 64 Turn owners before materializing inherited
-provenance. SQLite reads only source/ordinal keys for count and page selection;
-it does not parse unrelated inherited payloads. Each selected inherited ordinal
-uses the same targeted payload-digest and canonical-membership validation as
-native transcript inspection. The decoded Turn is reused for identity, location
-and previews, including terminal-only anchors. Compact bootstrap metadata and
-ordinal count/range checks fail closed even for a small page. Schema 55 adds an
-ordinal-scoped reverse membership index. Each selected Turn must declare exactly
-the canonical Assistant members assigned to its ordinal;
-forward identity/digest checks and the reverse indexed lookup establish set
-equality without reading unrelated Turn payloads.
+A display directory selects at most 64 owners from finite, source-cut headers.
+Local headers belong to their original Start, member and terminal Journal facts;
+inherited headers belong to the original immutable lineage ordinal. Indexed
+numeric owner and ordinal ranges select identity, location and previews without
+decoding an oversized Attempt ID or historical message body. Missing required
+header evidence is an explicit observation failure. Later member or terminal
+facts cannot enter a page captured at an earlier cut.
 
-Complete inherited loading, lineage reconstruction/reinitialization and archive
-validation retain full payload and membership checks. An unrelated damaged payload
-may be detected there or when its own page is selected; it need not invalidate an
-independent intact page. This bounds payload deserialization and validation by the
-selected page and its directly relevant members. Total-count and offset queries
-can still traverse owner keys; the complete directory operation is not constant-time.
+Native inherited loading, lineage reconstruction/reinitialization and archive
+validation retain full payload-digest and canonical-membership checks. The
+ordinal-scoped reverse membership index requires each inherited Turn to declare
+exactly its assigned canonical Assistant members. Those native checks remain
+separate from bounded display headers and do not turn display read failures into
+execution or canonical-history failures.
 
 Each turn carries two native previews, matching DeepSeek Harness's turn outline.
 `prompt` is the turn's first eligible opening input: the earliest User message
@@ -55,6 +146,13 @@ precedes later steering input; when only response replay input is retained, that
 recorded input provides the preview. Neither nearby User messages nor live reads
 of the source Session establish ownership. The inherited response is
 the newest text-bearing retained member of a settled inherited turn.
+
+Retry identity uses this same original adoption order. RequestStart captures the
+opening input in its native transaction, using canonical ordinary-user, nonblank
+text and Human/delegated-Agent source eligibility. Later steering and frozen
+Original/Derived model inputs do not replace that identity. The resolver does not
+depend on optional display headers or preview Source availability; the optional
+deferred retry-ID field receives the already selected native identity.
 
 Local prompt lookup uses the existing Attempt/type/sequence index for the
 selected Attempt and the exact idle range between the previous and current
@@ -131,11 +229,14 @@ Compaction changes the canonical Surface, not these durable origins/order.
 
 ## Typed native reads
 
-`session/turns {target, offset?, limit}` returns `ConversationTurnPage`: the
+`session/turns {target, offset?, limit}` returns `ObservedTurnPage`: the
 cut it was captured at, total, offset and at most 64 ordered native turns.
 Omitted offset selects the final page; an explicit offset directly indexes
 history. Each mark carries its origin, ordinal, bounded prompt and response
-previews and optional exact transcript cursor.
+previews and optional exact transcript cursor. The display identity carries an
+exact inline Attempt ID or its original bounded field selector; it never changes
+the canonical Turn ID. Total is an exact decimal-string quantity, while offsets
+and navigation ordinals must satisfy the protocol's safe-integer constraints.
 
 `session/transcript {target, at, limit}` reads one contiguous transcript
 vocabulary and returns `transcript_window { cut, page, newer_cursor, target, target_cursor }`:
@@ -144,6 +245,13 @@ vocabulary and returns `transcript_window { cut, page, newer_cursor, target, tar
 - `older {before, cut}`: the finite page strictly before an already-read cursor; a missing cut captures current authority;
 - `newer {after, cut}`: the finite page strictly after the cursor at the same cut;
 - `turn {id, cut}`: native resolves the canonical Turn anchor and reads forward from it.
+- `turn_ordinal {ordinal, cut}`: the source resolves the original outline position
+  at that exact cut without reconstructing an oversized Attempt ID.
+
+Root and Child navigation capture the selected row's page cut at the gesture.
+A later outline refresh cannot substitute a newer cut. The server validates the
+source Conversation and cut before resolving the ordinal; a response-only
+identity cannot be used to fabricate a Turn anchor.
 
 All root pages are 1–64 entries; `next_cursor` is present while older history
 exists. A distant Turn takes exactly one native window read, independently of its
@@ -210,7 +318,7 @@ an already loaded exact anchor needs no read; any other jump requests one native
 64-entry window. Older and later actions each request one page and trim the
 opposite end of the finite cache. The transcript explicitly identifies historical
 inspection and leaves the intervening history unloaded. Live streaming continues
-from the independent runtime snapshot; overlapping cursors render exactly once
+from the independent bounded runtime projection; overlapping cursors render exactly once
 using the current native entry. Return to latest releases the historical window.
 
 A new navigation intent retires the previous read's commit authority immediately.
@@ -320,4 +428,91 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary is stored with the lineage bootstrap in SQLite schema 57. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and snapshot reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 70 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+
+## Request field metadata
+
+SQLite schema 70 stores frozen Request metadata separately from the native
+immutable selected-input tree. The Store owns that balanced tree and its canonical
+Original/Derived provenance. Request rows bind its root identity, digest and count;
+explicit historical reconstruction loads the selected input, while publication and
+settlement read only authenticated request metadata. Older development stores are
+rejected without migration.
+
+Request Source augments those same native nodes with immutable encoded fragments
+and field geometry. It does not own a second input selection. Unchanged native
+subtrees share Source augmentation; a Request retains a finite root and original
+capture witness. Journal sequence and occurrence rank are substituted at read
+time with checked, independent decimal-width accounting: 20 Journal widths and
+four occurrence-rank widths cover native sequences and the 8,192-item limit.
+Equal sums of decimal widths do not imply equal header admission. The resulting
+bytes preserve the original JSON representation.
+Reuse validates the earlier capture's witness rather than treating a newly hashed
+optional row as authoritative. Native root identity, readable cut, representation
+and original publication authorization remain mandatory.
+
+Fragment pages are authenticated and limited to 65,536 bytes before allocation.
+Their BLOBs occupy an ordinary rowid table with a separate unique, non-null
+32-byte hash index. Lookup searches that index and then the table; rowids never
+enter Source identity or authorization. Physical measurements include both
+B-trees, while the bounded BLOB handoff remains one page value per lookup.
+The fragment index has depth below 16 and native selection paths have height at
+most 32. A range visits at most 64 emitted pieces and may return a shorter positive
+chunk with an exact continuation. Bounded previews visit at most 512 pieces and
+retain the 32-node display budget. Pages retain both item and encoded-byte limits.
+The former two-content-row bound described schema 64's copied segments; it does
+not describe these composed reads. Tests account for actual index pages, native
+and Source nodes, metadata bytes, and emitted content separately.
+
+Each field Fact is stored once. A parent/ordinal child index entry contains only
+the canonical child path, which the existing field lookup resolves. Reading that
+reference checks its 4,096-byte encoded bound before parsing, exact parent and
+one-level depth, component bounds and canonical encoding. Page hashes and the
+independent original capture witness still fence replacement; a rehashed child
+path cannot authorize a different native source. This format removes duplicated
+Fact payloads without adding a lookup or changing original content bytes.
+
+Fixed identity columns precede growing payload columns in SQLite records. All
+optional Source creation remains inside its existing savepoint; failure leaves
+native Request, canonical and Journal commitment intact. Source metadata remains
+under the Store's retention and read-cut ownership, and never grants client
+access by itself.
+
+
+### Frozen binary artifact ranges
+
+Canonical binary content remains in the settled managed artifact. Its original
+canonical indexing transaction streams the artifact once, holding its native
+reader reservation, verifies the native settlement seal, and freezes SHA-256
+evidence for each 65,536-byte segment.
+Schema 69 retains those finite digests under the canonical source and block; it
+does not duplicate the artifact bytes. Optional-index failure rolls back that
+observation index without undoing canonical commitment.
+
+Each `BinaryBytes` read validates source authority and frozen length, then reads
+and verifies only the one or two intersecting segments. Artifact payload reads
+and SHA input total at most 131,072 bytes for a response of at most 65,536 decoded
+bytes, plus the fixed 64-byte native seal header and bounded digest lookups.
+Returned bytes are sliced from the verified buffers, never reread after checking.
+Missing integrity evidence or changed bytes makes the source unavailable, including
+a same-length external overwrite. Native one-shot writers and their reservation
+locks still own settlement; those advisory locks do not prevent external filesystem
+writers. No whole-file rehash occurs during a range read, and no modified content
+is silently recaptured under an existing reference.
+
+Native Artifact settlement is independent of this optional display index.
+`ArtifactWriter::finish()` retains exclusive reservation ownership while it syncs
+the bytes and publishes the fixed-format integrity seal in the existing reserved
+file. An abandoned writer has no successful settlement seal. Fork, Clone and tree
+copy validate source segment evidence and write those same verified buffers to
+the destination; they never authenticate an unverified replacement by hashing it
+only after copying. A failed copy is discarded before catalog publication.
+Healthy copies remain possible after optional display-index rollback, and their
+owned bytes remain available after the original allocation is deleted. The copy
+keeps its existing 256-Artifact/64-MiB aggregate copied-payload budget. Destination
+finalization additionally rereads that payload to bind its seal to the source
+aggregate before publication. A canonical
+ContentRead still reads at most two segments; lineage verification does not add a
+whole-file scan to range reads. Session archive streaming also verifies each
+existing 64 KiB source buffer before compression and checks the seal aggregate
+before successful completion; it does not prescan bodies under the capture barrier.
