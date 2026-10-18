@@ -1,6 +1,7 @@
 # Partial publication cadence
 
-The default oldest-payload deadline is 100 ms. Small responses that complete
+The default oldest-payload deadline is 100 ms. This triggers a flush decision;
+synchronous persistence and scheduling can add delay, so it is not a delivery SLA. Small responses that complete
 before that deadline need no intermediate partial transaction. Tool proposal
 start/completion remain distinct ordered frames but share the same commit batch.
 The caller remains the single synchronous persistence writer, commits before
