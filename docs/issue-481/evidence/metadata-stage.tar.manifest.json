@@ -1,7 +1,7 @@
 {
   "analyze-metadata-profiles.py": {
-    "bytes": 2217,
-    "sha256": "1df4c32e2d87c8daa177b555552e3097e10f1e48e9d2a7e34dadbab6466e4adf"
+    "bytes": 2560,
+    "sha256": "bb19f78d2a9f3cbae0cfd2d3db7a3797e6e7e17f6d55d4e86f76032c5075b994"
   },
   "archive-metadata.py": {
     "bytes": 1713,
@@ -1682,6 +1682,10 @@
   "metadata-profile-after-syscalls.log": {
     "bytes": 34,
     "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "metadata-profile-analysis.log": {
+    "bytes": 1707,
+    "sha256": "d0fb9aaa5ecf4fa4e61a5610d1cb8de35ada815c14e71e32307eeff4f327e89f"
   },
   "metadata-profile-before-short-large.log": {
     "bytes": 34,
