@@ -6145,8 +6145,12 @@ complete" sequence to crash inside.
 ### Bounded publication writes
 
 Provider chunk size is not the publication unit. The bounded coalescer flushes
-on maximum bytes, a structural boundary (a tool-call proposal start or
-completion), or the stream terminal. When the first payload enters an empty
+on 64 KiB of conservative payload weight, 128 nonmergeable frames, the 100 ms
+oldest-payload deadline, or the stream terminal. Tool proposal start/completion
+retain distinct ordered frames without forcing a transaction. Tool identities
+and completed arguments count toward pressure; one incoming oversized payload
+flushes immediately without truncation. These pressure exceptions differ from
+Pi Durable's timer-only snapshot cadence. When the first payload enters an empty
 buffer, it owns one absolute monotonic deadline `oldest_pending_time +
 max_latency`; later canonical provider events do not reset or extend it. The coalescer
 owns the deadline and the runtime monotonic clock owns the wake-up mechanism,

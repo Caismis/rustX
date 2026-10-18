@@ -391,8 +391,8 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
 }
 
 /// The Agent Loop uses the oldest buffered payload's deadline rather than a
-/// fresh full-duration sleep. A second delta arriving at t=49 ms cannot move
-/// the first release past the original t=50 ms boundary.
+/// fresh full-duration sleep. A second delta arriving at t=99 ms cannot move
+/// the first release past the original t=100 ms boundary.
 #[tokio::test]
 async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
     let (first_release, first_receiver) = support::fake::model_release();
@@ -425,7 +425,7 @@ async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
     execution.install_publication_policy(
         CoalescePolicy {
             max_bytes: usize::MAX,
-            max_latency_millis: 50,
+            max_latency_millis: 100,
         },
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     );
@@ -449,17 +449,17 @@ async fn chatty_provider_cannot_postpone_the_oldest_publication_deadline() {
     }
     let mut frame_count = publication.frame_count();
 
-    clock.advance(49);
-    assert_eq!(*frame_count.borrow(), 0, "no early release before t=50 ms");
+    clock.advance(99);
+    assert_eq!(*frame_count.borrow(), 0, "no early release before t=100 ms");
     first_release.send_replace(true);
     tokio::select! {
         result = &mut execution => panic!("agent execution ended before second delta: {result:?}"),
         count = emitted.wait_for(|count| *count >= 3) => {
-            count.expect("second delta emitted at t=49 ms");
+            count.expect("second delta emitted at t=99 ms");
         }
     }
 
-    // If the loop restarted a 50 ms timer here, this liveness guard would
+    // If the loop restarted a 100 ms timer here, this liveness guard would
     // expire. It is only a guard; the exact boundary is controlled by the
     // manual publication clock.
     clock.advance(1);
@@ -587,7 +587,10 @@ async fn tool_proposal_boundaries_are_released_as_their_own_frames() {
         "conv_6a0e034d-cbae-7d44-91e1-1601d8effa70",
         &model,
         tools,
-        quiet_policy(),
+        CoalescePolicy {
+            max_bytes: 1,
+            max_latency_millis: u64::MAX,
+        },
         None,
     )
     .await;
@@ -742,13 +745,16 @@ async fn assembler_finish_failure_after_published_frames_is_incomplete() {
     let run = run(
         "conv_28323f58-01b4-7ec8-82ba-e5156e469e84",
         &model,
-        quiet_policy(),
+        CoalescePolicy {
+            max_bytes: 1,
+            max_latency_millis: u64::MAX,
+        },
     )
     .await;
 
     assert!(
         !run.audit.publication_frames.is_empty(),
-        "the proposal start was a structural boundary and was already released"
+        "the one-byte pressure policy released the proposal before rejection"
     );
     assert!(
         !run.audit
