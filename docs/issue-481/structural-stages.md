@@ -4,9 +4,10 @@ The user authorized all three directions on 2026-10-18, superseding the prior
 scope freeze. This remains issue 481 / draft PR 484. No merge is authorized.
 The prior final combination at `5457e1c34106b8d49de0edfb40b49ca8267d0383`
 is now the structural baseline, using preserved optimized executable SHA-256
-`3757014962aa24e831f8562cfd04d729f4435690d575cba17f9e3a0c2f9cfd55`.
-Its exact Rust/test/Cargo trees match measured `99da5d68`. Fresh interleaved
-baseline samples will accompany each independently preserved stage executable.
+`2b12bfb992ef706ffa74ca026bfebca69c5eb9f15c56b9ac34ae41d86c3fc757`.
+Its production tree matches measured `99da5d68`; the fresh build adds the
+identical cold-append fixture to both revisions. Fresh interleaved samples and
+corrected cold-fixture identities are recorded in [Source metadata results](source-metadata.md).
 
 The baseline passed FULL and Merge verification in [run 39103028315](https://github.com/Caismis/rustX/actions/runs/39103028315). That result does not validate later stages.
 

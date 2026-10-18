@@ -232,3 +232,5 @@ An unresolved count must be reported, not silently treated as complete accountin
 RSS/PSS, process write-byte deltas and all per-run values. CPU per turn is the
 measured-window total divided by turn count, including driver/sample overhead;
 it is not an exclusive runtime profile or an allocation count.
+
+Fresh structural-stage results and binary identities: [Source metadata reuse](../../docs/issue-481/source-metadata.md).
