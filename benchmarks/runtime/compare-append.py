@@ -24,6 +24,9 @@ env = {k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TO
 manifest = {'clock_ticks':os.sysconf('SC_CLK_TCK'), 'cold':a.cold, 'pairs':a.pairs, 'pair_offset':a.pair_offset,
             'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
             'executables':{n:{'path':str(getattr(a,n).resolve()), 'sha256':hashlib.file_digest(getattr(a,n).open('rb'),'sha256').hexdigest()} for n in ('before','after')}}
+if manifest['executables']['before']['sha256'] == manifest['executables']['after']['sha256']:
+    p.error('before and after are the same executable; revision comparison is invalid')
+manifest['comparison_kind'] = 'production-revision'
 (a.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
 failed = False
 for pair in range(a.pair_offset,a.pair_offset+a.pairs):

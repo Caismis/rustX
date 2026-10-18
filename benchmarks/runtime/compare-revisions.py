@@ -16,6 +16,9 @@ args.output.mkdir(parents=True,exist_ok=False)
 env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN','SECRET','CREDENTIAL','API_KEY'))}
 env['UV_CACHE_DIR']='/workspace/.uv-cache'
 manifest={'clock_ticks':os.sysconf('SC_CLK_TCK'),'pairs':args.pairs,'pair_offset':args.pair_offset,'cases':args.case or CASES,'executables':{name:{'path':str(getattr(args,name).resolve()),'sha256':hashlib.file_digest(getattr(args,name).open('rb'),'sha256').hexdigest()} for name in ('before','after')},'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'scope':'runtime plus driver; sibling provider; evidence output after cleanup; see baseline identity for fixed build and hardware'}
+if manifest['executables']['before']['sha256'] == manifest['executables']['after']['sha256']:
+    p.error('before and after are the same executable; revision comparison is invalid')
+manifest['comparison_kind'] = 'production-revision'
 (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
 failed=False
 for pair in range(args.pair_offset,args.pair_offset+args.pairs):

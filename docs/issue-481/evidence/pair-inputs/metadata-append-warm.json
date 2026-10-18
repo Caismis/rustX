@@ -1,6 +1,16 @@
 {
   "append_counter_scope": "whole append phase after seed, including driver overhead",
   "append_mode": "warm",
+  "executables": {
+    "after": {
+      "path": "/workspace/issue-481-evidence/metadata-conformance",
+      "sha256": "5f006c64b0f207486888a1e2759564069709fe3731d596aaeaba5fb0918ca740"
+    },
+    "before": {
+      "path": "/workspace/issue-481-evidence/structural-baseline-conformance",
+      "sha256": "2b12bfb992ef706ffa74ca026bfebca69c5eb9f15c56b9ac34ae41d86c3fc757"
+    }
+  },
   "identity_review": "fresh library+conformance builds verified",
   "memory_scope": "all observed lifecycle and operation counters; sampled maxima, not peaks",
   "method": "For each case/metric, compute after/before within each pair, then median across all pairs. Null or zero denominators are unavailable, not zero ratios. No slow samples removed.",
