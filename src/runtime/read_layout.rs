@@ -11,8 +11,8 @@ use rusqlite::OptionalExtension as _;
 use serde_json::Value;
 use std::sync::Arc;
 const ITEM_BYTES: usize = 16_384;
-/// At most 4 KiB of original JSON can contribute nodes/keys to this index.
-const MEMORY_INDEX_BYTES: usize = 4096;
+/// At most 16 KiB of original JSON can contribute compact nodes/keys to this index.
+const MEMORY_INDEX_BYTES: usize = 16_384;
 const SAFE: u64 = 9_007_199_254_740_991;
 #[cfg(test)]
 thread_local! { pub(crate) static READ_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) }; }
@@ -1489,7 +1489,7 @@ mod tests {
     #[test]
     fn small_index_matches_disk_fields_and_allows_reentrant_reads() {
         use std::io::{Seek as _, Write as _};
-        let value = serde_json::json!({"@0":[1,2],"$key":true,"escaped/~":"水", "wide":(0..70).collect::<Vec<_>>()});
+        let value = serde_json::json!({"000-padding":"p".repeat(8192),"@0":[1,2],"$key":true,"escaped/~":"水", "wide":(0..70).collect::<Vec<_>>()});
         let small = SeekableObservationSource::new(&value).unwrap();
         assert!(small.layout.small_index.is_some());
         let original = original_layout_bytes(&small);
@@ -1511,7 +1511,7 @@ mod tests {
             source
                 .visit_fields(
                     |path, encoded, parent, start, end, children, key, preview| {
-                        let bytes = source.read(path, 0, 4096).unwrap().bytes;
+                        let bytes = source.read(path, 0, 65536).unwrap().bytes;
                         assert_eq!(
                             bytes,
                             original
@@ -1539,7 +1539,7 @@ mod tests {
 
     #[test]
     fn small_index_admission_uses_exact_encoded_bytes_and_retains_navigation() {
-        for (length, memory) in [(4094, true), (4095, false)] {
+        for (length, memory) in [(16_381, true), (16_382, true), (16_383, false)] {
             let value = "x".repeat(length);
             let source = SeekableObservationSource::new(&value).unwrap();
             assert_eq!(source.layout.written, (length + 2) as u64);
@@ -1564,11 +1564,11 @@ mod tests {
 
     #[test]
     fn small_index_dense_input_is_bounded_and_pagination_is_exact() {
-        let values = vec![0; 2047]; // 4,095 bytes, 2,048 index nodes.
+        let values = vec![0; 8191]; // 16,383 bytes, 8,192 compact index nodes.
         let source = SeekableObservationSource::new(&values).unwrap();
         assert!(source.layout.small_index.is_some());
         let index = source.layout.small_index.as_ref().unwrap();
-        let retained = index.nodes.capacity() * std::mem::size_of::<NodeRecord>()
+        let retained = index.nodes.capacity() * std::mem::size_of::<small::CompactRecord>()
             + index
                 .nodes
                 .iter()
@@ -1580,7 +1580,7 @@ mod tests {
         let mut offset = 0;
         loop {
             let page = source.page(&[], offset, 32).unwrap();
-            assert_eq!(page.total, 2047);
+            assert_eq!(page.total, 8191);
             for (index, field) in page.fields.iter().enumerate() {
                 assert_eq!(field.ordinal, offset + index as u64);
                 assert_eq!(field.value, Some(serde_json::json!(0)));
@@ -1596,6 +1596,7 @@ mod tests {
     fn small_index_preserves_lexical_bytes_keys_and_u64_evidence() {
         #[derive(serde::Serialize, schemars::JsonSchema)]
         struct Fixture<'a> {
+            padding: &'a str,
             revision: u64,
             #[schemars(with = "serde_json::Value")]
             raw: &'a serde_json::value::RawValue,
@@ -1604,12 +1605,15 @@ mod tests {
             "{\"z\":1.00,\"a\":-0.0,\"escaped\":\"\\u6c34\",\"u\":18446744073709551615}".into(),
         )
         .unwrap();
+        let padding = "p".repeat(8192);
         let fixture = Fixture {
+            padding: &padding,
             revision: u64::MAX,
             raw: &raw,
         };
         let source = SeekableObservationSource::new(&fixture).unwrap();
         assert!(source.layout.small_index.is_some());
+        assert!(source.layout.written > 4096);
         let mut expected = Vec::new();
         crate::runtime_client::structural_json::to_writer(&mut expected, &fixture).unwrap();
         let mut copied = Vec::new();
@@ -2044,7 +2048,7 @@ mod tests {
 
     #[test]
     fn t08_t12_source_read_errors_distinguish_invalid_selection_from_layout_failure() {
-        for padding in [0, 4096] {
+        for padding in [0, MEMORY_INDEX_BYTES] {
             let opaque = serde_json::json!({"wide": u64::MAX,"padding":"x".repeat(padding)});
             let native = NativeSource {
                 title: "original",
