@@ -1,0 +1,7 @@
+diff --git a/tests/boundary/durable/content.rs b/tests/boundary/durable/content.rs
+index 01a28f1c..af7af408 100644
+--- a/tests/boundary/durable/content.rs
++++ b/tests/boundary/durable/content.rs
+@@ -1134 +1134 @@ fn assert_request_source_point_indexes(connection: &rusqlite::Connection, sequen
+-            "EXPLAIN QUERY PLAN SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
++            "EXPLAIN QUERY PLAN SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",

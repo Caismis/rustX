@@ -1,0 +1,53 @@
+{
+  "original_summary_sha256": "7233c18ecf2b5a5568ae77ef8fef0b67db4ddd54503eaef0fa57f2b63a04e89f",
+  "files": {
+    "README.md": {
+      "bytes": 2798,
+      "sha256": "551ff19f33b8bfce7239fa2866a0717e78f656a49b0e390ddee2c287bef68006"
+    },
+    "build-identity.json": {
+      "bytes": 2353,
+      "sha256": "5dd49a476cad28e3b7fccc175463c3d088e6f68d5b472f03c669f65b7275036d"
+    },
+    "build.log": {
+      "bytes": 126,
+      "sha256": "cf900f9a91cdff74ea0257da6a7f98e631016177a3b9b1b15977e646ebf553f4"
+    },
+    "checksum-fixture-follow-up.patch": {
+      "bytes": 503,
+      "sha256": "a9eee584b0e7bce679178e67d8cb56d499ecaba1059855e22e26848c66823289"
+    },
+    "formal-acceptance.log": {
+      "bytes": 14940,
+      "sha256": "a2259bab40bee5fe56465dab52a5c6fff1c02b52b9a2efcf6836e5ff78a2a3e6"
+    },
+    "paired-samples.csv": {
+      "bytes": 11038,
+      "sha256": "bfce8d121c8b091af6e03810416b66a830d844fa58454f933789873767be7e55"
+    },
+    "paired-samples.json": {
+      "bytes": 93511,
+      "sha256": "7233c18ecf2b5a5568ae77ef8fef0b67db4ddd54503eaef0fa57f2b63a04e89f"
+    },
+    "product-tests.log": {
+      "bytes": 12779,
+      "sha256": "8643022ba353849518b52c5a146390fa30638372414a9a7eb56e9d7c18438e64"
+    },
+    "production-variant.patch": {
+      "bytes": 93231,
+      "sha256": "502f112da5dbc86451e2819ff4f368508823e4e6104c2f0de02fdddf7a94c30c"
+    },
+    "recompute.py": {
+      "bytes": 1162,
+      "sha256": "03deb142075e644894c8b0fdcb93b319d8be8e33552cbb65896e7643bb33cd09"
+    },
+    "test-proof.json": {
+      "bytes": 10726,
+      "sha256": "73b6c476e1c0d1d7afc163722c21b216462eadfcafeb6210d9e47c9627e3d4e3"
+    },
+    "variant-proof.json": {
+      "bytes": 1166,
+      "sha256": "023a4f9d418277b7ae7bcb0246b756cfbf8a9c43750b3c8d51813615e8d13283"
+    }
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "head": "13e09b13c2a8b19455cdbbf6a23b693a066126ad",
+  "production_tree": "774a0a1d81e7ed51fad9e76b2618b445e842226a",
+  "harness": {
+    "tests/common/provider_emulator.rs": "cb055ee1f9c9bc55c8af5cae080bb8564f2417226bacab76159f837261a2e47e",
+    "tests/conformance/agent_loop/runtime_benchmark.rs": "0c9b61828fe19270f32308eb382cc2dbe3f0dbb45abceff3790f1cf98e056f16",
+    "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+    "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+    "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "0bd3c441fea023649b5e9de4f6a6506c46ccb4b5d2bfea564d777770ed5535e5"
+  },
+  "start_utc": "2026-10-18T16:12:31.348296+00:00",
+  "commands": [
+    [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "rustx"
+    ],
+    [
+      "cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--test",
+      "conformance",
+      "--no-run",
+      "--message-format=json"
+    ]
+  ],
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)\n",
+  "build_environment": {
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "clean_exit": 0,
+  "build_exit": 0,
+  "root_artifacts": [
+    {
+      "name": "rustx",
+      "kind": [
+        "lib"
+      ],
+      "source_path": "/workspace/rustX-pi-separate-final/src/lib.rs",
+      "fresh": false
+    },
+    {
+      "name": "rustx",
+      "kind": [
+        "bin"
+      ],
+      "source_path": "/workspace/rustX-pi-separate-final/src/main.rs",
+      "fresh": false
+    },
+    {
+      "name": "conformance",
+      "kind": [
+        "test"
+      ],
+      "source_path": "/workspace/rustX-pi-separate-final/tests/conformance/main.rs",
+      "fresh": false
+    }
+  ],
+  "binary": "/workspace/issue-481-evidence/pi-separate-final-build/conformance",
+  "sha256": "f94da7f9fdf8f013ba1b03e4d3f50ef03bc458a6c8d642006ec823a16a66b644",
+  "library_sha256": "f128e01a6bb230d200bd01b6bc3a7c35141fe2ecbf5f654652fcfd9213987455",
+  "verified": true,
+  "end_utc": "2026-10-18T16:22:20.982113+00:00"
+}
