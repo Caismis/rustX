@@ -69,6 +69,11 @@ not evidence that all SQL preparation was eliminated or generally reduced.
 complete exclusive estimate of all harness overhead. Symbolization is optimized
 native code, without a claim that every inline call has independent attribution.
 
+`publish_attempt::{closure#5}` is an attempt-task parent, encompassing
+`run_attempt().await` and `finish_attempt`. Its 267/655 cumulative small-case
+samples do not attribute 40.8% to publication alone. Use the separately named
+`PublicationDraft::encode` stack for encoding, with the same overlap caveat.
+
 ## Diagnostic overhead and complete lifecycle
 
 Each control/CPU row below is one diagnostic run, not a three-pair headline or

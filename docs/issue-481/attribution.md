@@ -69,11 +69,15 @@ presence, **overlapping and not additive**, is approximately:
 
 | Stack owner or operation | Small | Large |
 |---|---:|---:|
-| Native attempt publication | 44.1% | 46.6% |
+| Attempt task parent (`publish_attempt::{closure#5}`) | 44.1% | 46.6% |
 | Read-domain materialization | 23.8% | 23.7% |
 | SQLite statement preparation | 21.8% | 21.6% |
 | Publication encoding | 19.7% | 18.8% |
 | Request observation layout indexing | 15.2% | see raw profile |
+
+The attempt-task parent calls `run_attempt().await` and then `finish_attempt`;
+its cumulative share includes request execution and completion, not publication
+alone. Publication encoding is the separately named encoder stack above.
 
 The large request/observation cost is broader than small Source construction.
 The small profile records just 10 samples in Source index initialization and
