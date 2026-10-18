@@ -575,7 +575,7 @@ fn t10_t12_t19_missing_request_body_layout_never_hides_own_assistant_tool_facts(
     use base64::Engine as _;
     let store = store();
     store.initialize(&[]).unwrap();
-    store.lock().unwrap().execute_batch("CREATE TRIGGER fail_entire_request_layout BEFORE INSERT ON request_observation_fields BEGIN SELECT RAISE(FAIL,'optional entire request layout'); END;").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TRIGGER fail_entire_request_layout BEFORE INSERT ON request_source_roots BEGIN SELECT RAISE(FAIL,'optional entire request layout'); END;").unwrap();
     let (request, start) = inspection_request(&store, 0, "original native schema");
     let (message, committed, occurrence) = inspection_assistant(&store, &request);
     let mut tool = envelope(

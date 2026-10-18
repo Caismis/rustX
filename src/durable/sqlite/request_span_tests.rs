@@ -231,7 +231,7 @@ fn t08_t14_t15_t19_original_span_headers_match_every_legacy_field_and_advancing_
         assert_eq!(
             observation_request::field_from(
                 &connection,
-                "request_observation_fields",
+                "request_source_roots",
                 &sequence.to_string(),
                 path
             )

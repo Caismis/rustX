@@ -26,8 +26,11 @@ fn connection() -> Connection {
 
 #[test]
 fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle() {
-    let value = fixture();
-    let original = SeekableObservationSource::new(&value).unwrap();
+    assert_lazy_matches_eager(&fixture());
+}
+
+fn assert_lazy_matches_eager<T: serde::Serialize + schemars::JsonSchema>(value: &T) {
+    let original = SeekableObservationSource::new(value).unwrap();
     let mut expected = Vec::new();
     original
         .visit_fields(|path, _, _, start, end, children, _, preview| {
@@ -43,10 +46,18 @@ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle
         .unwrap();
     let connection = connection();
     crate::runtime::read_layout::take_field_preview_work();
-    index_state(&connection, "preview_test", "source", &value).unwrap();
+    index_state(&connection, "preview_test", "source", value).unwrap();
     let (computed, skipped) = crate::runtime::read_layout::take_field_preview_work();
     assert_eq!(computed, 0);
     assert_eq!(skipped, expected.len());
+    // A later immutable source cannot replace the selected historical source.
+    index_state(
+        &connection,
+        "preview_test",
+        "later",
+        &serde_json::json!({"later":true}),
+    )
+    .unwrap();
     let changes = connection.total_changes();
     connection.execute_batch("PRAGMA query_only=ON").unwrap();
     for (path, start, end, children, preview) in expected {
@@ -135,7 +146,7 @@ fn state_preview_rejects_malformed_bytes_and_invalid_geometry_without_repair() {
         "end=9007199254740992",
         "source_kind=NULL",
     ] {
-        connection.execute_batch(&format!("SAVEPOINT corrupt; UPDATE state_observation_fields SET {assignment} WHERE source_id='source' AND path_json='[]';")).unwrap();
+        connection.execute_batch(&format!("SAVEPOINT corrupt; UPDATE state_observation_fields SET {assignment} WHERE source_id='source';")).unwrap();
         assert!(
             field_from(&connection, "state_observation_fields", "source", &[]).is_err(),
             "{assignment}"
@@ -262,7 +273,7 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 72,
-            expected: 73
+            expected: 74
         })
     ));
     let connection = Connection::open(path).unwrap();
@@ -272,5 +283,105 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
                 .get::<_, i64>(0))
             .unwrap(),
         72
+    );
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct LexicalFixture<'a> {
+    #[schemars(with = "serde_json::Value")]
+    raw: &'a serde_json::value::RawValue,
+}
+
+#[test]
+fn lazy_raw_value_previews_preserve_lexical_ranges_and_duplicate_ordinal_keys() {
+    for raw in [
+        r#"{ "z" : 1.00, "a":-0.0, "e":1e+03, "s":"\u6c34", "u":18446744073709551615, "empty":{ }, "array":[ 1, true, null, "x" ] }"#.to_owned(),
+        r#"{"@same":1.00,"@same":2e0,"$key":"first","$key":"second"}"#.to_owned(),
+        format!(
+            r#"{{"@same":1.00,"@same":2e0,"large":"{}","tail":"\u6c34"}}"#,
+            "x".repeat(70_000)
+        ),
+    ] {
+        let raw = serde_json::value::RawValue::from_string(raw).unwrap();
+        let fixture = LexicalFixture { raw: &raw };
+        assert_lazy_matches_eager(&fixture);
+        let connection = connection();
+        index_state(&connection, "preview_test", "raw", &fixture).unwrap();
+        let mut bytes = Vec::new();
+        while bytes.len() < raw.get().len() {
+            let chunk = read_from(
+                &connection,
+                "preview_test",
+                "state_observation_fields",
+                "raw",
+                &["raw".into()],
+                bytes.len() as u64,
+                31,
+            )
+            .unwrap();
+            assert!(!chunk.bytes.is_empty() && chunk.bytes.len() <= 31);
+            let (segments, returned) = crate::durable::sqlite::content::last_read_work();
+            assert!(segments <= 2 && returned <= 31);
+            bytes.extend_from_slice(&chunk.bytes);
+        }
+        assert_eq!(
+            bytes,
+            raw.get().as_bytes(),
+            "no number/escape/key-order normalization"
+        );
+    }
+}
+
+#[test]
+fn duplicate_named_paths_keep_existing_optional_failure_and_historical_bytes() {
+    let raw = serde_json::value::RawValue::from_string(r#"{"same":1,"same":2}"#.into()).unwrap();
+    let fixture = LexicalFixture { raw: &raw };
+    let source = SeekableObservationSource::new(&fixture).unwrap();
+    let mut paths = std::collections::HashSet::new();
+    let mut duplicate = false;
+    source
+        .visit_fields(|path, _, _, _, _, _, _, _| {
+            duplicate |= !paths.insert(path.to_vec());
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        duplicate,
+        "the eager path-keyed table also rejects this collision"
+    );
+    let connection = connection();
+    index_state(
+        &connection,
+        "preview_test",
+        "historical",
+        &serde_json::json!({"kept":7}),
+    )
+    .unwrap();
+    let before = field_from(&connection, "state_observation_fields", "historical", &[]).unwrap();
+    let failed = crate::durable::sqlite::optional_display_layout(&connection, || {
+        index_state(&connection, "preview_test", "duplicate", &fixture)
+    });
+    assert!(failed.is_none());
+    for table in [
+        "state_observation_fields",
+        "content_segments",
+        "content_frontiers",
+    ] {
+        let count: u64 = connection
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE source_id='duplicate'"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "no incomplete optional source: {table}");
+    }
+    assert_eq!(
+        field_from(&connection, "state_observation_fields", "historical", &[]).unwrap(),
+        before
+    );
+    assert_eq!(
+        source.read(&["raw".into()], 0, 64).unwrap().bytes,
+        raw.get().as_bytes()
     );
 }

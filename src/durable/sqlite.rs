@@ -331,7 +331,8 @@ fn count_conversation_store_open() {
 /// Version 71 stores authenticated Source pages with a bounded binary codec.
 /// Version 72 excludes unrelated NULL-key rows from scoped event indexes.
 /// Version 73 derives state field previews lazily from retained geometry and bytes.
-pub const SQLITE_SCHEMA_VERSION: i64 = 73;
+/// Version 74 removes independent original-capture Source witness seats.
+pub const SQLITE_SCHEMA_VERSION: i64 = 74;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -8740,18 +8741,6 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS state_observation_ledger_idx ON state_observation_sources(domain,ledger_position,source_id);
             CREATE INDEX IF NOT EXISTS state_observation_journal_idx ON state_observation_sources(domain,journal_sequence,source_id);
-            CREATE TABLE IF NOT EXISTS request_observation_fields (
-                source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),
-                path_json TEXT NOT NULL CHECK(path_json='[]'),
-                parent_path TEXT CHECK(parent_path IS NULL),ordinal INTEGER CHECK(ordinal IS NULL),
-                start INTEGER NOT NULL CHECK(start=0),
-                end INTEGER NOT NULL CHECK(end BETWEEN 0 AND 9007199254740991),
-                children INTEGER NOT NULL CHECK(children=0),
-                header_kind TEXT NOT NULL CHECK(header_kind='inline'),
-                header_json BLOB NOT NULL CHECK(header_json=x'6e756c6c'),
-                shape_witness BLOB NOT NULL CHECK(typeof(shape_witness)='blob' AND length(shape_witness)=32)
-            ) WITHOUT ROWID;
-
             CREATE TABLE IF NOT EXISTS request_trace_catalogs (
                 source_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
                 tool_count INTEGER NOT NULL CHECK(tool_count>=0),
@@ -9508,18 +9497,6 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
         (
             "request_trace_contexts",
             &["source_sequence", "ordinal", "header_json"],
-        ),
-        (
-            "request_observation_fields",
-            &[
-                "source_id",
-                "path_json",
-                "parent_path",
-                "ordinal",
-                "header_kind",
-                "shape_witness",
-                "header_json",
-            ],
         ),
         (
             "state_observation_fields",
@@ -19508,7 +19485,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 73);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 74);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -19577,7 +19554,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 73);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 74);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current

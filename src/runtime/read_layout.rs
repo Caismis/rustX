@@ -1165,6 +1165,26 @@ impl LayoutParser<'_> {
         self.reader.consume(count);
         self.position += count as u64;
     }
+    fn whitespace(&mut self) -> Result<(), &'static str> {
+        use std::io::BufRead as _;
+        loop {
+            if self.layout.expired() {
+                return Err("native source indexing deadline reached");
+            }
+            let buffer = self
+                .reader
+                .fill_buf()
+                .map_err(|_| "native source parser unavailable")?;
+            let count = buffer
+                .iter()
+                .take_while(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
+                .count();
+            if count == 0 {
+                return Ok(());
+            }
+            self.consume(count);
+        }
+    }
     fn expect(&mut self, byte: u8) -> Result<(), &'static str> {
         if self.peek()? != Some(byte) {
             return Err("native source JSON invalid");
@@ -1223,6 +1243,7 @@ impl LayoutParser<'_> {
             None
         };
         let complete = name.is_some();
+        self.whitespace()?;
         self.expect(b':')?;
         Ok((name.unwrap_or_default(), complete, (begin, end)))
     }
@@ -1269,7 +1290,13 @@ impl LayoutParser<'_> {
             .checked_add(1)
             .filter(|next| *next <= SAFE)
             .ok_or("native source nodes exhausted")?;
-        let start = self.position;
+        let root_start = self.position;
+        self.whitespace()?;
+        let start = if parent.is_none() {
+            root_start
+        } else {
+            self.position
+        };
         let byte = self.peek()?.ok_or("native source JSON truncated")?;
         let container = matches!(byte, b'{' | b'[');
         let object = byte == b'{';
@@ -1279,10 +1306,12 @@ impl LayoutParser<'_> {
         let (mut children, mut recursive) = (0_u64, 1_u64);
         if container {
             self.consume(1);
+            self.whitespace()?;
             let close = if object { b'}' } else { b']' };
             while self.peek()? != Some(close) {
                 if children > 0 {
                     self.expect(b',')?;
+                    self.whitespace()?;
                 }
                 let child_key = if object {
                     Some(self.child_key()?)
@@ -1292,17 +1321,20 @@ impl LayoutParser<'_> {
                 let (_, count) = self.value(Some(id), children, child_key, depth + 1)?;
                 recursive = (recursive + count).min(33);
                 children += 1;
+                self.whitespace()?;
             }
             self.expect(close)?;
         } else if byte == b'"' {
             self.string()?;
         } else {
-            while self
-                .peek()?
-                .is_some_and(|byte| !matches!(byte, b',' | b'}' | b']'))
-            {
+            while self.peek()?.is_some_and(|byte| {
+                !matches!(byte, b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t')
+            }) {
                 self.consume(1);
             }
+        }
+        if parent.is_none() {
+            self.whitespace()?;
         }
         let end = self.position;
         // IDs remain preorder; completed rows need no placeholder update.

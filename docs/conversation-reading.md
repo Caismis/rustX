@@ -58,8 +58,8 @@ never replaced by a synthetic execution ID. Navigation to a committed Assistant
 requires an explicit native identity relation at the captured canonical frontier.
 
 Request field metadata is selected through the Store's immutable selected-input
-root and its authenticated Source augmentation. Requests retain their own original
-capture witness, sequence and occurrence order; shared nodes do not substitute a
+root and its content-addressed Source augmentation. Requests retain their own
+native identity, sequence and occurrence order; shared nodes do not substitute a
 later request's identity. Original ranges and bounded field previews use the same
 composed source at the captured cut. Their work limits differ from ordinary
 segmented canonical, Journal and state sources; see [Request field metadata](#request-field-metadata)
@@ -428,31 +428,32 @@ read, reattachment, node switch or user cancellation retires the result. The
 retained presentation remains bounded and later source activity cannot rewrite
 the fork seed boundary.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 73 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 74 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 73 stores frozen Request metadata separately from the native
+SQLite schema 74 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
-settlement read only authenticated request metadata. Older development stores are
+settlement read only validated native request metadata. Older development stores are
 rejected without migration.
 
 Request Source augments those same native nodes with immutable encoded fragments
 and field geometry. It does not own a second input selection. Unchanged native
-subtrees share Source augmentation; a Request retains a finite root and original
-capture witness. Journal sequence and occurrence rank are substituted at read
+subtrees share Source augmentation; a Request retains a finite root and checksum. Journal sequence and occurrence rank are substituted at read
 time with checked, independent decimal-width accounting: 20 Journal widths and
 four occurrence-rank widths cover native sequences and the 8,192-item limit.
 Equal sums of decimal widths do not imply equal header admission. The resulting
 bytes preserve the original JSON representation.
-Reuse validates the earlier capture's witness rather than treating a newly hashed
-optional row as authoritative. Native root identity, readable cut, representation
-and original publication authorization remain mandatory.
+Reuse resolves the augmentation by native node identity and digest without walking
+an earlier capture proof. Native root identity, readable cut, representation and
+publication authorization remain mandatory. Content checksums detect inconsistent
+bytes; they do not independently authenticate a coherently rewritten optional
+Source graph against its original capture. There is no duplicate root witness seat.
 
-Fragment pages are authenticated and limited to 65,536 bytes before allocation.
-Schema 73 uses the `RXSP` version-1 binary page encoding: a typed leaf or branch,
+Fragment pages are content-addressed and limited to 65,536 bytes before allocation.
+Schema 74 uses the `RXSP` version-1 binary page encoding: a typed leaf or branch,
 bounded little-endian lengths, raw value bytes and raw 32-byte child hashes.
 Decoding rejects unknown versions/types, excess count/length, invalid UTF-8 keys,
 truncation, trailing bytes and inconsistent ordering/depth. There is no JSON-page
@@ -476,9 +477,9 @@ and Source nodes, metadata bytes, and emitted content separately.
 Each field Fact is stored once. A parent/ordinal child index entry contains only
 the canonical child path, which the existing field lookup resolves. Reading that
 reference checks its 4,096-byte encoded bound before parsing, exact parent and
-one-level depth, component bounds and canonical encoding. Page hashes and the
-independent original capture witness still fence replacement; a rehashed child
-path cannot authorize a different native source. This format removes duplicated
+one-level depth, component bounds and canonical encoding. Page hashes detect inconsistent replacement; native root identity and read-cut
+checks still fence access to a different native source. Coherent retagging within
+the optional graph is outside the retained integrity guarantee. This format removes duplicated
 Fact payloads without adding a lookup or changing original content bytes.
 
 Fixed identity columns precede growing payload columns in SQLite records. All
@@ -528,7 +529,7 @@ before successful completion; it does not prescan bodies under the capture barri
 
 ## Canonical append frontier
 
-Schema 70 removed `surface_head.active_json`; schema 73 retains that layout.
+Schema 70 removed `surface_head.active_json`; schema 74 retains that layout.
 The immutable Ledger and selected checkpoint remain the active-identity authorities.
 Cold/invalidated append validates the same bounded suffix and Original dependencies.
 Warm append may reuse a disposable connection-local validation count, checked
@@ -551,5 +552,6 @@ retained original segments. Field/page reads derive previews on demand with the
 existing 32-node/16 KiB rules; direct range reads bypass previews. Coordinates
 remain indexed eagerly, so a cold small read never parses or reindexes the entire
 Source. Errors remain explicit and reads do not persist a cache or start background
-work. Request capture witnesses are unchanged at this stage; native-state previews
-now describe retained committed bytes rather than an independent preview copy.
+work. Native-state previews describe retained committed bytes rather than an
+independent preview copy. Schema 74 separately removes duplicate request-capture
+witnesses and origin-proof walks, as described above.
