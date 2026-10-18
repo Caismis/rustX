@@ -798,8 +798,10 @@ request-message copy, generic repository, or client recovery cache.
 M8 introduced development schema version 1. The current store gate is defined
 by `SQLITE_SCHEMA_VERSION`; incompatible files fail explicitly at open. There is no migration
 framework, legacy reader, fallback, or dual write.
-File-backed SQLite uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy
-timeout. Commit is the local durability linearization point.
+File-backed SQLite uses WAL, `synchronous=NORMAL`, foreign keys, and the bounded
+writer busy handler. Commit is the local publication/process-crash durability
+linearization point with a healthy OS/filesystem. Machine failure can lose recent
+commits without a fixed loss window; see [the fault contract](issue-480/durability.md).
 
 Semantic transitions are prepare → SQLite transaction → COMMIT → infallible
 hot-state installation/reload:

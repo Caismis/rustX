@@ -1,0 +1,23 @@
+{
+  "run": 39068563822,
+  "head": "49c414395fbf28151b04512b1a08348827ad3cc9",
+  "job": 117501539531,
+  "artifact": 12116072494,
+  "files": [
+    {
+      "file": "rustx-480-ci-timeout-macos.log.gz",
+      "uncompressed_sha256": "53b7d373b2956f4f1e1e04e3208e545c9cb4c1aed8d425db4f5fd669cc35d1f1",
+      "uncompressed_bytes": 297734
+    },
+    {
+      "file": "cargo-timing-20261017T211606790Z-ba5fb6adc5bb5f2d.html.gz",
+      "uncompressed_sha256": "c18aa3e4c1e8c148e7f45467058c7e79f7b2e74ee79bb11797a6f1ee515d941c",
+      "uncompressed_bytes": 467623
+    },
+    {
+      "file": "cargo-timing-20261017T205645387Z-ba5fb6adc5bb5f2d.html.gz",
+      "uncompressed_sha256": "308d50c0f440fcb0315ebc49ed37c4a6c091c65ad6113072ce727b2d8cd2dbf6",
+      "uncompressed_bytes": 398562
+    }
+  ]
+}

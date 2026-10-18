@@ -1,0 +1,13 @@
+   Compiling rustx v0.1.0 (/home/capi/Documents/codes/rustX-issue-480)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running tests/conformance/main.rs (target/debug/deps/conformance-f576d2b351cf3497)
+
+running 5 tests
+test agent_loop::runtime_benchmark::request_oracle::tests::complete_oracle_rejects_frozen_identity_and_original_reference_mismatch ... ok
+test agent_loop::runtime_benchmark::request_oracle::tests::complete_oracle_rejects_changed_tool_schema ... ok
+test agent_loop::runtime_benchmark::request_oracle::tests::complete_oracle_rejects_mismatched_frozen_content_and_generated_time ... ok
+test agent_loop::runtime_benchmark::request_oracle::tests::complete_oracle_rejects_reordered_older_history_even_when_wire_and_frozen_agree ... ok
+test agent_loop::runtime_benchmark::request_oracle::tests::complete_oracle_rejects_omitted_older_history_even_when_wire_and_frozen_agree ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.02s
+

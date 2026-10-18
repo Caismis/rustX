@@ -1,0 +1,70 @@
+REPETITION 0
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.35s
+
+REPETITION 1
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.38s
+
+REPETITION 2
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.34s
+
+REPETITION 3
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.36s
+
+REPETITION 4
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.35s
+
+REPETITION 5
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.35s
+
+REPETITION 6
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.36s
+
+REPETITION 7
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.35s
+
+REPETITION 8
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.35s
+
+REPETITION 9
+
+running 1 test
+test runtime_client::host::tests::background_durable_commit_cannot_publish_a_half_semantic_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4216 filtered out; finished in 0.35s
+

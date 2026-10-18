@@ -1,0 +1,37 @@
+   Compiling foldhash v0.2.0
+   Compiling clang-sys v1.9.1
+   Compiling bindgen v0.72.1
+   Compiling rustc-hash v2.1.3
+   Compiling hashbrown v0.17.1
+   Compiling indexmap v2.14.0
+   Compiling rkyv v0.8.18
+   Compiling hashlink v0.12.2
+   Compiling serde_json v1.0.151
+   Compiling zip v8.6.0
+   Compiling write-fonts v0.48.1
+   Compiling serde_yaml_ng v0.10.0
+   Compiling lopdf v0.44.0
+   Compiling toml_edit v0.22.27
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling calamine v0.36.1
+   Compiling reqwest v0.13.4
+   Compiling serde_toon_format v0.1.2
+   Compiling referencing v0.26.2
+   Compiling reqwest v0.12.28
+   Compiling html-to-markdown-rs v3.11.4
+   Compiling schemars v1.2.1
+   Compiling axum v0.8.9
+   Compiling office_oxide v0.1.8
+   Compiling uv-small-str v0.0.40
+   Compiling toml v0.8.23
+   Compiling uv-normalize v0.0.40
+   Compiling jsonschema v0.26.2
+   Compiling rmcp v3.2.0 (https://github.com/Caismis/rust-sdk.git?rev=cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0#cd83bcbb)
+   Compiling async-openai v0.41.3
+   Compiling libsqlite3-sys v0.38.2
+   Compiling subsetter v0.2.6
+   Compiling pdf_oxide v0.3.77
+   Compiling rusqlite v0.40.2
+   Compiling xberg v1.0.14
+   Compiling rustx v0.1.0 (/home/capi/Documents/codes/rustX-issue-480)
+    Finished `release` profile [optimized] target(s) in 4m 49s

@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/home/capi/Documents/codes/rustX-issue-480/target/release/deps/conformance-4c2f5c06192b2fc6",
+    "agent_loop::runtime_benchmark::measure_runtime",
+    "--exact",
+    "--ignored",
+    "--nocapture"
+  ],
+  "returncode": 0,
+  "elapsed_seconds": 0.538739331997931,
+  "pair": 0,
+  "case": "tool",
+  "label": "before"
+}

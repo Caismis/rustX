@@ -1,0 +1,90 @@
+{
+  "instrumentation": "cfg(test) native publication profile; inclusive counters overlap",
+  "turns": 25,
+  "runs": [
+    {
+      "pair": 0,
+      "label": "before",
+      "argv": [
+        "/tmp/rustx-480-evidence/before-native-profile",
+        "runtime_client::host::tests::t19_native_publication_encoding_profile",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "sha256": "b27eb01900a5faed197824e700f66fb7f6cdfa4144bc83c77cb30be30c18fd73",
+      "returncode": 0,
+      "elapsed_seconds": 5.825790404807776
+    },
+    {
+      "pair": 0,
+      "label": "after",
+      "argv": [
+        "/tmp/rustx-480-evidence/after-native-profile",
+        "runtime_client::host::tests::t19_native_publication_encoding_profile",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "sha256": "3b27133ab6a07c8a295be47a406baadf30ef57afaae224f195112d9cf9995e4d",
+      "returncode": 0,
+      "elapsed_seconds": 4.85300183808431
+    },
+    {
+      "pair": 1,
+      "label": "before",
+      "argv": [
+        "/tmp/rustx-480-evidence/before-native-profile",
+        "runtime_client::host::tests::t19_native_publication_encoding_profile",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "sha256": "b27eb01900a5faed197824e700f66fb7f6cdfa4144bc83c77cb30be30c18fd73",
+      "returncode": 0,
+      "elapsed_seconds": 15.938493394758552
+    },
+    {
+      "pair": 1,
+      "label": "after",
+      "argv": [
+        "/tmp/rustx-480-evidence/after-native-profile",
+        "runtime_client::host::tests::t19_native_publication_encoding_profile",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "sha256": "3b27133ab6a07c8a295be47a406baadf30ef57afaae224f195112d9cf9995e4d",
+      "returncode": 0,
+      "elapsed_seconds": 1.8025548290461302
+    },
+    {
+      "pair": 2,
+      "label": "before",
+      "argv": [
+        "/tmp/rustx-480-evidence/before-native-profile",
+        "runtime_client::host::tests::t19_native_publication_encoding_profile",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "sha256": "b27eb01900a5faed197824e700f66fb7f6cdfa4144bc83c77cb30be30c18fd73",
+      "returncode": 0,
+      "elapsed_seconds": 3.155572162941098
+    },
+    {
+      "pair": 2,
+      "label": "after",
+      "argv": [
+        "/tmp/rustx-480-evidence/after-native-profile",
+        "runtime_client::host::tests::t19_native_publication_encoding_profile",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "sha256": "3b27133ab6a07c8a295be47a406baadf30ef57afaae224f195112d9cf9995e4d",
+      "returncode": 0,
+      "elapsed_seconds": 1.8278843583539128
+    }
+  ]
+}

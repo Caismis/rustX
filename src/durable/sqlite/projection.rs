@@ -1217,13 +1217,11 @@ pub(super) fn history(
     history_at(connection, scope, None)
 }
 
-#[allow(clippy::too_many_lines)] // One bounded checkpoint/Tail compilation under the native read transaction.
 pub(super) fn history_at(
     connection: &Connection,
     scope: &ConversationId,
     expected: Option<&crate::durable::projection::RequestHistoryCut>,
 ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
-    use crate::durable::projection::{HistoricalModelInput, RequestHistoryCut};
     let mut read_cut = super::compaction_resources::cut(connection, scope)?;
     let checkpoint = head(connection)?;
     if let Some(expected) = expected {
@@ -1245,6 +1243,38 @@ pub(super) fn history_at(
         }
         read_cut.ledger = expected.ledger;
     }
+    compile_history(connection, scope, &read_cut, checkpoint.as_ref())
+}
+
+/// Validate a captured archive's exact historical input after writer exclusion
+/// ends. Later head activations must not change this finite selection.
+pub(super) fn archive_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    cut: &crate::context::resources::ResourceReadCut,
+    checkpoint_id: Option<&CheckpointId>,
+) -> Result<(), ConversationStoreError> {
+    let checkpoint = at_journal_cut(connection, cut.journal.0)?;
+    if checkpoint
+        .as_ref()
+        .map(|value| &value.candidate.checkpoint_id)
+        != checkpoint_id
+    {
+        return Err(invalid(
+            "archive projection head disagrees with captured Journal",
+        ));
+    }
+    compile_history(connection, scope, cut, checkpoint.as_ref()).map(|_| ())
+}
+
+#[allow(clippy::too_many_lines)] // One bounded checkpoint/Tail compilation under the native read transaction.
+fn compile_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    read_cut: &crate::context::resources::ResourceReadCut,
+    checkpoint: Option<&ProjectionCheckpoint>,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    use crate::durable::projection::{HistoricalModelInput, RequestHistoryCut};
     let mut messages = Vec::new();
     let mut tool_associations = Vec::new();
     let mut pending_tail = std::collections::BTreeMap::new();
@@ -1304,7 +1334,7 @@ pub(super) fn history_at(
         let page = super::compaction_resources::messages(
             connection,
             scope,
-            &read_cut,
+            read_cut,
             after,
             None,
             ResourceLimits::default(),

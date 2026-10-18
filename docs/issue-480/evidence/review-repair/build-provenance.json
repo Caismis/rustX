@@ -1,0 +1,29 @@
+{
+  "baseline_commit": "c34f87983568700c7dfa2416722cdd2cd0fd9315",
+  "after_commit": "8e02b495f64fa0e186bfe5a8f0ecf18c6b0a68e3",
+  "overlay": {
+    "tests/conformance/agent_loop/runtime_benchmark.rs": {
+      "before": "59a1a7969bb042a05fbb9e1833b380ac8587a1d8181c9a7dd97f54150fde8a84",
+      "after": "59a1a7969bb042a05fbb9e1833b380ac8587a1d8181c9a7dd97f54150fde8a84"
+    },
+    "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": {
+      "before": "0bd3c441fea023649b5e9de4f6a6506c46ccb4b5d2bfea564d777770ed5535e5",
+      "after": "0bd3c441fea023649b5e9de4f6a6506c46ccb4b5d2bfea564d777770ed5535e5"
+    },
+    "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": {
+      "before": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d",
+      "after": "f3490616f4dd8e06991d5503ee2a9bc2b64ebfd72f9c19866d4f53b54dfd097d"
+    }
+  },
+  "base_main": "029e50f45d6a24c1452b5d0768274fdd661cda6f",
+  "scope": "Identical benchmark/oracle/tool-fixture overlay applied to Stage A baseline. No baseline production edits. AFTER includes review harness and cfg(test)-only CI fixture fixes. Documentation/evidence commits follow this measured implementation.",
+  "command": "cargo test --release --locked --test conformance --no-run --message-format=json",
+  "baseline_binary": {
+    "path": "/tmp/rustx-480-evidence/before-review-conformance",
+    "sha256": "5dd4d0769831807f01fecdf375043576c81f98708f8df572d09495f7bc3ac618"
+  },
+  "after_binary": {
+    "path": "/tmp/rustx-480-evidence/after-review-final-conformance",
+    "sha256": "e4d4dfd00eb8a46b544af604d53f3cf41b9fc033994bc464890943a56f58a04f"
+  }
+}

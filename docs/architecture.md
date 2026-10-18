@@ -240,7 +240,7 @@ semantic mutation epoch that read cuts carry. Older stores are rejected
 without migration or a compatibility path. Version 34 adds native revisioned
 Goal state and atomic Goal/inbound accounting.
 Version 32 freezes Issue #258’s durable
-`profile_digest` for the effective admitted child execution profile. Version 33 establishes
+`profile_digest` for the effective admitted child execution profile. Version 33 originally established
 non-creating rollback-journal management reads and separated workspace storage.
 Version 31 froze Issue
 #242's provider-independent typed Questionnaire interaction audit: a requested
@@ -292,10 +292,15 @@ handoff with a typed resource disposition that also durably preserves
 prove a complete handoff. Version 21 and every older development schema are
 rejected rather than decoded with missing or invented workspace authority; the
 review-only intermediate schema history is not a supported format.
-File-backed stores
-use rollback journaling (`DELETE`), `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
-successful SQLite commit is the local durability linearization point
-documented here.
+File-backed stores use WAL, connection-local `synchronous=NORMAL`, foreign-key
+enforcement, and the explicit bounded writer busy handler. A successful SQLite
+commit is the local publication and process-crash durability linearization point.
+Committed facts survive process termination while the OS/filesystem remains healthy.
+Power loss or OS failure may lose recent transactions; there is no promised time
+window or per-commit stable-media guarantee. P, U and C still commit independently.
+Known write/commit failures remain errors. SQLite owns WAL/SHM recovery and the
+1,000-page automatic checkpoint; no per-turn forced checkpoint is added.
+See [the durability audit](issue-480/durability.md) for connection and lifetime rules.
 
 Version 9 froze the durable **answer obligation** (Issue #111): adoption
 commits an `InboundTurnAdopted` fact naming the exact adopted batch, and

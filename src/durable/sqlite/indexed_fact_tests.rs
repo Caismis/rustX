@@ -345,6 +345,9 @@ fn transcript_attempts_seek_only_selected_identities_at_the_finite_cut() {
         .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
         .unwrap();
     drop(store);
+    // VACUUM INTO creates a rollback-journal image. Only the writer open may
+    // establish the production WAL policy before cold management inspection.
+    drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
     let store = SqliteConversationStore::open_existing(id.clone(), &path).unwrap();
     assert_eq!(store.transcript_attempts(&selected, cut).unwrap(), expected);
     // A malformed selected owner still fails; irrelevant malformed owners were not read.
@@ -851,13 +854,13 @@ fn measured_vm<T>(store: &SqliteConversationStore, read: impl FnOnce() -> T) -> 
             progress.fetch_add(1, Ordering::Relaxed);
             false
         }),
-    );
+    ).unwrap();
     let result = read();
     store
         .conn
         .lock()
         .unwrap()
-        .progress_handler(0, None::<fn() -> bool>);
+        .progress_handler(0, None::<fn() -> bool>).unwrap();
     (result, count.load(Ordering::Relaxed))
 }
 
@@ -1474,7 +1477,7 @@ fn inherited_turn_descriptors_validate_finite_evidence_without_enumerating_owner
         store
             .lock()
             .unwrap()
-            .authorizer(Some(deny_unloaded_turn_members));
+            .authorizer(Some(deny_unloaded_turn_members)).unwrap();
         provenance::take_turn_header_validations();
         provenance::take_turn_header_read_work();
         provenance::take_turn_validation_counts();
@@ -1493,11 +1496,11 @@ fn inherited_turn_descriptors_validate_finite_evidence_without_enumerating_owner
         assert_eq!(provenance::take_turn_validation_counts(), (0, 0));
         store.lock().unwrap().authorizer(
             None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
-        );
+        ).unwrap();
         store
             .lock()
             .unwrap()
-            .authorizer(Some(super::deny_selected_original_columns));
+            .authorizer(Some(super::deny_selected_original_columns)).unwrap();
         for id in [
             &seed.turns()[0].process_message_ids[0],
             seed.turns()[0].process_message_ids.last().unwrap(),
@@ -1513,7 +1516,7 @@ fn inherited_turn_descriptors_validate_finite_evidence_without_enumerating_owner
         }
         store.lock().unwrap().authorizer(
             None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
-        );
+        ).unwrap();
         assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
         costs.push(work);
     }
@@ -1574,7 +1577,7 @@ fn inherited_turn_row_witness_rejects_changed_owner_preview_cursor_and_encoded_b
         store
             .lock()
             .unwrap()
-            .authorizer(Some(deny_unloaded_turn_members));
+            .authorizer(Some(deny_unloaded_turn_members)).unwrap();
         provenance::take_turn_header_read_work();
         assert!(store.conversation_turns(0, 1).is_err(), "{damage}");
         assert!(store.observation_turns(Some(0), 1).is_err(), "{damage}");
@@ -1584,14 +1587,14 @@ fn inherited_turn_row_witness_rejects_changed_owner_preview_cursor_and_encoded_b
         store
             .lock()
             .unwrap()
-            .authorizer(Some(super::deny_selected_original_columns));
+            .authorizer(Some(super::deny_selected_original_columns)).unwrap();
         assert!(
             store.observation_transcript_process(&cut, 1).is_err(),
             "{damage}"
         );
         store.lock().unwrap().authorizer(
             None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
-        );
+        ).unwrap();
         assert_eq!(
             store.load_inherited_turns().unwrap(),
             seed.turns(),
@@ -1648,7 +1651,7 @@ fn inherited_turn_evidence_sql_bounds_precede_rust_metadata_allocation() {
         store
             .lock()
             .unwrap()
-            .authorizer(Some(deny_unloaded_turn_members));
+            .authorizer(Some(deny_unloaded_turn_members)).unwrap();
         provenance::take_turn_header_read_work();
         let result = if column.starts_with("observation_turn_display") {
             store.observation_turns(Some(0), 1).map(|_| ())
@@ -1661,7 +1664,7 @@ fn inherited_turn_evidence_sql_bounds_precede_rust_metadata_allocation() {
         assert!(materialized <= 16_384 + 64 + 32, "{column}: {materialized}");
         store.lock().unwrap().authorizer(
             None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
-        );
+        ).unwrap();
     }
 }
 
@@ -1814,7 +1817,7 @@ fn turn_directory_selected_corruption_fails_without_hydrating_unrelated_turns() 
         assert!(counts.0<=1 && counts.1<=1,"{damage}: {counts:?}");
         assert!(store.load_inherited_turns().is_err(),"{damage}");
         assert!(store.initialize_lineage(&seed).is_err(),"{damage}");
-        assert!(store.archive_frontiers().is_err(),"{damage}");
+        assert!(store.archive_frontiers().and_then(|(frontiers, cut)| store.archive_validate(&frontiers, &cut)).is_err(),"{damage}");
     }
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.initialize_lineage(&seed).unwrap();
@@ -1834,7 +1837,7 @@ fn turn_directory_selected_corruption_fails_without_hydrating_unrelated_turns() 
     assert!(store.load_inherited_turns().is_err());
     assert!(store.initialize_lineage(&seed).is_err());
     assert!(store.read_lineage_cut(SurfaceRevision::new(1)).is_err());
-    assert!(store.archive_frontiers().is_err());
+    assert!(store.archive_frontiers().and_then(|(frontiers, cut)| store.archive_validate(&frontiers, &cut)).is_err());
     // Raw payload corruption is the full native reader's responsibility. The
     // finite descriptor does not claim to rehash an unloaded payload.
     assert!(store.conversation_turns(7, 1).is_ok());
@@ -1878,7 +1881,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
     store
         .lock()
         .unwrap()
-        .authorizer(Some(super::deny_selected_original_columns));
+        .authorizer(Some(super::deny_selected_original_columns)).unwrap();
     provenance::take_turn_header_read_work();
     let process = store
         .observation_transcript_process(&cut, transcript)
@@ -1897,7 +1900,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     store
         .append_canonical(&assistant_message(
             "later-original-c",
@@ -2145,7 +2148,7 @@ fn inherited_turn_membership_is_exact_in_both_directions_with_valid_payload_dige
         );
         assert!(store.load_inherited_turns().is_err(), "{damage}");
         assert!(store.initialize_lineage(&seed).is_err(), "{damage}");
-        assert!(store.archive_frontiers().is_err(), "{damage}");
+        assert!(store.archive_frontiers().and_then(|(frontiers, cut)| store.archive_validate(&frontiers, &cut)).is_err(), "{damage}");
     }
 }
 
@@ -2189,7 +2192,7 @@ fn inherited_turn_reverse_corruption_is_scoped_to_materialized_records() {
     assert!(store.conversation_turns(7, 1).is_err());
     assert!(store.load_inherited_turns().is_err());
     assert!(store.initialize_lineage(&seed).is_err());
-    assert!(store.archive_frontiers().is_err());
+    assert!(store.archive_frontiers().and_then(|(frontiers, cut)| store.archive_validate(&frontiers, &cut)).is_err());
 }
 
 #[test]

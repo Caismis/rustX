@@ -40,6 +40,7 @@ struct ConversationCut {
     root: PathBuf,
     _access: ConversationAccess,
     artifact_lengths: BTreeMap<ArtifactId, Option<u64>>,
+    read_cut: Option<crate::context::resources::ResourceReadCut>,
 }
 #[derive(Serialize)]
 struct ArtifactManifest {
@@ -131,7 +132,7 @@ impl SessionArchiveProducer {
             };
             let access = ConversationAccess::existing(&root, &owned.private_root)
                 .map_err(|_| unavailable)?;
-            let store = SqliteConversationStore::open_existing(
+            let store = SqliteConversationStore::open_for_archive(
                 owned.conversation_id.clone(),
                 &owned.database,
             )
@@ -146,20 +147,28 @@ impl SessionArchiveProducer {
                 store,
                 _access: access,
                 artifact_lengths: BTreeMap::new(),
+                read_cut: None,
             });
         }
         conversations.sort_by(|a, b| a.manifest.conversation_id.cmp(&b.manifest.conversation_id));
         // Ownership is already frozen, so lineage traversal above needed no
         // execution read barriers. Only bounded frontier/identity reads occur
-        // while all included databases are simultaneously read-locked.
+        // while all included databases simultaneously exclude writers.
         #[cfg(test)]
         before_capture();
         for conversation in &mut conversations {
+            check_cancel(cancel)?;
             conversation.store.archive_barrier()?;
-            conversation.manifest.frontiers = conversation.store.archive_frontiers()?;
+            check_cancel(cancel)?;
+            let (frontiers, read_cut) = conversation.store.archive_frontiers()?;
+            conversation.manifest.frontiers = frontiers;
+            conversation.read_cut = Some(read_cut);
             conversation.artifact_lengths =
                 ArtifactStore::archive_lengths(&conversation.root, || check_cancel(cancel))?;
+            #[cfg(test)]
+            capture_probe::observed(&conversation.manifest.conversation_id);
         }
+        check_cancel(cancel)?;
         // LINEARIZATION: all database prefixes still equal these frontiers;
         // captured settled artifact bytes are immutable native facts. The
         // reference set is a function of the frozen prefixes, resolved below.
@@ -186,6 +195,17 @@ impl SessionArchiveCut {
 
     fn preflight(&mut self, cancel: &CancellationToken) -> Result<(), SessionArchivePrepareError> {
         for conversation in &self.conversations {
+            check_cancel(cancel)?;
+            conversation
+                .store
+                .archive_validate(
+                    &conversation.manifest.frontiers,
+                    conversation
+                        .read_cut
+                        .as_ref()
+                        .expect("captured archive read cut"),
+                )
+                .map_err(|_| SessionArchivePrepareError::CorruptAuthority)?;
             let mut refs = BTreeMap::<ArtifactId, Value>::new();
             conversation
                 .records(cancel, |_, record| {
@@ -709,5 +729,33 @@ mod tests {
         let encoded = record.value().to_string();
         assert!(encoded.contains("authored Authorization: Bearer sk-literal"));
         assert!(!encoded.contains("PROVIDER_PRIVATE_SECRET"));
+    }
+}
+
+/// Thread-scoped deterministic capture gate; absent from production builds.
+#[cfg(test)]
+pub(crate) mod capture_probe {
+    use crate::runtime::identity::ConversationId;
+    use std::cell::RefCell;
+    type Probe = Box<dyn FnMut(&ConversationId)>;
+    thread_local! {
+        static PROBE: RefCell<Option<Probe>> = const { RefCell::new(None) };
+    }
+    pub(crate) fn observe(probe: impl FnMut(&ConversationId) + 'static) -> Guard {
+        PROBE.with(|slot| *slot.borrow_mut() = Some(Box::new(probe)));
+        Guard
+    }
+    pub(crate) struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PROBE.with(|slot| slot.borrow_mut().take());
+        }
+    }
+    pub(super) fn observed(id: &ConversationId) {
+        PROBE.with(|slot| {
+            if let Some(probe) = slot.borrow_mut().as_mut() {
+                probe(id);
+            }
+        });
     }
 }

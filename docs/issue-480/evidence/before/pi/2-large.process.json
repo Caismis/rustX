@@ -1,0 +1,1 @@
+{"argv": ["node", "--conditions=source", "benchmarks/runtime/pi.mjs", "/home/capi/Documents/codes/pi-rustx-benchmark", "large", "/tmp/rustx-480-evidence/pi/2-large.json"], "returncode": 0, "wall_seconds": 2.480982779059559}

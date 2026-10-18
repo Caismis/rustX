@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'agent_loop::runtime_benchmark::measure_runtime' (620873) panicked at tests/conformance/agent_loop/runtime_benchmark.rs:12:45:
+called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test agent_loop::runtime_benchmark::measure_runtime ... FAILED
+
+failures:
+
+failures:
+    agent_loop::runtime_benchmark::measure_runtime
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 29 filtered out; finished in 13.97s
+

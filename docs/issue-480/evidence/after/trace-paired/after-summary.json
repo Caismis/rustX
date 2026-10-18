@@ -1,0 +1,31 @@
+{
+  "raw_sha256": "10f5a882e01d5358892ed9381343100fe273d1a07d3f8136433370919e9db803",
+  "completed_calls": {
+    "write": 835,
+    "fcntl": 187101,
+    "fsync": 175,
+    "rename": 43,
+    "pwrite64": 70154,
+    "unlink": 139
+  },
+  "errors": {
+    "fcntl:EBADF": 2
+  },
+  "successful_syncs_by_path": {
+    "other": 95,
+    "journal": 1,
+    "database": 27,
+    "wal": 52
+  },
+  "successful_write_bytes_by_path": {
+    "other": 1549052,
+    "journal": 524,
+    "database": 40960000,
+    "shm": 32,
+    "wal": 104685912,
+    "sqlite_temp": 27256800
+  },
+  "unresolved_calls": 0,
+  "scope": "strace -f: runtime/driver plus provider and helper child processes; database categories isolate named SQLite files",
+  "limitations": "OS return-byte accounting, not physical media traffic. Other includes files, pipes and sockets. Not owner-level SQL/transaction counts."
+}

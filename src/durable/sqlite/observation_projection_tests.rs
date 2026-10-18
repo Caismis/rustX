@@ -121,7 +121,7 @@ fn t08_t12_t19_t20_projection_head_reads_only_finite_original_activation_evidenc
     projection::take_header_work();
     projection::take_completion_work();
     observation_projection::take_read_work();
-    store.lock().unwrap().authorizer(Some(deny_projection_body));
+    store.lock().unwrap().authorizer(Some(deny_projection_body)).unwrap();
     let head = store
         .observation_projection_head(receipt.completed.sequence)
         .unwrap()
@@ -129,7 +129,7 @@ fn t08_t12_t19_t20_projection_head_reads_only_finite_original_activation_evidenc
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert_eq!(
         head.checkpoint_id,
         receipt.checkpoint.candidate.checkpoint_id
@@ -485,7 +485,7 @@ fn t08_t10_t12_t19_projection_provenance_ranges_are_cut_owned_and_auxiliary() {
     let (store, receipt) = original_provenance_fixture();
     let cut = store.observation_read_cut().unwrap();
     let activation = receipt.checkpoint.activation.activation.0;
-    store.lock().unwrap().authorizer(Some(deny_projection_body));
+    store.lock().unwrap().authorizer(Some(deny_projection_body)).unwrap();
     for item in 0..2 {
         let value = collect_provenance_windows(|offset| {
             store.observation_projection_provenance_read(
@@ -505,7 +505,7 @@ fn t08_t10_t12_t19_projection_provenance_ranges_are_cut_owned_and_auxiliary() {
     store
         .lock()
         .unwrap()
-        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>);
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>).unwrap();
     assert!(
         store
             .observation_projection_provenance_read(&cut, activation, 2, &[], 0, 1)
