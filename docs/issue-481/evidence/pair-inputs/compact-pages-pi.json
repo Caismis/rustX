@@ -1,0 +1,618 @@
+{
+  "method": "All three samples retained per case/engine. Native-schema and contract differences remain explicit.",
+  "samples": [
+    {
+      "case_engine": "cancel/pi",
+      "input": "compact-pages-pi-paired/0-cancel-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 235.914,
+        "lifecycle_write_mib": 0.62109375,
+        "max_sampled_anon_pss_mib": 95.03515625,
+        "max_sampled_pss_mib": 129.3115234375,
+        "max_sampled_rss_mib": 130.12109375,
+        "mean_turn_ms": 122.094,
+        "turn_cpu_ms_per_turn": 140.0,
+        "turn_write_mib_per_turn": 0.26171875
+      },
+      "pair": 0,
+      "sha256": "9e623923fa493313c66fd3706f5ffc0d78af728ad4ae58a2d878a8f62b3f4aca"
+    },
+    {
+      "case_engine": "cancel/pi",
+      "input": "compact-pages-pi-paired/1-cancel-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 238.822,
+        "lifecycle_write_mib": 0.62109375,
+        "max_sampled_anon_pss_mib": 94.28515625,
+        "max_sampled_pss_mib": 128.5498046875,
+        "max_sampled_rss_mib": 129.359375,
+        "mean_turn_ms": 122.317,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.26171875
+      },
+      "pair": 1,
+      "sha256": "c702a04e20af0844ec4991140a0dbeef29101fb87ea9f2bad90150a1c01d2548"
+    },
+    {
+      "case_engine": "cancel/pi",
+      "input": "compact-pages-pi-paired/2-cancel-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_ms": 232.647,
+        "lifecycle_write_mib": 0.62109375,
+        "max_sampled_anon_pss_mib": 92.85546875,
+        "max_sampled_pss_mib": 127.1865234375,
+        "max_sampled_rss_mib": 127.99609375,
+        "mean_turn_ms": 118.48,
+        "turn_cpu_ms_per_turn": 140.0,
+        "turn_write_mib_per_turn": 0.26171875
+      },
+      "pair": 2,
+      "sha256": "61014e2f51a570943c715fb5857d6c0047cb79ef6d0625caae2edd7636908827"
+    },
+    {
+      "case_engine": "cancel/rust",
+      "input": "compact-pages-pi-paired/0-cancel-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 267.89,
+        "lifecycle_write_mib": 4.1796875,
+        "max_sampled_anon_pss_mib": 100.8828125,
+        "max_sampled_pss_mib": 157.4169921875,
+        "max_sampled_rss_mib": 158.171875,
+        "mean_turn_ms": 47.306,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.71875
+      },
+      "pair": 0,
+      "sha256": "b2718a8a436e5d0419b18d860984efe5b8a1c8924b24ef3b17797531c2425b27"
+    },
+    {
+      "case_engine": "cancel/rust",
+      "input": "compact-pages-pi-paired/1-cancel-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 220.0,
+        "lifecycle_ms": 278.902,
+        "lifecycle_write_mib": 4.17578125,
+        "max_sampled_anon_pss_mib": 100.35546875,
+        "max_sampled_pss_mib": 157.1044921875,
+        "max_sampled_rss_mib": 157.859375,
+        "mean_turn_ms": 44.814,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.71484375
+      },
+      "pair": 1,
+      "sha256": "73b85450b975dbda882dd883b46e2017455e90ac3fa46c58692c59436959dea5"
+    },
+    {
+      "case_engine": "cancel/rust",
+      "input": "compact-pages-pi-paired/2-cancel-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 262.376,
+        "lifecycle_write_mib": 4.16796875,
+        "max_sampled_anon_pss_mib": 99.96484375,
+        "max_sampled_pss_mib": 156.7763671875,
+        "max_sampled_rss_mib": 157.53125,
+        "mean_turn_ms": 44.481,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.71484375
+      },
+      "pair": 2,
+      "sha256": "1be4518bef21ffac30af9240e4a498687403772b98bb31c2dd985aa4f607e644"
+    },
+    {
+      "case_engine": "large/pi",
+      "input": "compact-pages-pi-paired/0-large-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 180.0,
+        "lifecycle_ms": 234.639,
+        "lifecycle_write_mib": 0.671875,
+        "max_sampled_anon_pss_mib": 80.359375,
+        "max_sampled_pss_mib": 114.5771484375,
+        "max_sampled_rss_mib": 115.38671875,
+        "mean_turn_ms": 118.514,
+        "turn_cpu_ms_per_turn": 140.0,
+        "turn_write_mib_per_turn": 0.28125
+      },
+      "pair": 0,
+      "sha256": "f7a75aa5a8e8297c276b8c07527e633398a71d6680267a6b81eb085b7999f262"
+    },
+    {
+      "case_engine": "large/pi",
+      "input": "compact-pages-pi-paired/1-large-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 180.0,
+        "lifecycle_ms": 229.322,
+        "lifecycle_write_mib": 0.671875,
+        "max_sampled_anon_pss_mib": 77.72265625,
+        "max_sampled_pss_mib": 111.9443359375,
+        "max_sampled_rss_mib": 112.75390625,
+        "mean_turn_ms": 115.096,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.28125
+      },
+      "pair": 1,
+      "sha256": "ae9b35f67cee573892bad0ac3b6bde3d345524e0029f1b5b4f8a84cc908ce8e6"
+    },
+    {
+      "case_engine": "large/pi",
+      "input": "compact-pages-pi-paired/2-large-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 180.0,
+        "lifecycle_ms": 222.712,
+        "lifecycle_write_mib": 0.671875,
+        "max_sampled_anon_pss_mib": 78.53515625,
+        "max_sampled_pss_mib": 112.7646484375,
+        "max_sampled_rss_mib": 113.57421875,
+        "mean_turn_ms": 110.659,
+        "turn_cpu_ms_per_turn": 140.0,
+        "turn_write_mib_per_turn": 0.28125
+      },
+      "pair": 2,
+      "sha256": "f953bf46a6c5365ee5f2831c1f119fbb965b1d83137ade54f9e565708dc3eccf"
+    },
+    {
+      "case_engine": "large/rust",
+      "input": "compact-pages-pi-paired/0-large-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 390.0,
+        "lifecycle_ms": 421.924,
+        "lifecycle_write_mib": 13.1796875,
+        "max_sampled_anon_pss_mib": 103.1171875,
+        "max_sampled_pss_mib": 159.5537109375,
+        "max_sampled_rss_mib": 160.30859375,
+        "mean_turn_ms": 189.912,
+        "turn_cpu_ms_per_turn": 250.0,
+        "turn_write_mib_per_turn": 10.921875
+      },
+      "pair": 0,
+      "sha256": "0ec4eb85813d0efbaacf8c16b361dc27810a3a79d3cdb64f0c376b1c1bedd116"
+    },
+    {
+      "case_engine": "large/rust",
+      "input": "compact-pages-pi-paired/1-large-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 370.0,
+        "lifecycle_ms": 426.908,
+        "lifecycle_write_mib": 13.171875,
+        "max_sampled_anon_pss_mib": 102.93359375,
+        "max_sampled_pss_mib": 159.4560546875,
+        "max_sampled_rss_mib": 160.2109375,
+        "mean_turn_ms": 206.26,
+        "turn_cpu_ms_per_turn": 220.0,
+        "turn_write_mib_per_turn": 10.921875
+      },
+      "pair": 1,
+      "sha256": "7667949130caf6c7c46fe8e3e8036cf3ad7a1b4a3b7cbd2398d3c35ad94c9c98"
+    },
+    {
+      "case_engine": "large/rust",
+      "input": "compact-pages-pi-paired/2-large-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 380.0,
+        "lifecycle_ms": 415.465,
+        "lifecycle_write_mib": 13.1875,
+        "max_sampled_anon_pss_mib": 102.515625,
+        "max_sampled_pss_mib": 158.8310546875,
+        "max_sampled_rss_mib": 159.5859375,
+        "mean_turn_ms": 188.428,
+        "turn_cpu_ms_per_turn": 230.0,
+        "turn_write_mib_per_turn": 10.9296875
+      },
+      "pair": 2,
+      "sha256": "60a968787f88c1445d46a2f4f3472b96b1863cbfd6fcc8397947868c48707f3f"
+    },
+    {
+      "case_engine": "short-large/pi",
+      "input": "compact-pages-pi-paired/0-short-large-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 1220.0,
+        "lifecycle_ms": 1039.363,
+        "lifecycle_write_mib": 20.78515625,
+        "max_sampled_anon_pss_mib": 163.51953125,
+        "max_sampled_pss_mib": 198.1591796875,
+        "max_sampled_rss_mib": 198.96875,
+        "mean_turn_ms": 4.60390625,
+        "turn_cpu_ms_per_turn": 8.125,
+        "turn_write_mib_per_turn": 0.2139892578125
+      },
+      "pair": 0,
+      "sha256": "c690db0f4525398dc502a74748db916901fb76bcb5eb2470fa7b719243b981a8"
+    },
+    {
+      "case_engine": "short-large/pi",
+      "input": "compact-pages-pi-paired/1-short-large-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 1220.0,
+        "lifecycle_ms": 1081.641,
+        "lifecycle_write_mib": 20.77734375,
+        "max_sampled_anon_pss_mib": 149.5546875,
+        "max_sampled_pss_mib": 184.1865234375,
+        "max_sampled_rss_mib": 184.99609375,
+        "mean_turn_ms": 4.82303125,
+        "turn_cpu_ms_per_turn": 7.8125,
+        "turn_write_mib_per_turn": 0.2139892578125
+      },
+      "pair": 1,
+      "sha256": "9c1355e979f68995940ed4e910ba30ca024420e0aef8c4779ec772c03c734e4e"
+    },
+    {
+      "case_engine": "short-large/pi",
+      "input": "compact-pages-pi-paired/2-short-large-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 1340.0,
+        "lifecycle_ms": 1159.804,
+        "lifecycle_write_mib": 20.77734375,
+        "max_sampled_anon_pss_mib": 165.0078125,
+        "max_sampled_pss_mib": 199.6396484375,
+        "max_sampled_rss_mib": 200.44921875,
+        "mean_turn_ms": 5.05409375,
+        "turn_cpu_ms_per_turn": 8.4375,
+        "turn_write_mib_per_turn": 0.2139892578125
+      },
+      "pair": 2,
+      "sha256": "99f6fca1faa3170ff6fbca72e70183a8f2c840466ba8e959f3772bbe10b80ffd"
+    },
+    {
+      "case_engine": "short-large/rust",
+      "input": "compact-pages-pi-paired/0-short-large-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 14110.0,
+        "lifecycle_ms": 11516.558,
+        "lifecycle_write_mib": 314.94921875,
+        "max_sampled_anon_pss_mib": 229.80078125,
+        "max_sampled_pss_mib": 286.3857421875,
+        "max_sampled_rss_mib": 287.140625,
+        "mean_turn_ms": 68.48384375,
+        "turn_cpu_ms_per_turn": 101.875,
+        "turn_write_mib_per_turn": 3.44775390625
+      },
+      "pair": 0,
+      "sha256": "5971dd391556ca70b1e58e4e47034a7f2051c1387a59d34f8b735a167bbda10d"
+    },
+    {
+      "case_engine": "short-large/rust",
+      "input": "compact-pages-pi-paired/1-short-large-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 14270.0,
+        "lifecycle_ms": 11674.279,
+        "lifecycle_write_mib": 314.86328125,
+        "max_sampled_anon_pss_mib": 232.3515625,
+        "max_sampled_pss_mib": 288.6396484375,
+        "max_sampled_rss_mib": 289.39453125,
+        "mean_turn_ms": 71.5930625,
+        "turn_cpu_ms_per_turn": 104.6875,
+        "turn_write_mib_per_turn": 3.4495849609375
+      },
+      "pair": 1,
+      "sha256": "f79029dbe9c1a122490ce881389f9431d1fca1ccbce35d4e5256fd89c6f2c09e"
+    },
+    {
+      "case_engine": "short-large/rust",
+      "input": "compact-pages-pi-paired/2-short-large-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 14530.0,
+        "lifecycle_ms": 11820.589,
+        "lifecycle_write_mib": 315.20703125,
+        "max_sampled_anon_pss_mib": 228.71484375,
+        "max_sampled_pss_mib": 284.7802734375,
+        "max_sampled_rss_mib": 285.53515625,
+        "mean_turn_ms": 73.32259375,
+        "turn_cpu_ms_per_turn": 108.125,
+        "turn_write_mib_per_turn": 3.4588623046875
+      },
+      "pair": 2,
+      "sha256": "c7848fd900f9d59e3706fa0009518d50a5e581b38e670af809acef3adf50c94e"
+    },
+    {
+      "case_engine": "short-small/pi",
+      "input": "compact-pages-pi-paired/0-short-small-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 650.0,
+        "lifecycle_ms": 564.333,
+        "lifecycle_write_mib": 8.875,
+        "max_sampled_anon_pss_mib": 115.30859375,
+        "max_sampled_pss_mib": 149.7529296875,
+        "max_sampled_rss_mib": 150.5625,
+        "mean_turn_ms": 4.502,
+        "turn_cpu_ms_per_turn": 9.375,
+        "turn_write_mib_per_turn": 0.214111328125
+      },
+      "pair": 0,
+      "sha256": "92509fa926c98861accbcfbd81122f26a4ab1b09298b52b125025dd2e2a44958"
+    },
+    {
+      "case_engine": "short-small/pi",
+      "input": "compact-pages-pi-paired/1-short-small-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 680.0,
+        "lifecycle_ms": 583.413,
+        "lifecycle_write_mib": 8.875,
+        "max_sampled_anon_pss_mib": 115.96875,
+        "max_sampled_pss_mib": 150.3935546875,
+        "max_sampled_rss_mib": 151.203125,
+        "mean_turn_ms": 5.1849375,
+        "turn_cpu_ms_per_turn": 10.0,
+        "turn_write_mib_per_turn": 0.214111328125
+      },
+      "pair": 1,
+      "sha256": "9af1b8970c41ef94d69fe25a8916f284836b9aa294f84ffeb67dcf6cea3d1051"
+    },
+    {
+      "case_engine": "short-small/pi",
+      "input": "compact-pages-pi-paired/2-short-small-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 630.0,
+        "lifecycle_ms": 538.561,
+        "lifecycle_write_mib": 8.87890625,
+        "max_sampled_anon_pss_mib": 113.09375,
+        "max_sampled_pss_mib": 147.5263671875,
+        "max_sampled_rss_mib": 148.3359375,
+        "mean_turn_ms": 4.3255,
+        "turn_cpu_ms_per_turn": 8.75,
+        "turn_write_mib_per_turn": 0.2142333984375
+      },
+      "pair": 2,
+      "sha256": "5ef11a0d8f67ddd5879d5c0755f2027f18267636528d854cf0aa52e97cf0c7af"
+    },
+    {
+      "case_engine": "short-small/rust",
+      "input": "compact-pages-pi-paired/0-short-small-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 4780.0,
+        "lifecycle_ms": 3764.61,
+        "lifecycle_write_mib": 123.75,
+        "max_sampled_anon_pss_mib": 149.09375,
+        "max_sampled_pss_mib": 205.33203125,
+        "max_sampled_rss_mib": 206.0859375,
+        "mean_turn_ms": 64.81409375,
+        "turn_cpu_ms_per_turn": 95.625,
+        "turn_write_mib_per_turn": 3.1015625
+      },
+      "pair": 0,
+      "sha256": "dad798955258f9c4f4fe275d3e197aedaefb0ef30eea170fcc32c6a4a2872d4c"
+    },
+    {
+      "case_engine": "short-small/rust",
+      "input": "compact-pages-pi-paired/1-short-small-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 4900.0,
+        "lifecycle_ms": 3863.598,
+        "lifecycle_write_mib": 123.6796875,
+        "max_sampled_anon_pss_mib": 148.3359375,
+        "max_sampled_pss_mib": 204.9169921875,
+        "max_sampled_rss_mib": 205.671875,
+        "mean_turn_ms": 66.60553125,
+        "turn_cpu_ms_per_turn": 97.8125,
+        "turn_write_mib_per_turn": 3.1014404296875
+      },
+      "pair": 1,
+      "sha256": "0c930137aa886a9a384a491fd5727db5b676e9ff33e0fe6e86823cfcd48b4265"
+    },
+    {
+      "case_engine": "short-small/rust",
+      "input": "compact-pages-pi-paired/2-short-small-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 4740.0,
+        "lifecycle_ms": 3785.499,
+        "lifecycle_write_mib": 123.77734375,
+        "max_sampled_anon_pss_mib": 148.41796875,
+        "max_sampled_pss_mib": 205.1005859375,
+        "max_sampled_rss_mib": 205.85546875,
+        "mean_turn_ms": 65.67884375,
+        "turn_cpu_ms_per_turn": 96.25,
+        "turn_write_mib_per_turn": 3.1019287109375
+      },
+      "pair": 2,
+      "sha256": "552fc3f535c6d0114a15406c156e4010af190278e38fc880fe04937ed2b0f5b9"
+    },
+    {
+      "case_engine": "stream/pi",
+      "input": "compact-pages-pi-paired/0-stream-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 550.0,
+        "lifecycle_ms": 1779.355,
+        "lifecycle_write_mib": 0.84765625,
+        "max_sampled_anon_pss_mib": 104.7890625,
+        "max_sampled_pss_mib": 139.1630859375,
+        "max_sampled_rss_mib": 139.97265625,
+        "mean_turn_ms": 1664.086,
+        "turn_cpu_ms_per_turn": 510.0,
+        "turn_write_mib_per_turn": 0.4765625
+      },
+      "pair": 0,
+      "sha256": "cc40a8f1dd37793c00190923a1a4404d03728eb0d1bdc680340e3d3c026c06d6"
+    },
+    {
+      "case_engine": "stream/pi",
+      "input": "compact-pages-pi-paired/1-stream-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 560.0,
+        "lifecycle_ms": 1785.029,
+        "lifecycle_write_mib": 0.84765625,
+        "max_sampled_anon_pss_mib": 104.80078125,
+        "max_sampled_pss_mib": 139.1904296875,
+        "max_sampled_rss_mib": 140.0,
+        "mean_turn_ms": 1669.221,
+        "turn_cpu_ms_per_turn": 540.0,
+        "turn_write_mib_per_turn": 0.4765625
+      },
+      "pair": 1,
+      "sha256": "4d96f76a902ac81c1ef3efeb1945014aacae3448fc0087c31f3080436a9ac6d6"
+    },
+    {
+      "case_engine": "stream/pi",
+      "input": "compact-pages-pi-paired/2-stream-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 540.0,
+        "lifecycle_ms": 1786.761,
+        "lifecycle_write_mib": 0.84375,
+        "max_sampled_anon_pss_mib": 105.2421875,
+        "max_sampled_pss_mib": 139.6357421875,
+        "max_sampled_rss_mib": 140.4453125,
+        "mean_turn_ms": 1674.083,
+        "turn_cpu_ms_per_turn": 500.0,
+        "turn_write_mib_per_turn": 0.4765625
+      },
+      "pair": 2,
+      "sha256": "88c327d2bdedcb3af00ce6ba839afd8d268e9ee3da565a7b2b3d3ed007574ca5"
+    },
+    {
+      "case_engine": "stream/rust",
+      "input": "compact-pages-pi-paired/0-stream-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 340.0,
+        "lifecycle_ms": 1808.038,
+        "lifecycle_write_mib": 5.6953125,
+        "max_sampled_anon_pss_mib": 101.12890625,
+        "max_sampled_pss_mib": 157.5107421875,
+        "max_sampled_rss_mib": 158.265625,
+        "mean_turn_ms": 1587.501,
+        "turn_cpu_ms_per_turn": 200.0,
+        "turn_write_mib_per_turn": 3.19921875
+      },
+      "pair": 0,
+      "sha256": "723109f6b53d75594867a7040eb09e95b034f5f78ffa9d65f1354935939c42f6"
+    },
+    {
+      "case_engine": "stream/rust",
+      "input": "compact-pages-pi-paired/1-stream-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 350.0,
+        "lifecycle_ms": 1804.097,
+        "lifecycle_write_mib": 5.69140625,
+        "max_sampled_anon_pss_mib": 99.90625,
+        "max_sampled_pss_mib": 156.4052734375,
+        "max_sampled_rss_mib": 157.16015625,
+        "mean_turn_ms": 1577.083,
+        "turn_cpu_ms_per_turn": 200.0,
+        "turn_write_mib_per_turn": 3.19921875
+      },
+      "pair": 1,
+      "sha256": "cec6995b5b727383bc569a8b19bb04814a2166aa4d4282b4aadca2d4136d9afb"
+    },
+    {
+      "case_engine": "stream/rust",
+      "input": "compact-pages-pi-paired/2-stream-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 350.0,
+        "lifecycle_ms": 1796.962,
+        "lifecycle_write_mib": 5.69921875,
+        "max_sampled_anon_pss_mib": 101.140625,
+        "max_sampled_pss_mib": 157.4169921875,
+        "max_sampled_rss_mib": 158.171875,
+        "mean_turn_ms": 1572.565,
+        "turn_cpu_ms_per_turn": 200.0,
+        "turn_write_mib_per_turn": 3.19921875
+      },
+      "pair": 2,
+      "sha256": "d60defc5f71af2afa8280889174f202f4c20a64b01a36f017d9cbf96c8083c1d"
+    },
+    {
+      "case_engine": "tool/pi",
+      "input": "compact-pages-pi-paired/0-tool-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 220.0,
+        "lifecycle_ms": 247.558,
+        "lifecycle_write_mib": 0.9375,
+        "max_sampled_anon_pss_mib": 94.22265625,
+        "max_sampled_pss_mib": 128.4912109375,
+        "max_sampled_rss_mib": 129.30078125,
+        "mean_turn_ms": 132.38,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.5703125
+      },
+      "pair": 0,
+      "sha256": "77ada334c1492f78bc0150f6f8896f175aee7909b2bbfce7d8fb9109152a7591"
+    },
+    {
+      "case_engine": "tool/pi",
+      "input": "compact-pages-pi-paired/1-tool-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 230.0,
+        "lifecycle_ms": 251.029,
+        "lifecycle_write_mib": 0.9375,
+        "max_sampled_anon_pss_mib": 92.3515625,
+        "max_sampled_pss_mib": 126.6318359375,
+        "max_sampled_rss_mib": 127.44140625,
+        "mean_turn_ms": 133.694,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.5703125
+      },
+      "pair": 1,
+      "sha256": "98cb3c85aa76058e420fb4779c9bab31d222cc323cd11512eee051940643e380"
+    },
+    {
+      "case_engine": "tool/pi",
+      "input": "compact-pages-pi-paired/2-tool-pi.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 245.798,
+        "lifecycle_write_mib": 0.9375,
+        "max_sampled_anon_pss_mib": 96.16015625,
+        "max_sampled_pss_mib": 130.4365234375,
+        "max_sampled_rss_mib": 131.24609375,
+        "mean_turn_ms": 132.837,
+        "turn_cpu_ms_per_turn": 160.0,
+        "turn_write_mib_per_turn": 0.5703125
+      },
+      "pair": 2,
+      "sha256": "225e1c4db1ec0b88dbfae4bd9acf3d898a943d9c9c5a84533c8361f499780012"
+    },
+    {
+      "case_engine": "tool/rust",
+      "input": "compact-pages-pi-paired/0-tool-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 290.0,
+        "lifecycle_ms": 326.31,
+        "lifecycle_write_mib": 7.625,
+        "max_sampled_anon_pss_mib": 101.63671875,
+        "max_sampled_pss_mib": 158.3154296875,
+        "max_sampled_rss_mib": 159.0703125,
+        "mean_turn_ms": 100.828,
+        "turn_cpu_ms_per_turn": 120.0,
+        "turn_write_mib_per_turn": 5.75390625
+      },
+      "pair": 0,
+      "sha256": "5ca95713eb3e06d574fe3a77691ba2ce67c2cc3448bfb74464737819c34966e6"
+    },
+    {
+      "case_engine": "tool/rust",
+      "input": "compact-pages-pi-paired/1-tool-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 290.0,
+        "lifecycle_ms": 333.157,
+        "lifecycle_write_mib": 7.6171875,
+        "max_sampled_anon_pss_mib": 101.79296875,
+        "max_sampled_pss_mib": 158.4599609375,
+        "max_sampled_rss_mib": 159.21484375,
+        "mean_turn_ms": 104.086,
+        "turn_cpu_ms_per_turn": 130.0,
+        "turn_write_mib_per_turn": 5.75390625
+      },
+      "pair": 1,
+      "sha256": "48b86f8d3de434a6531ec964ac1f95e3db4e2879004a5d0db1a524a42bb44265"
+    },
+    {
+      "case_engine": "tool/rust",
+      "input": "compact-pages-pi-paired/2-tool-rust.json",
+      "metrics": {
+        "lifecycle_cpu_ms": 290.0,
+        "lifecycle_ms": 334.117,
+        "lifecycle_write_mib": 7.62109375,
+        "max_sampled_anon_pss_mib": 101.578125,
+        "max_sampled_pss_mib": 158.4091796875,
+        "max_sampled_rss_mib": 159.1640625,
+        "mean_turn_ms": 101.034,
+        "turn_cpu_ms_per_turn": 130.0,
+        "turn_write_mib_per_turn": 5.75390625
+      },
+      "pair": 2,
+      "sha256": "17b7b7775f525301d0b03b284fe19b76774dadaa10e6f52b45aaf3c40527f07b"
+    }
+  ],
+  "scope": "CPU self user+system ticks; process-attributed writes (not device writes); runtime plus driver; verification phases explicit; evidence output after cleanup excluded; maximum sampled RSS/PSS, not peak; allocation count unavailable"
+}
