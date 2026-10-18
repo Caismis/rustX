@@ -27,7 +27,7 @@ previous layouts without migration, fallback or dual writes.
 The diagnostic profiler now calls this operation a node lookup, not capture
 authentication. Original-proof path/cache counters are removed rather than
 reported as successful proof work. Existing historical measurements retain their
-original meaning and labels. New profile and formal comparisons remain pending; no performance gain is claimed.
+original meaning and labels. The isolated comparison below shows small write savings and mixed CPU/memory results; no general performance gain is claimed.
 Validation passed: all-target/all-feature Clippy with warnings denied, all 407
 durable SQLite tests (253.37 seconds), and all 26 Source tests (1.05 seconds).
 The six lazy-preview fixtures and three corrected integrity/reuse checks also
@@ -50,3 +50,69 @@ operation diagnostics. `lookup_calls` counts native-key hash lookups and
 SQLite bytes or device I/O. Phase elapsed timings overlap and are not CPU shares.
 The previous authentication-specific environment variable and proof counters are
 removed, not emitted as successful zero-work authentication.
+
+## Isolated cloud comparison
+
+Compared lazy previews `b5840bd903d2508e693e1a4f80c3dc6173c9e29b`
+(binary `e6e3c0109de5202820201b1aa657f2e018223240934131829cb7e5761936a474`)
+with integrity/RawValue `5e37b9240290723483ac00855cee7eee58760c81`
+(binary `a12ce8c51d38264328ff06658d7ab971591a6dbb0fba1d752f498b3b936c0f54`,
+production tree `0873f5f136f276eb109f5de832a69d319932a41a`). The optimized build
+finished at 14:28:14 UTC on 2026-10-18. Fresh root artifacts, identical compiler,
+build settings and all five benchmark fixture hashes were verified. No compiler,
+test run or profiler overlapped formal timing.
+
+All 36 fresh-process samples, 846 full ordered requests and 18 paired comparisons
+passed. There are three interleaved pairs per workload; every sample is retained.
+The following ratios are medians of within-pair after/before ratios:
+
+| Workload | Turn wall | Turn CPU | Lifecycle wall | Lifecycle CPU | Sampled anon PSS | Process lifecycle writes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| short-small | 0.9737 | 1.0204 | 0.9743 | 1.0151 | 1.0096 | 0.9977 |
+| short-large | 0.9444 | 0.9547 | 0.9718 | 0.9723 | 0.9982 | 0.9973 |
+| stream | 0.9996 | 0.9048 | 0.9915 | 0.9211 | 1.0031 | 0.9955 |
+| large | 0.9260 | 1.0909 | 0.9613 | 1.0270 | 1.0062 | 0.9981 |
+| tool | 0.9793 | 1.0000 | 0.9743 | 1.0000 | 1.0193 | 0.9941 |
+| cancel | 1.0044 | 1.0000 | 0.9899 | 1.0000 | 1.0007 | 0.9949 |
+
+Lifecycle process-write savings are approximately 0.2–0.6%. This is not a general
+CPU or memory improvement: short-small turn CPU increases 2.0%, large turn CPU
+increases 9.1%, and tool sampled anonymous PSS increases 1.9%. Short-large turn
+wall/CPU improve 5.6%/4.5%, while cancel wall is slightly worse. Small CPU totals
+are coarse at 10 ms self-CPU resolution. These mixed results are weak support
+for the meaningful loss of independent original-capture authentication. The user
+will choose retained scope after final combined and leave-one-out evidence; no
+automatic reversal is performed. A reversal must retain the RawValue correctness
+repair and differential fixtures.
+
+A separate instrumented 32-turn diagnostic has exactly 672 WAL write-commit
+markers and 256 new events on each side. WAL frames fall from 16,355 to 16,348
+(67,382,600 to 67,353,760 frame bytes). The previous 32 redundant root-seat rows
+are absent. Endpoint dbstat attribution cannot exclude intermediate page reuse;
+complete traces, mixed/unmapped ownership and snapshot overhead are retained.
+This profile is outside formal timing and supplies no exclusive CPU percentage.
+
+CPU includes the runtime and measurement driver, not the sibling fake provider.
+Provider startup/control/cleanup costs are retained separately; the external
+controller keeps the provider alive through product cleanup. Lifecycle includes
+verification, checkpoint/close/reopen and cleanup, with evidence-file output
+after counter capture. RSS/PSS values are sampled maxima, not peaks; allocations
+are unavailable. Process-attributed writes and WAL frame bytes are not physical
+device writes. No unrelated medians are subtracted. DB/WAL logical and allocated
+footprints and phase counters remain in each complete sample. Cold physical-read
+bounds retain their tests; this comparison is not a first-read latency benchmark.
+
+[Complete evidence archive](evidence/integrity-measurements/measurements.tar.xz),
+[manifest](evidence/integrity-measurements/measurements.tar.manifest.json),
+[formal summary](evidence/integrity-measurements/formal-summary.json), and
+[WAL diagnostic](evidence/integrity-measurements/wal-summary.json) preserve all
+records, scripts and build identities; originals and executables remain in the
+cloud workspace. Atomic settlement and partial cadence are excluded.
+
+```sh
+python3 benchmarks/runtime/build-revision.py --repo /workspace/rustX-pi-integrity --target /workspace/issue-481-target --output /workspace/issue-481-evidence/pi-integrity-build
+python3 benchmarks/runtime/compare-revisions.py --before /workspace/issue-481-evidence/pi-lazy-build/conformance --after /workspace/issue-481-evidence/pi-integrity-build/conformance --output /workspace/issue-481-evidence/pi-integrity-matrix --pairs 3
+python3 benchmarks/runtime/summarize-comparisons.py /workspace/issue-481-evidence/pi-integrity-matrix
+python3 /workspace/issue-481-evidence/pi-integrity-profile/run.py
+python3 /workspace/issue-481-evidence/pi-integrity-profile/analyze.py
+```
