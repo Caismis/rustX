@@ -4,11 +4,13 @@ import {createHash} from 'node:crypto';
 import {normalized} from './pi-oracle.mjs';
 const [rustFile,piFile,output]=process.argv.slice(2);
 const rust=JSON.parse(await readFile(rustFile)),pi=JSON.parse(await readFile(piFile));
-assert.equal(rust.case,pi.scenario);
-assert.equal(rust.wire_requests.length,pi.requests.length);
+const sameEngine=pi.measurement_version !== undefined;
+const rightRequests=pi.wire_requests??pi.requests;
+assert.equal(rust.case,pi.scenario??pi.case);
+assert.equal(rust.wire_requests.length,rightRequests.length);
 const checked=[];
-for(let i=0;i<pi.requests.length;i++) {
- const r=rust.wire_requests[i],p=pi.requests[i];
+for(let i=0;i<rightRequests.length;i++) {
+ const r=rust.wire_requests[i],p=rightRequests[i];
  for(const key of ['method','path','protocol','model','index']) assert.deepEqual(r[key],p[key]);
  const workspaceOf=(wire)=>{
   for(const message of wire.body.messages) for(const call of message.tool_calls??[]) {
@@ -22,7 +24,8 @@ for(let i=0;i<pi.requests.length;i++) {
  // This is explicitly not full request equality or feature/durability equivalence.
  const {tools:rustTools,...rustCore}=a,{tools:piTools,...piCore}=b;
  assert.deepEqual(rustCore,piCore);
+ if(sameEngine) assert.deepEqual(a,b);
  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
- checked.push({index:i,coreEqual:true,fullRequestEqual:JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
+ checked.push({index:i,coreEqual:true,fullRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
 }
 await writeFile(output,JSON.stringify({case:rust.case,checked},null,2));

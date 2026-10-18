@@ -15,8 +15,8 @@ inspected Actions artifact listing did not identify that harness. This is a
 reconstruction, not a copy of the offline desktop work. Desktop numbers and
 the old in-process Pi faux-provider ratios are not cloud baselines.
 
-The session's tools do not expose its actual model/reasoning/service tier;
-the requested `gpt-6-astra medium, Standard` selection is unverified.
+The parent confirmed that the create API admitted `gpt-6-astra medium, Standard`.
+The session's tools do not independently expose these runtime settings.
 No permissions or security settings were changed.
 
 ## Build inputs
@@ -83,5 +83,6 @@ oracle tests passed, including negative cases. These smoke runs overlapped
 Rust compilation and are not performance evidence. Failed attempts are
 retained under `/workspace/issue-481-evidence` alongside their logs.
 
-The fresh baseline, profile, Source and canonical changes, final validation
-and draft PR are still pending. This file records progress, not acceptance.
+The fresh baseline and separate syscall profile are complete; see `baseline.md`.
+Source optimization is under focused validation. Canonical optimization, combined
+validation and the draft PR remain pending. This file records progress, not acceptance.

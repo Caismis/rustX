@@ -25,6 +25,10 @@ def delta(a,b,key):
     return None if x is None or y is None else y-x
 
 
+def scaled(value, divisor):
+    return None if value is None else value/divisor
+
+
 def sample(path):
     s=json.loads(path.read_text())
     lifecycle={p['phase']:p for p in s['lifecycle']}
@@ -36,13 +40,13 @@ def sample(path):
     measured=[p for p in samples if p['measured']]
     memory=[counters(p) for p in [*samples,*s['lifecycle']]]
     result={'file':str(path),'mean_turn_ms':statistics.mean(p['settled_us']/1000 for p in measured),
-        'turn_cpu_ms_per_turn':delta(start,end,'cpu_ms')/s['measured'],
-        'turn_write_mib_per_turn':delta(start,end,'write_bytes')/s['measured']/2**20,
+        'turn_cpu_ms_per_turn':scaled(delta(start,end,'cpu_ms'),s['measured']),
+        'turn_write_mib_per_turn':scaled(delta(start,end,'write_bytes'),s['measured']*2**20),
         'lifecycle_cpu_ms':delta(initial,final,'cpu_ms'),
-        'lifecycle_write_mib':delta(initial,final,'write_bytes')/2**20,
+        'lifecycle_write_mib':scaled(delta(initial,final,'write_bytes'),2**20),
         'lifecycle_ms':(final['elapsed_us']-initial['elapsed_us'])/1000,
-        'max_sampled_rss_mib':max(p['rss_kib'] for p in memory if p['rss_kib'] is not None)/1024,
-        'max_sampled_pss_mib':max(p['pss_kib'] for p in memory if p['pss_kib'] is not None)/1024,
+        'max_sampled_rss_mib':scaled(max((p['rss_kib'] for p in memory if p['rss_kib'] is not None),default=None),1024),
+        'max_sampled_pss_mib':scaled(max((p['pss_kib'] for p in memory if p['pss_kib'] is not None),default=None),1024),
         'phases':[]}
     previous=initial
     for current in s['lifecycle'][1:]:

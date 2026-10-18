@@ -65,7 +65,7 @@ Commands: `benchmarks/runtime/controller.py`, `summarize-http.py`, and
 `profile-source.py`, with the pinned build command in `progress.md`. The profile
 command and each run's complete argv are retained in their process records.
 The original raw evidence remains in `/workspace/issue-481-evidence`.
-`evidence/baseline.tar.gz` is a compact copy with `MANIFEST.json`; the separate
+`evidence/baseline.tar.xz` is a compact copy with `MANIFEST.json`; the separate
 manifest lists each original relative path, byte count, and SHA-256.
 
 Five Rust and eight Node oracle regressions passed. The initial Rust smoke
