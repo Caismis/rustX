@@ -5,9 +5,40 @@
     "baseline-manifest.json": "7993cb1b1a4e7bf684456d1224cd9e02065933d9c6ee05f319240b0845f63140",
     "source-manifest.json": "8063878c9c28fc014903d39489bf8bf70a531da58a2fe5d39b83f30e54f3f4c5",
     "combined.tar.manifest.json": "6b34f866869bd3bc990e6ca781db040d5b37055198a174136e169d530e1f26e2",
-    "reservations.tar.manifest.json": "5b949397ade5f1baf8a5371b5764f2fadc548d646b422d0ee113f09eb709dd0f"
+    "reservations.tar.manifest.json": "5b949397ade5f1baf8a5371b5764f2fadc548d646b422d0ee113f09eb709dd0f",
+    "statement-reuse.tar.manifest.json": "ca4ed153ebb30dc489d7d05f12753570984939ded68062223a677e9563604db0"
   },
   "files": {
+    "statement-reuse-cancel.json": {
+      "pairs": 3,
+      "sha256": "171e23b2bcf06cc15fd849216e0fd30e98272425730115621aeda832998eec2a",
+      "bytes": 6333
+    },
+    "statement-reuse-large.json": {
+      "pairs": 3,
+      "sha256": "ff7c673e6d073be37fc77e4b21646404abfd6d8fb325a7f7ff9bec2c95bdd0ae",
+      "bytes": 6362
+    },
+    "statement-reuse-short-large.json": {
+      "pairs": 3,
+      "sha256": "c69a941ae9b99ffec4049e0a98d5a36b7fd4bdf4f1b80a013fbaed9b872548dd",
+      "bytes": 7655
+    },
+    "statement-reuse-short-small.json": {
+      "pairs": 3,
+      "sha256": "675bac7dc5ab6bd4502e31d216a135ad24f5d1d4e09a04e6512c94f8e83b44d2",
+      "bytes": 7618
+    },
+    "statement-reuse-stream.json": {
+      "pairs": 3,
+      "sha256": "897831ce7e584b087c2a389fd9f2ea2df8bc50fa49bd7bba60af3ca63c5cb589",
+      "bytes": 6362
+    },
+    "statement-reuse-tool.json": {
+      "pairs": 3,
+      "sha256": "15af276c528d2dc79da966d22a0eb627070d4d0cd433aa179a6584cb6a435e91",
+      "bytes": 6324
+    },
     "reservations-cancel.json": {
       "pairs": 3,
       "sha256": "ff5e8f1ed38b6871e574a507194b3d72a41799de61c972e5326c87f1c40c0c96",

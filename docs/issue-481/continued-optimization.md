@@ -49,3 +49,32 @@ profiling remains separate from these formal measurements.
 comparison, process status, test/build log and summary. Originals remain under
 `/workspace/issue-481-evidence`. Further stages, fresh Pi controls, combined
 comparison and final exact-head FULL/independent review remain outstanding.
+
+## Request-fragment statement reuse
+
+Production commit `6d25b170` uses the existing bounded rusqlite statement cache
+for repeated page inserts, spool reads/deletes and augmentation inserts. It does
+not enlarge the cache or change transaction/connection ownership. The spool
+cursor and statement are still dropped before deletion. All 370 durable tests
+passed, including new rollback, changed-byte digest rejection and dropped-table
+invalidation coverage. After executable SHA-256:
+`4c557c078820cf6ea76c69a4d8c5ec231deef9a9185b098a41588d174e6d2916`;
+before is the reservation executable above. All 36 samples and full ordered
+request comparisons passed.
+
+| Workload | Wall ratio | CPU ratio | Sampled RSS ratio | Lifecycle process-write ratio |
+|---|---:|---:|---:|---:|
+| short-small | 0.9973 | 1.0030 | 1.0047 | 1.0008 |
+| short-large | 0.9940 | 1.0145 | 1.0074 | 1.0003 |
+| stream | 0.9984 | 1.0000 | 1.0137 | 0.9981 |
+| large | 0.9916 | 1.0435 | 1.0130 | 1.0000 |
+| tool | 0.9587 | 1.0000 | 1.0113 | 0.9982 |
+| cancel | 0.9639 | 0.8571 | 1.0195 | 1.0000 |
+
+This narrow reuse does not demonstrate a broad throughput or memory gain.
+The profile's cumulative prepare samples include many other call sites and
+cannot be attributed entirely to these statements. No canonical validation scan
+was removed. `evidence/statement-reuse.tar.xz` retains all samples, tests and
+build log; its manifest verifies every archived file. Source editing and
+formatting ran while samples were collected; compilation and test execution
+started only after the matrix completed.
