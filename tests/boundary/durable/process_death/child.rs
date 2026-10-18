@@ -851,12 +851,18 @@ fn call_steps(index: u32, call: &ScriptedCall) -> Vec<FakeStep> {
         .collect()
 }
 
+/// A fixed pressure-sized payload keeps crash cuts reachable without clocks
+/// or sleeps, including with the 64 KiB partial policy.
+fn wide_text_chunk() -> FakeStep {
+    text(&format!("{WIDE_TEXT}{}", ".".repeat(65_536)))
+}
+
 /// One plain streaming text turn whose payload provably crosses the
 /// publication byte threshold before the terminal event.
 fn wide_text_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         text(" tail"),
         done(ModelFinishReason::Stop),
     ]
@@ -869,7 +875,7 @@ fn wide_text_turn() -> Vec<FakeStep> {
 fn unresolved_output_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::Failed {
             error: ModelError {
                 kind: ModelErrorKind::Transport,
@@ -891,7 +897,7 @@ fn unresolved_output_turn() -> Vec<FakeStep> {
 fn retryable_unresolved_output_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::Failed {
             error: ModelError {
                 kind: ModelErrorKind::Transport,
@@ -928,7 +934,7 @@ fn short_text_turn() -> Vec<FakeStep> {
 fn structurally_incomplete_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::ToolCallStarted {
             block_index: ContentBlockIndex::new(1),
             call: ToolCallStart {
@@ -948,7 +954,7 @@ fn structurally_incomplete_turn() -> Vec<FakeStep> {
 
 /// A turn that proposes one complete tool call after releasing frames.
 fn calling_turn(call: &ScriptedCall) -> Vec<FakeStep> {
-    let mut steps = vec![started(), text(WIDE_TEXT)];
+    let mut steps = vec![started(), wide_text_chunk()];
     steps.extend(call_steps(1, call));
     steps.push(done(ModelFinishReason::ToolCalls));
     steps
@@ -1435,7 +1441,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 vec![
                     vec![
                         started(),
-                        text(WIDE_TEXT),
+                        wide_text_chunk(),
                         FakeStep::ParkUntilReleased(receiver),
                         text(" tail"),
                         done(ModelFinishReason::Stop),

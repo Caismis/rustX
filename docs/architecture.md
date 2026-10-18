@@ -5881,15 +5881,20 @@ Provider chunk size is not the publication unit:
 ```text
 Provider ModelStreamItem::Event canonical delta
   -> in-memory assembler            (canonical message assembly)
-  -> bounded publication coalescer  (bytes / latency / structure / terminal)
+  -> bounded publication coalescer  (pressure / latency / terminal)
   -> typed publication frame
   -> durable publication staging
   -> user-facing release
 ```
 
 The coalescer (`src/publication/coalescer.rs`) flushes on a bounded
-deterministic policy: a maximum byte threshold, a structural boundary (a
-tool-call proposal start or completion), or the stream terminal. When the
+deterministic policy: a 100 ms oldest-payload timer, 64 KiB of conservative
+payload weight, 128 nonmergeable frames, or the stream terminal. Structural
+tool transitions retain separate ordered frames but do not force a transaction.
+Tool identities and completed arguments count toward pressure; argument counting
+stops at the byte budget without allocating an encoded copy. A single oversized
+provider payload can exceed the limit and flushes immediately. These pressure
+flushes are an explicit difference from Pi Durable's timer-only cadence. When the
 first payload enters an empty buffer, it owns one absolute monotonic deadline
 `oldest_pending_time + max_latency`; later canonical provider events never reset it. The
 coalescer owns that deadline and asks the runtime monotonic clock for the

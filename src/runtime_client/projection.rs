@@ -93,6 +93,8 @@
 //! Goal change is a durable phase/revision change: there is no activation-only
 //! Goal event, and no snapshot or event can represent an Active-but-inert Goal.
 
+mod canonical_tools;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -5029,6 +5031,9 @@ impl RuntimeClientProjection {
             if canonical_header_position(header).is_some_and(|position| {
                 position >= batch.first_position && position <= batch.last_position
             }) {
+                if batch.read_cut.ledger_through > self.canonical_observed_through {
+                    self.install_canonical_tool_proposals(attempt_id, header, &mut events);
+                }
                 self.rebind_canonical_foreground(header, &mut events);
             }
         }

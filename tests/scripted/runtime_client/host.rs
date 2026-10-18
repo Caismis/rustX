@@ -1417,7 +1417,7 @@ async fn streamed_deltas_publish_no_adoption_eligibility_change() {
     ];
     steps.extend((0..DELTAS).map(|index| {
         FakeStep::Emit(ModelEvent::TextDelta {
-            block_index: ContentBlockIndex::new(0),
+            block_index: ContentBlockIndex::new(u32::try_from(index % 2).unwrap()),
             text: format!("{index} "),
         })
     }));
@@ -1529,9 +1529,19 @@ async fn streamed_deltas_publish_no_adoption_eligibility_change() {
     assert_eq!(committed.len(), 1);
     assert_eq!(
         committed[0].content,
-        vec![rustx::message::types::AssistantContentBlock::Text(
-            rustx::message::content::TextBlock { text: expected }
-        )],
+        (0..2)
+            .map(|block| rustx::message::types::AssistantContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: (block..DELTAS)
+                        .step_by(2)
+                        .fold(String::new(), |mut output, index| {
+                            use std::fmt::Write as _;
+                            write!(output, "{index} ").expect("String write");
+                            output
+                        })
+                }
+            ))
+            .collect::<Vec<_>>(),
         "the final notification supplies every byte including the unflushed tail"
     );
     let (first, last) = (deltas[0], deltas[deltas.len() - 1]);
