@@ -1,0 +1,2932 @@
+{
+  "append_mode": null,
+  "append_counter_scope": null,
+  "memory_scope": "all observed lifecycle and operation counters; sampled maxima, not peaks",
+  "scope": "See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction",
+  "samples": {
+    "cancel": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-cancel-before.json",
+          "mean_turn_ms": 44.671,
+          "turn_cpu_ms_per_turn": 70.0,
+          "turn_write_mib_per_turn": 1.4609375,
+          "lifecycle_cpu_ms": 220.0,
+          "lifecycle_write_mib": 3.85546875,
+          "lifecycle_ms": 267.164,
+          "max_sampled_rss_mib": 158.578125,
+          "max_sampled_pss_mib": 157.8515625,
+          "max_sampled_anon_pss_mib": 101.36328125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 73.785,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 124.236,
+              "cpu_ms": 120.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 48.688,
+              "cpu_ms": 70.0,
+              "write_bytes": 1531904
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.917,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.735,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.039,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.904,
+              "cpu_ms": 10.0,
+              "write_bytes": 823296
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.98,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.88,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-cancel-after.json",
+          "mean_turn_ms": 43.464,
+          "turn_cpu_ms_per_turn": 50.0,
+          "turn_write_mib_per_turn": 1.45703125,
+          "lifecycle_cpu_ms": 200.0,
+          "lifecycle_write_mib": 3.8359375,
+          "lifecycle_ms": 264.456,
+          "max_sampled_rss_mib": 155.46875,
+          "max_sampled_pss_mib": 154.744140625,
+          "max_sampled_anon_pss_mib": 98.5703125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.848,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 121.779,
+              "cpu_ms": 120.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 47.039,
+              "cpu_ms": 60.0,
+              "write_bytes": 1527808
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.027,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.305,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.139,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.569,
+              "cpu_ms": 10.0,
+              "write_bytes": 819200
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.928,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.822,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9729802332609523,
+          "turn_cpu_ms_per_turn": 0.7142857142857143,
+          "turn_write_mib_per_turn": 0.9973262032085561,
+          "lifecycle_cpu_ms": 0.9090909090909091,
+          "lifecycle_write_mib": 0.9949341438703141,
+          "lifecycle_ms": 0.989863903819377,
+          "max_sampled_rss_mib": 0.9803921568627451,
+          "max_sampled_pss_mib": 0.9803142786439,
+          "max_sampled_anon_pss_mib": 0.9724459516744384
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-cancel-before.json",
+          "mean_turn_ms": 42.328,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.4609375,
+          "lifecycle_cpu_ms": 200.0,
+          "lifecycle_write_mib": 3.85546875,
+          "lifecycle_ms": 259.57,
+          "max_sampled_rss_mib": 157.08984375,
+          "max_sampled_pss_mib": 156.36328125,
+          "max_sampled_anon_pss_mib": 99.92578125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.918,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 121.192,
+              "cpu_ms": 120.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 45.722,
+              "cpu_ms": 60.0,
+              "write_bytes": 1531904
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.013,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.327,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.154,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.524,
+              "cpu_ms": 0.0,
+              "write_bytes": 823296
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.919,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.801,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-cancel-after.json",
+          "mean_turn_ms": 43.442,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.45703125,
+          "lifecycle_cpu_ms": 200.0,
+          "lifecycle_write_mib": 3.83203125,
+          "lifecycle_ms": 256.071,
+          "max_sampled_rss_mib": 157.0625,
+          "max_sampled_pss_mib": 156.337890625,
+          "max_sampled_anon_pss_mib": 100.0,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.163,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 119.633,
+              "cpu_ms": 110.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 46.837,
+              "cpu_ms": 80.0,
+              "write_bytes": 1527808
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.575,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.042,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.064,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.679,
+              "cpu_ms": 0.0,
+              "write_bytes": 819200
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.253,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.825,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 1.0263182763182763,
+          "turn_cpu_ms_per_turn": 1.0,
+          "turn_write_mib_per_turn": 0.9973262032085561,
+          "lifecycle_cpu_ms": 1.0,
+          "lifecycle_write_mib": 0.993920972644377,
+          "lifecycle_ms": 0.9865200138690913,
+          "max_sampled_rss_mib": 0.9998259355961706,
+          "max_sampled_pss_mib": 0.9998376177271479,
+          "max_sampled_anon_pss_mib": 1.0007427387514172
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-cancel-before.json",
+          "mean_turn_ms": 42.203,
+          "turn_cpu_ms_per_turn": 60.0,
+          "turn_write_mib_per_turn": 1.4609375,
+          "lifecycle_cpu_ms": 210.0,
+          "lifecycle_write_mib": 3.85546875,
+          "lifecycle_ms": 263.65,
+          "max_sampled_rss_mib": 157.03515625,
+          "max_sampled_pss_mib": 156.30859375,
+          "max_sampled_anon_pss_mib": 99.73046875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.45,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 126.507,
+              "cpu_ms": 130.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 45.994,
+              "cpu_ms": 60.0,
+              "write_bytes": 1531904
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.938,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.448,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.163,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.191,
+              "cpu_ms": 20.0,
+              "write_bytes": 823296
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.088,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.871,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-cancel-after.json",
+          "mean_turn_ms": 42.389,
+          "turn_cpu_ms_per_turn": 70.0,
+          "turn_write_mib_per_turn": 1.45703125,
+          "lifecycle_cpu_ms": 220.0,
+          "lifecycle_write_mib": 3.8359375,
+          "lifecycle_ms": 292.259,
+          "max_sampled_rss_mib": 157.73046875,
+          "max_sampled_pss_mib": 157.005859375,
+          "max_sampled_anon_pss_mib": 100.3203125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 88.293,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.02,
+              "cpu_ms": 120.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 47.829,
+              "cpu_ms": 70.0,
+              "write_bytes": 1527808
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.783,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.107,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.165,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.674,
+              "cpu_ms": 10.0,
+              "write_bytes": 819200
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 6.828,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.56,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 1.004407269625382,
+          "turn_cpu_ms_per_turn": 1.1666666666666667,
+          "turn_write_mib_per_turn": 0.9973262032085561,
+          "lifecycle_cpu_ms": 1.0476190476190477,
+          "lifecycle_write_mib": 0.9949341438703141,
+          "lifecycle_ms": 1.108511283899109,
+          "max_sampled_rss_mib": 1.004427750553469,
+          "max_sampled_pss_mib": 1.004460827189804,
+          "max_sampled_anon_pss_mib": 1.0059143785985665
+        }
+      }
+    ],
+    "large": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-large-before.json",
+          "mean_turn_ms": 203.493,
+          "turn_cpu_ms_per_turn": 220.0,
+          "turn_write_mib_per_turn": 10.45703125,
+          "lifecycle_cpu_ms": 370.0,
+          "lifecycle_write_mib": 12.66015625,
+          "lifecycle_ms": 423.525,
+          "max_sampled_rss_mib": 160.5078125,
+          "max_sampled_pss_mib": 159.78125,
+          "max_sampled_anon_pss_mib": 103.296875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.586,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 122.816,
+              "cpu_ms": 120.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 208.522,
+              "cpu_ms": 220.0,
+              "write_bytes": 10964992
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.894,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.91,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.29,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.712,
+              "cpu_ms": 0.0,
+              "write_bytes": 618496
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.932,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.863,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-large-after.json",
+          "mean_turn_ms": 188.425,
+          "turn_cpu_ms_per_turn": 240.0,
+          "turn_write_mib_per_turn": 10.44921875,
+          "lifecycle_cpu_ms": 380.0,
+          "lifecycle_write_mib": 12.63671875,
+          "lifecycle_ms": 407.15,
+          "max_sampled_rss_mib": 158.75,
+          "max_sampled_pss_mib": 158.025390625,
+          "max_sampled_anon_pss_mib": 101.921875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.109,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 123.065,
+              "cpu_ms": 120.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 192.911,
+              "cpu_ms": 240.0,
+              "write_bytes": 10956800
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.086,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.347,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.051,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.71,
+              "cpu_ms": 10.0,
+              "write_bytes": 618496
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.012,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.859,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9259532268923256,
+          "turn_cpu_ms_per_turn": 1.0909090909090908,
+          "turn_write_mib_per_turn": 0.999252895031752,
+          "lifecycle_cpu_ms": 1.027027027027027,
+          "lifecycle_write_mib": 0.9981487195310089,
+          "lifecycle_ms": 0.9613364028097515,
+          "max_sampled_rss_mib": 0.9890484302750061,
+          "max_sampled_pss_mib": 0.9890108546841385,
+          "max_sampled_anon_pss_mib": 0.9866888519134775
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-large-before.json",
+          "mean_turn_ms": 197.218,
+          "turn_cpu_ms_per_turn": 220.0,
+          "turn_write_mib_per_turn": 10.45703125,
+          "lifecycle_cpu_ms": 360.0,
+          "lifecycle_write_mib": 12.65625,
+          "lifecycle_ms": 417.925,
+          "max_sampled_rss_mib": 154.91015625,
+          "max_sampled_pss_mib": 154.18359375,
+          "max_sampled_anon_pss_mib": 100.99609375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 68.811,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 127.029,
+              "cpu_ms": 120.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 201.277,
+              "cpu_ms": 220.0,
+              "write_bytes": 10964992
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.871,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.451,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.041,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.643,
+              "cpu_ms": 0.0,
+              "write_bytes": 618496
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.959,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.843,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-large-after.json",
+          "mean_turn_ms": 202.635,
+          "turn_cpu_ms_per_turn": 210.0,
+          "turn_write_mib_per_turn": 10.44921875,
+          "lifecycle_cpu_ms": 370.0,
+          "lifecycle_write_mib": 12.63671875,
+          "lifecycle_ms": 430.064,
+          "max_sampled_rss_mib": 161.66796875,
+          "max_sampled_pss_mib": 160.943359375,
+          "max_sampled_anon_pss_mib": 104.296875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.764,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 129.795,
+              "cpu_ms": 130.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 206.711,
+              "cpu_ms": 220.0,
+              "write_bytes": 10956800
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.103,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.501,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.81,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.581,
+              "cpu_ms": 0.0,
+              "write_bytes": 618496
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.706,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.093,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 1.0274670669005872,
+          "turn_cpu_ms_per_turn": 0.9545454545454546,
+          "turn_write_mib_per_turn": 0.999252895031752,
+          "lifecycle_cpu_ms": 1.0277777777777777,
+          "lifecycle_write_mib": 0.9984567901234568,
+          "lifecycle_ms": 1.0290458814380572,
+          "max_sampled_rss_mib": 1.0436240764556068,
+          "max_sampled_pss_mib": 1.043842314610727,
+          "max_sampled_anon_pss_mib": 1.0326822664861728
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-large-before.json",
+          "mean_turn_ms": 202.666,
+          "turn_cpu_ms_per_turn": 210.0,
+          "turn_write_mib_per_turn": 10.45703125,
+          "lifecycle_cpu_ms": 390.0,
+          "lifecycle_write_mib": 12.66015625,
+          "lifecycle_ms": 449.285,
+          "max_sampled_rss_mib": 159.87109375,
+          "max_sampled_pss_mib": 159.14453125,
+          "max_sampled_anon_pss_mib": 102.8046875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 72.351,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 144.702,
+              "cpu_ms": 140.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 209.003,
+              "cpu_ms": 210.0,
+              "write_bytes": 10964992
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.861,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.846,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.287,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.297,
+              "cpu_ms": 0.0,
+              "write_bytes": 618496
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.057,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.881,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-large-after.json",
+          "mean_turn_ms": 183.629,
+          "turn_cpu_ms_per_turn": 230.0,
+          "turn_write_mib_per_turn": 10.44921875,
+          "lifecycle_cpu_ms": 380.0,
+          "lifecycle_write_mib": 12.6328125,
+          "lifecycle_ms": 411.177,
+          "max_sampled_rss_mib": 160.78125,
+          "max_sampled_pss_mib": 160.056640625,
+          "max_sampled_anon_pss_mib": 103.4453125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.214,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.919,
+              "cpu_ms": 120.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 188.98,
+              "cpu_ms": 230.0,
+              "write_bytes": 10956800
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.502,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 4.728,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.242,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 7.74,
+              "cpu_ms": 10.0,
+              "write_bytes": 618496
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.967,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.885,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9060671252208066,
+          "turn_cpu_ms_per_turn": 1.0952380952380953,
+          "turn_write_mib_per_turn": 0.999252895031752,
+          "lifecycle_cpu_ms": 0.9743589743589743,
+          "lifecycle_write_mib": 0.9978401727861771,
+          "lifecycle_ms": 0.9151807872508542,
+          "max_sampled_rss_mib": 1.0056930632589733,
+          "max_sampled_pss_mib": 1.0057313271642816,
+          "max_sampled_anon_pss_mib": 1.0062314765559692
+        }
+      }
+    ],
+    "short-large": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-short-large-before.json",
+          "mean_turn_ms": 71.90465625,
+          "turn_cpu_ms_per_turn": 110.625,
+          "turn_write_mib_per_turn": 2.74169921875,
+          "lifecycle_cpu_ms": 14750.0,
+          "lifecycle_write_mib": 252.99609375,
+          "lifecycle_ms": 11787.023,
+          "max_sampled_rss_mib": 289.296875,
+          "max_sampled_pss_mib": 288.5703125,
+          "max_sampled_anon_pss_mib": 231.45703125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 68.947,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.409,
+              "cpu_ms": 120.0,
+              "write_bytes": 1662976
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6863.172,
+              "cpu_ms": 9900.0,
+              "write_bytes": 262365184
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2299.092,
+              "cpu_ms": 2300.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 21.011,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 4.16,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 14.139,
+              "cpu_ms": 20.0,
+              "write_bytes": 1220608
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2386.335,
+              "cpu_ms": 2390.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 4.758,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-short-large-after.json",
+          "mean_turn_ms": 65.7281875,
+          "turn_cpu_ms_per_turn": 100.0,
+          "turn_write_mib_per_turn": 2.73388671875,
+          "lifecycle_cpu_ms": 14120.0,
+          "lifecycle_write_mib": 252.1953125,
+          "lifecycle_ms": 11325.528,
+          "max_sampled_rss_mib": 288.8203125,
+          "max_sampled_pss_mib": 288.095703125,
+          "max_sampled_anon_pss_mib": 231.9296875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 78.498,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 126.537,
+              "cpu_ms": 130.0,
+              "write_bytes": 1642496
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6499.97,
+              "cpu_ms": 9390.0,
+              "write_bytes": 261574656
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2262.776,
+              "cpu_ms": 2250.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 20.028,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.547,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.992,
+              "cpu_ms": 0.0,
+              "write_bytes": 1191936
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2318.553,
+              "cpu_ms": 2320.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 4.627,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.914101964015717,
+          "turn_cpu_ms_per_turn": 0.903954802259887,
+          "turn_write_mib_per_turn": 0.9971504897595725,
+          "lifecycle_cpu_ms": 0.9572881355932203,
+          "lifecycle_write_mib": 0.9968348078496765,
+          "lifecycle_ms": 0.9608471961071087,
+          "max_sampled_rss_mib": 0.998352687010532,
+          "max_sampled_pss_mib": 0.9983553076860601,
+          "max_sampled_anon_pss_mib": 1.0020420906958298
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-short-large-before.json",
+          "mean_turn_ms": 65.69609375,
+          "turn_cpu_ms_per_turn": 98.125,
+          "turn_write_mib_per_turn": 2.740478515625,
+          "lifecycle_cpu_ms": 13840.0,
+          "lifecycle_write_mib": 252.84375,
+          "lifecycle_ms": 11198.731,
+          "max_sampled_rss_mib": 288.3671875,
+          "max_sampled_pss_mib": 287.640625,
+          "max_sampled_anon_pss_mib": 231.125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.689,
+              "cpu_ms": 0.0,
+              "write_bytes": 8192
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.522,
+              "cpu_ms": 130.0,
+              "write_bytes": 1658880
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6338.671,
+              "cpu_ms": 9060.0,
+              "write_bytes": 262221824
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2276.362,
+              "cpu_ms": 2270.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 22.27,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 4.415,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 16.484,
+              "cpu_ms": 10.0,
+              "write_bytes": 1204224
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2334.598,
+              "cpu_ms": 2340.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 4.72,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-short-large-after.json",
+          "mean_turn_ms": 63.04034375,
+          "turn_cpu_ms_per_turn": 94.6875,
+          "turn_write_mib_per_turn": 2.73291015625,
+          "lifecycle_cpu_ms": 13820.0,
+          "lifecycle_write_mib": 252.16796875,
+          "lifecycle_ms": 11222.941,
+          "max_sampled_rss_mib": 287.9921875,
+          "max_sampled_pss_mib": 287.267578125,
+          "max_sampled_anon_pss_mib": 230.7109375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 73.509,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 127.397,
+              "cpu_ms": 130.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6257.588,
+              "cpu_ms": 8940.0,
+              "write_bytes": 261550080
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2337.605,
+              "cpu_ms": 2320.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 19.619,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.691,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 12.347,
+              "cpu_ms": 20.0,
+              "write_bytes": 1191936
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2387.261,
+              "cpu_ms": 2370.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 4.924,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9595752220808409,
+          "turn_cpu_ms_per_turn": 0.964968152866242,
+          "turn_write_mib_per_turn": 0.9972383073496659,
+          "lifecycle_cpu_ms": 0.9985549132947977,
+          "lifecycle_write_mib": 0.9973272772216043,
+          "lifecycle_ms": 1.0021618520884197,
+          "max_sampled_rss_mib": 0.9986995746525426,
+          "max_sampled_pss_mib": 0.9987030800152099,
+          "max_sampled_anon_pss_mib": 0.9982084910762574
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-short-large-before.json",
+          "mean_turn_ms": 69.099125,
+          "turn_cpu_ms_per_turn": 103.4375,
+          "turn_write_mib_per_turn": 2.7413330078125,
+          "lifecycle_cpu_ms": 14100.0,
+          "lifecycle_write_mib": 252.84375,
+          "lifecycle_ms": 11407.973,
+          "max_sampled_rss_mib": 290.27734375,
+          "max_sampled_pss_mib": 289.55078125,
+          "max_sampled_anon_pss_mib": 233.1640625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.312,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.355,
+              "cpu_ms": 120.0,
+              "write_bytes": 1662976
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6571.614,
+              "cpu_ms": 9350.0,
+              "write_bytes": 262205440
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2266.929,
+              "cpu_ms": 2270.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 20.812,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 3.011,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 12.405,
+              "cpu_ms": 20.0,
+              "write_bytes": 1216512
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2334.74,
+              "cpu_ms": 2330.0,
+              "write_bytes": 36864
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 3.795,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-short-large-after.json",
+          "mean_turn_ms": 65.26040625,
+          "turn_cpu_ms_per_turn": 98.75,
+          "turn_write_mib_per_turn": 2.736572265625,
+          "lifecycle_cpu_ms": 13710.0,
+          "lifecycle_write_mib": 252.3359375,
+          "lifecycle_ms": 11086.563,
+          "max_sampled_rss_mib": 288.1953125,
+          "max_sampled_pss_mib": 287.470703125,
+          "max_sampled_anon_pss_mib": 230.77734375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.073,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.205,
+              "cpu_ms": 130.0,
+              "write_bytes": 1642496
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 6219.012,
+              "cpu_ms": 8920.0,
+              "write_bytes": 261709824
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 2286.033,
+              "cpu_ms": 2280.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 19.323,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.405,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.736,
+              "cpu_ms": 0.0,
+              "write_bytes": 1200128
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 2348.563,
+              "cpu_ms": 2340.0,
+              "write_bytes": 36864
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 3.213,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9444462031899825,
+          "turn_cpu_ms_per_turn": 0.9546827794561934,
+          "turn_write_mib_per_turn": 0.9982633477312197,
+          "lifecycle_cpu_ms": 0.9723404255319149,
+          "lifecycle_write_mib": 0.9979915956000495,
+          "lifecycle_ms": 0.9718258449594858,
+          "max_sampled_rss_mib": 0.9928274414285907,
+          "max_sampled_pss_mib": 0.9928161888701518,
+          "max_sampled_anon_pss_mib": 0.989763779527559
+        }
+      }
+    ],
+    "short-small": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-short-small-before.json",
+          "mean_turn_ms": 60.94471875,
+          "turn_cpu_ms_per_turn": 91.875,
+          "turn_write_mib_per_turn": 2.5196533203125,
+          "lifecycle_cpu_ms": 4630.0,
+          "lifecycle_write_mib": 100.8046875,
+          "lifecycle_ms": 3676.378,
+          "max_sampled_rss_mib": 203.94140625,
+          "max_sampled_pss_mib": 203.21484375,
+          "max_sampled_anon_pss_mib": 146.78515625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 125.114,
+              "cpu_ms": 0.0,
+              "write_bytes": 16384
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.065,
+              "cpu_ms": 130.0,
+              "write_bytes": 1691648
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2511.449,
+              "cpu_ms": 3580.0,
+              "write_bytes": 103079936
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 434.258,
+              "cpu_ms": 450.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 13.511,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.684,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.073,
+              "cpu_ms": 10.0,
+              "write_bytes": 880640
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 446.419,
+              "cpu_ms": 440.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.805,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-short-small-after.json",
+          "mean_turn_ms": 59.3423125,
+          "turn_cpu_ms_per_turn": 93.75,
+          "turn_write_mib_per_turn": 2.513671875,
+          "lifecycle_cpu_ms": 4700.0,
+          "lifecycle_write_mib": 100.50390625,
+          "lifecycle_ms": 3552.407,
+          "max_sampled_rss_mib": 202.9140625,
+          "max_sampled_pss_mib": 202.189453125,
+          "max_sampled_anon_pss_mib": 145.5234375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.462,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.149,
+              "cpu_ms": 120.0,
+              "write_bytes": 1642496
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2458.661,
+              "cpu_ms": 3680.0,
+              "write_bytes": 102830080
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 428.295,
+              "cpu_ms": 440.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 12.926,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.75,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.66,
+              "cpu_ms": 0.0,
+              "write_bytes": 876544
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 439.665,
+              "cpu_ms": 450.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.839,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9737072172475978,
+          "turn_cpu_ms_per_turn": 1.0204081632653061,
+          "turn_write_mib_per_turn": 0.9976260840075578,
+          "lifecycle_cpu_ms": 1.0151187904967602,
+          "lifecycle_write_mib": 0.9970161977834612,
+          "lifecycle_ms": 0.9662790387713124,
+          "max_sampled_rss_mib": 0.994962554348867,
+          "max_sampled_pss_mib": 0.9949541548930281,
+          "max_sampled_anon_pss_mib": 0.9914043164701812
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-short-small-before.json",
+          "mean_turn_ms": 61.77303125,
+          "turn_cpu_ms_per_turn": 91.25,
+          "turn_write_mib_per_turn": 2.5201416015625,
+          "lifecycle_cpu_ms": 4590.0,
+          "lifecycle_write_mib": 100.76171875,
+          "lifecycle_ms": 3629.62,
+          "max_sampled_rss_mib": 202.69921875,
+          "max_sampled_pss_mib": 201.97265625,
+          "max_sampled_anon_pss_mib": 145.55078125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.003,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 123.646,
+              "cpu_ms": 120.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2541.756,
+              "cpu_ms": 3570.0,
+              "write_bytes": 103092224
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 428.229,
+              "cpu_ms": 430.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 11.911,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.78,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.186,
+              "cpu_ms": 10.0,
+              "write_bytes": 872448
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 441.363,
+              "cpu_ms": 430.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.746,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-short-small-after.json",
+          "mean_turn_ms": 60.659125,
+          "turn_cpu_ms_per_turn": 93.75,
+          "turn_write_mib_per_turn": 2.5177001953125,
+          "lifecycle_cpu_ms": 4660.0,
+          "lifecycle_write_mib": 100.74609375,
+          "lifecycle_ms": 3604.742,
+          "max_sampled_rss_mib": 206.01953125,
+          "max_sampled_pss_mib": 205.294921875,
+          "max_sampled_anon_pss_mib": 148.234375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.739,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 130.064,
+              "cpu_ms": 130.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2501.888,
+              "cpu_ms": 3620.0,
+              "write_bytes": 102965248
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 431.093,
+              "cpu_ms": 430.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 13.942,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.82,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.179,
+              "cpu_ms": 0.0,
+              "write_bytes": 1003520
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 440.899,
+              "cpu_ms": 440.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 3.118,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9819677579769084,
+          "turn_cpu_ms_per_turn": 1.0273972602739727,
+          "turn_write_mib_per_turn": 0.9990312424315815,
+          "lifecycle_cpu_ms": 1.0152505446623095,
+          "lifecycle_write_mib": 0.9998449311882148,
+          "lifecycle_ms": 0.9931458389583483,
+          "max_sampled_rss_mib": 1.0163804898730031,
+          "max_sampled_pss_mib": 1.0164490861618798,
+          "max_sampled_anon_pss_mib": 1.0184375083867852
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-short-small-before.json",
+          "mean_turn_ms": 64.589625,
+          "turn_cpu_ms_per_turn": 98.125,
+          "turn_write_mib_per_turn": 2.5186767578125,
+          "lifecycle_cpu_ms": 4840.0,
+          "lifecycle_write_mib": 100.83984375,
+          "lifecycle_ms": 3744.707,
+          "max_sampled_rss_mib": 202.47265625,
+          "max_sampled_pss_mib": 201.74609375,
+          "max_sampled_anon_pss_mib": 144.9375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 74.352,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 129.909,
+              "cpu_ms": 130.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2637.907,
+              "cpu_ms": 3800.0,
+              "write_bytes": 103108608
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 437.361,
+              "cpu_ms": 450.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 12.481,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.157,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.42,
+              "cpu_ms": 0.0,
+              "write_bytes": 884736
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 437.825,
+              "cpu_ms": 440.0,
+              "write_bytes": 36864
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 3.295,
+              "cpu_ms": 0.0,
+              "write_bytes": 49152
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-short-small-after.json",
+          "mean_turn_ms": 61.34403125,
+          "turn_cpu_ms_per_turn": 92.1875,
+          "turn_write_mib_per_turn": 2.516357421875,
+          "lifecycle_cpu_ms": 4650.0,
+          "lifecycle_write_mib": 100.609375,
+          "lifecycle_ms": 3648.498,
+          "max_sampled_rss_mib": 203.7890625,
+          "max_sampled_pss_mib": 203.064453125,
+          "max_sampled_anon_pss_mib": 146.3359375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 77.843,
+              "cpu_ms": 0.0,
+              "write_bytes": 16384
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.761,
+              "cpu_ms": 120.0,
+              "write_bytes": 1667072
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 2512.766,
+              "cpu_ms": 3600.0,
+              "write_bytes": 102920192
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 448.523,
+              "cpu_ms": 450.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 14.975,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 3.115,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.812,
+              "cpu_ms": 10.0,
+              "write_bytes": 860160
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 453.933,
+              "cpu_ms": 450.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.77,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9497505404312225,
+          "turn_cpu_ms_per_turn": 0.9394904458598726,
+          "turn_write_mib_per_turn": 0.9990791450588863,
+          "lifecycle_cpu_ms": 0.9607438016528925,
+          "lifecycle_write_mib": 0.9977145070695332,
+          "lifecycle_ms": 0.9743080032696818,
+          "max_sampled_rss_mib": 1.0065016495282928,
+          "max_sampled_pss_mib": 1.0065347454837648,
+          "max_sampled_anon_pss_mib": 1.0096485554118155
+        }
+      }
+    ],
+    "stream": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-stream-before.json",
+          "mean_turn_ms": 1647.177,
+          "turn_cpu_ms_per_turn": 260.0,
+          "turn_write_mib_per_turn": 2.78125,
+          "lifecycle_cpu_ms": 420.0,
+          "lifecycle_write_mib": 5.2421875,
+          "lifecycle_ms": 1891.601,
+          "max_sampled_rss_mib": 154.3515625,
+          "max_sampled_pss_mib": 153.625,
+          "max_sampled_anon_pss_mib": 100.44140625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 86.345,
+              "cpu_ms": 0.0,
+              "write_bytes": 8192
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 131.23,
+              "cpu_ms": 130.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1650.855,
+              "cpu_ms": 260.0,
+              "write_bytes": 2924544
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.147,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.579,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.194,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.178,
+              "cpu_ms": 10.0,
+              "write_bytes": 876544
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.227,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.846,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-stream-after.json",
+          "mean_turn_ms": 1602.164,
+          "turn_cpu_ms_per_turn": 220.0,
+          "turn_write_mib_per_turn": 2.77734375,
+          "lifecycle_cpu_ms": 370.0,
+          "lifecycle_write_mib": 5.21484375,
+          "lifecycle_ms": 1825.965,
+          "max_sampled_rss_mib": 158.1875,
+          "max_sampled_pss_mib": 157.462890625,
+          "max_sampled_anon_pss_mib": 101.0859375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 73.526,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.216,
+              "cpu_ms": 120.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1605.75,
+              "cpu_ms": 230.0,
+              "write_bytes": 2920448
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.547,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 1.848,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.063,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.37,
+              "cpu_ms": 0.0,
+              "write_bytes": 872448
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 4.84,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.805,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9726726393095582,
+          "turn_cpu_ms_per_turn": 0.8461538461538461,
+          "turn_write_mib_per_turn": 0.9985955056179775,
+          "lifecycle_cpu_ms": 0.8809523809523809,
+          "lifecycle_write_mib": 0.9947839046199702,
+          "lifecycle_ms": 0.9653013505490851,
+          "max_sampled_rss_mib": 1.024851951207167,
+          "max_sampled_pss_mib": 1.0249822009764036,
+          "max_sampled_anon_pss_mib": 1.0064169875160425
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-stream-before.json",
+          "mean_turn_ms": 1580.154,
+          "turn_cpu_ms_per_turn": 210.0,
+          "turn_write_mib_per_turn": 2.7890625,
+          "lifecycle_cpu_ms": 380.0,
+          "lifecycle_write_mib": 5.23828125,
+          "lifecycle_ms": 1817.62,
+          "max_sampled_rss_mib": 158.1015625,
+          "max_sampled_pss_mib": 157.375,
+          "max_sampled_anon_pss_mib": 100.91015625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.571,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 133.477,
+              "cpu_ms": 130.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1585.645,
+              "cpu_ms": 210.0,
+              "write_bytes": 2924544
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.542,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.365,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.909,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.266,
+              "cpu_ms": 10.0,
+              "write_bytes": 876544
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.608,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.237,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-stream-after.json",
+          "mean_turn_ms": 1579.451,
+          "turn_cpu_ms_per_turn": 190.0,
+          "turn_write_mib_per_turn": 2.78515625,
+          "lifecycle_cpu_ms": 350.0,
+          "lifecycle_write_mib": 5.21484375,
+          "lifecycle_ms": 1802.133,
+          "max_sampled_rss_mib": 158.5859375,
+          "max_sampled_pss_mib": 157.861328125,
+          "max_sampled_anon_pss_mib": 101.22265625,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.428,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 124.819,
+              "cpu_ms": 130.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1583.469,
+              "cpu_ms": 190.0,
+              "write_bytes": 2920448
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 3.757,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.346,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.118,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.935,
+              "cpu_ms": 0.0,
+              "write_bytes": 872448
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.338,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.923,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9995551066541616,
+          "turn_cpu_ms_per_turn": 0.9047619047619048,
+          "turn_write_mib_per_turn": 0.9985994397759104,
+          "lifecycle_cpu_ms": 0.9210526315789473,
+          "lifecycle_write_mib": 0.9955257270693513,
+          "lifecycle_ms": 0.9914795171708058,
+          "max_sampled_rss_mib": 1.0030636952117409,
+          "max_sampled_pss_mib": 1.0030902501985703,
+          "max_sampled_anon_pss_mib": 1.0030968141524408
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-stream-before.json",
+          "mean_turn_ms": 1572.777,
+          "turn_cpu_ms_per_turn": 190.0,
+          "turn_write_mib_per_turn": 2.7890625,
+          "lifecycle_cpu_ms": 350.0,
+          "lifecycle_write_mib": 5.23828125,
+          "lifecycle_ms": 1804.39,
+          "max_sampled_rss_mib": 158.484375,
+          "max_sampled_pss_mib": 157.7578125,
+          "max_sampled_anon_pss_mib": 101.2109375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.868,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 133.699,
+              "cpu_ms": 130.0,
+              "write_bytes": 1654784
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1576.947,
+              "cpu_ms": 200.0,
+              "write_bytes": 2924544
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 4.209,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.457,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.46,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.454,
+              "cpu_ms": 10.0,
+              "write_bytes": 876544
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.409,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.887,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-stream-after.json",
+          "mean_turn_ms": 1581.0,
+          "turn_cpu_ms_per_turn": 190.0,
+          "turn_write_mib_per_turn": 2.78515625,
+          "lifecycle_cpu_ms": 350.0,
+          "lifecycle_write_mib": 5.21484375,
+          "lifecycle_ms": 1808.219,
+          "max_sampled_rss_mib": 156.484375,
+          "max_sampled_pss_mib": 155.759765625,
+          "max_sampled_anon_pss_mib": 99.125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.768,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 127.362,
+              "cpu_ms": 120.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 1585.023,
+              "cpu_ms": 200.0,
+              "write_bytes": 2920448
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 5.216,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.363,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.543,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 8.84,
+              "cpu_ms": 10.0,
+              "write_bytes": 872448
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 5.092,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 1.012,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 1.0052283317978328,
+          "turn_cpu_ms_per_turn": 1.0,
+          "turn_write_mib_per_turn": 0.9985994397759104,
+          "lifecycle_cpu_ms": 1.0,
+          "lifecycle_write_mib": 0.9955257270693513,
+          "lifecycle_ms": 1.0021220467858944,
+          "max_sampled_rss_mib": 0.9873804594301488,
+          "max_sampled_pss_mib": 0.9873347199524588,
+          "max_sampled_anon_pss_mib": 0.9793901968351988
+        }
+      }
+    ],
+    "tool": [
+      {
+        "pair": 0,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-tool-before.json",
+          "mean_turn_ms": 92.595,
+          "turn_cpu_ms_per_turn": 110.0,
+          "turn_write_mib_per_turn": 3.74609375,
+          "lifecycle_cpu_ms": 290.0,
+          "lifecycle_write_mib": 6.5703125,
+          "lifecycle_ms": 328.2,
+          "max_sampled_rss_mib": 158.28125,
+          "max_sampled_pss_mib": 157.5546875,
+          "max_sampled_anon_pss_mib": 100.74609375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 71.47,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 128.765,
+              "cpu_ms": 130.0,
+              "write_bytes": 1650688
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 96.477,
+              "cpu_ms": 120.0,
+              "write_bytes": 3928064
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 8.071,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 4.165,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.139,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.116,
+              "cpu_ms": 10.0,
+              "write_bytes": 1273856
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.137,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.86,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/0-tool-after.json",
+          "mean_turn_ms": 86.116,
+          "turn_cpu_ms_per_turn": 110.0,
+          "turn_write_mib_per_turn": 3.73828125,
+          "lifecycle_cpu_ms": 280.0,
+          "lifecycle_write_mib": 6.546875,
+          "lifecycle_ms": 319.773,
+          "max_sampled_rss_mib": 160.59375,
+          "max_sampled_pss_mib": 159.869140625,
+          "max_sampled_anon_pss_mib": 102.8359375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 70.272,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 129.056,
+              "cpu_ms": 130.0,
+              "write_bytes": 1638400
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 90.369,
+              "cpu_ms": 110.0,
+              "write_bytes": 3919872
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 7.221,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.712,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.664,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.206,
+              "cpu_ms": 10.0,
+              "write_bytes": 1269760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.373,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.9,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9300286192558993,
+          "turn_cpu_ms_per_turn": 1.0,
+          "turn_write_mib_per_turn": 0.9979144942648592,
+          "lifecycle_cpu_ms": 0.9655172413793104,
+          "lifecycle_write_mib": 0.9964328180737217,
+          "lifecycle_ms": 0.9743235831809873,
+          "max_sampled_rss_mib": 1.0146100691016782,
+          "max_sampled_pss_mib": 1.014689839837358,
+          "max_sampled_anon_pss_mib": 1.0207436702725756
+        }
+      },
+      {
+        "pair": 1,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-tool-before.json",
+          "mean_turn_ms": 88.931,
+          "turn_cpu_ms_per_turn": 110.0,
+          "turn_write_mib_per_turn": 3.73828125,
+          "lifecycle_cpu_ms": 280.0,
+          "lifecycle_write_mib": 6.58203125,
+          "lifecycle_ms": 331.169,
+          "max_sampled_rss_mib": 157.5,
+          "max_sampled_pss_mib": 156.7734375,
+          "max_sampled_anon_pss_mib": 100.10546875,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 75.494,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 129.716,
+              "cpu_ms": 130.0,
+              "write_bytes": 1662976
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 94.149,
+              "cpu_ms": 110.0,
+              "write_bytes": 3928064
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 10.173,
+              "cpu_ms": 20.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.547,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.262,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.661,
+              "cpu_ms": 10.0,
+              "write_bytes": 1273856
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.247,
+              "cpu_ms": 0.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.92,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/1-tool-after.json",
+          "mean_turn_ms": 87.086,
+          "turn_cpu_ms_per_turn": 120.0,
+          "turn_write_mib_per_turn": 3.73828125,
+          "lifecycle_cpu_ms": 280.0,
+          "lifecycle_write_mib": 6.54296875,
+          "lifecycle_ms": 315.787,
+          "max_sampled_rss_mib": 157.98046875,
+          "max_sampled_pss_mib": 157.255859375,
+          "max_sampled_anon_pss_mib": 100.234375,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 68.845,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.856,
+              "cpu_ms": 120.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 91.04,
+              "cpu_ms": 130.0,
+              "write_bytes": 3919872
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 8.53,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.035,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.141,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 10.123,
+              "cpu_ms": 10.0,
+              "write_bytes": 1269760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.323,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.894,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 0.9792535786171301,
+          "turn_cpu_ms_per_turn": 1.0909090909090908,
+          "turn_write_mib_per_turn": 1.0,
+          "lifecycle_cpu_ms": 1.0,
+          "lifecycle_write_mib": 0.9940652818991098,
+          "lifecycle_ms": 0.9535524158360232,
+          "max_sampled_rss_mib": 1.0030505952380953,
+          "max_sampled_pss_mib": 1.0030771914087806,
+          "max_sampled_anon_pss_mib": 1.0012877043742927
+        }
+      },
+      {
+        "pair": 2,
+        "before": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-tool-before.json",
+          "mean_turn_ms": 99.813,
+          "turn_cpu_ms_per_turn": 140.0,
+          "turn_write_mib_per_turn": 3.76171875,
+          "lifecycle_cpu_ms": 300.0,
+          "lifecycle_write_mib": 6.59765625,
+          "lifecycle_ms": 327.209,
+          "max_sampled_rss_mib": 157.61328125,
+          "max_sampled_pss_mib": 156.88671875,
+          "max_sampled_anon_pss_mib": 99.89453125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.551,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 125.793,
+              "cpu_ms": 120.0,
+              "write_bytes": 1658880
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 103.43,
+              "cpu_ms": 140.0,
+              "write_bytes": 3944448
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 6.811,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 2.635,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 1.132,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 9.887,
+              "cpu_ms": 0.0,
+              "write_bytes": 1277952
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.053,
+              "cpu_ms": 20.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.917,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after": {
+          "file": "/workspace/issue-481-evidence/pi-integrity-matrix/2-tool-after.json",
+          "mean_turn_ms": 103.488,
+          "turn_cpu_ms_per_turn": 130.0,
+          "turn_write_mib_per_turn": 3.73828125,
+          "lifecycle_cpu_ms": 310.0,
+          "lifecycle_write_mib": 6.54296875,
+          "lifecycle_ms": 345.032,
+          "max_sampled_rss_mib": 159.5703125,
+          "max_sampled_pss_mib": 158.845703125,
+          "max_sampled_anon_pss_mib": 101.8203125,
+          "phases": [
+            {
+              "through": "after_provider_start",
+              "wall_ms": 69.82,
+              "cpu_ms": 0.0,
+              "write_bytes": 4096
+            },
+            {
+              "through": "after_initialization",
+              "wall_ms": 132.102,
+              "cpu_ms": 130.0,
+              "write_bytes": 1634304
+            },
+            {
+              "through": "after_turns",
+              "wall_ms": 108.399,
+              "cpu_ms": 140.0,
+              "write_bytes": 3919872
+            },
+            {
+              "through": "after_verification",
+              "wall_ms": 9.007,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_shutdown",
+              "wall_ms": 3.705,
+              "cpu_ms": 10.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_driver_drop",
+              "wall_ms": 2.204,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            },
+            {
+              "through": "after_final_writer_close",
+              "wall_ms": 11.187,
+              "cpu_ms": 10.0,
+              "write_bytes": 1269760
+            },
+            {
+              "through": "after_reopen_verification",
+              "wall_ms": 7.621,
+              "cpu_ms": 10.0,
+              "write_bytes": 32768
+            },
+            {
+              "through": "after_cleanup",
+              "wall_ms": 0.987,
+              "cpu_ms": 0.0,
+              "write_bytes": 0
+            }
+          ]
+        },
+        "after_over_before": {
+          "mean_turn_ms": 1.0368188512518408,
+          "turn_cpu_ms_per_turn": 0.9285714285714286,
+          "turn_write_mib_per_turn": 0.9937694704049844,
+          "lifecycle_cpu_ms": 1.0333333333333334,
+          "lifecycle_write_mib": 0.9917110716400237,
+          "lifecycle_ms": 1.0544697731419368,
+          "max_sampled_rss_mib": 1.0124166646013533,
+          "max_sampled_pss_mib": 1.01248661703558,
+          "max_sampled_anon_pss_mib": 1.0192781449184687
+        }
+      }
+    ]
+  },
+  "medians": {
+    "cancel": {
+      "before": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 263.65,
+        "lifecycle_write_mib": 3.85546875,
+        "max_sampled_anon_pss_mib": 99.92578125,
+        "max_sampled_pss_mib": 156.36328125,
+        "max_sampled_rss_mib": 157.08984375,
+        "mean_turn_ms": 42.328,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.4609375
+      },
+      "after": {
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_ms": 264.456,
+        "lifecycle_write_mib": 3.8359375,
+        "max_sampled_anon_pss_mib": 100.0,
+        "max_sampled_pss_mib": 156.337890625,
+        "max_sampled_rss_mib": 157.0625,
+        "mean_turn_ms": 43.442,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.45703125
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0,
+        "lifecycle_ms": 0.989863903819377,
+        "lifecycle_write_mib": 0.9949341438703141,
+        "max_sampled_anon_pss_mib": 1.0007427387514172,
+        "max_sampled_pss_mib": 0.9998376177271479,
+        "max_sampled_rss_mib": 0.9998259355961706,
+        "mean_turn_ms": 1.004407269625382,
+        "turn_cpu_ms_per_turn": 1.0,
+        "turn_write_mib_per_turn": 0.9973262032085561
+      }
+    },
+    "large": {
+      "before": {
+        "lifecycle_cpu_ms": 370.0,
+        "lifecycle_ms": 423.525,
+        "lifecycle_write_mib": 12.66015625,
+        "max_sampled_anon_pss_mib": 102.8046875,
+        "max_sampled_pss_mib": 159.14453125,
+        "max_sampled_rss_mib": 159.87109375,
+        "mean_turn_ms": 202.666,
+        "turn_cpu_ms_per_turn": 220.0,
+        "turn_write_mib_per_turn": 10.45703125
+      },
+      "after": {
+        "lifecycle_cpu_ms": 380.0,
+        "lifecycle_ms": 411.177,
+        "lifecycle_write_mib": 12.63671875,
+        "max_sampled_anon_pss_mib": 103.4453125,
+        "max_sampled_pss_mib": 160.056640625,
+        "max_sampled_rss_mib": 160.78125,
+        "mean_turn_ms": 188.425,
+        "turn_cpu_ms_per_turn": 230.0,
+        "turn_write_mib_per_turn": 10.44921875
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.027027027027027,
+        "lifecycle_ms": 0.9613364028097515,
+        "lifecycle_write_mib": 0.9981487195310089,
+        "max_sampled_anon_pss_mib": 1.0062314765559692,
+        "max_sampled_pss_mib": 1.0057313271642816,
+        "max_sampled_rss_mib": 1.0056930632589733,
+        "mean_turn_ms": 0.9259532268923256,
+        "turn_cpu_ms_per_turn": 1.0909090909090908,
+        "turn_write_mib_per_turn": 0.999252895031752
+      }
+    },
+    "short-large": {
+      "before": {
+        "lifecycle_cpu_ms": 14100.0,
+        "lifecycle_ms": 11407.973,
+        "lifecycle_write_mib": 252.84375,
+        "max_sampled_anon_pss_mib": 231.45703125,
+        "max_sampled_pss_mib": 288.5703125,
+        "max_sampled_rss_mib": 289.296875,
+        "mean_turn_ms": 69.099125,
+        "turn_cpu_ms_per_turn": 103.4375,
+        "turn_write_mib_per_turn": 2.7413330078125
+      },
+      "after": {
+        "lifecycle_cpu_ms": 13820.0,
+        "lifecycle_ms": 11222.941,
+        "lifecycle_write_mib": 252.1953125,
+        "max_sampled_anon_pss_mib": 230.77734375,
+        "max_sampled_pss_mib": 287.470703125,
+        "max_sampled_rss_mib": 288.1953125,
+        "mean_turn_ms": 65.26040625,
+        "turn_cpu_ms_per_turn": 98.75,
+        "turn_write_mib_per_turn": 2.73388671875
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.9723404255319149,
+        "lifecycle_ms": 0.9718258449594858,
+        "lifecycle_write_mib": 0.9973272772216043,
+        "max_sampled_anon_pss_mib": 0.9982084910762574,
+        "max_sampled_pss_mib": 0.9983553076860601,
+        "max_sampled_rss_mib": 0.998352687010532,
+        "mean_turn_ms": 0.9444462031899825,
+        "turn_cpu_ms_per_turn": 0.9546827794561934,
+        "turn_write_mib_per_turn": 0.9972383073496659
+      }
+    },
+    "short-small": {
+      "before": {
+        "lifecycle_cpu_ms": 4630.0,
+        "lifecycle_ms": 3676.378,
+        "lifecycle_write_mib": 100.8046875,
+        "max_sampled_anon_pss_mib": 145.55078125,
+        "max_sampled_pss_mib": 201.97265625,
+        "max_sampled_rss_mib": 202.69921875,
+        "mean_turn_ms": 61.77303125,
+        "turn_cpu_ms_per_turn": 91.875,
+        "turn_write_mib_per_turn": 2.5196533203125
+      },
+      "after": {
+        "lifecycle_cpu_ms": 4660.0,
+        "lifecycle_ms": 3604.742,
+        "lifecycle_write_mib": 100.609375,
+        "max_sampled_anon_pss_mib": 146.3359375,
+        "max_sampled_pss_mib": 203.064453125,
+        "max_sampled_rss_mib": 203.7890625,
+        "mean_turn_ms": 60.659125,
+        "turn_cpu_ms_per_turn": 93.75,
+        "turn_write_mib_per_turn": 2.516357421875
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0151187904967602,
+        "lifecycle_ms": 0.9743080032696818,
+        "lifecycle_write_mib": 0.9977145070695332,
+        "max_sampled_anon_pss_mib": 1.0096485554118155,
+        "max_sampled_pss_mib": 1.0065347454837648,
+        "max_sampled_rss_mib": 1.0065016495282928,
+        "mean_turn_ms": 0.9737072172475978,
+        "turn_cpu_ms_per_turn": 1.0204081632653061,
+        "turn_write_mib_per_turn": 0.9990312424315815
+      }
+    },
+    "stream": {
+      "before": {
+        "lifecycle_cpu_ms": 380.0,
+        "lifecycle_ms": 1817.62,
+        "lifecycle_write_mib": 5.23828125,
+        "max_sampled_anon_pss_mib": 100.91015625,
+        "max_sampled_pss_mib": 157.375,
+        "max_sampled_rss_mib": 158.1015625,
+        "mean_turn_ms": 1580.154,
+        "turn_cpu_ms_per_turn": 210.0,
+        "turn_write_mib_per_turn": 2.7890625
+      },
+      "after": {
+        "lifecycle_cpu_ms": 350.0,
+        "lifecycle_ms": 1808.219,
+        "lifecycle_write_mib": 5.21484375,
+        "max_sampled_anon_pss_mib": 101.0859375,
+        "max_sampled_pss_mib": 157.462890625,
+        "max_sampled_rss_mib": 158.1875,
+        "mean_turn_ms": 1581.0,
+        "turn_cpu_ms_per_turn": 190.0,
+        "turn_write_mib_per_turn": 2.78515625
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.9210526315789473,
+        "lifecycle_ms": 0.9914795171708058,
+        "lifecycle_write_mib": 0.9955257270693513,
+        "max_sampled_anon_pss_mib": 1.0030968141524408,
+        "max_sampled_pss_mib": 1.0030902501985703,
+        "max_sampled_rss_mib": 1.0030636952117409,
+        "mean_turn_ms": 0.9995551066541616,
+        "turn_cpu_ms_per_turn": 0.9047619047619048,
+        "turn_write_mib_per_turn": 0.9985994397759104
+      }
+    },
+    "tool": {
+      "before": {
+        "lifecycle_cpu_ms": 290.0,
+        "lifecycle_ms": 328.2,
+        "lifecycle_write_mib": 6.58203125,
+        "max_sampled_anon_pss_mib": 100.10546875,
+        "max_sampled_pss_mib": 156.88671875,
+        "max_sampled_rss_mib": 157.61328125,
+        "mean_turn_ms": 92.595,
+        "turn_cpu_ms_per_turn": 110.0,
+        "turn_write_mib_per_turn": 3.74609375
+      },
+      "after": {
+        "lifecycle_cpu_ms": 280.0,
+        "lifecycle_ms": 319.773,
+        "lifecycle_write_mib": 6.54296875,
+        "max_sampled_anon_pss_mib": 101.8203125,
+        "max_sampled_pss_mib": 158.845703125,
+        "max_sampled_rss_mib": 159.5703125,
+        "mean_turn_ms": 87.086,
+        "turn_cpu_ms_per_turn": 120.0,
+        "turn_write_mib_per_turn": 3.73828125
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0,
+        "lifecycle_ms": 0.9743235831809873,
+        "lifecycle_write_mib": 0.9940652818991098,
+        "max_sampled_anon_pss_mib": 1.0192781449184687,
+        "max_sampled_pss_mib": 1.01248661703558,
+        "max_sampled_rss_mib": 1.0124166646013533,
+        "mean_turn_ms": 0.9792535786171301,
+        "turn_cpu_ms_per_turn": 1.0,
+        "turn_write_mib_per_turn": 0.9979144942648592
+      }
+    }
+  }
+}
