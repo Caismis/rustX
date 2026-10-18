@@ -1131,7 +1131,7 @@ fn assert_request_source_point_indexes(connection: &rusqlite::Connection, sequen
             format!("SEARCH request_source_pages USING INDEX {hash_index} (hash=?)"),
         ),
         (
-            "EXPLAIN QUERY PLAN SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+            "EXPLAIN QUERY PLAN SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
             rusqlite::types::Value::Text(sequence.to_string()),
             "SEARCH request_source_roots USING PRIMARY KEY (source_id=?)".into(),
         ),
