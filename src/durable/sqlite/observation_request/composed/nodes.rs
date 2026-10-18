@@ -120,26 +120,60 @@ pub(super) fn load(
     }
     Ok(node)
 }
-fn template_width(template: &Template, class: usize) -> Result<u64, ConversationStoreError> {
-    // A representative one-digit J/rank hole plus its exact width delta. The
-    // source label and encoded native u64 field retain their established codec.
-    let hole = hole(1, 0, template.provenance_bytes)?;
-    add(
-        add(template.prefix.length, template.suffix.length)?,
-        add(hole.len() as u64, weights::delta(class)?)?,
-    )
-}
-fn leaf_widths(connection: &Connection, leaf: &Leaf) -> Result<Vec<u64>, ConversationStoreError> {
-    leaf.variants
+fn leaf_geometry(
+    connection: &Connection,
+    leaf: &Leaf,
+) -> Result<(Vec<u64>, u64, u64), ConversationStoreError> {
+    if leaf.variants.len() != weights::CLASSES
+        || leaf.templates.is_empty()
+        || leaf.templates.len() > weights::CLASSES
+    {
+        return Err(storage("captured Source leaf geometry differs"));
+    }
+    #[cfg(test)]
+    super::WORK.with(|work| {
+        let mut value = work.get();
+        value.leaf_width_calls += 1;
+        work.set(value);
+    });
+    // Capture already deduplicates templates. Retain only one scalar base width
+    // per template (at most 80), not decoded metadata or a persistent cache.
+    let mut bases = Vec::with_capacity(leaf.templates.len());
+    let mut max_path = 0;
+    let mut max_key_path = 0;
+    for digest in &leaf.templates {
+        let template = fragments::load_template(connection, *digest)?;
+        let hole = hole(1, 0, template.provenance_bytes)?;
+        #[cfg(test)]
+        super::WORK.with(|work| {
+            let mut value = work.get();
+            value.width_hole_encodes += 1;
+            work.set(value);
+        });
+        bases.push(add(
+            add(template.prefix.length, template.suffix.length)?,
+            hole.len() as u64,
+        )?);
+        max_path = max_path.max(template.prefix.max_path.max(template.suffix.max_path));
+        max_key_path = max_key_path.max(
+            template
+                .prefix
+                .max_key_path
+                .max(template.suffix.max_key_path),
+        );
+    }
+    let widths = leaf
+        .variants
         .iter()
         .enumerate()
         .map(|(class, index)| {
-            template_width(
-                &fragments::load_template(connection, leaf.templates[usize::from(*index)])?,
-                class,
-            )
+            let base = bases
+                .get(usize::from(*index))
+                .ok_or_else(|| storage("captured Source leaf geometry differs"))?;
+            add(*base, weights::delta(class)?)
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    Ok((widths, max_path, max_key_path))
 }
 pub(super) fn hole(
     sequence: u64,
@@ -223,19 +257,7 @@ impl Capture<'_> {
                     .get(at)
                     .ok_or_else(|| storage("actual frozen input missing new leaf"))?;
                 let leaf = fragments::capture(connection, self.scope, message, frozen)?;
-                let widths = leaf_widths(connection, &leaf)?;
-                let mut max_path = 0;
-                let mut max_key_path = 0;
-                for digest in &leaf.templates {
-                    let template = fragments::load_template(connection, *digest)?;
-                    max_path = max_path.max(template.prefix.max_path.max(template.suffix.max_path));
-                    max_key_path = max_key_path.max(
-                        template
-                            .prefix
-                            .max_key_path
-                            .max(template.suffix.max_key_path),
-                    );
-                }
+                let (widths, max_path, max_key_path) = leaf_geometry(connection, &leaf)?;
                 (Content::Leaf { leaf }, widths, max_path, max_key_path)
             }
             manifest::NodeKind::Branch { left, right } => {
@@ -446,3 +468,7 @@ pub(super) fn validate_paths(
         Content::Leaf { .. } => Err(storage("request path width interval invalid")),
     }
 }
+
+#[cfg(test)]
+#[path = "template_metrics_tests.rs"]
+mod template_metrics_tests;

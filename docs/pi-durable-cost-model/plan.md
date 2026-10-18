@@ -57,7 +57,9 @@ External tool side effects remain outside SQLite atomicity. A crash between an
 external effect and result commit can leave an unknown outcome. Do not silently
 rerun non-replayable effects; retain explicit unknown/replay-policy handling and
 identify any intentional changes relative to Pi's abandoned-task behavior.
-Exactly-once is not claimed. Tool completion and its committed result must agree.
+Exactly-once is not claimed. Pi records execution intent and reruns only when
+both the stored and current tool policy say `safe`; unsafe/abandoned calls report
+that they may have partially run. Tool completion and its committed result must agree.
 
 Inspection no longer promises independent original wire-byte/field witnesses
 where those are removed. It must still identify the committed historical content

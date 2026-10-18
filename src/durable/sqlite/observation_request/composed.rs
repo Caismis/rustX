@@ -37,9 +37,12 @@ pub(crate) struct Work {
     pub new_nodes: usize,
     pub new_fragment_bytes: usize,
     pub header_decodes: usize,
+    pub template_loads: usize,
+    pub leaf_width_calls: usize,
+    pub width_hole_encodes: usize,
 }
 #[cfg(test)]
-thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,header_decodes:0})};}
+thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,header_decodes:0,template_loads:0,leaf_width_calls:0,width_hole_encodes:0})};}
 #[cfg(test)]
 pub(in crate::durable::sqlite) fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))

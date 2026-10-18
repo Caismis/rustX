@@ -390,3 +390,24 @@ fn t19_composed_branch_reuses_its_already_authenticated_native_node() {
     );
     assert_fragment_oracle(&store, &snapshot, sequence);
 }
+
+#[test]
+fn repeated_native_leaves_do_not_recompute_template_metrics() {
+    let store = fragment_fixture();
+    let first = shape_snapshot(&store, 1);
+    observation_request::composed::take_work();
+    let started = store.commit_model_turn_start(&[], &first, Utc::now()).unwrap().started;
+    let work = observation_request::composed::take_work();
+    assert_eq!(work.new_leaves, first.input.len());
+    assert_eq!(work.leaf_width_calls, work.new_leaves);
+    assert!(work.width_hole_encodes >= work.new_leaves);
+    assert_shape_oracle(&store, &first, started.sequence, &shape_oracle(&store, &first, started.sequence));
+    let repeated = shape_snapshot(&store, 2);
+    observation_request::composed::take_work();
+    let next = store.commit_model_turn_start(&[], &repeated, Utc::now()).unwrap().started;
+    let work = observation_request::composed::take_work();
+    assert_eq!(work.new_leaves, 0);
+    assert_eq!(work.leaf_width_calls, 0);
+    assert_eq!(work.width_hole_encodes, 0);
+    assert_shape_oracle(&store, &repeated, next.sequence, &shape_oracle(&store, &repeated, next.sequence));
+}

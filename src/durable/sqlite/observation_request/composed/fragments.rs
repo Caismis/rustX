@@ -556,6 +556,12 @@ pub(super) fn load_template(
     connection: &Connection,
     digest: index::Hash,
 ) -> Result<Template, ConversationStoreError> {
+    #[cfg(test)]
+    super::WORK.with(|work| {
+        let mut value = work.get();
+        value.template_loads += 1;
+        work.set(value);
+    });
     let bytes = index::load_blob(connection, digest)?;
     let template: Template = serde_json::from_slice(&bytes)
         .map_err(|_| storage("composed message template malformed"))?;
