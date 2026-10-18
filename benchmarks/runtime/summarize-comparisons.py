@@ -20,11 +20,13 @@ def append_sample(path):
         'append_write_mib_per_append':summary.scaled(summary.delta(phases['after_seed'],phases['after_appends'],'write_bytes'),value['measured']*2**20),
         'lifecycle_cpu_ms':summary.delta(phases['before_initialization'],phases['after_cleanup'],'cpu_ms'),
         'lifecycle_write_mib':summary.scaled(summary.delta(phases['before_initialization'],phases['after_cleanup'],'write_bytes'),2**20),
-        'max_sampled_rss_mib':max(summary.counters(p)['rss_kib'] for p in value['lifecycle'])/1024,
-        'max_sampled_pss_mib':max(summary.counters(p)['pss_kib'] for p in value['lifecycle'])/1024,
     }
-    memory = [summary.counters(p)['anon_pss_kib'] for p in value['lifecycle']]
-    result['max_sampled_anon_pss_mib'] = summary.scaled(max((x for x in memory if x is not None), default=None),1024)
+    points = [*value['lifecycle'], *({'process':op[side]}
+              for op in value.get('operation_counters',[]) for side in ('before','after'))]
+    memory = [summary.counters(point) for point in points]
+    for counter, field in [('rss_kib','max_sampled_rss_mib'),('pss_kib','max_sampled_pss_mib'),
+                           ('anon_pss_kib','max_sampled_anon_pss_mib')]:
+        result[field] = summary.scaled(max((p[counter] for p in memory if p[counter] is not None),default=None),1024)
     result['lifecycle_ms'] = (phases['after_cleanup']['elapsed_us']-phases['before_initialization']['elapsed_us'])/1000
     if value.get('cold',False):
         operations = value['operation_counters']
@@ -48,6 +50,7 @@ def summarize(directories, append=False):
     groups = {}
     seen = set()
     identities = set()
+    append_modes = set()
     for directory in directories:
         manifest = directory / 'manifest.json'
         if manifest.exists():
@@ -72,6 +75,12 @@ def summarize(directories, append=False):
                 raw = json.loads(path.read_text())
                 workload.append((raw['history'], raw['measured'], raw.get('cold',False) if append else False))
                 if append:
+                    cold = raw.get('cold',False)
+                    if type(cold) is not bool:
+                        raise ValueError('append mode must be boolean')
+                    append_modes.add(cold)
+                    if len(append_modes) > 1:
+                        raise ValueError('mixed warm/cold append scopes across samples')
                     assert raw['history'] == int(case), f'history differs from pair label: {path}'
                 else:
                     assert raw['case'] == case, f'case differs from pair label: {path}'
@@ -95,7 +104,11 @@ def summarize(directories, append=False):
                 values = [record[side].get(key) for record in records]
                 if all(value is None or isinstance(value,(int,float)) for value in values):
                     medians[case][side][key] = statistics.median(values) if all(value is not None for value in values) else None
-    return {'scope':'See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction',
+    append_mode = ('cold' if True in append_modes else 'warm') if append else None
+    return {'append_mode':append_mode,
+            'append_counter_scope':('per-operation brackets, including counter-sampling overhead; reopen excluded; whole phase with reopens retained separately' if append_mode=='cold' else 'whole append phase after seed, including driver overhead' if append else None),
+            'memory_scope':'all observed lifecycle and operation counters; sampled maxima, not peaks',
+            'scope':'See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction',
             'samples':groups,'medians':medians}
 
 

@@ -273,5 +273,43 @@ class SummaryTests(unittest.TestCase):
         p['smaps_rollup']+='Pss_Anon: 256 kB\n'
         self.assertEqual(http.counters({'process':p})['anon_pss_kib'],256)
 
+    def test_append_modes_cannot_mix_across_pairs_or_directories(self):
+        self.test_append_endpoints_and_footprints()
+        self.assertEqual(paired.summarize([self.root],append=True)['append_mode'],'warm')
+        for side in ('before','after'):
+            value=json.loads((self.root/f'0-64-{side}.json').read_text())
+            value.update(cold=True,operation_counters=[{'before':process(10,100),'after':process(11,200)}]*32)
+            self.write(f'1-64-{side}',value)
+        identity={'executables':{n:{'sha256':'same-binary'} for n in ('before','after')}}
+        (self.root/'manifest.json').write_text(json.dumps(identity))
+        with self.assertRaisesRegex(ValueError,'mixed warm/cold'):
+            paired.summarize([self.root],append=True)
+        other=self.root/'cold';other.mkdir();(other/'manifest.json').write_text(json.dumps(identity))
+        for path in self.root.glob('1-64-*'):path.rename(other/path.name)
+        cold=paired.summarize([other],append=True)
+        self.assertEqual(cold['append_mode'],'cold')
+        self.assertIn('per-operation',cold['append_counter_scope'])
+        for directories in ([self.root,other],[other,self.root]):
+            with self.assertRaisesRegex(ValueError,'mixed warm/cold'):
+                paired.summarize(directories,append=True)
+
+    def test_cold_memory_maxima_include_operation_before_and_after_samples(self):
+        self.test_append_endpoints_and_footprints()
+        for side in ('before','after'):
+            path=self.root/f'0-64-{side}.json';value=json.loads(path.read_text())
+            before=process(rss=200*1024);before['smaps_rollup']+='Pss_Anon: 102400 kB\n'
+            after=process(rss=300*1024);after['smaps_rollup']+='Pss_Anon: 153600 kB\n'
+            value.update(cold=True,operation_counters=[{'before':before,'after':after}]*32)
+            path.write_text(json.dumps(value))
+        result=paired.summarize([self.root],append=True)['medians']['64']['before']
+        self.assertEqual(result['max_sampled_rss_mib'],300)
+        self.assertEqual(result['max_sampled_pss_mib'],300-128/1024)
+        self.assertEqual(result['max_sampled_anon_pss_mib'],150)
+        path=self.root/'0-64-before.json';value=json.loads(path.read_text())
+        memory=value['operation_counters'][0]['before']
+        memory['smaps_rollup']=memory['smaps_rollup'].replace('Rss: 204800 kB','Rss: 409600 kB')
+        path.write_text(json.dumps(value))
+        self.assertEqual(paired.append_sample(path)['max_sampled_rss_mib'],400)
+
 
 if __name__ == '__main__':unittest.main()
