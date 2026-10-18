@@ -1,0 +1,2028 @@
+diff --git a/docs/pi-durable-cost-model/diagnostic-separate-final.md b/docs/pi-durable-cost-model/diagnostic-separate-final.md
+new file mode 100644
+index 00000000..fa0ed8a8
+--- /dev/null
++++ b/docs/pi-durable-cost-model/diagnostic-separate-final.md
+@@ -0,0 +1,8 @@
++# Diagnostic: full candidate without atomic ordinary final settlement
++
++This comparison-only branch reverses ce8f7270 on candidate a3c116fe. It retains
++100 ms bounded partial batching, canonical proposal projection, and all Source
++changes. The atomic-only mailbox test probe is removed with the atomic path.
++Gate 77 rejects other layouts with no migration. Candidate documents describe
++the full candidate, not this diagnostic. No retained-scope choice or merge is
++requested. Native ordered P/U/C commits are restored.
+diff --git a/src/agent/execution.rs b/src/agent/execution.rs
+index ecff0207..6d509176 100644
+--- a/src/agent/execution.rs
++++ b/src/agent/execution.rs
+@@ -646 +645,0 @@ pub struct AgentExecution<'a> {
+-    precommitted_terminal: Option<RuntimeEvent>,
+@@ -688 +686,0 @@ struct OpenPublication {
+-    provider_completion: Option<RuntimeEventEnvelope>,
+@@ -1319 +1316,0 @@ impl<'a> AgentExecution<'a> {
+-            precommitted_terminal: None,
+@@ -1840 +1837 @@ impl<'a> AgentExecution<'a> {
+-    #[allow(clippy::too_many_lines)] // One model completion and owner settlement path.
++    #[allow(clippy::too_many_lines)] // One P -> U -> C ordering, one place.
+@@ -1872,0 +1870,3 @@ impl<'a> AgentExecution<'a> {
++        // P: the provider outcome of this exact request becomes durable.
++        // This downstream copy is derived only after canonical assembly has
++        // validated and retained the event's terminal fact.
+@@ -1875 +1875 @@ impl<'a> AgentExecution<'a> {
+-        let completion = self.event_envelope(RuntimeEvent::ModelRequestCompleted {
++        self.emit(RuntimeEvent::ModelRequestCompleted {
+@@ -1881,9 +1881,10 @@ impl<'a> AgentExecution<'a> {
+-        self.publication
+-            .as_mut()
+-            .expect("completed request owns publication")
+-            .provider_completion = Some(completion);
+-        // Workflow output belongs to its separate owner. Preserve its prepared
+-        // provider/publication facts before invoking that owner's transaction.
+-        if self.workflow_output.is_some()
+-            && let Err(error) = self.commit_publication_terminal()
+-        {
++        if let Some(terminal) = self.durable_failure_terminal_from_state() {
++            return Some(terminal);
++        }
++        // U: P is durable and provider completion is structurally accepted,
++        // so the remaining publication payload and the publication terminal
++        // marker commit in one transaction — and only then is the final
++        // buffered payload released. This is the intentional tail-latency
++        // cost of correct ordering; with nothing buffered, a terminal-only
++        // frame commits and no visible text waits.
++        if let Err(error) = self.commit_publication_terminal() {
+@@ -1992,4 +1993,7 @@ impl<'a> AgentExecution<'a> {
+-        if !has_tool_calls && self.cancellation.is_cancelled() {
+-            return Some(Terminal::Cancelled {
+-                reason: self.cancellation.reason(),
+-            });
++        if let Err(error) =
++            self.commit_assistant_message(&assistant_message_id, &turn_assembly.content)
++        {
++            return Some(self.commit_failure_terminal(
++                "the assembled Assistant message cannot be committed",
++                error,
++            ));
+@@ -1997,10 +2000,0 @@ impl<'a> AgentExecution<'a> {
+-        let boundary =
+-            match self.commit_assistant_message(&assistant_message_id, &turn_assembly.content) {
+-                Ok(boundary) => boundary,
+-                Err(error) => {
+-                    return Some(self.commit_failure_terminal(
+-                        "the assembled Assistant message cannot be committed",
+-                        error,
+-                    ));
+-                }
+-            };
+@@ -2028,4 +2022,13 @@ impl<'a> AgentExecution<'a> {
+-            return if boundary.expect("no-tool output commits its native boundary") {
+-                None
+-            } else {
+-                Some(Terminal::Completed { finish_reason })
++            self.emit(RuntimeEvent::TurnCompleted);
++            if let Some(terminal) = self.durable_failure_terminal_from_state() {
++                return Some(terminal);
++            }
++            // Safe boundary for a completed no-tool turn: the attempt may
++            // settle only when the boundary snapshot observes no eligible
++            // inbound work. A drained batch keeps the attempt running for
++            // one further model turn, so a pending inbound message prevents
++            // a successful Stop from settling before it is observed.
++            return match self.safe_boundary_drain() {
++                Ok(true) => None,
++                Ok(false) => Some(Terminal::Completed { finish_reason }),
++                Err(terminal) => Some(terminal),
+@@ -2034 +2036,0 @@ impl<'a> AgentExecution<'a> {
+-
+@@ -2237,7 +2238,0 @@ impl<'a> AgentExecution<'a> {
+-        Ok(self.install_adopted_boundary(adopted))
+-    }
+-
+-    fn install_adopted_boundary(
+-        &mut self,
+-        adopted: crate::runtime::inbound::AdoptedInbound,
+-    ) -> bool {
+@@ -2248 +2243 @@ impl<'a> AgentExecution<'a> {
+-            return false;
++            return Ok(false);
+@@ -2290 +2285 @@ impl<'a> AgentExecution<'a> {
+-        true
++        Ok(true)
+@@ -5430,3 +5425,9 @@ impl<'a> AgentExecution<'a> {
+-    /// Accepts ordinary output atomically with its pending provider completion,
+-    /// final frames and optional no-tool inbox boundary. Workflow-owned output
+-    /// retains its already prepared provider/publication facts across that owner.
++    /// Commits **C**: the assembled Assistant message joins canonical history
++    /// as one compound durable transition with its publication stream.
++    ///
++    /// The transition validates that the exact stream is publication-complete,
++    /// appends the canonical Ledger fact, advances the Surface, records
++    /// `AssistantMessageCommitted`, and clears the stream's publication
++    /// staging — all in one transaction. `ModelRequestCompleted` is
++    /// deliberately not part of it: provider completion remains an external
++    /// execution fact even when canonicalization later fails.
+@@ -5437 +5438 @@ impl<'a> AgentExecution<'a> {
+-    ) -> Result<Option<bool>, CanonicalCommitError> {
++    ) -> Result<(), CanonicalCommitError> {
+@@ -5442,14 +5442,0 @@ impl<'a> AgentExecution<'a> {
+-        if self
+-            .publication
+-            .as_ref()
+-            .is_some_and(|publication| publication.provider_completion.is_some())
+-        {
+-            return self.commit_model_output(&block);
+-        }
+-        if self.workflow_output.is_none() {
+-            return Err(CanonicalCommitError::Durable(
+-                crate::durable::ConversationStoreError::PublicationViolation(
+-                    "ordinary model output requires its atomic completion boundary".into(),
+-                ),
+-            ));
+-        }
+@@ -5482 +5469 @@ impl<'a> AgentExecution<'a> {
+-        Ok(None)
++        Ok(())
+@@ -5586 +5572,0 @@ impl<'a> AgentExecution<'a> {
+-            provider_completion: None,
+@@ -5685,3 +5671,3 @@ impl<'a> AgentExecution<'a> {
+-    /// Prepares Workflow or rejected output: commits pending P, then U, and
+-    /// releases its final buffered payload. Ordinary accepted output uses
+-    /// the atomic model settlement and publishes its canonical receipt.
++    /// Commits **U** — the final publication frame and the publication
++    /// terminal marker in one transaction — and only then releases the final
++    /// buffered payload.
+@@ -5689 +5675 @@ impl<'a> AgentExecution<'a> {
+-    /// The native U transition requires durable P. When no
++    /// P must already be durable; the durable store enforces that. When no
+@@ -5693,16 +5678,0 @@ impl<'a> AgentExecution<'a> {
+-        if let Some(completion) = self
+-            .publication
+-            .as_mut()
+-            .and_then(|publication| publication.provider_completion.take())
+-        {
+-            match self.store.append_event(completion) {
+-                Ok(persisted) => self.record_persisted_event(persisted),
+-                Err(error) => {
+-                    let message = format!("provider completion could not be committed: {error}");
+-                    self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+-                    self.durable_failure = Some(message.clone());
+-                    return Err(RuntimeError::DurableStore { message });
+-                }
+-            }
+-        }
+-
+@@ -5759,9 +5728,0 @@ impl<'a> AgentExecution<'a> {
+-        if self.durable_failure.is_none()
+-            && self
+-                .publication
+-                .as_ref()
+-                .is_some_and(|publication| publication.provider_completion.is_some())
+-        {
+-            self.commit_publication_terminal()?;
+-        }
+-
+@@ -5924,11 +5884,0 @@ impl<'a> AgentExecution<'a> {
+-        if let Some(committed) = self.precommitted_terminal.take() {
+-            assert_eq!(
+-                committed, event,
+-                "the native final-commit winner cannot be reclassified"
+-            );
+-            debug_assert!(
+-                self.terminal_emitted,
+-                "committed terminal published under mailbox ownership"
+-            );
+-            return;
+-        }
+@@ -7051,54 +7000,0 @@ mod tests {
+-    struct FinalPublicationProbe {
+-        mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+-        terminal: std::sync::atomic::AtomicBool,
+-        producer: Mutex<Option<std::thread::JoinHandle<()>>>,
+-    }
+-
+-    impl FinalPublicationProbe {
+-        fn completion(self: &Arc<Self>) {
+-            let probe = Arc::clone(self);
+-            let (checked, wait_checked) = std::sync::mpsc::sync_channel(0);
+-            let producer = std::thread::spawn(move || {
+-                assert!(
+-                    probe
+-                        .mailbox
+-                        .with_pending_snapshot(|_| ())
+-                        .unwrap()
+-                        .is_none(),
+-                    "the final publication lease excludes a concurrent pending reader"
+-                );
+-                checked.send(()).unwrap();
+-                probe
+-                    .mailbox
+-                    .enqueue(UserMessageBlock {
+-                        id: MessageId::new("late-after-final"),
+-                        content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+-                            text: "late input".into(),
+-                        })],
+-                        source: UserSource::Human,
+-                        kind: InboundKind::Message,
+-                        timestamp: Some(chrono::Utc::now()),
+-                    })
+-                    .unwrap();
+-                assert!(
+-                    probe.terminal.load(std::sync::atomic::Ordering::SeqCst),
+-                    "pending acceptance cannot overtake final terminal publication"
+-                );
+-            });
+-            *self.producer.lock().unwrap() = Some(producer);
+-            wait_checked.recv().unwrap();
+-        }
+-
+-        fn terminal(&self) {
+-            assert!(
+-                self.mailbox
+-                    .with_pending_snapshot(|_| ())
+-                    .unwrap()
+-                    .is_none(),
+-                "the same publication lease remains held through the terminal callback"
+-            );
+-            self.terminal
+-                .store(true, std::sync::atomic::Ordering::SeqCst);
+-        }
+-    }
+-
+@@ -7107,2 +7002,0 @@ mod tests {
+-        cancel_after_completion: Option<AgentCancellation>,
+-        final_publication_probe: Option<Arc<FinalPublicationProbe>>,
+@@ -7149,12 +7042,0 @@ mod tests {
+-            if let Some(probe) = &self.final_publication_probe {
+-                match event {
+-                    RuntimeEvent::ModelRequestCompleted { .. } => probe.completion(),
+-                    RuntimeEvent::AttemptCompleted { .. } => probe.terminal(),
+-                    _ => {}
+-                }
+-            }
+-            if matches!(event, RuntimeEvent::ModelRequestCompleted { .. })
+-                && let Some(cancellation) = &self.cancel_after_completion
+-            {
+-                cancellation.cancel();
+-            }
+@@ -8410,2 +8292,4 @@ mod tests {
+-    /// Cancellation at the first post-commit notification cannot reclassify
+-    /// the already committed empty-inbox completion winner.
++    /// A terminal Event Journal append is a required durable publication.
++    /// If it fails, the execution settlement candidate remains available to
++    /// the caller, but neither the local event projection nor an observer may
++    /// fabricate the uncommitted terminal fact.
+@@ -8413,2 +8297 @@ mod tests {
+-    #[allow(clippy::too_many_lines)] // Complete execution fixture and exact publication oracle.
+-    async fn cancellation_after_atomic_final_commit_preserves_completed_winner() {
++    async fn terminal_event_append_failure_never_fabricates_terminal_fact() {
+@@ -8431,0 +8315 @@ mod tests {
++        store.arm_fail_next_terminal_event();
+@@ -8439,10 +8323 @@ mod tests {
+-        let probe = Arc::new(FinalPublicationProbe {
+-            mailbox: tool_runtime.mailbox(),
+-            terminal: std::sync::atomic::AtomicBool::new(false),
+-            producer: Mutex::new(None),
+-        });
+-        let observer = RecordingObserver {
+-            cancel_after_completion: Some(cancellation.clone()),
+-            final_publication_probe: Some(Arc::clone(&probe)),
+-            ..Default::default()
+-        };
++        let observer = RecordingObserver::default();
+@@ -8462,27 +8337,2 @@ mod tests {
+-        probe
+-            .producer
+-            .lock()
+-            .unwrap()
+-            .take()
+-            .expect("concurrent producer")
+-            .join()
+-            .unwrap();
+-        let pending = probe
+-            .mailbox
+-            .with_pending_snapshot(|items| items)
+-            .unwrap()
+-            .expect("publication lease released");
+-        assert_eq!(pending.len(), 1);
+-        assert_eq!(pending[0].message().id.as_str(), "late-after-final");
+-        assert_eq!(
+-            adapter.request_count(),
+-            1,
+-            "later input did not reopen the committed winner"
+-        );
+-        assert!(
+-            cancellation.is_cancelled(),
+-            "outcome: {:?}; durable error: {:?}",
+-            result.outcome,
+-            result.durable_failure
+-        );
+-        assert_eq!(
++
++        assert!(matches!(
+@@ -8493,17 +8342,0 @@ mod tests {
+-        );
+-        assert!(result.durable_failure.is_none());
+-        let durable: Vec<_> = store
+-            .read_events(None, 64)
+-            .unwrap()
+-            .events
+-            .into_iter()
+-            .map(|envelope| envelope.event)
+-            .collect();
+-        let published = observer.events();
+-        assert_eq!(
+-            published, durable,
+-            "every committed event is published once in native order"
+-        );
+-        assert!(matches!(
+-            durable.last(),
+-            Some(RuntimeEvent::AttemptCompleted { .. })
+@@ -8511,82 +8343,0 @@ mod tests {
+-        assert_eq!(
+-            durable
+-                .iter()
+-                .filter(|event| matches!(event, RuntimeEvent::AssistantMessageCommitted { .. }))
+-                .count(),
+-            1
+-        );
+-        assert_eq!(
+-            durable
+-                .iter()
+-                .filter(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. }))
+-                .count(),
+-            1
+-        );
+-        assert!(
+-            !durable
+-                .iter()
+-                .any(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+-        );
+-        assert_eq!(
+-            store
+-                .load_canonical()
+-                .unwrap()
+-                .iter()
+-                .filter(|message| matches!(message, MessageBlock::Assistant(_)))
+-                .count(),
+-            1
+-        );
+-        assert!(
+-            store
+-                .load_unsettled_publication_streams()
+-                .unwrap()
+-                .is_empty()
+-        );
+-    }
+-
+-    /// Failing the final Attempt terminal rolls back the entire accepted answer.
+-    /// A failure terminal/audit may subsequently describe the durable error;
+-    /// neither canonical success nor a successful terminal may be fabricated.
+-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+-    async fn final_terminal_failure_rolls_back_answer_and_never_publishes_success() {
+-        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
+-            ModelEvent::Started,
+-            ModelEvent::TextDelta {
+-                block_index: ContentBlockIndex::new(0),
+-                text: "done".to_owned(),
+-            },
+-            ModelEvent::Completed {
+-                finish_reason: ModelFinishReason::Stop,
+-                usage: None,
+-            },
+-        ]]));
+-        let store = Arc::new(
+-            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+-                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+-            ))
+-            .expect("in-memory store"),
+-        );
+-        store.arm_fail_next_terminal_event();
+-        let tool_runtime = tool_runtime_with_store(
+-            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+-            Some(store.clone()),
+-        );
+-        let (_dir, _coordinator, lease) =
+-            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+-        let observer = RecordingObserver::default();
+-        let mut execution = AgentExecution::new(
+-            request(&adapter),
+-            lease,
+-            &cancellation,
+-            crate::scripted_suites::support::default_execution_policy(),
+-            runtime(&adapter),
+-            &tool_runtime,
+-            crate::agent::AttemptLifecycle::inert(),
+-        )
+-        .expect("execution construction");
+-        execution.observe(&observer);
+-
+-        let result = execution.run().await;
+-
+-        assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+@@ -8595 +8346 @@ mod tests {
+-            Some(super::DurableFailureKind::CanonicalCommit)
++            Some(super::DurableFailureKind::EventJournal)
+@@ -8599,5 +8349,0 @@ mod tests {
+-        assert!(
+-            events
+-                .iter()
+-                .any(|event| matches!(event, RuntimeEvent::AttemptStarted { .. }))
+-        );
+@@ -8608,2 +8354,4 @@ mod tests {
+-                    | RuntimeEvent::AssistantMessageCommitted { .. }
+-                    | RuntimeEvent::ModelRequestCompleted { .. }
++                    | RuntimeEvent::AttemptCancelled { .. }
++                    | RuntimeEvent::AttemptTimedOut { .. }
++                    | RuntimeEvent::AttemptLimitExceeded { .. }
++                    | RuntimeEvent::AttemptFailed { .. }
+@@ -8611 +8359 @@ mod tests {
+-            "the rejected final transaction leaves no accepted final facts"
++            "an uncommitted terminal candidate never enters the local projection"
+@@ -8614,7 +8362,14 @@ mod tests {
+-            !observer.events().iter().any(|event| matches!(
+-                event,
+-                RuntimeEvent::AttemptCompleted { .. }
+-                    | RuntimeEvent::AssistantMessageCommitted { .. }
+-                    | RuntimeEvent::ModelRequestCompleted { .. }
+-            )),
+-            "observers cannot acknowledge rolled-back final facts"
++            !observer
++                .events
++                .lock()
++                .expect("observer event lock")
++                .iter()
++                .any(|event| matches!(
++                    event,
++                    RuntimeEvent::AttemptCompleted { .. }
++                        | RuntimeEvent::AttemptCancelled { .. }
++                        | RuntimeEvent::AttemptTimedOut { .. }
++                        | RuntimeEvent::AttemptLimitExceeded { .. }
++                        | RuntimeEvent::AttemptFailed { .. }
++                )),
++            "publication follows the durable Event Journal commit"
+@@ -8621,0 +8377 @@ mod tests {
++        let persisted = store.read_events(None, 64).expect("event journal").events;
+@@ -8623,3 +8379 @@ mod tests {
+-            !store
+-                .load_canonical()
+-                .unwrap()
++            persisted
+@@ -8627 +8381 @@ mod tests {
+-                .any(|message| matches!(message, MessageBlock::Assistant(_)))
++                .any(|envelope| matches!(envelope.event, RuntimeEvent::AttemptStarted { .. }))
+@@ -8629,4 +8383,10 @@ mod tests {
+-        assert_eq!(
+-            store.terminal_event_attempts(),
+-            2,
+-            "one rejected final boundary and one honest failure terminal"
++        assert!(
++            !persisted.iter().any(|envelope| matches!(
++                envelope.event,
++                RuntimeEvent::AttemptCompleted { .. }
++                    | RuntimeEvent::AttemptCancelled { .. }
++                    | RuntimeEvent::AttemptTimedOut { .. }
++                    | RuntimeEvent::AttemptLimitExceeded { .. }
++                    | RuntimeEvent::AttemptFailed { .. }
++            )),
++            "the failed terminal transaction leaves no durable terminal fact"
+@@ -8633,0 +8394 @@ mod tests {
++        assert_eq!(store.terminal_event_attempts(), 1);
+@@ -10335,2 +10095,0 @@ mod tests {
+-
+-mod model_settlement;
+diff --git a/src/agent/execution/model_settlement.rs b/src/agent/execution/model_settlement.rs
+deleted file mode 100644
+index e40edfbc..00000000
+--- a/src/agent/execution/model_settlement.rs
++++ /dev/null
+@@ -1,105 +0,0 @@
+-//! Atomic ordinary model output; mailbox and publication keep their own owners.
+-use super::{AgentExecution, CanonicalCommitError, MessageBlock, RuntimeEvent};
+-use crate::durable::inbox::{ConversationStoreError, ModelTurnBoundary, ModelTurnSettlement};
+-
+-impl AgentExecution<'_> {
+-    pub(super) fn commit_model_output(
+-        &mut self,
+-        block: &MessageBlock,
+-    ) -> Result<Option<bool>, CanonicalCommitError> {
+-        let prepared = self.conversation.prepare_commit(block)?;
+-        let publication = self
+-            .publication
+-            .as_ref()
+-            .expect("model completion owns its stream");
+-        let stream = publication.start.stream_id.clone();
+-        let completion = publication
+-            .provider_completion
+-            .clone()
+-            .expect("pending provider completion");
+-        let RuntimeEvent::ModelRequestCompleted { finish_reason, .. } = &completion.event else {
+-            unreachable!("pending model completion")
+-        };
+-        let has_tools = matches!(block, MessageBlock::Assistant(message) if message.content.iter().any(|part| matches!(part, crate::message::types::AssistantContentBlock::ToolCall(_))));
+-        let canonical = self.event_envelope(Self::canonical_event(block).expect("Assistant event"));
+-        let mailbox = self.tool_runtime.mailbox();
+-        let publication_lease = (!has_tools).then(|| mailbox.pending_publication());
+-        let boundary = if has_tools {
+-            None
+-        } else {
+-            let batch = mailbox.select_pending_batch().map_err(|error| {
+-                CanonicalCommitError::Durable(ConversationStoreError::Storage(error.to_string()))
+-            })?;
+-            if let Some(batch) = &batch {
+-                for item in batch.items() {
+-                    self.conversation
+-                        .prepare_commit(&crate::durable::inbox::canonical_block(item.message()))?;
+-                }
+-            }
+-            Some(ModelTurnBoundary {
+-                pending_watermark: batch
+-                    .as_ref()
+-                    .map(crate::runtime::inbound::InboundBatch::watermark),
+-                turn_completed: self.event_envelope(RuntimeEvent::TurnCompleted),
+-                attempt_completed: self.event_envelope(RuntimeEvent::AttemptCompleted {
+-                    attempt_id: self.request.attempt_id.clone(),
+-                    finish_reason: finish_reason.clone(),
+-                }),
+-            })
+-        };
+-        let frames = self
+-            .publication
+-            .as_mut()
+-            .expect("model publication")
+-            .coalescer
+-            .take_terminal_frames();
+-        let committed = self
+-            .store
+-            .settle_model_turn(ModelTurnSettlement {
+-                stream_id: &stream,
+-                provider: completion,
+-                frames: &frames,
+-                assistant: prepared.message(),
+-                canonical,
+-                boundary,
+-            })
+-            .map_err(CanonicalCommitError::Durable)?;
+-        self.record_persisted_event(committed.provider);
+-        // The complete final output is published through its canonical receipt.
+-        // Live-prefix backing was consumed by the same commit; publishing those
+-        // transient frame receipts now would expose unreadable ContentRefs.
+-        self.conversation.install_prepared(prepared);
+-        if let Some(observer) = self.observer {
+-            observer.observe_committed(
+-                &self.request.attempt_id,
+-                block,
+-                &committed.canonical_receipt,
+-            );
+-        }
+-        self.record_persisted_event(committed.canonical);
+-        self.publication = None;
+-        let Some(boundary) = committed.boundary else {
+-            return Ok(None);
+-        };
+-        self.record_persisted_event(boundary.turn_completed);
+-        if let Some(adopted) = boundary.adopted {
+-            let adopted = publication_lease
+-                .as_ref()
+-                .expect("no-tool mailbox lease")
+-                .publish_adoption(adopted);
+-            assert!(self.install_adopted_boundary(adopted));
+-            Ok(Some(true))
+-        } else {
+-            let terminal = boundary
+-                .attempt_completed
+-                .expect("empty boundary committed terminal");
+-            self.precommitted_terminal = Some(terminal.event.clone());
+-            debug_assert!(!self.terminal_emitted);
+-            self.terminal_emitted = true;
+-            // Publish the committed terminal before releasing the mailbox lease,
+-            // so a later acceptance cannot overtake this native boundary.
+-            self.record_persisted_event(terminal);
+-            Ok(Some(false))
+-        }
+-    }
+-}
+diff --git a/src/durable/inbox.rs b/src/durable/inbox.rs
+index 7d1c118d..1137f267 100644
+--- a/src/durable/inbox.rs
++++ b/src/durable/inbox.rs
+@@ -31,49 +30,0 @@ use crate::runtime::inbound::InboundSequence;
+-/// One accepted model output and its optional no-tool inbox boundary.
+-/// The native store commits these facts together before any receipt is released.
+-pub struct ModelTurnSettlement<'a> {
+-    /// Exact previously opened publication stream.
+-    pub stream_id: &'a PublicationStreamId,
+-    /// Structurally validated completion of that stream's request.
+-    pub provider: RuntimeEventEnvelope,
+-    /// Final pending frames, including a terminal-only frame when empty.
+-    pub frames: &'a [PublicationFrame],
+-    /// Prepared canonical Assistant.
+-    pub assistant: &'a MessageBlock,
+-    /// Canonical acceptance event for that Assistant.
+-    pub canonical: RuntimeEventEnvelope,
+-    /// No-tool final boundary; absent when tools must still execute.
+-    pub boundary: Option<ModelTurnBoundary>,
+-}
+-
+-/// Finite pending selection protected by the mailbox publication owner.
+-pub struct ModelTurnBoundary {
+-    /// Selected finite watermark; None asserts an empty native inbox.
+-    pub pending_watermark: Option<InboundSequence>,
+-    /// Completion of the accepted model turn.
+-    pub turn_completed: RuntimeEventEnvelope,
+-    /// Candidate terminal, committed only if there is no selected inbound work.
+-    pub attempt_completed: RuntimeEventEnvelope,
+-}
+-
+-/// Receipts from one successful native model-output COMMIT.
+-pub struct CommittedModelTurn {
+-    /// Ordered provider completion fact.
+-    pub provider: RuntimeEventEnvelope,
+-    /// Ordered canonical acceptance fact.
+-    pub canonical: RuntimeEventEnvelope,
+-    /// Exact canonical content receipt.
+-    pub canonical_receipt: TranscriptCommitReceipt,
+-    /// Optional committed no-tool boundary.
+-    pub boundary: Option<CommittedModelTurnBoundary>,
+-}
+-
+-/// The same transaction either adopted a finite batch or completed the Attempt.
+-pub struct CommittedModelTurnBoundary {
+-    /// Ordered turn completion fact.
+-    pub turn_completed: RuntimeEventEnvelope,
+-    /// Native adopted content and exact observation receipts.
+-    pub adopted: Option<AdoptedBatch>,
+-    /// Present only for the empty-inbox completion winner.
+-    pub attempt_completed: Option<RuntimeEventEnvelope>,
+-}
+-
+@@ -3161,9 +3111,0 @@ pub trait ConversationStore: Send + Sync + 'static {
+-    /// Atomically accepts ordinary model output, including provider completion,
+-    /// final frames and canonical acceptance. No-tool output also commits its
+-    /// finite inbox adoption or empty-inbox Attempt completion in this boundary.
+-    /// No prior provider completion is accepted by this operation.
+-    fn settle_model_turn(
+-        &self,
+-        settlement: ModelTurnSettlement<'_>,
+-    ) -> Result<CommittedModelTurn, ConversationStoreError>;
+-
+@@ -3178 +3119,0 @@ pub trait ConversationStore: Send + Sync + 'static {
+-    /// Workflow-owned preparation retains its separate owner boundary.
+diff --git a/src/durable/sqlite.rs b/src/durable/sqlite.rs
+index 421df6a1..ca99d394 100644
+--- a/src/durable/sqlite.rs
++++ b/src/durable/sqlite.rs
+@@ -335,2 +335,2 @@ fn count_conversation_store_open() {
+-/// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
+-pub const SQLITE_SCHEMA_VERSION: i64 = 75;
++/// Diagnostic version 77 retains separate final P/U/C cuts with bounded partial cadence.
++pub const SQLITE_SCHEMA_VERSION: i64 = 77;
+@@ -3539,2 +3539,82 @@ impl ConversationStore for SqliteConversationStore {
+-        let adopted =
+-            self.adopt_pending_tx(&transaction, &mut validation, watermark, attempt_id)?;
++        #[cfg(test)]
++        if let Some(probe) = self
++            .pending_adoption_transaction_probe
++            .lock()
++            .unwrap()
++            .take()
++        {
++            probe();
++        }
++        ensure_surface_head(&transaction)?;
++
++        let items = load_pending_until(&transaction, watermark)?;
++        for item in &items {
++            let block = MessageBlock::User(item.message.clone());
++            let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
++            if cursor != item.transcript_cursor {
++                return Err(ConversationStoreError::InvalidReference(format!(
++                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
++                    item.message_id, item.transcript_cursor, cursor
++                )));
++            }
++        }
++        transaction
++            .execute(
++                "DELETE FROM pending_inbound WHERE sequence <= ?1",
++                [seq_to_i64(watermark.get())?],
++            )
++            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
++        for item in &items {
++            // The removed native pending row fences these derived bytes even
++            // if cleanup fails; their deletion cannot refuse adoption.
++            let _ = optional_display_layout(&transaction, || {
++                content::clear_pending(&transaction, &item.sequence.get().to_string())
++            });
++        }
++        if !items.is_empty() {
++            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
++        }
++        let mut adoption = None;
++        if !items.is_empty() {
++            let fact = crate::durable::inbox::inbound_adoption_event(
++                &self.conversation_id,
++                attempt_id,
++                items.iter().map(|item| item.message_id.clone()).collect(),
++            );
++            adoption = Some(persist_event_tx(&transaction, &self.conversation_id, fact)?.event);
++        }
++        #[cfg(test)]
++        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
++            || Self::consume(&self.fail_adopt_remaining)
++        {
++            return Err(storage("fault injected: adopt commit"));
++        }
++        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
++        let canonical_receipts = canonical_observation_batch(
++            &transaction,
++            &self.conversation_id,
++            &items
++                .iter()
++                .map(|item| (&item.message_id, item.transcript_cursor))
++                .collect::<Vec<_>>(),
++            adoption
++                .as_ref()
++                .map(|event| (event.sequence, event.sequence)),
++        )?;
++        if let Some(event) = &mut adoption {
++            event.observation = canonical_receipts.first().and_then(|receipt| {
++                observation_receipt::canonical(
++                    &transaction,
++                    &self.conversation_id,
++                    event,
++                    Arc::clone(&receipt.observation),
++                )
++            });
++        }
++        let pending_observation = observation_receipt::pending(
++            &transaction,
++            &self.conversation_id,
++            None,
++            None,
++            Some((watermark.get(), items.len() as u64)),
++        );
+@@ -3547 +3627,7 @@ impl ConversationStore for SqliteConversationStore {
+-        Ok(adopted)
++        Ok(crate::durable::inbox::AdoptedBatch {
++            pending_observation,
++            canonical_receipts,
++            read_cut,
++            items,
++            adoption,
++        })
+@@ -5629,0 +5716,5 @@ impl ConversationStore for SqliteConversationStore {
++        if frames.is_empty() {
++            return Err(ConversationStoreError::PublicationViolation(
++                "the publication terminal transaction must carry a final frame".to_owned(),
++            ));
++        }
+@@ -5634 +5725,47 @@ impl ConversationStore for SqliteConversationStore {
+-        let receipts = self.publication_terminal_tx(&transaction, stream_id, frames)?;
++        #[cfg(test)]
++        if Self::consume(&self.fail_publication_terminal_remaining) {
++            return Err(storage("fault injected: publication terminal commit"));
++        }
++        let stream = require_publication_stream(&transaction, stream_id)?;
++        let (snapshot, _, completed_sequence) = require_started_request_tx(
++            &transaction,
++            &self.conversation_id,
++            &stream.start.request_id,
++        )?;
++        validate_publication_generation(&snapshot, &stream.start)?;
++        // U may never precede P: prove the exact provider outcome before the
++        // frame/proposal staging transaction does any durable work.
++        if !request_outcome_is_durable(
++            &transaction,
++            &self.conversation_id,
++            &snapshot,
++            completed_sequence,
++        )? {
++            return Err(ConversationStoreError::PublicationViolation(format!(
++                "publication terminal for {stream_id} has no durable provider outcome for request {}",
++                stream.start.request_id
++            )));
++        }
++        let (stream, receipts) = stage_frames_tx(&transaction, frames, &self.conversation_id)?;
++        if stream.start.stream_id != *stream_id {
++            return Err(ConversationStoreError::PublicationViolation(format!(
++                "terminal frames belong to publication stream {}, not {stream_id}",
++                stream.start.stream_id
++            )));
++        }
++        if stream.terminal_sequence.is_some() {
++            return Err(ConversationStoreError::PublicationViolation(format!(
++                "publication stream {stream_id} already committed its terminal boundary"
++            )));
++        }
++        let terminal_sequence = frames
++            .last()
++            .map(|frame| frame.sequence)
++            .ok_or_else(|| storage("terminal frames are empty"))?;
++        // The final frame and the terminal marker share this one transaction.
++        transaction
++            .execute(
++                "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
++                params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
++            )
++            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+@@ -5643,8 +5780,2 @@ impl ConversationStore for SqliteConversationStore {
+-    fn settle_model_turn(
+-        &self,
+-        settlement: crate::durable::inbox::ModelTurnSettlement<'_>,
+-    ) -> Result<crate::durable::inbox::CommittedModelTurn, ConversationStoreError> {
+-        self.settle_model_turn_native(settlement)
+-    }
+-
+-    // Workflow preparation uses the same canonical transaction body.
++    // Keep native acceptance, event/staging and COMMIT in one auditable boundary.
++    #[allow(clippy::too_many_lines)]
+@@ -5662 +5793,2 @@ impl ConversationStore for SqliteConversationStore {
+-        let result = self.canonical_publication_tx(
++        let stream = require_publication_stream(&transaction, stream_id)?;
++        let (snapshot, _, completed_sequence) = require_started_request_tx(
+@@ -5664,2 +5796,7 @@ impl ConversationStore for SqliteConversationStore {
+-            &mut validation,
+-            stream_id,
++            &self.conversation_id,
++            &stream.start.request_id,
++        )?;
++        validate_publication_generation(&snapshot, &stream.start)?;
++        validate_canonical_publication_event(
++            &self.conversation_id,
++            &stream.start,
+@@ -5667 +5804,80 @@ impl ConversationStore for SqliteConversationStore {
+-            event,
++            &event,
++        )?;
++        validate_canonical_tool_proposals(&transaction, stream_id, message)?;
++        if let Some(settlement) = stream.settlement {
++            return Err(ConversationStoreError::PublicationViolation(format!(
++                "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
++                settlement.as_str()
++            )));
++        }
++        // C may never precede U for a published stream.
++        if stream.terminal_sequence.is_none() {
++            return Err(ConversationStoreError::PublicationViolation(format!(
++                "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
++            )));
++        }
++        if !matches!(message, MessageBlock::Assistant(_)) {
++            return Err(ConversationStoreError::PublicationViolation(format!(
++                "canonical acceptance of publication stream {stream_id} requires an Assistant message"
++            )));
++        }
++        if !request_outcome_is_durable(
++            &transaction,
++            &self.conversation_id,
++            &snapshot,
++            completed_sequence,
++        )? {
++            return Err(ConversationStoreError::PublicationViolation(format!(
++                "canonical acceptance of publication stream {stream_id} has no durable provider outcome for request {}",
++                stream.start.request_id
++            )));
++        }
++        ensure_surface_head(&transaction)?;
++
++        let transcript_cursor =
++            validation
++                .append(&transaction, message, None)?
++                .ok_or_else(|| {
++                    ConversationStoreError::InvalidReference(
++                        "canonical publication must receive a transcript cursor".to_owned(),
++                    )
++                })?;
++        #[cfg(test)]
++        if Self::consume(&self.fail_event_remaining) {
++            return Err(storage("fault injected: canonical publication commit"));
++        }
++        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
++        content::settle_canonical(&transaction, stream_id, message)?;
++        rebind_published_read_layouts(&transaction, message, &persisted.event)?;
++        // The canonical transition clears the lifecycle staging of the stream:
++        // the Ledger is now the long-term authority and no transient frame
++        // survives it.
++        clear_publication_staging(&transaction, stream_id)?;
++        // Proposal ownership remains as one bounded `(stream_id, call_id)`
++        // fact after C. Recovery ToolResult repair and later Tool Plane
++        // transitions must still resolve the exact accepted proposal rather
++        // than falling back to a bare call id.
++        transaction
++            .execute(
++                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
++                params![
++                    PublicationSettlement::Canonical.as_str(),
++                    stream_id.as_str()
++                ],
++            )
++            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
++        transaction
++            .execute(
++                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
++                params![
++                    PublicationSettlement::Canonical.as_str(),
++                    stream_id.as_str()
++                ],
++            )
++            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
++        let mut receipt = canonical_observation_receipt(
++            &transaction,
++            &self.conversation_id,
++            message,
++            Some(transcript_cursor),
++            persisted.event.tool_occurrence.clone(),
+@@ -5669,0 +5886,8 @@ impl ConversationStore for SqliteConversationStore {
++        let sequence = persisted.event.sequence;
++        set_canonical_range(&mut receipt, Some((sequence, sequence)));
++        persisted.event.observation = observation_receipt::canonical(
++            &transaction,
++            &self.conversation_id,
++            &persisted.event,
++            Arc::clone(&receipt.observation),
++        );
+@@ -5675 +5899 @@ impl ConversationStore for SqliteConversationStore {
+-        Ok(result)
++        Ok((persisted.event, receipt))
+@@ -13894,4 +14117,0 @@ mod tests {
+-    mod final_settlement_tests {
+-        use super::*;
+-        include!("sqlite/final_settlement_tests.rs");
+-    }
+@@ -19269 +19489 @@ mod tests {
+-        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
++        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
+@@ -19338 +19558 @@ mod tests {
+-        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
++        assert_eq!(SQLITE_SCHEMA_VERSION, 77);
+@@ -21397,2 +21616,0 @@ mod projection_publication;
+-
+-mod final_settlement;
+diff --git a/src/durable/sqlite/content_binary_tests.rs b/src/durable/sqlite/content_binary_tests.rs
+index 8de185da..cc76e8fe 100644
+--- a/src/durable/sqlite/content_binary_tests.rs
++++ b/src/durable/sqlite/content_binary_tests.rs
+@@ -408 +408 @@ fn binary_integrity_schema_refuses_68_and_relaxed_digest_tables() {
+-            expected: 75
++            expected: 77
+@@ -415 +415 @@ fn binary_integrity_schema_refuses_68_and_relaxed_digest_tables() {
+-        .execute("UPDATE rustx_store SET schema_version=75", [])
++        .execute("UPDATE rustx_store SET schema_version=77", [])
+diff --git a/src/durable/sqlite/final_settlement.rs b/src/durable/sqlite/final_settlement.rs
+deleted file mode 100644
+index cc0c5eda..00000000
+--- a/src/durable/sqlite/final_settlement.rs
++++ /dev/null
+@@ -1,436 +0,0 @@
+-//! Native final-output transaction parts. The caller owns COMMIT and publication.
+-#[cfg(test)]
+-use super::AdmissionFaultOperation;
+-use super::{
+-    Arc, ConversationStoreError, InboundSequence, MessageBlock, PublicationFrame,
+-    PublicationSettlement, PublicationStreamId, RuntimeEventEnvelope, SqliteConversationStore,
+-    Transaction, TranscriptCommitReceipt, append_validation, canonical_observation_batch,
+-    canonical_observation_receipt, clear_publication_staging, content, ensure_surface_head,
+-    load_pending_until, observation_receipt, optional_display_layout, params, persist_event_tx,
+-    reading, rebind_published_read_layouts, request_outcome_is_durable, require_publication_stream,
+-    require_started_request_tx, seq_to_i64, set_canonical_range, stage_frames_tx, storage,
+-    validate_canonical_publication_event, validate_canonical_tool_proposals,
+-    validate_publication_generation,
+-};
+-impl SqliteConversationStore {
+-    pub(super) fn publication_terminal_tx(
+-        &self,
+-        transaction: &Transaction<'_>,
+-        stream_id: &PublicationStreamId,
+-        frames: &[PublicationFrame],
+-    ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError> {
+-        if frames.is_empty() {
+-            return Err(ConversationStoreError::PublicationViolation(
+-                "the publication terminal transaction must carry a final frame".to_owned(),
+-            ));
+-        }
+-        #[cfg(test)]
+-        if Self::consume(&self.fail_publication_terminal_remaining) {
+-            return Err(storage("fault injected: publication terminal commit"));
+-        }
+-        let stream = require_publication_stream(transaction, stream_id)?;
+-        let (snapshot, _, completed_sequence) = require_started_request_tx(
+-            transaction,
+-            &self.conversation_id,
+-            &stream.start.request_id,
+-        )?;
+-        validate_publication_generation(&snapshot, &stream.start)?;
+-        // Final frames follow the exact provider outcome in this transaction;
+-        // the caller may commit both together with canonical acceptance.
+-        if !request_outcome_is_durable(
+-            transaction,
+-            &self.conversation_id,
+-            &snapshot,
+-            completed_sequence,
+-        )? {
+-            return Err(ConversationStoreError::PublicationViolation(format!(
+-                "publication terminal for {stream_id} has no durable provider outcome for request {}",
+-                stream.start.request_id
+-            )));
+-        }
+-        let (stream, receipts) = stage_frames_tx(transaction, frames, &self.conversation_id)?;
+-        if stream.start.stream_id != *stream_id {
+-            return Err(ConversationStoreError::PublicationViolation(format!(
+-                "terminal frames belong to publication stream {}, not {stream_id}",
+-                stream.start.stream_id
+-            )));
+-        }
+-        if stream.terminal_sequence.is_some() {
+-            return Err(ConversationStoreError::PublicationViolation(format!(
+-                "publication stream {stream_id} already committed its terminal boundary"
+-            )));
+-        }
+-        let terminal_sequence = frames
+-            .last()
+-            .map(|frame| frame.sequence)
+-            .ok_or_else(|| storage("terminal frames are empty"))?;
+-        // The final frame and the terminal marker share this one transaction.
+-        transaction
+-            .execute(
+-                "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
+-                params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
+-            )
+-            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+-        Ok(receipts)
+-    }
+-
+-    #[allow(clippy::too_many_lines)] // One native canonical transition.
+-    pub(super) fn canonical_publication_tx(
+-        &self,
+-        transaction: &Transaction<'_>,
+-        validation: &mut append_validation::Batch<'_>,
+-        stream_id: &PublicationStreamId,
+-        message: &MessageBlock,
+-        event: RuntimeEventEnvelope,
+-    ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
+-        let stream = require_publication_stream(transaction, stream_id)?;
+-        let (snapshot, _, completed_sequence) = require_started_request_tx(
+-            transaction,
+-            &self.conversation_id,
+-            &stream.start.request_id,
+-        )?;
+-        validate_publication_generation(&snapshot, &stream.start)?;
+-        validate_canonical_publication_event(
+-            &self.conversation_id,
+-            &stream.start,
+-            message,
+-            &event,
+-        )?;
+-        validate_canonical_tool_proposals(transaction, stream_id, message)?;
+-        if let Some(settlement) = stream.settlement {
+-            return Err(ConversationStoreError::PublicationViolation(format!(
+-                "publication stream {stream_id} already settled as {}; canonical acceptance is permanently forbidden",
+-                settlement.as_str()
+-            )));
+-        }
+-        // C may never precede U for a published stream.
+-        if stream.terminal_sequence.is_none() {
+-            return Err(ConversationStoreError::PublicationViolation(format!(
+-                "publication stream {stream_id} has no durable publication terminal; canonical acceptance requires U"
+-            )));
+-        }
+-        if !matches!(message, MessageBlock::Assistant(_)) {
+-            return Err(ConversationStoreError::PublicationViolation(format!(
+-                "canonical acceptance of publication stream {stream_id} requires an Assistant message"
+-            )));
+-        }
+-        if !request_outcome_is_durable(
+-            transaction,
+-            &self.conversation_id,
+-            &snapshot,
+-            completed_sequence,
+-        )? {
+-            return Err(ConversationStoreError::PublicationViolation(format!(
+-                "canonical acceptance of publication stream {stream_id} has no durable provider outcome for request {}",
+-                stream.start.request_id
+-            )));
+-        }
+-        ensure_surface_head(transaction)?;
+-
+-        let transcript_cursor =
+-            validation
+-                .append(transaction, message, None)?
+-                .ok_or_else(|| {
+-                    ConversationStoreError::InvalidReference(
+-                        "canonical publication must receive a transcript cursor".to_owned(),
+-                    )
+-                })?;
+-        #[cfg(test)]
+-        if Self::consume(&self.fail_event_remaining) {
+-            return Err(storage("fault injected: canonical publication commit"));
+-        }
+-        let mut persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
+-        content::settle_canonical(transaction, stream_id, message)?;
+-        rebind_published_read_layouts(transaction, message, &persisted.event)?;
+-        // The canonical transition clears the lifecycle staging of the stream:
+-        // the Ledger is now the long-term authority and no transient frame
+-        // survives it.
+-        clear_publication_staging(transaction, stream_id)?;
+-        // Proposal ownership remains as one bounded `(stream_id, call_id)`
+-        // fact after C. Recovery ToolResult repair and later Tool Plane
+-        // transitions must still resolve the exact accepted proposal rather
+-        // than falling back to a bare call id.
+-        transaction
+-            .execute(
+-                "UPDATE publication_proposals SET settlement=?1 WHERE stream_id=?2",
+-                params![
+-                    PublicationSettlement::Canonical.as_str(),
+-                    stream_id.as_str()
+-                ],
+-            )
+-            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
+-        transaction
+-            .execute(
+-                "UPDATE publication_streams SET settlement=?1 WHERE stream_id=?2",
+-                params![
+-                    PublicationSettlement::Canonical.as_str(),
+-                    stream_id.as_str()
+-                ],
+-            )
+-            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+-        let mut receipt = canonical_observation_receipt(
+-            transaction,
+-            &self.conversation_id,
+-            message,
+-            Some(transcript_cursor),
+-            persisted.event.tool_occurrence.clone(),
+-        )?;
+-        let sequence = persisted.event.sequence;
+-        set_canonical_range(&mut receipt, Some((sequence, sequence)));
+-        persisted.event.observation = observation_receipt::canonical(
+-            transaction,
+-            &self.conversation_id,
+-            &persisted.event,
+-            Arc::clone(&receipt.observation),
+-        );
+-        Ok((persisted.event, receipt))
+-    }
+-
+-    #[allow(clippy::too_many_lines)] // One native pending adoption transition.
+-    pub(super) fn adopt_pending_tx(
+-        &self,
+-        transaction: &Transaction<'_>,
+-        validation: &mut append_validation::Batch<'_>,
+-        watermark: InboundSequence,
+-        attempt_id: Option<crate::runtime::identity::AttemptId>,
+-    ) -> Result<crate::durable::inbox::AdoptedBatch, ConversationStoreError> {
+-        #[cfg(test)]
+-        if let Some(probe) = self
+-            .pending_adoption_transaction_probe
+-            .lock()
+-            .unwrap()
+-            .take()
+-        {
+-            probe();
+-        }
+-        ensure_surface_head(transaction)?;
+-
+-        let items = load_pending_until(transaction, watermark)?;
+-        for item in &items {
+-            let block = MessageBlock::User(item.message.clone());
+-            let cursor = validation.append(transaction, &block, Some(&item.message_id))?;
+-            if cursor != item.transcript_cursor {
+-                return Err(ConversationStoreError::InvalidReference(format!(
+-                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
+-                    item.message_id, item.transcript_cursor, cursor
+-                )));
+-            }
+-        }
+-        transaction
+-            .execute(
+-                "DELETE FROM pending_inbound WHERE sequence <= ?1",
+-                [seq_to_i64(watermark.get())?],
+-            )
+-            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+-        for item in &items {
+-            // The removed native pending row fences these derived bytes even
+-            // if cleanup fails; their deletion cannot refuse adoption.
+-            let _ = optional_display_layout(transaction, || {
+-                content::clear_pending(transaction, &item.sequence.get().to_string())
+-            });
+-        }
+-        if !items.is_empty() {
+-            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
+-        }
+-        let mut adoption = None;
+-        if !items.is_empty() {
+-            let fact = crate::durable::inbox::inbound_adoption_event(
+-                &self.conversation_id,
+-                attempt_id,
+-                items.iter().map(|item| item.message_id.clone()).collect(),
+-            );
+-            adoption = Some(persist_event_tx(transaction, &self.conversation_id, fact)?.event);
+-        }
+-        #[cfg(test)]
+-        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
+-            || Self::consume(&self.fail_adopt_remaining)
+-        {
+-            return Err(storage("fault injected: adopt commit"));
+-        }
+-        let read_cut = reading::cut(transaction, &self.conversation_id)?;
+-        let canonical_receipts = canonical_observation_batch(
+-            transaction,
+-            &self.conversation_id,
+-            &items
+-                .iter()
+-                .map(|item| (&item.message_id, item.transcript_cursor))
+-                .collect::<Vec<_>>(),
+-            adoption
+-                .as_ref()
+-                .map(|event| (event.sequence, event.sequence)),
+-        )?;
+-        if let Some(event) = &mut adoption {
+-            event.observation = canonical_receipts.first().and_then(|receipt| {
+-                observation_receipt::canonical(
+-                    transaction,
+-                    &self.conversation_id,
+-                    event,
+-                    Arc::clone(&receipt.observation),
+-                )
+-            });
+-        }
+-        let pending_observation = observation_receipt::pending(
+-            transaction,
+-            &self.conversation_id,
+-            None,
+-            None,
+-            Some((watermark.get(), items.len() as u64)),
+-        );
+-        Ok(crate::durable::inbox::AdoptedBatch {
+-            pending_observation,
+-            canonical_receipts,
+-            read_cut,
+-            items,
+-            adoption,
+-        })
+-    }
+-}
+-
+-impl SqliteConversationStore {
+-    #[allow(clippy::too_many_lines)] // One auditable native final-output transaction.
+-    pub(super) fn settle_model_turn_native(
+-        &self,
+-        settlement: crate::durable::inbox::ModelTurnSettlement<'_>,
+-    ) -> Result<crate::durable::inbox::CommittedModelTurn, ConversationStoreError> {
+-        use crate::durable::inbox::{CommittedModelTurn, CommittedModelTurnBoundary};
+-        let mut connection = self.lock()?;
+-        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
+-        let transaction = connection
+-            .transaction_with_behavior(super::TransactionBehavior::Immediate)
+-            .map_err(|error| storage(format!("model settlement transaction: {error}")))?;
+-        let stream = require_publication_stream(&transaction, settlement.stream_id)?;
+-        if stream.terminal_sequence.is_some() || stream.settlement.is_some() {
+-            return Err(ConversationStoreError::PublicationViolation(
+-                "model output is already terminal or settled".into(),
+-            ));
+-        }
+-        if settlement.provider.conversation_id != self.conversation_id
+-            || settlement.provider.attempt_id != Some(stream.start.attempt_id.clone())
+-            || settlement.provider.turn_id.as_ref() != Some(&stream.start.turn_id)
+-            || !matches!(&settlement.provider.event, super::RuntimeEvent::ModelRequestCompleted { request_id, .. } if request_id == &stream.start.request_id)
+-        {
+-            return Err(ConversationStoreError::PublicationViolation(
+-                "model completion does not own the stream".into(),
+-            ));
+-        }
+-        let (_, _, prior_completion) = require_started_request_tx(
+-            &transaction,
+-            &self.conversation_id,
+-            &stream.start.request_id,
+-        )?;
+-        if prior_completion.is_some() {
+-            return Err(ConversationStoreError::PublicationViolation(
+-                "model output already has a provider completion".into(),
+-            ));
+-        }
+-        let super::RuntimeEvent::ModelRequestCompleted { finish_reason, .. } =
+-            &settlement.provider.event
+-        else {
+-            unreachable!("validated completion")
+-        };
+-        let finish_reason = finish_reason.clone();
+-        let has_tools = matches!(settlement.assistant, MessageBlock::Assistant(message) if message.content.iter().any(|block| matches!(block, crate::message::types::AssistantContentBlock::ToolCall(_))));
+-        if has_tools == settlement.boundary.is_some() {
+-            return Err(ConversationStoreError::PublicationViolation(
+-                "model settlement has the wrong tool/inbox boundary".into(),
+-            ));
+-        }
+-        let provider =
+-            persist_event_tx(&transaction, &self.conversation_id, settlement.provider)?.event;
+-        super::process_death::reach("during:model_settlement_provider");
+-        // Final staging is consumed by canonical settlement in this transaction.
+-        // Its live-prefix receipts cannot escape after that backing is removed;
+-        // the canonical receipt publishes the complete accepted output instead.
+-        self.publication_terminal_tx(&transaction, settlement.stream_id, settlement.frames)?;
+-        super::process_death::reach("during:model_settlement_frames");
+-        let (canonical, canonical_receipt) = self.canonical_publication_tx(
+-            &transaction,
+-            &mut validation,
+-            settlement.stream_id,
+-            settlement.assistant,
+-            settlement.canonical,
+-        )?;
+-        super::process_death::reach("during:model_settlement_canonical");
+-        let boundary = if let Some(boundary) = settlement.boundary {
+-            if !matches!(
+-                boundary.turn_completed.event,
+-                super::RuntimeEvent::TurnCompleted
+-            ) || !matches!(&boundary.attempt_completed.event, super::RuntimeEvent::AttemptCompleted { attempt_id, finish_reason: terminal_reason } if attempt_id == &stream.start.attempt_id && terminal_reason == &finish_reason)
+-                || [&boundary.turn_completed, &boundary.attempt_completed]
+-                    .iter()
+-                    .any(|event| {
+-                        event.conversation_id != self.conversation_id
+-                            || event.attempt_id != Some(stream.start.attempt_id.clone())
+-                    })
+-                || boundary.turn_completed.turn_id.as_ref() != Some(&stream.start.turn_id)
+-                || boundary.attempt_completed.turn_id.is_some()
+-            {
+-                return Err(ConversationStoreError::PublicationViolation(
+-                    "model boundary does not own the stream".into(),
+-                ));
+-            }
+-            let turn_completed =
+-                persist_event_tx(&transaction, &self.conversation_id, boundary.turn_completed)?
+-                    .event;
+-            let (adopted, attempt_completed) = if let Some(watermark) = boundary.pending_watermark {
+-                let adopted = self.adopt_pending_tx(
+-                    &transaction,
+-                    &mut validation,
+-                    watermark,
+-                    Some(stream.start.attempt_id.clone()),
+-                )?;
+-                if adopted.items.is_empty() {
+-                    return Err(ConversationStoreError::PublicationViolation(
+-                        "selected model boundary inbox became empty".into(),
+-                    ));
+-                }
+-                (Some(adopted), None)
+-            } else {
+-                let pending: bool = transaction
+-                    .query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
+-                        row.get(0)
+-                    })
+-                    .map_err(|error| storage(error.to_string()))?;
+-                if pending {
+-                    return Err(ConversationStoreError::PublicationViolation(
+-                        "empty model boundary has pending inbound".into(),
+-                    ));
+-                }
+-                #[cfg(test)]
+-                {
+-                    self.terminal_event_attempts
+-                        .fetch_add(1, super::Ordering::SeqCst);
+-                    if Self::consume(&self.fail_terminal_event_remaining) {
+-                        return Err(storage("fault injected: final model terminal commit"));
+-                    }
+-                }
+-                let terminal = persist_event_tx(
+-                    &transaction,
+-                    &self.conversation_id,
+-                    boundary.attempt_completed,
+-                )?
+-                .event;
+-                (None, Some(terminal))
+-            };
+-            Some(CommittedModelTurnBoundary {
+-                turn_completed,
+-                adopted,
+-                attempt_completed,
+-            })
+-        } else {
+-            None
+-        };
+-        super::process_death::reach("before:settle_model_turn");
+-        transaction
+-            .commit()
+-            .map_err(|error| storage(format!("model settlement commit: {error}")))?;
+-        validation.committed(&connection);
+-        super::process_death::reach("after:settle_model_turn");
+-        Ok(CommittedModelTurn {
+-            provider,
+-            canonical,
+-            canonical_receipt,
+-            boundary,
+-        })
+-    }
+-}
+diff --git a/src/durable/sqlite/final_settlement_tests.rs b/src/durable/sqlite/final_settlement_tests.rs
+deleted file mode 100644
+index 3adbb713..00000000
+--- a/src/durable/sqlite/final_settlement_tests.rs
++++ /dev/null
+@@ -1,314 +0,0 @@
+-use crate::durable::inbox::{CommittedModelTurn, ModelTurnBoundary, ModelTurnSettlement};
+-
+-struct FinalFixture {
+-    store: SqliteConversationStore,
+-    start: PublicationStreamStart,
+-    message: MessageBlock,
+-    frames: Vec<PublicationFrame>,
+-}
+-impl FinalFixture {
+-    fn new() -> Self {
+-        let store = store();
+-        store.initialize(&[]).unwrap();
+-        let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+-        freeze_test_input(&store, &mut snapshot, &[]);
+-        store
+-            .append_event(envelope(
+-                store.conversation_id(),
+-                "attempt",
+-                Some(snapshot.identity.attempt_id.clone()),
+-                RuntimeEvent::AttemptStarted {
+-                    attempt_id: snapshot.identity.attempt_id.clone(),
+-                },
+-            ))
+-            .unwrap();
+-        let mut turn = envelope(
+-            store.conversation_id(),
+-            "turn-start",
+-            Some(snapshot.identity.attempt_id.clone()),
+-            RuntimeEvent::TurnStarted,
+-        );
+-        turn.turn_id = Some(snapshot.identity.turn.clone());
+-        store.append_event(turn).unwrap();
+-        store
+-            .commit_model_turn_start(&[], &snapshot, Utc::now())
+-            .unwrap();
+-        let start = PublicationStreamStart {
+-            stream_id: PublicationStreamId::for_request(
+-                &snapshot.identity.attempt_id,
+-                &snapshot.provisional_message_id,
+-            ),
+-            message_id: snapshot.provisional_message_id,
+-            attempt_id: snapshot.identity.attempt_id,
+-            turn_id: snapshot.identity.turn,
+-            request_id: snapshot.request_id,
+-        };
+-        store.open_publication_stream(&start).unwrap();
+-        let message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
+-            id: start.message_id.clone(),
+-            content: vec![crate::message::types::AssistantContentBlock::Text(
+-                crate::message::content::TextBlock {
+-                    text: "final 水".into(),
+-                },
+-            )],
+-        });
+-        let frames = vec![PublicationFrame {
+-            stream_id: start.stream_id.clone(),
+-            message_id: start.message_id.clone(),
+-            sequence: 0,
+-            payload: crate::publication::PublicationPayload::TextSuffix {
+-                block_index: crate::message::types::ContentBlockIndex::new(0),
+-                suffix: "final 水".into(),
+-            },
+-        }];
+-        Self {
+-            store,
+-            start,
+-            message,
+-            frames,
+-        }
+-    }
+-    fn event(&self, id: &str, event: RuntimeEvent) -> RuntimeEventEnvelope {
+-        let mut event = envelope(
+-            self.store.conversation_id(),
+-            id,
+-            Some(self.start.attempt_id.clone()),
+-            event,
+-        );
+-        event.turn_id = (!matches!(&event.event, RuntimeEvent::AttemptCompleted { .. }))
+-            .then(|| self.start.turn_id.clone());
+-        event
+-    }
+-    fn candidate(&self, pending: Option<InboundSequence>) -> ModelTurnSettlement<'_> {
+-        ModelTurnSettlement {
+-            stream_id: &self.start.stream_id,
+-            provider: self.event(
+-                "provider",
+-                RuntimeEvent::ModelRequestCompleted {
+-                    request_id: self.start.request_id.clone(),
+-                    finish_reason: ModelFinishReason::Stop,
+-                    usage: None,
+-                    generation: None,
+-                },
+-            ),
+-            frames: &self.frames,
+-            assistant: &self.message,
+-            canonical: self.event(
+-                "canonical",
+-                RuntimeEvent::AssistantMessageCommitted {
+-                    message_id: self.start.message_id.clone(),
+-                },
+-            ),
+-            boundary: Some(ModelTurnBoundary {
+-                pending_watermark: pending,
+-                turn_completed: self.event("turn", RuntimeEvent::TurnCompleted),
+-                attempt_completed: self.event(
+-                    "terminal",
+-                    RuntimeEvent::AttemptCompleted {
+-                        attempt_id: self.start.attempt_id.clone(),
+-                        finish_reason: ModelFinishReason::Stop,
+-                    },
+-                ),
+-            }),
+-        }
+-    }
+-    fn settle(
+-        &self,
+-        pending: Option<InboundSequence>,
+-    ) -> Result<CommittedModelTurn, ConversationStoreError> {
+-        self.store.settle_model_turn(self.candidate(pending))
+-    }
+-}
+-
+-#[test]
+-fn final_model_commit_contains_ordered_facts_and_readable_canonical_output() {
+-    use base64::Engine as _;
+-    let fixture = FinalFixture::new();
+-    let result = fixture.settle(None).unwrap();
+-    assert_eq!(
+-        fixture.store.load_canonical().unwrap(),
+-        vec![fixture.message.clone()]
+-    );
+-    assert!(result.provider.sequence < result.canonical.sequence);
+-    let boundary = result.boundary.unwrap();
+-    assert!(boundary.adopted.is_none());
+-    assert!(result.canonical.sequence < boundary.turn_completed.sequence);
+-    let terminal = boundary.attempt_completed.unwrap();
+-    assert!(boundary.turn_completed.sequence < terminal.sequence);
+-    assert!(
+-        terminal.turn_id.is_none(),
+-        "Attempt terminal is not a Turn fact"
+-    );
+-    let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
+-        component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+-        locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+-            message_id: fixture.start.message_id.clone(),
+-        },
+-        block_index: crate::message::types::ContentBlockIndex::new(0),
+-    };
+-    let reference = fixture
+-        .store
+-        .content_descriptor(
+-            &source,
+-            crate::runtime_client::content::ContentRepresentation::Utf8Text,
+-        )
+-        .unwrap()
+-        .unwrap();
+-    let content = fixture.store.content_read(&reference, 0, 64).unwrap();
+-    assert_eq!(
+-        base64::engine::general_purpose::STANDARD
+-            .decode(content.data_base64)
+-            .unwrap(),
+-        "final 水".as_bytes()
+-    );
+-    assert!(
+-        fixture
+-            .store
+-            .load_unsettled_publication_streams()
+-            .unwrap()
+-            .is_empty()
+-    );
+-    assert!(
+-        fixture.settle(None).is_err(),
+-        "a committed output cannot be accepted twice"
+-    );
+-}
+-
+-#[test]
+-fn final_model_faults_roll_back_provider_frames_canonical_and_terminal_together() {
+-    for stage in 0..3 {
+-        let fixture = FinalFixture::new();
+-        let frontier = fixture.store.presentation_frontier().unwrap();
+-        let fault = match stage {
+-            0 => &fixture.store.fail_publication_terminal_remaining,
+-            1 => &fixture.store.fail_event_remaining,
+-            _ => &fixture.store.fail_terminal_event_remaining,
+-        };
+-        fault.store(1, Ordering::SeqCst);
+-        assert!(fixture.settle(None).is_err());
+-        assert!(fixture.store.load_canonical().unwrap().is_empty());
+-        assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
+-        let streams = fixture.store.load_unsettled_publication_streams().unwrap();
+-        assert_eq!(streams.len(), 1);
+-        assert!(streams[0].terminal_sequence.is_none());
+-        let connection = fixture.store.lock().unwrap();
+-        assert_eq!(
+-            connection
+-                .query_row("SELECT count(*) FROM publication_frames", [], |row| row
+-                    .get::<_, u64>(0))
+-                .unwrap(),
+-            0
+-        );
+-        drop(connection);
+-        assert!(
+-            fixture.settle(None).is_ok(),
+-            "rollback left no provisional acceptance certificate"
+-        );
+-    }
+-}
+-
+-#[test]
+-fn final_model_adopts_finite_pending_order_without_terminal_and_preserves_cursors() {
+-    let fixture = FinalFixture::new();
+-    let first = fixture.store.accept_inbound(draft("first")).unwrap();
+-    let second = fixture.store.accept_inbound(draft("second")).unwrap();
+-    let batch = fixture.store.select_pending_batch().unwrap().unwrap();
+-    let third = fixture
+-        .store
+-        .accept_inbound(draft("arrived after selection"))
+-        .unwrap();
+-    let all_pending = fixture.store.load_pending().unwrap();
+-    let frontier = fixture.store.presentation_frontier().unwrap();
+-    assert!(
+-        fixture.settle(None).is_err(),
+-        "empty boundary cannot consume or ignore pending input"
+-    );
+-    assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
+-    fixture.store.arm_fail_next_adopt_commit();
+-    assert!(fixture.settle(Some(batch.watermark)).is_err());
+-    assert!(fixture.store.load_canonical().unwrap().is_empty());
+-    assert_eq!(fixture.store.load_pending().unwrap(), all_pending);
+-    let result = fixture.settle(Some(batch.watermark)).unwrap();
+-    let boundary = result.boundary.unwrap();
+-    assert!(boundary.attempt_completed.is_none());
+-    let adopted = boundary.adopted.unwrap();
+-    assert_eq!(adopted.items, batch.items);
+-    assert_eq!(adopted.items[0].transcript_cursor, first.transcript_cursor);
+-    assert_eq!(adopted.items[1].transcript_cursor, second.transcript_cursor);
+-    let remaining = fixture.store.load_pending().unwrap();
+-    assert_eq!(remaining.len(), 1);
+-    assert_eq!(remaining[0].message_id, third.message_id);
+-    assert_eq!(remaining[0].transcript_cursor, third.transcript_cursor);
+-    let canonical = fixture.store.load_canonical().unwrap();
+-    assert_eq!(canonical.len(), 3);
+-    assert_eq!(canonical[0], fixture.message);
+-    assert_eq!(canonical[1].id(), &adopted.items[0].message_id);
+-    assert_eq!(canonical[2].id(), &adopted.items[1].message_id);
+-}
+-
+-#[test]
+-fn final_model_rejects_foreign_envelopes_and_wrong_terminal_without_partial_facts() {
+-    for fault in 0..4 {
+-        let fixture = FinalFixture::new();
+-        let frontier = fixture.store.presentation_frontier().unwrap();
+-        let mut candidate = fixture.candidate(None);
+-        match fault {
+-            0 => candidate.provider.turn_id = Some(TurnId::new("foreign")),
+-            1 => candidate.canonical.attempt_id = Some(AttemptId::new("foreign")),
+-            2 => {
+-                candidate.boundary.as_mut().unwrap().attempt_completed.event =
+-                    RuntimeEvent::AttemptCancelled {
+-                        attempt_id: fixture.start.attempt_id.clone(),
+-                        reason: crate::runtime::types::CancellationReason::UserRequested,
+-                    };
+-            }
+-            _ => {
+-                candidate
+-                    .boundary
+-                    .as_mut()
+-                    .unwrap()
+-                    .attempt_completed
+-                    .turn_id = Some(fixture.start.turn_id.clone());
+-            }
+-        }
+-        assert!(fixture.store.settle_model_turn(candidate).is_err());
+-        assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
+-        assert!(fixture.store.load_canonical().unwrap().is_empty());
+-        assert!(
+-            fixture.store.load_unsettled_publication_streams().unwrap()[0]
+-                .terminal_sequence
+-                .is_none()
+-        );
+-    }
+-}
+-
+-#[test]
+-fn independent_final_commit_schema_is_refused_without_rewriting() {
+-    let directory = tempfile::tempdir().unwrap();
+-    let path = directory.path().join("independent-final.sqlite");
+-    let conversation = ConversationId::generate();
+-    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+-    store.initialize(&[]).unwrap();
+-    store
+-        .conn
+-        .lock()
+-        .unwrap()
+-        .execute("UPDATE rustx_store SET schema_version=74", [])
+-        .unwrap();
+-    drop(store);
+-    assert!(matches!(
+-        SqliteConversationStore::open_existing(conversation, &path),
+-        Err(ConversationStoreError::SchemaVersionMismatch {
+-            stored: 74,
+-            expected: 75
+-        })
+-    ));
+-    let connection = Connection::open(&path).unwrap();
+-    assert_eq!(
+-        connection
+-            .query_row("SELECT schema_version FROM rustx_store", [], |row| row
+-                .get::<_, i64>(0))
+-            .unwrap(),
+-        74
+-    );
+-}
+diff --git a/src/durable/sqlite/observation_request/composed/schema_tests.rs b/src/durable/sqlite/observation_request/composed/schema_tests.rs
+index 3a4bf95f..bfc52ebd 100644
+--- a/src/durable/sqlite/observation_request/composed/schema_tests.rs
++++ b/src/durable/sqlite/observation_request/composed/schema_tests.rs
+@@ -130 +130 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
+-            expected: 75
++            expected: 77
+@@ -202 +202 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
+-            expected: 75
++            expected: 77
+@@ -248 +248 @@ fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
+-                expected: 75
++                expected: 77
+@@ -288 +288 @@ fn independent_source_witness_layout_is_rejected_without_migration() {
+-            expected: 75
++            expected: 77
+diff --git a/src/durable/sqlite/observation_request/state_preview_tests.rs b/src/durable/sqlite/observation_request/state_preview_tests.rs
+index d74ff995..96cd2bc9 100644
+--- a/src/durable/sqlite/observation_request/state_preview_tests.rs
++++ b/src/durable/sqlite/observation_request/state_preview_tests.rs
+@@ -276 +276 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
+-            expected: 75
++            expected: 77
+diff --git a/src/durable/sqlite/reading_tests.rs b/src/durable/sqlite/reading_tests.rs
+index 722e8c3b..073ce33f 100644
+--- a/src/durable/sqlite/reading_tests.rs
++++ b/src/durable/sqlite/reading_tests.rs
+@@ -1149 +1149 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
+-        assert_eq!(super::SQLITE_SCHEMA_VERSION, 75);
++        assert_eq!(super::SQLITE_SCHEMA_VERSION, 77);
+diff --git a/src/durable/sqlite/scoped_event_index_tests.rs b/src/durable/sqlite/scoped_event_index_tests.rs
+index 47772528..ca5759d8 100644
+--- a/src/durable/sqlite/scoped_event_index_tests.rs
++++ b/src/durable/sqlite/scoped_event_index_tests.rs
+@@ -121 +121 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
+-            expected: 75
++            expected: 77
+diff --git a/src/runtime/inbound.rs b/src/runtime/inbound.rs
+index ab06d416..9c21135f 100644
+--- a/src/runtime/inbound.rs
++++ b/src/runtime/inbound.rs
+@@ -1287,9 +1286,0 @@ impl ConversationInboundMailbox {
+-    /// Holds the existing pending publication ordering while the Agent owner
+-    /// commits a final-output boundary. This lease owns no model semantics.
+-    pub(crate) fn pending_publication(&self) -> PendingPublication<'_> {
+-        PendingPublication {
+-            mailbox: self,
+-            _guard: self.publication.lock().expect("inbound publication lock"),
+-        }
+-    }
+-
+@@ -1315 +1306 @@ impl ConversationInboundMailbox {
+-        let publication = self.pending_publication();
++        let _publication = self.publication.lock().expect("inbound publication lock");
+@@ -1319,14 +1309,0 @@ impl ConversationInboundMailbox {
+-        Ok(publication.publish_adoption(adopted))
+-    }
+-}
+-
+-/// Pending observation publication ordering, borrowed only for a native commit.
+-pub(crate) struct PendingPublication<'a> {
+-    mailbox: &'a ConversationInboundMailbox,
+-    _guard: std::sync::MutexGuard<'a, ()>,
+-}
+-impl PendingPublication<'_> {
+-    pub(crate) fn publish_adoption(
+-        &self,
+-        adopted: crate::durable::inbox::AdoptedBatch,
+-    ) -> AdoptedInbound {
+@@ -1345,5 +1322 @@ impl PendingPublication<'_> {
+-            let state = self
+-                .mailbox
+-                .state
+-                .lock()
+-                .expect("inbound mailbox lock poisoned");
++            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+@@ -1354 +1327 @@ impl PendingPublication<'_> {
+-        AdoptedInbound {
++        Ok(AdoptedInbound {
+@@ -1358 +1331 @@ impl PendingPublication<'_> {
+-        }
++        })
+diff --git a/tests/boundary/durable/process_death/child.rs b/tests/boundary/durable/process_death/child.rs
+index 588b5074..67395d5b 100644
+--- a/tests/boundary/durable/process_death/child.rs
++++ b/tests/boundary/durable/process_death/child.rs
+@@ -60,3 +59,0 @@ pub(crate) const TEXT_TURN: &str = "text_turn";
+-/// Structurally complete provider output rejected by native tool preflight.
+-/// Its provider/publication facts never authorize canonical tool execution.
+-pub(crate) const REJECTED_TOOL_TURN: &str = "rejected_tool_turn";
+@@ -1062,2 +1059 @@ async fn scenario_body(root: &Path, scenario: &str) {
+-        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE
+-        | REJECTED_TOOL_TURN => {
++        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE => {
+@@ -1067,6 +1062,0 @@ async fn scenario_body(root: &Path, scenario: &str) {
+-                REJECTED_TOOL_TURN => calling_turn(&ScriptedCall {
+-                    id: "call-unknown",
+-                    tool_id: "unknown-tool",
+-                    name: "unknown_tool",
+-                    arguments: serde_json::json!({}),
+-                }),
+diff --git a/tests/boundary/durable/process_death/conformance.rs b/tests/boundary/durable/process_death/conformance.rs
+index 914b9bce..d47607ec 100644
+--- a/tests/boundary/durable/process_death/conformance.rs
++++ b/tests/boundary/durable/process_death/conformance.rs
+@@ -616 +616,7 @@ fn a_turn_drained_into_a_live_attempt_continues() {
+-    let mut process = lab.spawn(child::STREAMING_INBOUND, Some("after:settle_model_turn"));
++    // Occurrence 1 is the admission adoption of the first message; occurrence
++    // 2 is the running attempt's safe-boundary drain of the second.
++    let mut process = lab.spawn_nth(
++        child::STREAMING_INBOUND,
++        Some("after:adopt_pending_batch"),
++        2,
++    );
+@@ -619 +625 @@ fn a_turn_drained_into_a_live_attempt_continues() {
+-    process.wait_reached("after:settle_model_turn");
++    process.wait_reached("after:adopt_pending_batch");
+@@ -786,2 +792,5 @@ fn assistant_canonical_commit_is_atomic() {
+-    let mut process = before.spawn(child::TEXT_TURN, Some("before:settle_model_turn"));
+-    process.wait_reached("before:settle_model_turn");
++    let mut process = before.spawn(
++        child::TEXT_TURN,
++        Some("before:commit_canonical_publication"),
++    );
++    process.wait_reached("before:commit_canonical_publication");
+@@ -795,2 +804,2 @@ fn assistant_canonical_commit_is_atomic() {
+-    let mut process = after.spawn(child::TEXT_TURN, Some("after:settle_model_turn"));
+-    process.wait_reached("after:settle_model_turn");
++    let mut process = after.spawn(child::TEXT_TURN, Some("after:commit_canonical_publication"));
++    process.wait_reached("after:commit_canonical_publication");
+@@ -886,2 +895,5 @@ fn kill_before_p_with_released_frames_is_incomplete() {
+-    let mut process = lab.spawn(child::TEXT_TURN, Some("during:model_settlement_provider"));
+-    process.wait_reached("during:model_settlement_provider");
++    let mut process = lab.spawn(
++        child::TEXT_TURN,
++        Some("before:event:model_request_completed"),
++    );
++    process.wait_reached("before:event:model_request_completed");
+@@ -951 +963 @@ fn p_committed_and_u_missing_is_incomplete() {
+-        child::REJECTED_TOOL_TURN,
++        child::TEXT_TURN,
+@@ -985,4 +997 @@ fn u_committed_and_c_missing_is_unaccepted() {
+-    let mut process = lab.spawn(
+-        child::REJECTED_TOOL_TURN,
+-        Some("after:commit_publication_terminal"),
+-    );
++    let mut process = lab.spawn(child::TEXT_TURN, Some("after:commit_publication_terminal"));
+@@ -1017,2 +1026,2 @@ fn u_committed_and_c_missing_is_unaccepted() {
+-/// A terminal-only turn commits provider outcome, frames, canonical acceptance
+-/// and the empty-inbox Attempt terminal together, before any final publication.
++/// A turn whose whole payload fits in the terminal transaction still reaches U
++/// as one atomic final frame plus terminal marker, and still never precedes P.
+@@ -1020 +1029 @@ fn u_committed_and_c_missing_is_unaccepted() {
+-fn terminal_only_publication_settles_atomically() {
++fn terminal_only_publication_reaches_u_atomically() {
+@@ -1022,3 +1031,5 @@ fn terminal_only_publication_settles_atomically() {
+-    let gate = "after:settle_model_turn";
+-    let mut process = lab.spawn(child::TERMINAL_ONLY_TURN, Some(gate));
+-    process.wait_reached(gate);
++    let mut process = lab.spawn(
++        child::TERMINAL_ONLY_TURN,
++        Some("after:commit_publication_terminal"),
++    );
++    process.wait_reached("after:commit_publication_terminal");
+@@ -1025,0 +1037 @@ fn terminal_only_publication_settles_atomically() {
++
+@@ -1027,6 +1039,4 @@ fn terminal_only_publication_settles_atomically() {
+-    assert!(has_p(&durable) && has_c(&durable));
+-    assert!(durable.unsettled_publications().is_empty());
+-    assert_eq!(
+-        shapes(&durable.canonical()),
+-        vec!["user", "context", "assistant"]
+-    );
++    let streams = durable.unsettled_publications();
++    assert_eq!(streams.len(), 1);
++    assert!(streams[0].reached_publication_terminal());
++    assert!(has_p(&durable), "U may never precede P");
+@@ -1034 +1043,0 @@ fn terminal_only_publication_settles_atomically() {
+-    let report = durable.recover();
+@@ -1036,2 +1045,2 @@ fn terminal_only_publication_settles_atomically() {
+-        report.attempt_class(),
+-        &AttemptRecoveryClass::AlreadyTerminal
++        durable.recover().publication_classes()[0].kind,
++        PublicationAuditKind::Unaccepted
+@@ -1039 +1047,0 @@ fn terminal_only_publication_settles_atomically() {
+-    assert!(report.publication_classes().is_empty());
+@@ -1047,2 +1055,2 @@ fn c_committed_settles_canonically_without_an_audit() {
+-    let mut process = lab.spawn(child::TEXT_TURN, Some("after:settle_model_turn"));
+-    process.wait_reached("after:settle_model_turn");
++    let mut process = lab.spawn(child::TEXT_TURN, Some("after:commit_canonical_publication"));
++    process.wait_reached("after:commit_canonical_publication");
+@@ -1077,5 +1085,6 @@ fn no_boundary_creates_u_without_p_or_c_without_u() {
+-        "during:model_settlement_provider",
+-        "during:model_settlement_frames",
+-        "during:model_settlement_canonical",
+-        "before:settle_model_turn",
+-        "after:settle_model_turn",
++        "before:event:model_request_completed",
++        "after:event:model_request_completed",
++        "before:commit_publication_terminal",
++        "after:commit_publication_terminal",
++        "before:commit_canonical_publication",
++        "after:commit_canonical_publication",
+@@ -1090,8 +1098,0 @@ fn no_boundary_creates_u_without_p_or_c_without_u() {
+-        let committed = gate == "after:settle_model_turn";
+-        assert_eq!(has_p(&durable), committed, "provider at {gate}");
+-        assert_eq!(has_c(&durable), committed, "canonical at {gate}");
+-        assert_eq!(
+-            durable.has_event(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. })),
+-            committed,
+-            "terminal at {gate}"
+-        );
+@@ -1109,2 +1110,2 @@ fn no_boundary_creates_u_without_p_or_c_without_u() {
+-/// A proposal whose atomic final settlement never committed settles as
+-/// Incomplete and never authorizes an execution — not before the crash, and
++/// A complete proposal whose canonical acceptance never committed settles as
++/// Unaccepted and never authorizes an execution — not before the crash, and
+@@ -1113 +1114 @@ fn no_boundary_creates_u_without_p_or_c_without_u() {
+-fn an_uncommitted_proposal_never_becomes_an_execution() {
++fn an_unaccepted_proposal_never_becomes_an_execution() {
+@@ -1115,2 +1116,5 @@ fn an_uncommitted_proposal_never_becomes_an_execution() {
+-    let mut process = lab.spawn(child::TOOL_TURN, Some("before:settle_model_turn"));
+-    process.wait_reached("before:settle_model_turn");
++    let mut process = lab.spawn(
++        child::TOOL_TURN,
++        Some("before:commit_canonical_publication"),
++    );
++    process.wait_reached("before:commit_canonical_publication");
+@@ -1120 +1123,0 @@ fn an_uncommitted_proposal_never_becomes_an_execution() {
+-    assert!(!has_p(&durable));
+@@ -1127 +1130 @@ fn an_uncommitted_proposal_never_becomes_an_execution() {
+-        PublicationAuditKind::Incomplete
++        PublicationAuditKind::Unaccepted
+@@ -1145,4 +1148 @@ fn a_publication_audit_carryover_stays_request_only() {
+-    let mut process = lab.spawn(
+-        child::REJECTED_TOOL_TURN,
+-        Some("after:commit_publication_terminal"),
+-    );
++    let mut process = lab.spawn(child::TEXT_TURN, Some("after:commit_publication_terminal"));
+@@ -1156 +1156 @@ fn a_publication_audit_carryover_stays_request_only() {
+-        "the rejected output audit body exists"
++        "the Unaccepted audit body exists"
+@@ -1325,2 +1325,2 @@ fn unresolved_output_carryover_recovery_reuses_the_same_audit_across_second_cras
+-/// retry atomically commits canonical acceptance and its terminal, process
+-/// death before publication must not resurrect an earlier partial audit
++/// retry reaches canonical acceptance and the owning attempt dies before its
++/// terminal transaction, recovery must not resurrect an earlier partial audit
+@@ -1333 +1333 @@ fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
+-        Some("after:settle_model_turn"),
++        Some("before:event:attempt_completed"),
+@@ -1335 +1335 @@ fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
+-    process.wait_reached("after:settle_model_turn");
++    process.wait_reached("before:event:attempt_completed");
+@@ -1368 +1368 @@ fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
+-        "the accepted final settlement did not install old carryover"
++        "the live attempt-terminal transaction had not installed carryover"
+@@ -1371,7 +1371,5 @@ fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
+-    // Recovery sees the accepted final retry and terminal in one commit.
+-    // It must not choose an older audit for this canonical logical step.
+-    let report = durable.recover();
+-    assert_eq!(
+-        report.attempt_class(),
+-        &AttemptRecoveryClass::AlreadyTerminal
+-    );
++    // Recovery sees the accepted final retry through durable facts. It may
++    // terminalize the interrupted attempt, but the shared selector is not
++    // allowed to choose either older audit generation for this already
++    // canonical logical step.
++    durable.recover();
+@@ -1387,2 +1385,2 @@ fn recovery_of_internal_retry_success_does_not_install_old_carryover() {
+-        0,
+-        "recovery cannot fabricate failure after atomic final completion"
++        1,
++        "recovery terminalizes the interrupted attempt exactly once"
+@@ -2950 +2948 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
+-        let mut process = lab.spawn(child::REJECTED_TOOL_TURN, Some(gate));
++        let mut process = lab.spawn(child::TEXT_TURN, Some(gate));
+@@ -3002 +3000 @@ fn client_presence_at_crash_time_changes_no_durable_result() {
+-    let gate = "during:model_settlement_frames";
++    let gate = "after:commit_publication_terminal";
+@@ -3046 +3044 @@ fn streaming_output_and_pending_inbound_compose() {
+-        Some("during:model_settlement_provider"),
++        Some("before:event:model_request_completed"),
+@@ -3050 +3048 @@ fn streaming_output_and_pending_inbound_compose() {
+-    process.wait_reached("during:model_settlement_provider");
++    process.wait_reached("before:event:model_request_completed");
+@@ -3081,2 +3079,5 @@ fn background_capable_turn_and_streaming_publication_compose() {
+-    let mut process = lab.spawn(child::BACKGROUND_TOOL, Some("before:settle_model_turn"));
+-    process.wait_reached("before:settle_model_turn");
++    let mut process = lab.spawn(
++        child::BACKGROUND_TOOL,
++        Some("before:commit_canonical_publication"),
++    );
++    process.wait_reached("before:commit_canonical_publication");

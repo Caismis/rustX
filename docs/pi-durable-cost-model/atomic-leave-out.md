@@ -58,3 +58,8 @@ profile data, exact identities and the reproducible diagnostic patch. The
 archived `run-cost-stage.py pi-atomic-leaveout pi-separate-final-build
 pi-partial-build` records the commands and checks profile identities against the
 formal builds. Original artifacts remain in the cloud workspace.
+
+[Readable per-pair JSON/CSV, recomputation script, exact variant and fixture
+diffs, build identity and existing test proof](evidence/atomic-leaveout/readable/README.md)
+allow review without unpacking the archive or resolving local diagnostic commits.
+No new measurements or production changes accompany this evidence view.
