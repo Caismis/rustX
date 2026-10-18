@@ -33,4 +33,3 @@ test runtime::read_layout::tests::t08_t15_t20_layout_traversal_reuses_rows_witho
 test runtime::read_layout::tests::t08_t12_t15_t20_native_collection_source_indexes_once_and_seeks_each_chunk ... ok
 
 test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 4243 filtered out; finished in 1.04s
-
