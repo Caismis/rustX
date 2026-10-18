@@ -6,9 +6,155 @@
     "source-manifest.json": "8063878c9c28fc014903d39489bf8bf70a531da58a2fe5d39b83f30e54f3f4c5",
     "combined.tar.manifest.json": "6b34f866869bd3bc990e6ca781db040d5b37055198a174136e169d530e1f26e2",
     "reservations.tar.manifest.json": "5b949397ade5f1baf8a5371b5764f2fadc548d646b422d0ee113f09eb709dd0f",
-    "statement-reuse.tar.manifest.json": "ca4ed153ebb30dc489d7d05f12753570984939ded68062223a677e9563604db0"
+    "statement-reuse.tar.manifest.json": "ca4ed153ebb30dc489d7d05f12753570984939ded68062223a677e9563604db0",
+    "continued-runtime.tar.manifest.json": "108d75fdc87aef9e6c71796b5fa9cf34367182681aca6c22fcc701051a00c93d"
   },
   "files": {
+    "compact-source-cancel.json": {
+      "pairs": 3,
+      "sha256": "2a00f01746a0cae07093212dcb5fc35af15d655d104a213543717e43475772c2",
+      "bytes": 6320
+    },
+    "compact-source-large.json": {
+      "pairs": 3,
+      "sha256": "a2a2e0e8141c98af66e759fece9c3a52c8d9034f9bf51a14eeb88bf40309a7f7",
+      "bytes": 6346
+    },
+    "compact-source-short-large.json": {
+      "pairs": 3,
+      "sha256": "a4a4bc867287c4244bbff2d81c66db0eee95e7eee40ac81507208ba76bf8fa42",
+      "bytes": 7635
+    },
+    "compact-source-short-small.json": {
+      "pairs": 3,
+      "sha256": "98d69e534d683821a1ef60c5c9ed3f61718d71a506a842c454158084ef0a8937",
+      "bytes": 7610
+    },
+    "compact-source-stream.json": {
+      "pairs": 3,
+      "sha256": "c9c7737cbbdeb3a96aca026531a606ef50abd8ebf3efd0525bdad5f9f9da9f31",
+      "bytes": 6350
+    },
+    "compact-source-tool.json": {
+      "pairs": 3,
+      "sha256": "22db7de77cc77ba7600bd79c5dfb6626bf063fd7d11e33817ff74f736007a150",
+      "bytes": 6312
+    },
+    "continued-combined-cancel.json": {
+      "pairs": 3,
+      "sha256": "a23d7b592d20d41fc962d158879b4a5a7b1a09cd0a598d0ce1a11cef1e3f81b4",
+      "bytes": 6372
+    },
+    "continued-combined-large.json": {
+      "pairs": 3,
+      "sha256": "9dfe0135bf49459d02d4adb11933b6e8429d572d644c985e85662fc4d95e4ed1",
+      "bytes": 6401
+    },
+    "continued-combined-short-large.json": {
+      "pairs": 3,
+      "sha256": "1191cca665479ac73931a0aad052332a788126f5e933f03ceb108b442b9ddd68",
+      "bytes": 7684
+    },
+    "continued-combined-short-small.json": {
+      "pairs": 3,
+      "sha256": "dae6743f9a2fbfb250e122a018a1c9df872e786abc6236e45df58a3c2adbfc16",
+      "bytes": 7658
+    },
+    "continued-combined-stream.json": {
+      "pairs": 3,
+      "sha256": "5aec4c7662d042e3c9b8ebd4bd131be6a6279ccb1be042d347d31a491cba0876",
+      "bytes": 6400
+    },
+    "continued-combined-tool.json": {
+      "pairs": 3,
+      "sha256": "2a3b40d5fd34c83a162a982008017af75b5e0172ebd21793715ba250ae9a482e",
+      "bytes": 6362
+    },
+    "final-combined-cancel.json": {
+      "pairs": 3,
+      "sha256": "f5a053621ae3fcfb98e58fa24a3b423173717b8a321595e66cf0e38bcd82418f",
+      "bytes": 6319
+    },
+    "final-combined-large.json": {
+      "pairs": 3,
+      "sha256": "fd3bc9802d5e275282ca7374cc734ed72160f67c2d96dc2e598dfab3962612a0",
+      "bytes": 6348
+    },
+    "final-combined-short-large.json": {
+      "pairs": 3,
+      "sha256": "c6db8819253aa1a0e5a6321ec9ad76380f7602221146b7d319777e3518a03c4f",
+      "bytes": 7635
+    },
+    "final-combined-short-small.json": {
+      "pairs": 3,
+      "sha256": "00fd6bdea178427d535ac1c37963d3a7117589a737fd52200d4563eb79408fdf",
+      "bytes": 7605
+    },
+    "final-combined-stream.json": {
+      "pairs": 3,
+      "sha256": "fb2352c9698bee72713d66ba39830a2780f5ec76e736a6bcf57af1723556ef44",
+      "bytes": 6350
+    },
+    "final-combined-tool.json": {
+      "pairs": 3,
+      "sha256": "584685da7626514a76c8f77113ac4fe74c59857bc7fee595a03a922dca331bde",
+      "bytes": 6311
+    },
+    "final-pi-cancel.json": {
+      "pairs": 3,
+      "sha256": "e6f6145be7a5bea65341c996a87fb7fa5a3986ca82f8e74a4374358b7b123b97",
+      "bytes": 6194
+    },
+    "final-pi-large.json": {
+      "pairs": 3,
+      "sha256": "9e710a3bcfc217b3eca8aa80c8ca371d3eed4af4204a9166a662fd6d7788a9fe",
+      "bytes": 6204
+    },
+    "final-pi-short-large.json": {
+      "pairs": 3,
+      "sha256": "8b0053437c659bdea00f27df3d210041c37965bfff0df117c71bb3e554aadf13",
+      "bytes": 7399
+    },
+    "final-pi-short-small.json": {
+      "pairs": 3,
+      "sha256": "e12a38cee17b03b2f9d9a8113d2102494c28160bd2be50168e8d2cf0f6b050dd",
+      "bytes": 7362
+    },
+    "final-pi-stream.json": {
+      "pairs": 3,
+      "sha256": "5a64eeacd32980985d97c270c784e330d4b816baecc54ae9ab7b1311b86c29e8",
+      "bytes": 6223
+    },
+    "final-pi-tool.json": {
+      "pairs": 3,
+      "sha256": "aad83ff420645296aca7877f82c9b4920fc34173f0f3a756bb6340a4c08ae62f",
+      "bytes": 6178
+    },
+    "final-append-0.json": {
+      "pairs": 3,
+      "sha256": "336d39632ed632a090535a55484d80a60f348be877c03edeb7db4dee700a1c12",
+      "bytes": 7523
+    },
+    "final-append-2048.json": {
+      "pairs": 3,
+      "sha256": "9033146532d5acfdc7d3a8c138fa4fce59e02f31be3f2a86479478e5a656d5c5",
+      "bytes": 7832
+    },
+    "final-append-512.json": {
+      "pairs": 3,
+      "sha256": "bcaff6427b61578678af97ef719f46282a64e43773eb679ee87b904a158d6f80",
+      "bytes": 7716
+    },
+    "final-append-64.json": {
+      "pairs": 3,
+      "sha256": "246203a73372b5c822fb64e6d7b6054f09124c3fac02cba685af89f0bdf94092",
+      "bytes": 7570
+    },
+    "reservation-cancel-confirmation-cancel.json": {
+      "pairs": 12,
+      "sha256": "75ff80d41b6721eb18d0da227fc701fa0791a931112f66ffefb67699b63b48e3",
+      "bytes": 25552
+    },
     "statement-reuse-cancel.json": {
       "pairs": 3,
       "sha256": "171e23b2bcf06cc15fd849216e0fd30e98272425730115621aeda832998eec2a",

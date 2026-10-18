@@ -1,0 +1,101 @@
+{
+  "scope": "Separate one-run allocator-substituted diagnostics, 32 steady turns each. Not native allocator counts, peaks or timing comparisons. Leaf and owner attribution overlap; generic folded symbols can alias. Raw total headers are complete.",
+  "profiles": [
+    {
+      "label": "attribution",
+      "allocations": 8146523,
+      "requested_bytes": 1687264799,
+      "sqlite_malloc_realloc_bytes": 631200520,
+      "selected_innermost_owner_bytes": {
+        "PendingObservations>::drain": 80411298,
+        "Layout>::initialize_index": 31917440,
+        "copy_original_bytes_to": 16788736,
+        "fragments::persist_part": 43690096,
+        "index::persist": 12497944
+      },
+      "analysis_path": "attr-heap-small/steady-allocations.json",
+      "analysis_sha256": "ae701b503c5d4aa4a771d6af13dd048e5a6bdcd40346e4ed4471abc28df871be"
+    },
+    {
+      "label": "reservations_and_sql",
+      "allocations": 7994748,
+      "requested_bytes": 1590776800,
+      "sqlite_malloc_realloc_bytes": 631740776,
+      "selected_innermost_owner_bytes": {
+        "PendingObservations>::drain": 3290105,
+        "Layout>::initialize_index": 31917440,
+        "copy_original_bytes_to": 16788736,
+        "fragments::persist_part": 43968368,
+        "index::persist": 13347448
+      },
+      "analysis_path": "continued-profile/attr-heap-sql/steady-allocations.json",
+      "analysis_sha256": "5fa1fb3caa12018eefd46bf7dc12e7a87975e122a15b866c01d0e4983df14917"
+    },
+    {
+      "label": "compact_source_candidate",
+      "allocations": 7906444,
+      "requested_bytes": 1518976183,
+      "sqlite_malloc_realloc_bytes": 583880208,
+      "selected_innermost_owner_bytes": {
+        "PendingObservations>::drain": 3260839,
+        "Layout>::initialize_index": 2940480,
+        "copy_original_bytes_to": 113320,
+        "fragments::persist_part": 39440776,
+        "index::persist": 13402368
+      },
+      "analysis_path": "continued-profile/attr-heap-small/steady-allocations.json",
+      "analysis_sha256": "5fb23e348adf49e0424da6e3ef073cf8966ef5daf1e5a42fc897eb77fdd18ee2"
+    }
+  ],
+  "write_attribution": {
+    "completed_calls": {
+      "other/openat": 1552,
+      "other/close": 1597,
+      "other/write": 315,
+      "other/fsync": 96,
+      "database/openat": 9,
+      "database/pread64": 5908,
+      "other/pwrite64": 34,
+      "other/pread64": 1,
+      "database/pwrite64": 7015,
+      "database/fsync": 26,
+      "other/unlink": 133,
+      "wal/openat": 7,
+      "wal/pwrite64": 50777,
+      "wal/fsync": 50,
+      "source-bytes/openat": 1649,
+      "source-bytes/write": 442,
+      "source-bytes/pread64": 91712,
+      "source-bytes/close": 2091,
+      "other/unlinkat": 946,
+      "wal/pread64": 9506,
+      "wal/close": 7,
+      "database/close": 9,
+      "failed/openat": 6,
+      "source-index/openat": 160,
+      "source-index/pread64": 1000,
+      "source-index/pwrite64": 480,
+      "source-index/close": 160,
+      "sqlite-temp/openat": 128,
+      "sqlite-temp/pwrite64": 9082,
+      "sqlite-temp/close": 128,
+      "evidence-json/openat": 1,
+      "evidence-json/write": 1,
+      "evidence-json/close": 1
+    },
+    "successful_write_bytes": {
+      "other": 57796,
+      "database": 28733440,
+      "wal": 104549920,
+      "source-bytes": 692655,
+      "source-index": 1966080,
+      "sqlite-temp": 26490100,
+      "evidence-json": 6686425
+    },
+    "source_bytes_files_written": 442,
+    "source_bytes_files_at_most_4096": 402,
+    "source_index_files_written": 40,
+    "unresolved": 0,
+    "limitations": "Syscall return bytes, not physical device writes. Source index openat counts approximate connection work; not SQL statement counts or CPU attribution. Profile is separate from formal timing."
+  }
+}

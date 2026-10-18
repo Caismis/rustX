@@ -1,0 +1,583 @@
+{
+  "scope": "Sample counts, not elapsed timers. Cumulative rows overlap and must not be summed. Divide the selected row numerator by denominator_samples to recompute its proportion. Reports may omit low-count functions; denominator independently checked against complete raw profile records.",
+  "profiles": [
+    {
+      "case": "short-small",
+      "phase": "before_measured_turns -> after_turns",
+      "measured_turns": 32,
+      "binary_sha256": "3757014962aa24e831f8562cfd04d729f4435690d575cba17f9e3a0c2f9cfd55",
+      "denominator_samples": 680,
+      "requested_interval_us": 4000,
+      "raw_profile": {
+        "path": "attr-cpu-small/before_measured_turns.cpu",
+        "sha256": "7b1dc15739f8907397a48607f9ff6eeb81c47e1979edb87169834bf3d536479a"
+      },
+      "symbolized_report": {
+        "path": "attr-cpu-small/steady-cumulative.txt",
+        "sha256": "bcac5d93bafa598daad7b421b438e049169262d62d8be4a3978b0efb64a75311",
+        "command": "google-pprof --text --cum --no_strip_temp --nodecount=200 (small), 100 (large) BINARY PROFILE"
+      },
+      "rows": [
+        {
+          "symbol": "0x00007f86c76b6b7a",
+          "flat_samples": 0,
+          "cumulative_samples": 680
+        },
+        {
+          "symbol": "0x00007f86c77347f7",
+          "flat_samples": 0,
+          "cumulative_samples": 680
+        },
+        {
+          "symbol": "<std::sys::thread::unix::Thread>::new::thread_start",
+          "flat_samples": 0,
+          "cumulative_samples": 680
+        },
+        {
+          "symbol": "core::ops::function::FnOnce<>>::call_once::{shim:vtable#0}",
+          "flat_samples": 0,
+          "cumulative_samples": 680
+        },
+        {
+          "symbol": "<tokio::runtime::blocking::pool::Inner>::run",
+          "flat_samples": 0,
+          "cumulative_samples": 633
+        },
+        {
+          "symbol": "std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, >",
+          "flat_samples": 0,
+          "cumulative_samples": 633
+        },
+        {
+          "symbol": "tokio::runtime::blocking::schedule::BlockingSchedule>>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 633
+        },
+        {
+          "symbol": "<tokio::runtime::context::scoped::Scoped<tokio::runtime::scheduler::Context>>::set::<tokio::runtime::scheduler::multi_thread::worker::run::{closure#0}::{closure#0}, >",
+          "flat_samples": 1,
+          "cumulative_samples": 467
+        },
+        {
+          "symbol": "tokio::runtime::context::runtime::enter_runtime::<tokio::runtime::scheduler::multi_thread::worker::run::{closure#0}, >",
+          "flat_samples": 0,
+          "cumulative_samples": 467
+        },
+        {
+          "symbol": "tokio::runtime::scheduler::multi_thread::worker::run",
+          "flat_samples": 0,
+          "cumulative_samples": 467
+        },
+        {
+          "symbol": "<tokio::runtime::scheduler::multi_thread::worker::Context>::run_task",
+          "flat_samples": 0,
+          "cumulative_samples": 465
+        },
+        {
+          "symbol": "alloc::sync::Arc<tokio::runtime::scheduler::current_thread::Handle>>>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 465
+        },
+        {
+          "symbol": "alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 465
+        },
+        {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 295
+        },
+        {
+          "symbol": "<rustx::agent::execution::AgentExecution>::run_owned::{closure#0}",
+          "flat_samples": 0,
+          "cumulative_samples": 291
+        },
+        {
+          "symbol": "<rustx::agent::execution::AgentExecution>::run_turn_body::{closure#0}",
+          "flat_samples": 0,
+          "cumulative_samples": 254
+        },
+        {
+          "symbol": "core::future::future::Future>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 175
+        },
+        {
+          "symbol": "<rustx::runtime_client::projection::ReadDomainCut>::read",
+          "flat_samples": 0,
+          "cumulative_samples": 166
+        },
+        {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 161
+        },
+        {
+          "symbol": "sqlite3Prepare",
+          "flat_samples": 1,
+          "cumulative_samples": 161
+        },
+        {
+          "symbol": "sqlite3RunParser",
+          "flat_samples": 8,
+          "cumulative_samples": 153
+        },
+        {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 1,
+          "cumulative_samples": 148
+        },
+        {
+          "symbol": "sqlite3_step",
+          "flat_samples": 2,
+          "cumulative_samples": 139
+        },
+        {
+          "symbol": "yy_reduce.isra.0",
+          "flat_samples": 10,
+          "cumulative_samples": 136
+        },
+        {
+          "symbol": "sqlite3_prepare_v3",
+          "flat_samples": 0,
+          "cumulative_samples": 125
+        },
+        {
+          "symbol": "<rustx::agent::execution::AgentExecution>::start_actual_model_request",
+          "flat_samples": 0,
+          "cumulative_samples": 120
+        },
+        {
+          "symbol": "rustx::durable::inbox::ConversationStore>::commit_model_turn_start",
+          "flat_samples": 0,
+          "cumulative_samples": 116
+        },
+        {
+          "symbol": "rustx::durable::inbox::ConversationStoreError, <rustx::agent::execution::AgentExecution>::start_model_turn::{closure#0}>",
+          "flat_samples": 0,
+          "cumulative_samples": 116
+        },
+        {
+          "symbol": "<rusqlite::inner_connection::InnerConnection>::prepare",
+          "flat_samples": 0,
+          "cumulative_samples": 114
+        },
+        {
+          "symbol": "<rustx::durable::sqlite::SqliteConversationStore>::insert_fresh_start_tx",
+          "flat_samples": 0,
+          "cumulative_samples": 113
+        },
+        {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 104
+        },
+        {
+          "symbol": "rustx::durable::sqlite::observation_request::index_selection",
+          "flat_samples": 0,
+          "cumulative_samples": 103
+        },
+        {
+          "symbol": "rustx::durable::inbox::ConversationStoreError>>>>::from_iter",
+          "flat_samples": 0,
+          "cumulative_samples": 99
+        },
+        {
+          "symbol": "<rustx::runtime_client::trace::TraceProjection>::page",
+          "flat_samples": 0,
+          "cumulative_samples": 98
+        },
+        {
+          "symbol": "sqlite3VdbeExec",
+          "flat_samples": 19,
+          "cumulative_samples": 91
+        },
+        {
+          "symbol": "sqlite3Select",
+          "flat_samples": 3,
+          "cumulative_samples": 88
+        },
+        {
+          "symbol": "alloc::vec::Vec<rustx::runtime_client::trace::types::TraceRecord>>",
+          "flat_samples": 0,
+          "cumulative_samples": 84
+        },
+        {
+          "symbol": "<rustx::runtime_client::trace::TraceProjection>::record",
+          "flat_samples": 0,
+          "cumulative_samples": 82
+        },
+        {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeObserver>::publish_native_batch",
+          "flat_samples": 0,
+          "cumulative_samples": 78
+        },
+        {
+          "symbol": "serde_core::ser::Serialize>::serialize::<rustx::runtime_client::preflight::Check>",
+          "flat_samples": 6,
+          "cumulative_samples": 77
+        },
+        {
+          "symbol": "conformance::agent_loop::runtime_benchmark::process_sample",
+          "flat_samples": 0,
+          "cumulative_samples": 21
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::SeekableObservationSource>::preview_node",
+          "flat_samples": 0,
+          "cumulative_samples": 9
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::seal",
+          "flat_samples": 0,
+          "cumulative_samples": 5
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Node>::from_row",
+          "flat_samples": 0,
+          "cumulative_samples": 5
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::LayoutParser>::value",
+          "flat_samples": 0,
+          "cumulative_samples": 3
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::read_bytes",
+          "flat_samples": 0,
+          "cumulative_samples": 2
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::SeekableObservationSource>::field_reader",
+          "flat_samples": 0,
+          "cumulative_samples": 2
+        },
+        {
+          "symbol": "conformance::agent_loop::runtime_benchmark::footprint",
+          "flat_samples": 0,
+          "cumulative_samples": 2
+        },
+        {
+          "symbol": "conformance::agent_loop::runtime_benchmark::footprint::visit",
+          "flat_samples": 0,
+          "cumulative_samples": 2
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::children_at",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::node_at",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::reader_connection",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::LayoutParser>::string",
+          "flat_samples": 1,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "rustx::runtime::read_layout::Layout>>",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "rustx::runtime::read_layout::Layout>>>>",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        }
+      ]
+    },
+    {
+      "case": "short-large",
+      "phase": "before_measured_turns -> after_turns",
+      "measured_turns": 32,
+      "binary_sha256": "3757014962aa24e831f8562cfd04d729f4435690d575cba17f9e3a0c2f9cfd55",
+      "denominator_samples": 732,
+      "requested_interval_us": 4000,
+      "raw_profile": {
+        "path": "attr-cpu-large/before_measured_turns.cpu",
+        "sha256": "0f98d836b54848bf1af615e99a0d9dec819913c928fab4a3587b1f4fa7fb9220"
+      },
+      "symbolized_report": {
+        "path": "attr-cpu-large/steady-cumulative.txt",
+        "sha256": "aa783e3dd298385e7b2bfeceeae5de754138884a00fa1548afcc9fb14c64367f",
+        "command": "google-pprof --text --cum --no_strip_temp --nodecount=200 (small), 100 (large) BINARY PROFILE"
+      },
+      "rows": [
+        {
+          "symbol": "0x00007f9dc87acb7a",
+          "flat_samples": 0,
+          "cumulative_samples": 730
+        },
+        {
+          "symbol": "0x00007f9dc882a7f7",
+          "flat_samples": 0,
+          "cumulative_samples": 730
+        },
+        {
+          "symbol": "<std::sys::thread::unix::Thread>::new::thread_start",
+          "flat_samples": 0,
+          "cumulative_samples": 730
+        },
+        {
+          "symbol": "core::ops::function::FnOnce<>>::call_once::{shim:vtable#0}",
+          "flat_samples": 0,
+          "cumulative_samples": 730
+        },
+        {
+          "symbol": "<tokio::runtime::blocking::pool::Inner>::run",
+          "flat_samples": 1,
+          "cumulative_samples": 682
+        },
+        {
+          "symbol": "std::sys::backtrace::__rust_begin_short_backtrace::<<tokio::runtime::blocking::pool::Spawner>::spawn_thread::{closure#0}, >",
+          "flat_samples": 0,
+          "cumulative_samples": 682
+        },
+        {
+          "symbol": "tokio::runtime::blocking::schedule::BlockingSchedule>>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 681
+        },
+        {
+          "symbol": "tokio::runtime::scheduler::multi_thread::worker::run",
+          "flat_samples": 0,
+          "cumulative_samples": 507
+        },
+        {
+          "symbol": "<tokio::runtime::context::scoped::Scoped<tokio::runtime::scheduler::Context>>::set::<tokio::runtime::scheduler::multi_thread::worker::run::{closure#0}::{closure#0}, >",
+          "flat_samples": 0,
+          "cumulative_samples": 506
+        },
+        {
+          "symbol": "<tokio::runtime::scheduler::multi_thread::worker::Context>::run_task",
+          "flat_samples": 0,
+          "cumulative_samples": 506
+        },
+        {
+          "symbol": "alloc::sync::Arc<tokio::runtime::scheduler::current_thread::Handle>>>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 506
+        },
+        {
+          "symbol": "alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 506
+        },
+        {
+          "symbol": "tokio::runtime::context::runtime::enter_runtime::<tokio::runtime::scheduler::multi_thread::worker::run::{closure#0}, >",
+          "flat_samples": 0,
+          "cumulative_samples": 506
+        },
+        {
+          "symbol": "<rustx::runtime::conversation_runtime::RuntimeInner>::publish_attempt::{closure#5}",
+          "flat_samples": 0,
+          "cumulative_samples": 324
+        },
+        {
+          "symbol": "<rustx::agent::execution::AgentExecution>::run_owned::{closure#0}",
+          "flat_samples": 1,
+          "cumulative_samples": 315
+        },
+        {
+          "symbol": "<rustx::agent::execution::AgentExecution>::run_turn_body::{closure#0}",
+          "flat_samples": 0,
+          "cumulative_samples": 276
+        },
+        {
+          "symbol": "core::future::future::Future>::poll",
+          "flat_samples": 0,
+          "cumulative_samples": 184
+        },
+        {
+          "symbol": "<rustx::runtime_client::projection::ReadDomainCut>::read",
+          "flat_samples": 0,
+          "cumulative_samples": 174
+        },
+        {
+          "symbol": "sqlite3LockAndPrepare",
+          "flat_samples": 0,
+          "cumulative_samples": 151
+        },
+        {
+          "symbol": "sqlite3Prepare",
+          "flat_samples": 0,
+          "cumulative_samples": 151
+        },
+        {
+          "symbol": "sqlite3RunParser",
+          "flat_samples": 13,
+          "cumulative_samples": 151
+        },
+        {
+          "symbol": "sqlite3_step",
+          "flat_samples": 3,
+          "cumulative_samples": 151
+        },
+        {
+          "symbol": "<rustx::agent::execution::AgentExecution>::start_actual_model_request",
+          "flat_samples": 0,
+          "cumulative_samples": 141
+        },
+        {
+          "symbol": "rustx::durable::inbox::ConversationStore>::commit_model_turn_start",
+          "flat_samples": 0,
+          "cumulative_samples": 140
+        },
+        {
+          "symbol": "rustx::durable::inbox::ConversationStoreError, <rustx::agent::execution::AgentExecution>::start_model_turn::{closure#0}>",
+          "flat_samples": 0,
+          "cumulative_samples": 140
+        },
+        {
+          "symbol": "<rustx::runtime_client::projection::PublicationDraft>::encode",
+          "flat_samples": 0,
+          "cumulative_samples": 137
+        },
+        {
+          "symbol": "yy_reduce.isra.0",
+          "flat_samples": 12,
+          "cumulative_samples": 135
+        },
+        {
+          "symbol": "<rustx::durable::sqlite::SqliteConversationStore>::insert_fresh_start_tx",
+          "flat_samples": 0,
+          "cumulative_samples": 130
+        },
+        {
+          "symbol": "rustx::durable::sqlite::index_request_read_layouts",
+          "flat_samples": 0,
+          "cumulative_samples": 120
+        },
+        {
+          "symbol": "sqlite3_prepare_v3",
+          "flat_samples": 0,
+          "cumulative_samples": 120
+        },
+        {
+          "symbol": "rustx::durable::sqlite::observation_request::index_selection",
+          "flat_samples": 0,
+          "cumulative_samples": 112
+        },
+        {
+          "symbol": "<rusqlite::inner_connection::InnerConnection>::prepare",
+          "flat_samples": 0,
+          "cumulative_samples": 111
+        },
+        {
+          "symbol": "sqlite3VdbeExec",
+          "flat_samples": 14,
+          "cumulative_samples": 111
+        },
+        {
+          "symbol": "<rustx::runtime_client::trace::TraceProjection>::page",
+          "flat_samples": 0,
+          "cumulative_samples": 110
+        },
+        {
+          "symbol": "rustx::durable::inbox::ConversationStoreError>>>>::from_iter",
+          "flat_samples": 0,
+          "cumulative_samples": 108
+        },
+        {
+          "symbol": "serde_core::ser::Serialize>::serialize::<rustx::runtime_client::preflight::Check>",
+          "flat_samples": 0,
+          "cumulative_samples": 93
+        },
+        {
+          "symbol": "serde_core::ser::Serialize>::serialize::<rustx::runtime_client::structural_json::Encoder<rustx::runtime_client::preflight::Check>>",
+          "flat_samples": 3,
+          "cumulative_samples": 89
+        },
+        {
+          "symbol": "sqlite3Select",
+          "flat_samples": 1,
+          "cumulative_samples": 86
+        },
+        {
+          "symbol": "alloc::vec::Vec<rustx::runtime_client::trace::types::TraceRecord>>",
+          "flat_samples": 0,
+          "cumulative_samples": 84
+        },
+        {
+          "symbol": "<rustx::runtime_client::trace::TraceProjection>::record",
+          "flat_samples": 0,
+          "cumulative_samples": 82
+        },
+        {
+          "symbol": "conformance::agent_loop::runtime_benchmark::process_sample",
+          "flat_samples": 0,
+          "cumulative_samples": 24
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::LayoutParser>::value",
+          "flat_samples": 0,
+          "cumulative_samples": 7
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::SeekableObservationSource>::preview_node",
+          "flat_samples": 0,
+          "cumulative_samples": 7
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::unindexed",
+          "flat_samples": 0,
+          "cumulative_samples": 4
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Node>::from_row",
+          "flat_samples": 0,
+          "cumulative_samples": 4
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::read_bytes",
+          "flat_samples": 0,
+          "cumulative_samples": 3
+        },
+        {
+          "symbol": "conformance::agent_loop::runtime_benchmark::footprint",
+          "flat_samples": 0,
+          "cumulative_samples": 2
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::node_at",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::Layout>::seal",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "<rustx::runtime::read_layout::LayoutParser>::string",
+          "flat_samples": 1,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "conformance::agent_loop::runtime_benchmark::footprint::visit",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "rustx::runtime::read_layout::Layout>>",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        },
+        {
+          "symbol": "rustx::runtime::read_layout::Layout>>>>",
+          "flat_samples": 0,
+          "cumulative_samples": 1
+        }
+      ]
+    }
+  ]
+}
