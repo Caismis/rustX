@@ -119,8 +119,8 @@ Two separate complete-lifecycle syscall traces reconstruct every operation with
 zero unresolved lines. Both create/write 442 original-byte files (402 at most
 4 KiB) and 40 disk-index files; Source-index writes remain 1,966,080 bytes. Thus
 metadata reuse does not eliminate the carriers or their connections/index work.
-Original-byte file writes are 692,662/692,615 bytes; generated native identities
-account for slight byte variation. Successful syscall counts/bytes are logical
+Original-byte file writes are 692,662/692,615 bytes; no storage reduction is
+inferred from this small difference. Successful syscall counts/bytes are logical
 process operations, not physical-device traffic or whole-runtime SQL statement
 counts. The Source optimization avoids redundant reads/parses; SQLite preparation
 and persisted page construction remain substantial targets for the next stage.

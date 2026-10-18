@@ -461,6 +461,7 @@ struct ConnectionOwner {
     wake: Condvar,
     poisoned: AtomicBool,
     manifest: Arc<manifest::Owner>,
+    append_validation: Arc<append_validation::Owner>,
 }
 impl ConnectionOwner {
     #[cfg(test)]
@@ -873,12 +874,18 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
-        let manifest = manifest::Owner::install(&connection)?;
+        let append_validation = append_validation::Owner::new(&connection)?;
+        let rollback = Arc::clone(&append_validation);
+        connection
+            .rollback_hook(Some(move || rollback.invalidate()))
+            .map_err(|error| storage(format!("install canonical rollback observer: {error}")))?;
+        let manifest = manifest::Owner::install(&connection, Arc::clone(&append_validation))?;
         Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
                 available: Mutex::new(Some(connection)),
                 manifest,
+                append_validation,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
             }),
@@ -3520,6 +3527,7 @@ impl ConversationStore for SqliteConversationStore {
         attempt_id: Option<crate::runtime::identity::AttemptId>,
     ) -> Result<crate::durable::inbox::AdoptedBatch, ConversationStoreError> {
         let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("adopt transaction: {error}")))?;
@@ -3533,11 +3541,11 @@ impl ConversationStore for SqliteConversationStore {
             probe();
         }
         ensure_surface_head(&transaction)?;
+
         let items = load_pending_until(&transaction, watermark)?;
         for item in &items {
             let block = MessageBlock::User(item.message.clone());
-            let cursor =
-                append_adopted_message_and_surface(&transaction, &block, &item.message_id)?;
+            let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
             if cursor != item.transcript_cursor {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
@@ -3609,6 +3617,7 @@ impl ConversationStore for SqliteConversationStore {
         transaction
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
+        validation.committed(&connection);
         process_death::reach("after:adopt_pending_batch");
         Ok(crate::durable::inbox::AdoptedBatch {
             pending_observation,
@@ -4473,11 +4482,13 @@ impl ConversationStore for SqliteConversationStore {
     ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
         validate_canonical_event_for_message(message, &event.event)?;
         let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical event transaction: {error}")))?;
         ensure_surface_head(&transaction)?;
-        let transcript_cursor = append_message_and_surface_internal(&transaction, message, None)?;
+
+        let transcript_cursor = validation.append(&transaction, message, None)?;
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical event journal commit"));
@@ -4514,6 +4525,7 @@ impl ConversationStore for SqliteConversationStore {
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical event commit: {error}")))?;
+        validation.committed(&connection);
         process_death::reach_event("after:canonical", &persisted.event.event);
         Ok((persisted.event, receipt))
     }
@@ -4531,17 +4543,15 @@ impl ConversationStore for SqliteConversationStore {
             validate_canonical_event_for_message(message, &event.event)?;
         }
         let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical event batch transaction: {error}")))?;
         ensure_surface_head(&transaction)?;
+
         let mut receipts = Vec::with_capacity(messages.len());
         for message in messages {
-            receipts.push(append_message_and_surface_internal(
-                &transaction,
-                message,
-                None,
-            )?);
+            receipts.push(validation.append(&transaction, message, None)?);
         }
         let mut persisted = Vec::with_capacity(events.len());
         for event in events {
@@ -4586,6 +4596,7 @@ impl ConversationStore for SqliteConversationStore {
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical event batch commit: {error}")))?;
+        validation.committed(&connection);
         process_death::reach("after:append_canonical_batch");
         Ok((persisted, receipts))
     }
@@ -5761,6 +5772,8 @@ impl ConversationStore for SqliteConversationStore {
         Ok(receipts)
     }
 
+    // Keep native acceptance, event/staging and COMMIT in one auditable boundary.
+    #[allow(clippy::too_many_lines)]
     fn commit_canonical_publication(
         &self,
         stream_id: &PublicationStreamId,
@@ -5768,6 +5781,7 @@ impl ConversationStore for SqliteConversationStore {
         event: RuntimeEventEnvelope,
     ) -> Result<(RuntimeEventEnvelope, TranscriptCommitReceipt), ConversationStoreError> {
         let mut connection = self.lock()?;
+        let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("canonical publication transaction: {error}")))?;
@@ -5814,12 +5828,15 @@ impl ConversationStore for SqliteConversationStore {
             )));
         }
         ensure_surface_head(&transaction)?;
+
         let transcript_cursor =
-            append_message_and_surface(&transaction, message)?.ok_or_else(|| {
-                ConversationStoreError::InvalidReference(
-                    "canonical publication must receive a transcript cursor".to_owned(),
-                )
-            })?;
+            validation
+                .append(&transaction, message, None)?
+                .ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "canonical publication must receive a transcript cursor".to_owned(),
+                    )
+                })?;
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical publication commit"));
@@ -5872,6 +5889,7 @@ impl ConversationStore for SqliteConversationStore {
         transaction
             .commit()
             .map_err(|error| storage(format!("canonical publication commit: {error}")))?;
+        validation.committed(&connection);
         process_death::reach("after:commit_canonical_publication");
         Ok((persisted.event, receipt))
     }
@@ -7797,10 +7815,12 @@ fn append_canonical_messages(
         return Ok(Vec::new());
     }
     let mut connection = store.lock()?;
+    let mut validation = append_validation::Batch::begin(&store.conn.append_validation);
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| storage(format!("canonical transaction: {error}")))?;
     ensure_surface_head(&transaction)?;
+
     let mut receipts = Vec::with_capacity(messages.len());
     for message in messages {
         if let MessageBlock::Tool(tool) = message {
@@ -7815,7 +7835,7 @@ fn append_canonical_messages(
                 Some(&tool.occurrence.assistant_message_id),
             )?;
         }
-        receipts.push(append_message_and_surface(&transaction, message)?);
+        receipts.push(validation.append(&transaction, message, None)?);
     }
     let receipts = canonical_observation_batch(
         &transaction,
@@ -7830,6 +7850,7 @@ fn append_canonical_messages(
     transaction
         .commit()
         .map_err(|error| storage(format!("canonical commit: {error}")))?;
+    validation.committed(&connection);
     Ok(receipts)
 }
 
@@ -9848,6 +9869,16 @@ fn append_head(connection: &Connection) -> Result<(SurfaceRevision, u64), Conver
         let head = materialize_head(connection, ledger, checkpoint)?;
         return Ok((head.revision, head.compaction_generation));
     }
+    validate_append_identities(connection, ledger)?;
+    Ok((
+        SurfaceRevision::new(nonnegative(ledger, "canonical frontier")?),
+        0,
+    ))
+}
+fn validate_append_identities(
+    connection: &Connection,
+    ledger: i64,
+) -> Result<usize, ConversationStoreError> {
     let mut statement = connection
         .prepare(CANONICAL_SUFFIX_IDS)
         .map_err(|e| storage(e.to_string()))?;
@@ -9870,10 +9901,7 @@ fn append_head(connection: &Connection) -> Result<(SurfaceRevision, u64), Conver
         value.as_str().map_err(|e| storage(e.to_string()))?;
         count += 1;
     }
-    Ok((
-        SurfaceRevision::new(nonnegative(ledger, "canonical frontier")?),
-        0,
-    ))
+    Ok(count)
 }
 
 fn update_surface_head(
@@ -9934,7 +9962,7 @@ fn append_message_and_surface(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_and_surface_internal(transaction, message, None)
+    append_message_with_head(transaction, message, None, append_head(transaction)?)
 }
 
 /// Appends a destination-owned immutable canonical fact during lineage bootstrap.
@@ -9947,21 +9975,13 @@ fn append_seeded_ledger_message(
     append_message_ledger(transaction, message, None).map(|_| ())
 }
 
-fn append_adopted_message_and_surface(
-    transaction: &Transaction<'_>,
-    message: &MessageBlock,
-    pending_message_id: &MessageId,
-) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_and_surface_internal(transaction, message, Some(pending_message_id))
-}
-
-fn append_message_and_surface_internal(
+fn append_message_with_head(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
+    (head_revision, generation): (SurfaceRevision, u64),
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     let id = crate::conversation::message_id_of(message);
-    let (head_revision, generation) = append_head(transaction)?;
     let transcript_cursor =
         append_message_ledger(transaction, message, allowed_pending_message_id)?;
     let revision = head_revision.next();
@@ -21440,6 +21460,7 @@ mod executor_wait_tests {
     fn a_connection_wait_does_not_park_its_tokio_worker() {
         let owner = Arc::new(ConnectionOwner {
             manifest: manifest::Owner::uninstalled(),
+            append_validation: append_validation::Owner::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21472,6 +21493,7 @@ mod presentation_cancellation_tests {
         let manifest = manifest::Owner::uninstalled();
         let owner = Arc::new(ConnectionOwner {
             manifest,
+            append_validation: append_validation::Owner::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21515,6 +21537,7 @@ mod presentation_cancellation_tests {
         let manifest = manifest::Owner::uninstalled();
         let owner = Arc::new(ConnectionOwner {
             manifest,
+            append_validation: append_validation::Owner::uninstalled(),
             available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
             wake: Condvar::new(),
             poisoned: AtomicBool::new(false),
@@ -21581,6 +21604,7 @@ fn optional_display_layout<T>(
         }
     }
 }
+mod append_validation;
 mod manifest;
 mod projection;
 
