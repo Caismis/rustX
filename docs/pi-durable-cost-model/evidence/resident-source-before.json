@@ -1,0 +1,43 @@
+{
+  "completed_calls": {
+    "other/openat": 1668,
+    "other/close": 1713,
+    "other/write": 319,
+    "other/fsync": 96,
+    "database/openat": 9,
+    "database/pread64": 5880,
+    "other/pwrite64": 8376,
+    "other/pread64": 1,
+    "database/pwrite64": 6633,
+    "database/fsync": 26,
+    "other/unlink": 131,
+    "wal/openat": 7,
+    "wal/pwrite64": 49583,
+    "wal/fsync": 50,
+    "source-bytes/openat": 1649,
+    "source-bytes/write": 442,
+    "source-bytes/pread64": 40753,
+    "source-bytes/close": 2091,
+    "other/unlinkat": 946,
+    "wal/pread64": 8690,
+    "wal/close": 7,
+    "database/close": 9,
+    "failed/openat": 6,
+    "source-index/openat": 160,
+    "source-index/pread64": 1000,
+    "source-index/pwrite64": 480,
+    "source-index/close": 160
+  },
+  "successful_write_bytes": {
+    "other": 31589499,
+    "database": 27168768,
+    "wal": 102090280,
+    "source-bytes": 692618,
+    "source-index": 1966080
+  },
+  "source_bytes_files_written": 442,
+  "source_bytes_files_at_most_4096": 402,
+  "source_index_files_written": 40,
+  "unresolved": 0,
+  "limitations": "Syscall return bytes, not physical device writes. Source index openat counts approximate connection work; not SQL statement counts or CPU attribution. Profile is separate from formal timing."
+}

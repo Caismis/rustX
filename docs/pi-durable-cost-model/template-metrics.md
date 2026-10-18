@@ -71,3 +71,26 @@ the [verified compact archive](evidence/template-metrics.tar.xz) and
 [manifest](evidence/template-metrics.tar.manifest.json) retain raw samples,
 provider/controller output, build identities and validation logs. Cloud originals
 remain in `/workspace/issue-481-evidence`; no input was destroyed.
+
+## Complete six-scenario comparison
+
+A separate, non-overlapping follow-up runs the same frozen executable pair through
+stream, large-output, tool and cancellation scripts: three interleaved pairs per
+case, 24 additional samples. All pass, bringing this stage to **36 samples / 846
+fully validated requests / 18 paired comparisons**. No build, test or profiler ran
+during formal samples. The initial short-case results above remain unchanged.
+
+| Additional case | Wall ratio | Self CPU ratio | Lifecycle write ratio |
+|---|---:|---:|---:|
+| stream | 0.98117 | 0.90476 | 0.99931 |
+| large | 1.00490 | 1.04762 | 0.99941 |
+| tool | 0.99191 | 1.00000 | 0.99949 |
+| cancel | 0.94517 | 1.00000 | 1.00094 |
+
+These single-turn scenarios have coarse 10 ms CPU ticks; their ratios do not
+establish a general CPU benefit. Large-output CPU is adverse and retained.
+[Complete plain summary](evidence/template-complete-summary.json),
+[additional raw archive](evidence/template-extra-cases.tar.xz) and
+[manifest](evidence/template-extra-cases.tar.manifest.json) preserve the added
+cohort. Reproduce with the same comparison command using `--case stream --case
+large --case tool --case cancel`, then summarize both directories together.
