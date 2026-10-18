@@ -364,7 +364,7 @@ fn canonical_append_measurement(cold: bool) {
         let message = message(index);
         if cold {
             drop(store.take());
-            store = Some(SqliteConversationStore::open_existing(cid.clone(), &database).unwrap());
+            store = Some(SqliteConversationStore::open(cid.clone(), &database).unwrap());
         }
         let before = cold.then(process_sample);
         let start = Instant::now();
