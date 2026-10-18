@@ -2241,3 +2241,59 @@ fn inherited_turn_reverse_membership_seeks_only_the_selected_ordinal() {
     }
     assert!(costs.iter().all(|cost| *cost == costs[0]), "{costs:?}");
 }
+
+#[test]
+fn historical_fact_cuts_reuse_plans_without_changing_rows_or_scan_work() {
+    use rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG;
+    let store = store();
+    let first = terminal(&store, 0, true);
+    let last = terminal(&store, 1, true);
+    let connection = store.lock().unwrap();
+    assert!(connection.db_config(SQLITE_DBCONFIG_ENABLE_QPSG).unwrap());
+    let cuts = [0, first.sequence, last.sequence, first.sequence, 0];
+    let mut controls = Vec::new();
+    for stable in [false, true] {
+        connection
+            .set_db_config(SQLITE_DBCONFIG_ENABLE_QPSG, stable)
+            .unwrap();
+        let (sql, _) = presentation_statements(&query(
+            FactScope::All,
+            vec!["model_request_completed"],
+            last.sequence,
+        ))
+        .unwrap()
+        .remove(0);
+        let mut statement = connection.prepare(&sql).unwrap();
+        let mut results = Vec::new();
+        for through in cuts {
+            let (_, values) = presentation_statements(&query(
+                FactScope::All,
+                vec!["model_request_completed"],
+                through,
+            ))
+            .unwrap()
+            .remove(0);
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(values), |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            results.push(rows);
+        }
+        assert_eq!(statement.get_status(StatementStatus::FullscanStep), 0);
+        assert_eq!(statement.get_status(StatementStatus::Sort), 0);
+        if stable {
+            assert_eq!(statement.get_status(StatementStatus::RePrepare), 0);
+            assert_eq!(results, controls);
+        } else {
+            assert!(statement.get_status(StatementStatus::RePrepare) > 0);
+            assert!(results[0].is_empty());
+            assert_eq!(results[1].len(), 1);
+            assert_eq!(results[2].len(), 1);
+            assert_ne!(results[1], results[2]);
+            controls = results;
+        }
+    }
+}
