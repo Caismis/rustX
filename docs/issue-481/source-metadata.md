@@ -48,18 +48,18 @@ overhead; reopen/close work belongs to separately retained lifecycle counters.
 | warm | 64 | 0.9928 | 0.6667 | 1.0000 |
 | warm | 512 | 1.0079 | 1.0000 | 1.0000 |
 | warm | 2048 | 1.0691 | 1.2000 | 1.0000 |
-| cold | 0 | 0.9972 | 1.0000 | 1.0000 |
-| cold | 64 | 1.0553 | 0.6000 | 1.0000 |
-| cold | 512 | 1.0632 | 1.0000 | 1.0000 |
-| cold | 2048 | 1.0392 | 1.2857 | 1.0000 |
 
 Each sample measures 32 appends. Coarse CPU ticks make ratios for these short
 windows noisy; the raw counters and per-operation observations remain available.
 The first cold attempt failed all 24 samples because the fixture used the read-only
 management opener. Those failures and empty summary output are retained. The
-corrected fixture uses the writable opener before each measured append. Both
-production revisions were rebuilt with that identical fixture, and all 24 rerun
-samples passed. The original successful runtime/warm/Pi samples remain unchanged.
+corrected fixture uses the writable opener before each measured append. Both checkout builds were requested with that fixture, and all 24 samples passed
+their oracles. **Independent review found this cold A/B matrix invalid:** both
+executables were SHA-256 `ab315719267cecb3c4f74527349c6f972fd4dbea839dbdb00585b2643f714e5c`.
+The shared Cargo target reused the metadata executable when returning to the older
+checkout. These are same-binary samples, not a production-revision comparison;
+their former cold ratio rows are withdrawn. A fresh-root-crate rebuild and rerun
+are pending. Original binaries, build logs and samples are retained. The original successful runtime/warm/Pi samples remain unchanged.
 
 ## Same-provider Pi comparison
 
@@ -132,3 +132,6 @@ The compact [evidence archive](evidence/metadata-stage.tar.xz) preserves raw
 profiles and successful/failed samples, with a per-file SHA-256
 [manifest](evidence/metadata-stage.tar.manifest.json). Original evidence is retained
 in the cloud workspace.
+
+The shared-target identity audit and plain per-pair numeric inputs are in
+[evidence/pair-inputs](evidence/pair-inputs) and [the build audit](evidence/build-identity-audit.json).

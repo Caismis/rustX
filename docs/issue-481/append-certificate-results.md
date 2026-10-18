@@ -80,3 +80,15 @@ sample, process result, oracle output, full logical/allocated DB/WAL/temp footpr
 summary, build identity and development-check failure. Its
 [SHA-256 manifest](evidence/certificate-stage.tar.manifest.json) is checked against
 the archive; original evidence remains in the cloud workspace.
+
+## Build identity review in progress
+
+Independent review found that the earlier stage-1 cold baseline was mislabeled:
+a shared Cargo target returned the metadata executable for both inputs. That
+cold comparison is withdrawn. Here, the `ab315719…14e5c` baseline follows the
+fresh metadata library build and a fresh conformance-fixture build; the
+certificate candidate rebuilt its library and conformance target. A fresh clean
+metadata build is being used to independently confirm the baseline binary, so
+these stage-2 attribution claims remain provisional until that check completes.
+The original records remain unchanged. [Plain pair inputs](evidence/pair-inputs)
+permit recomputation without extracting an archive.
