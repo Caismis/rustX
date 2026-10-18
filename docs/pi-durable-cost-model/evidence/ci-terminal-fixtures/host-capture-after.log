@@ -1,0 +1,5 @@
+
+running 1 test
+test runtime_client::host::tests::incremental_projection_independent_snapshot_capture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4278 filtered out; finished in 1.22s

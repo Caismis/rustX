@@ -1,0 +1,28 @@
+[
+  {
+    "name": "runtime_client::host::tests::incremental_projection_independent_snapshot_capture",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "runtime_client::host::tests::incremental_projection_independent_snapshot_capture",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit": 101,
+    "diagnostic_guard_seconds": 30,
+    "timed_out": false,
+    "elapsed_seconds": 0.61529082099878
+  },
+  {
+    "name": "runtime::conversation_runtime::tests::terminal_event_durable_failure_degrades_without_fabricated_terminal",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "runtime::conversation_runtime::tests::terminal_event_durable_failure_degrades_without_fabricated_terminal",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit": null,
+    "diagnostic_guard_seconds": 30,
+    "timed_out": true,
+    "elapsed_seconds": 30.008813281994662
+  }
+]

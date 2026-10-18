@@ -1,0 +1,20 @@
+{
+  "base": "770248f10fe63ba50f7457ed17436ea339521618",
+  "scope": "Both changed files have byte-identical prefixes before their existing cfg(test) root module; all diff hunks are inside those modules. No production or workflow changes.",
+  "files": [
+    {
+      "file": "src/runtime/conversation_runtime.rs",
+      "test_module_line": 8146,
+      "unchanged_prefix_sha256": "e8839784b815a86d9278ef1ed0e79860c6e9c67471e85fd4404b14d93663e9ea",
+      "before_sha256": "5a1241d646ff7e268fd46c229e8f6c6550a74d07cb22d23e0ed05d7bd55f119d",
+      "after_sha256": "947cd9453d1deaaefe3ecb7c7071de89fd082d913f15243c9dddfb4018b17c04"
+    },
+    {
+      "file": "src/runtime_client/host.rs",
+      "test_module_line": 6210,
+      "unchanged_prefix_sha256": "7e3d254916f2680488131baaabf4367759706e4b69e5d49909f601dc135d8e3b",
+      "before_sha256": "982e27338f0f54ed5c880f40d1a241062e451c2623cc166e180dced3c79a0e11",
+      "after_sha256": "f963afa126933e098bc579a2b543622ea4a733c7323a0816bcd6706330c8ccde"
+    }
+  ]
+}

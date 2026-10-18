@@ -1,0 +1,9 @@
+
+running 5 tests
+test durable::sqlite::tests::final_settlement_tests::final_model_commit_contains_ordered_facts_and_readable_canonical_output ... ok
+test durable::sqlite::tests::final_settlement_tests::independent_final_commit_schema_is_refused_without_rewriting ... ok
+test durable::sqlite::tests::final_settlement_tests::final_model_adopts_finite_pending_order_without_terminal_and_preserves_cursors ... ok
+test durable::sqlite::tests::final_settlement_tests::final_model_rejects_foreign_envelopes_and_wrong_terminal_without_partial_facts ... ok
+test durable::sqlite::tests::final_settlement_tests::final_model_faults_roll_back_provider_frames_canonical_and_terminal_together ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 4274 filtered out; finished in 0.21s
