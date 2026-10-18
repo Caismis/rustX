@@ -6136,9 +6136,10 @@ outcome that can establish P.
 ### The U transaction
 
 The final publication frame and the publication terminal marker commit in one
-transaction; only after it succeeds may the final buffered payload be
-released. When no visible payload remains, a terminal-only frame carries the
-terminal transition. There is no "write the final frame, publish, then mark
+transaction. Ordinary accepted output publishes the complete canonical receipt
+after that compound commit; consumed final staging references are not released.
+Prepared Workflow/rejected output releases its committed staging receipts. When
+no visible payload remains, a terminal-only frame carries the terminal transition. There is no "write the final frame, publish, then mark
 complete" sequence to crash inside.
 
 ### Bounded publication writes

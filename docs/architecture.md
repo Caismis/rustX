@@ -5903,9 +5903,11 @@ There is deliberately no "write the final frame, publish, then mark the stream
 complete" sequence to crash inside. The remaining publication payload and terminal marker commit together. For
 ordinary accepted output this is the final settlement transaction described
 above; the prepared Workflow/rejected-output path requires its provider fact
-first. Only after commit is the final buffered payload released. When no payload remains, a terminal-only
-frame still carries the terminal transition, so nothing visible is delayed
-that does not exist.
+first. Ordinary accepted output releases the complete canonical receipt after
+commit; its final staging references have been consumed and are not published.
+Prepared Workflow/rejected output releases its committed staging receipts. When
+no payload remains, a terminal-only frame still carries the native terminal
+transition.
 
 ### 6.1.4 Three mutually exclusive settlements
 

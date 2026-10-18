@@ -257,8 +257,8 @@ async fn text_execution_completes_with_exact_trace() {
     assert_single_terminal(&result.event_history);
     assert_eq!(
         result.publication_frames.len(),
-        1,
-        "the two provider deltas coalesced into one durable publication frame"
+        0,
+        "the complete final output uses its canonical receipt"
     );
     assert!(
         result.publication_audits.is_empty(),
@@ -278,6 +278,10 @@ async fn text_execution_completes_with_exact_trace() {
         panic!("final message must contain text");
     };
     assert_eq!(block.text, "hello world");
+    assert_eq!(
+        result.canonical_notifications,
+        vec![MessageBlock::Assistant(assistant.clone())]
+    );
 }
 
 /// Several deltas across blocks assemble in stream order.
@@ -294,23 +298,11 @@ async fn several_deltas_assemble_in_stream_order() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    // Different target blocks are never coalesced together, so the released
-    // publication preserves the provider's block ordering exactly.
-    let deltas: Vec<String> = result
-        .publication_frames
-        .iter()
-        .filter_map(|frame| match &frame.payload {
-            rustx::publication::PublicationPayload::TextSuffix {
-                block_index,
-                suffix,
-            } => Some(format!("{}:{suffix}", block_index.get())),
-            _ => None,
-        })
-        .collect();
+    assert!(result.publication_frames.is_empty());
     assert_eq!(
-        deltas,
-        vec!["0:a", "1:b", "0:c"],
-        "publication order preserved"
+        result.canonical_notifications,
+        vec![result.messages().last().unwrap().clone()],
+        "the complete ordered blocks reach the actual canonical notification seam"
     );
     let MessageBlock::Assistant(assistant) = result.messages().last().expect("Assistant message")
     else {

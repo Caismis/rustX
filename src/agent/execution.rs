@@ -7048,9 +7048,64 @@ mod tests {
 
     use crate::publication::{PublicationFrame, PublicationStreamStart};
 
+    struct FinalPublicationProbe {
+        mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+        terminal: std::sync::atomic::AtomicBool,
+        producer: Mutex<Option<std::thread::JoinHandle<()>>>,
+    }
+
+    impl FinalPublicationProbe {
+        fn completion(self: &Arc<Self>) {
+            let probe = Arc::clone(self);
+            let (checked, wait_checked) = std::sync::mpsc::sync_channel(0);
+            let producer = std::thread::spawn(move || {
+                assert!(
+                    probe
+                        .mailbox
+                        .with_pending_snapshot(|_| ())
+                        .unwrap()
+                        .is_none(),
+                    "the final publication lease excludes a concurrent pending reader"
+                );
+                checked.send(()).unwrap();
+                probe
+                    .mailbox
+                    .enqueue(UserMessageBlock {
+                        id: MessageId::new("late-after-final"),
+                        content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                            text: "late input".into(),
+                        })],
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        timestamp: Some(chrono::Utc::now()),
+                    })
+                    .unwrap();
+                assert!(
+                    probe.terminal.load(std::sync::atomic::Ordering::SeqCst),
+                    "pending acceptance cannot overtake final terminal publication"
+                );
+            });
+            *self.producer.lock().unwrap() = Some(producer);
+            wait_checked.recv().unwrap();
+        }
+
+        fn terminal(&self) {
+            assert!(
+                self.mailbox
+                    .with_pending_snapshot(|_| ())
+                    .unwrap()
+                    .is_none(),
+                "the same publication lease remains held through the terminal callback"
+            );
+            self.terminal
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     #[derive(Default)]
     struct RecordingObserver {
         cancel_after_completion: Option<AgentCancellation>,
+        final_publication_probe: Option<Arc<FinalPublicationProbe>>,
         start_gap: Option<(
             Arc<crate::runtime::monotonic::ManualMonotonicClock>,
             Arc<crate::durable::SqliteConversationStore>,
@@ -7091,6 +7146,13 @@ mod tests {
             _tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
             _receipt: Option<&crate::durable::observation::NativeObservationBatch>,
         ) {
+            if let Some(probe) = &self.final_publication_probe {
+                match event {
+                    RuntimeEvent::ModelRequestCompleted { .. } => probe.completion(),
+                    RuntimeEvent::AttemptCompleted { .. } => probe.terminal(),
+                    _ => {}
+                }
+            }
             if matches!(event, RuntimeEvent::ModelRequestCompleted { .. })
                 && let Some(cancellation) = &self.cancel_after_completion
             {
@@ -8374,8 +8436,14 @@ mod tests {
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let probe = Arc::new(FinalPublicationProbe {
+            mailbox: tool_runtime.mailbox(),
+            terminal: std::sync::atomic::AtomicBool::new(false),
+            producer: Mutex::new(None),
+        });
         let observer = RecordingObserver {
             cancel_after_completion: Some(cancellation.clone()),
+            final_publication_probe: Some(Arc::clone(&probe)),
             ..Default::default()
         };
         let mut execution = AgentExecution::new(
@@ -8391,6 +8459,26 @@ mod tests {
         execution.observe(&observer);
 
         let result = execution.run().await;
+        probe
+            .producer
+            .lock()
+            .unwrap()
+            .take()
+            .expect("concurrent producer")
+            .join()
+            .unwrap();
+        let pending = probe
+            .mailbox
+            .with_pending_snapshot(|items| items)
+            .unwrap()
+            .expect("publication lease released");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].message().id.as_str(), "late-after-final");
+        assert_eq!(
+            adapter.request_count(),
+            1,
+            "later input did not reopen the committed winner"
+        );
         assert!(
             cancellation.is_cancelled(),
             "outcome: {:?}; durable error: {:?}",

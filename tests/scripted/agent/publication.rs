@@ -243,8 +243,8 @@ async fn many_provider_deltas_coalesce_into_few_publication_writes() {
 
     assert_eq!(
         run.audit.publication_frames.len(),
-        5,
-        "40 provider deltas became 4 threshold flushes plus the terminal frame"
+        4,
+        "40 provider deltas became 4 threshold flushes; the final receipt is canonical"
     );
     assert_eq!(
         run.audit.released_publication_text().len(),
@@ -258,13 +258,76 @@ async fn many_provider_deltas_coalesce_into_few_publication_writes() {
         .iter()
         .map(|frame| frame.sequence)
         .collect();
-    assert_eq!(sequences, vec![0, 1, 2, 3, 4]);
+    assert_eq!(sequences, vec![0, 1, 2, 3]);
     assert!(run.audit.publication_audits.is_empty());
 }
 
+/// Committed partial frames preserve interleaved block arrival order, while
+/// the final canonical notification carries the complete blocks in index order.
+#[tokio::test]
+async fn partial_block_order_and_final_canonical_content_are_both_exact() {
+    let delta = |index, value: &str| {
+        FakeStep::Emit(ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(index),
+            text: value.into(),
+        })
+    };
+    let model = fake_model(vec![vec![
+        started(),
+        delta(0, "a"),
+        delta(1, "b"),
+        delta(0, "c"),
+        done(ModelFinishReason::Stop),
+    ]]);
+    let observed = run(
+        "conv_30d0c537-fb0d-77a2-8a6b-9e1d7d4a0741",
+        &model,
+        CoalescePolicy {
+            max_bytes: 1,
+            max_latency_millis: u64::MAX,
+        },
+    )
+    .await;
+    let deltas: Vec<_> = observed
+        .audit
+        .publication_frames
+        .iter()
+        .map(|frame| {
+            let PublicationPayload::TextSuffix {
+                block_index,
+                suffix,
+            } = &frame.payload
+            else {
+                panic!("only partial text frames")
+            };
+            (frame.sequence, block_index.get(), suffix.as_str())
+        })
+        .collect();
+    assert_eq!(deltas, vec![(0, 0, "a"), (1, 1, "b"), (2, 0, "c")]);
+    assert_eq!(
+        observed.audit.canonical_notifications,
+        vec![observed.audit.messages().last().unwrap().clone()]
+    );
+    let MessageBlock::Assistant(assistant) = &observed.audit.canonical_notifications[0] else {
+        panic!("Assistant notification")
+    };
+    assert_eq!(
+        assistant.content,
+        vec!["ac", "b"]
+            .into_iter()
+            .map(
+                |text| rustx::message::types::AssistantContentBlock::Text(TextBlock {
+                    text: text.into()
+                })
+            )
+            .collect::<Vec<_>>()
+    );
+    assert!(observed.audit.publication_audits.is_empty());
+}
+
 /// **Regression 2.** The latency flush is decided by the injected clock
-/// alone. The same script under a never-elapsing clock produces one frame;
-/// advancing the fake clock past the threshold produces one frame per delta.
+/// alone. A never-elapsing clock leaves final output to the canonical receipt;
+/// advancing the fake clock past the threshold produces one partial frame per delta.
 #[tokio::test]
 async fn latency_flush_is_driven_by_the_injected_clock() {
     let script = || {
@@ -277,7 +340,7 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
         ]]
     };
 
-    // The clock never advances, so only the terminal transaction flushes.
+    // The clock never advances, so only the canonical receipt publishes content.
     let parked = run(
         "conv_3ca052fa-fbf2-72af-8f93-5d4c315a82b1",
         &fake_model(script()),
@@ -286,10 +349,25 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
     .await;
     assert_eq!(
         parked.audit.publication_frames.len(),
-        1,
-        "with no byte or latency trigger, only the terminal transaction flushes"
+        0,
+        "with no byte or latency trigger, only the canonical receipt publishes content"
     );
-    assert_eq!(parked.audit.released_publication_text(), "alphabetagamma");
+    assert!(parked.audit.released_publication_text().is_empty());
+    assert_eq!(
+        parked.audit.canonical_notifications,
+        vec![parked.audit.messages().last().unwrap().clone()]
+    );
+    let MessageBlock::Assistant(assistant) = &parked.audit.canonical_notifications[0] else {
+        panic!("Assistant notification")
+    };
+    assert_eq!(
+        assistant.content,
+        vec![rustx::message::types::AssistantContentBlock::Text(
+            TextBlock {
+                text: "alphabetagamma".into()
+            }
+        )]
+    );
 
     // The same script under a clock that always reports the threshold as
     // elapsed flushes on every delta instead.
@@ -304,8 +382,8 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
     .await;
     assert_eq!(
         flushing.audit.publication_frames.len(),
-        4,
-        "an already-elapsed latency window flushes each delta, plus the terminal frame"
+        3,
+        "an already-elapsed latency window flushes each delta; final content is canonical"
     );
     assert_eq!(flushing.audit.released_publication_text(), "alphabetagamma");
     // The manual clock proves nothing waited on wall-clock time.
@@ -617,14 +695,19 @@ async fn a_failed_publication_terminal_releases_no_final_payload() {
         "the buffered tail is released only after U commits"
     );
     assert!(matches!(run.audit.outcome, AttemptOutcome::Failed { .. }));
-    // P committed before U was attempted: the provider outcome remains an
-    // external execution fact even though publication never settled.
+    assert!(run.audit.canonical_notifications.is_empty());
+    assert_eq!(
+        run.audit.messages().len(),
+        1,
+        "failed final acceptance leaves only input"
+    );
+    // Ordinary P and U roll back together with canonical acceptance.
     assert!(
-        run.audit
+        !run.audit
             .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::ModelRequestCompleted { .. })),
-        "P is durable and independent of the failed U"
+        "the failed final transaction publishes no provider completion"
     );
     let audit = run
         .audit
@@ -634,7 +717,7 @@ async fn a_failed_publication_terminal_releases_no_final_payload() {
     assert_eq!(
         audit.kind,
         PublicationAuditKind::Incomplete,
-        "P present but U absent is Incomplete, not Unaccepted"
+        "neither P nor U survived the failed final transaction"
     );
 }
 
@@ -809,10 +892,11 @@ async fn a_canonically_accepted_turn_creates_no_audit_and_no_staging() {
         panic!("the canonical message carries the assembled text");
     };
     assert_eq!(block.text, "hello world");
+    assert!(run.audit.publication_frames.is_empty());
     assert_eq!(
-        run.audit.released_publication_text(),
-        "hello world",
-        "what was released for display equals what became canonical"
+        run.audit.canonical_notifications,
+        vec![MessageBlock::Assistant(assistant.clone())],
+        "the complete canonical content was actually released for display"
     );
 }
 
