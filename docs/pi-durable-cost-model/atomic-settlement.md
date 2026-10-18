@@ -81,3 +81,33 @@ a documented test-length lint allowance followed the behavioral checks.
 These are targeted checks, not an exact-head FULL/Merge-verification claim.
 Partial cadence is unchanged at this stage. Performance and final dependency
 comparisons remain necessary before a retain/revert recommendation.
+
+## Client notification and concurrent-inbox follow-up
+
+The broader scripted suite initially exposed six assertions tied to transient
+final frames/P-only failure and four client delta-only expectations. Fixtures now
+record the actual canonical notification, verify exact complete content after a
+partial checkpoint, retain interleaved partial ordering, and reject success/P
+publication after a failed final transaction. Streaming-specific fixtures cross
+a deterministic pressure threshold; no sleep or timeout increase is used.
+
+The post-commit cancellation test now includes a concurrent inbox producer. An
+existing nonblocking mailbox snapshot probe proves the publication lock is held
+at P notification and still held at the final Attempt callback. A channel gate
+places the producer at that boundary; its acceptance must observe terminal
+publication first. The late input remains pending, only one model request ran,
+and published events equal native events exactly, including generation evidence.
+
+Cross-stage validation on the locally integrated cadence candidate passed 606
+scripted tests (90.90 s), 89 tests matching `agent::execution::` (19.62 s), and
+all-target/all-feature Clippy (2m 52s). These filters overlap. The mailbox probe
+and exact publication test both passed. The new ordering fixture's initial UUIDv4
+was corrected to the required UUIDv7; its failure is retained. Two test futures
+were boxed after the larger recording helper crossed the lint threshold.
+
+[Checks](evidence/atomic-client-validation/checks.tar.xz) and
+[manifest](evidence/atomic-client-validation/checks.tar.manifest.json) retain the
+initial failures and successful follow-up. This is not a final FULL result or an
+atomic speedup claim. The separate cadence stage supplies canonical tool proposal
+installation when structural frames no longer force a flush; that integration
+change belongs to the cadence increment, not this test-only follow-up.

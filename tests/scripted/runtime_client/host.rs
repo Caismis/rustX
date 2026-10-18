@@ -600,8 +600,8 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         }]
     );
 
-    // Release and resume after C: exactly the remaining delta arrives, so
-    // the client reconstructs "hello world" with no duplicate output.
+    // Resume after the checkpoint cursor. The final canonical notification
+    // replaces the partial prefix; no transient final delta is replayed.
     release_tx.send(true).expect("release");
     let resumed = receive_until(&subscription, |event| {
         event
@@ -623,10 +623,33 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
             _ => None,
         })
         .collect();
+    assert!(
+        deltas.is_empty(),
+        "the final tail uses the canonical notification"
+    );
+    let committed: Vec<_> = resumed
+        .iter()
+        .flat_map(|event| event.event.facts())
+        .filter_map(|fact| match fact {
+            RuntimeClientEvent::MessageCommitted {
+                message: MessageBlock::Assistant(assistant),
+                ..
+            } => Some(assistant),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        deltas,
-        vec!["world".to_owned()],
-        "no duplicated output after resume"
+        committed.len(),
+        1,
+        "one canonical rebind after the partial checkpoint"
+    );
+    assert_eq!(
+        committed[0].content,
+        vec![rustx::message::types::AssistantContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: "hello world".into()
+            }
+        )]
     );
 
     let (final_snapshot, _) = host
@@ -1483,7 +1506,34 @@ async fn streamed_deltas_publish_no_adoption_eligibility_change() {
         write!(text, "{index} ").expect("writing to a String cannot fail");
         text
     });
-    assert_eq!(text, expected);
+    assert!(
+        !text.is_empty(),
+        "the scenario must exercise actual partial release"
+    );
+    assert_eq!(
+        text,
+        expected[..text.len()],
+        "partial output is the exact ordered prefix"
+    );
+    let committed: Vec<_> = streamed
+        .iter()
+        .flat_map(|event| event.event.facts())
+        .filter_map(|fact| match fact {
+            RuntimeClientEvent::MessageCommitted {
+                message: MessageBlock::Assistant(assistant),
+                ..
+            } => Some(assistant),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(committed.len(), 1);
+    assert_eq!(
+        committed[0].content,
+        vec![rustx::message::types::AssistantContentBlock::Text(
+            rustx::message::content::TextBlock { text: expected }
+        )],
+        "the final notification supplies every byte including the unflushed tail"
+    );
     let (first, last) = (deltas[0], deltas[deltas.len() - 1]);
     assert!(
         streamed[first..=last]
