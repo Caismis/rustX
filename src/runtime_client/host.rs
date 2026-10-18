@@ -8483,6 +8483,7 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(definition.clone(), Arc::new(tool)).unwrap();
         let call_id = ToolCallId::new("capture-call");
+        let (continue_stream, live_prefix_gate) = model_release();
         let script = vec![
             GatedStep::Emit(ModelEvent::Started),
             GatedStep::Emit(ModelEvent::ReasoningDelta {
@@ -8493,6 +8494,7 @@ mod tests {
                 block_index: ContentBlockIndex::new(1),
                 text: "first ".into(),
             }),
+            GatedStep::ParkUntilReleased(live_prefix_gate),
             GatedStep::Emit(ModelEvent::TextDelta {
                 block_index: ContentBlockIndex::new(1),
                 text: "second".into(),
@@ -8546,14 +8548,32 @@ mod tests {
             .host
             .submit_inbound(submit_content("projection equivalence"))
             .unwrap();
+        // Hold provider completion until an actual nonempty LiveRef has been
+        // committed and published. The tiny stream must not depend on beating
+        // the production coalescer deadline; preserve the original live/expiry
+        // assertions and the exact response bytes consumed by the client oracle.
         let mut events = receive_until(&subscription, |event| {
-            event
-                .event
-                .facts()
-                .iter()
-                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+            event.event.facts().iter().any(|fact| matches!(
+                fact,
+                RuntimeClientEvent::BlockContentAdvanced { content_ref, .. }
+                    if content_ref.readable_end > 0 && matches!(
+                        &content_ref.source,
+                        crate::runtime_client::content::ContentSource::LivePublicationPrefix { .. }
+                    )
+            ))
         })
         .await;
+        continue_stream.send_replace(true);
+        events.extend(
+            receive_until(&subscription, |event| {
+                event
+                    .event
+                    .facts()
+                    .iter()
+                    .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+            })
+            .await,
+        );
         // Attempt settlement is a semantic event, not completion of the
         // independently owned presentation read. Capture the equivalence cut
         // only after the terminal response's decorated domain was published.

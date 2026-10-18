@@ -1,0 +1,14 @@
+
+running 1 test
+
+thread 'runtime_client::host::tests::incremental_projection_independent_snapshot_capture' (136888) panicked at src/runtime_client/host.rs:8596:14:
+actual released nonempty LiveRef in the original native stream
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test runtime_client::host::tests::incremental_projection_independent_snapshot_capture ... FAILED
+
+failures:
+
+failures:
+    runtime_client::host::tests::incremental_projection_independent_snapshot_capture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4277 filtered out; finished in 0.55s
