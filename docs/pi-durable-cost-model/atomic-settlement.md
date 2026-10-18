@@ -111,3 +111,66 @@ initial failures and successful follow-up. This is not a final FULL result or an
 atomic speedup claim. The separate cadence stage supplies canonical tool proposal
 installation when structural frames no longer force a flush; that integration
 change belongs to the cadence increment, not this test-only follow-up.
+
+## Isolated atomic-settlement measurement
+
+Three interleaved paired runs in each of six cases passed: 36 samples, 846 full
+ordered requests and 18 paired request comparisons. Predecessor is integrity
+`5e37b9240290723483ac00855cee7eee58760c81`; measured atomic production is
+`ce8f7270ef65ef279f9c5d6c73135b420074dab0`, source tree
+`c13b161837efdbfa98e76afac23a50366274e315`. The clean release builder verified
+identical compiler/settings and all benchmark fixture hashes. Executable SHA-256:
+`80cddef13e44afc99e0b1178fc180f4849abc8aae98503a166e1de678190ccac`.
+
+All values below are medians of three same-pair after/before ratios. Formal
+samples ran after compilation ended and before profiling; none were removed.
+
+| Workload | Turn wall | Turn CPU | Lifecycle wall | Lifecycle CPU | Sampled anon PSS | Process lifecycle writes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| short-small | 0.9203 | 0.9286 | 0.9624 | 0.9647 | 0.9979 | 0.7992 |
+| short-large | 0.9603 | 0.9529 | 0.9966 | 0.9875 | 1.0080 | 0.8125 |
+| stream | 0.9978 | 0.9545 | 1.0004 | 1.0000 | 1.0019 | 0.9281 |
+| large | 1.0099 | 0.9545 | 1.0047 | 1.0000 | 1.0045 | 0.9712 |
+| tool | 0.9924 | 0.8462 | 0.9904 | 1.0000 | 1.0010 | 0.9056 |
+| cancel | 1.0472 | 1.0000 | 0.9917 | 1.0000 | 1.0167 | 0.9980 |
+
+Short-small turn wall/CPU improve about 8.0%/7.1%, with lifecycle writes down
+20.1%; short-large writes fall 18.7%. Cancellation turn wall regresses 4.7%,
+large wall regresses 1.0%, and memory is mixed. These three-pair observations
+are not confidence bounds or proof of a general speedup. The user must weigh
+the lost independent final crash cuts against these measured savings.
+
+Separate matched short-small WAL profile: 672 → 544 write commits over 32
+steady turns (four fewer per turn), 16,349 → 12,783 frames and 67,357,880 →
+52,665,960 frame bytes. Both sides add exactly 256 events, 64 ledger rows,
+704 content segments and 3008 state fields. This supports reduced transaction
+write amplification, not removal of those native facts. Endpoint dbstat owners
+can miss intermediate page reuse; mixed/unmapped owners are retained. No
+overlapping elapsed scope is reported as an exclusive CPU percentage.
+
+CPU includes product plus driver, self threads only at 10 ms resolution; the
+provider is a controller-owned sibling and stays alive through product cleanup.
+Memory is sampled RSS/PSS, not a peak; allocations are unavailable. Process
+writes are not physical-device writes. Lifecycle includes verification,
+checkpoint, close/reopen and cleanup; evidence-file output follows counters.
+Provider startup/control and full controller lifetime remain in raw records.
+The comparison is against the immediate predecessor, not Pi and not a
+multiplied estimate of the final combination.
+
+Commands (from this checkout, with the documented Rust environment):
+
+```sh
+python3 benchmarks/runtime/build-revision.py --repo /workspace/rustX-pi-atomic --target /workspace/issue-481-target --output /workspace/issue-481-evidence/pi-atomic-build
+python3 benchmarks/runtime/compare-revisions.py --before /workspace/issue-481-evidence/pi-integrity-build/conformance --after /workspace/issue-481-evidence/pi-atomic-build/conformance --output /workspace/issue-481-evidence/pi-atomic-matrix
+python3 benchmarks/runtime/summarize-comparisons.py /workspace/issue-481-evidence/pi-atomic-matrix
+python3 /workspace/issue-481-evidence/pi-atomic-profile/run.py
+python3 /workspace/issue-481-evidence/pi-atomic-profile/analyze.py
+```
+
+[Raw archive](evidence/atomic-measurements/measurements.tar.xz),
+[manifest](evidence/atomic-measurements/measurements.tar.manifest.json),
+[formal summary](evidence/atomic-measurements/formal-summary.json), and
+[WAL summary](evidence/atomic-measurements/wal-summary.json) preserve source/build
+identity, every sample, profile scripts and results. Original artifacts remain
+in the cloud workspace. Final combined/leave-out results and exact-head FULL
+validation are still required.
