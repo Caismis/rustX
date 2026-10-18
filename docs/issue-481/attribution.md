@@ -139,3 +139,14 @@ build, corrected build and all analysis attempts remain in
 `/workspace/issue-481-evidence`. The failed unsafe-Rust probe was replaced with
 the safe socket handshake; the repository's unsafe-code lint was not relaxed.
 Reproduction tools are under `benchmarks/runtime/profiling/`.
+
+## Attribution review correction
+
+The heap analyzer now requires `--binary` and matches that exact recorded path,
+instead of a hard-coded basename. Deterministic fixtures cover a renamed binary,
+the ELF segment/file-offset gap, missing mappings and a missing zero-offset
+mapping. The recorded allocation tables revalidate unchanged. The Python suite
+now has 26 passing tests. [Plain CPU sample counts](evidence/attribution-cpu-counts.json)
+expose phase IDs, raw/report hashes and denominators independently checked against
+binary profile records: SQLite preparation is 164/751 and 183/847 samples, not
+an exclusive share that can be added to other cumulative rows.

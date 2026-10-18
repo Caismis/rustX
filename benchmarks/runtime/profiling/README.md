@@ -36,7 +36,8 @@ not differences between unrelated processes or medians:
 ```sh
 nm -n -C /path/to/immutable-conformance > /path/to/symbols.txt
 readelf -l /path/to/immutable-conformance
-python3 benchmarks/runtime/profiling/analyze-heap.py /path/to/symbols.txt \
+python3 benchmarks/runtime/profiling/analyze-heap.py --binary /path/to/immutable-conformance \
+  /path/to/symbols.txt \
   /path/to/alloc.0004.heap /path/to/alloc.0005.heap > /path/to/steady-allocations.json
 /path/to/google-pprof --text --cum --no_strip_temp --nodecount=200 \
   /path/to/immutable-conformance /path/to/before_measured_turns.cpu
