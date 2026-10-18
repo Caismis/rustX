@@ -320,14 +320,14 @@ fn measure_canonical_append() {
     let output = PathBuf::from(std::env::var_os("RUSTX_BENCH_OUTPUT").expect("output"));
     let root = tempfile::tempdir_in(output.parent().unwrap()).unwrap();
     let database = root.path().join("conversation.sqlite");
-    let cid = ConversationId::new("append-measurement");
+    let cid = ConversationId::new("conv_018f0000-0000-7000-8000-000000000001");
     let began = Instant::now();
     let mut lifecycle = Vec::new();
     lifecycle_sample(&mut lifecycle, "before_initialization", began);
     let store = SqliteConversationStore::open(cid.clone(), &database).unwrap();
     let message = |index: usize| {
         MessageBlock::User(UserMessageBlock {
-            id: MessageId::new(format!("message-{index:05}")),
+            id: MessageId::new(format!("msg_018f0000-0000-7000-8000-{index:012x}")),
             content: vec![UserContentBlock::Text(TextBlock {
                 text: format!("canonical input {index:05}"),
             })],
