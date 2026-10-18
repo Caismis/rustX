@@ -2,7 +2,9 @@
 use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
-pub(super) const RESIDENT_BYTES: usize = 4096;
+// Byte residency is independent of navigation residency. The 16 KiB bound
+// covers the measured 12–13 KiB carriers without growing the disk-index cutoff.
+pub(super) const RESIDENT_BYTES: usize = 16_384;
 
 #[derive(Debug)]
 pub(super) enum Bytes {
