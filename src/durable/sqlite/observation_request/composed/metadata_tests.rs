@@ -236,7 +236,7 @@ fn metadata_capture_matches_original_facts_roots_and_page_bytes() {
 #[test]
 fn metadata_capture_preserves_duplicate_and_numeric_error_rejection() {
     let deep = format!("{}0{}", "[".repeat(130), "]".repeat(130));
-    for raw in [r#"{"duplicate":1,"duplicate":2}"#, r#"[1e400]"#, &deep] {
+    for raw in [r#"{"duplicate":1,"duplicate":2}"#, "[1e400]", &deep] {
         let source = source(raw, "suffix");
         let reader = source.byte_reader().unwrap();
         let total = source.read(&[], 0, 1).unwrap().readable_end;
