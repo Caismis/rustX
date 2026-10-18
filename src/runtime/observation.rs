@@ -2303,11 +2303,8 @@ mod tests {
                     panic!("complete native J transition");
                 };
                 assert_eq!(observations.len(), 1);
-                assert_eq!(
-                    observations.capacity(),
-                    1,
-                    "a bare witness does not reserve 32 absent proofs"
-                );
+                // A bare witness does not reserve 32 absent proofs.
+                assert_eq!(observations.capacity(), 1);
                 let ConversationObservation::JournalFact(witness) = &observations[0] else {
                     panic!("finite source witness");
                 };
@@ -2320,11 +2317,8 @@ mod tests {
         assert!(!queue.has_unpublished());
         let empty = queue.drain();
         assert!(empty.is_empty());
-        assert_eq!(
-            empty.capacity(),
-            0,
-            "an idle drain allocates no observation page"
-        );
+        // An idle drain allocates no observation page.
+        assert_eq!(empty.capacity(), 0);
     }
 
     #[test]
