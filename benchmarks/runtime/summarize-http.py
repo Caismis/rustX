@@ -64,7 +64,7 @@ def main():
         if not r['accepted']:
             groups.setdefault('failed',[]).append(str(path));continue
         raw=path.with_name(path.name.replace('.process.json','.json'))
-        engine='rust' if raw.stem.endswith('-rust') else 'pi'
+        engine=raw.stem.rsplit('-',1)[1]
         groups.setdefault(r['case']+'/'+engine,[]).append(sample(raw))
     print(json.dumps({'clock_ticks':os.sysconf('SC_CLK_TCK'),'scope':'CPU self user+system ticks; process-attributed writes (not device writes); runtime plus driver; verification phases explicit; evidence output after cleanup excluded; maximum sampled RSS/PSS, not peak; allocation count unavailable','groups':groups},indent=2))
 

@@ -72,3 +72,10 @@ Five Rust and eight Node oracle regressions passed. The initial Rust smoke
 records remain failed: the controller read an unflushed log and rejected the
 otherwise passing product run. The controller was repaired before formal runs;
 none of those failed samples is relabelled or included in the baseline table.
+
+Cloud filesystem qualification: `/tmp` is tmpfs, while `/workspace` is an
+overlay filesystem. The Source temporary files live on tmpfs in these runs;
+the Source index syscall write bytes above are logical file traffic and cannot
+be counted as physical disk writes or expected reductions in `/proc/io`
+`write_bytes`. Runtime databases live under the evidence directory on the
+workspace filesystem. This mount arrangement is held fixed across revisions.
